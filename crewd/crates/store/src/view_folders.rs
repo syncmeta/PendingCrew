@@ -216,7 +216,10 @@ pub fn assign(
     }
     Ok(())
 }
-#[expect(clippy::too_many_arguments, reason = "Keep scope, revision and actor audit facts explicit in the caller-owned folder transaction")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep scope, revision and actor audit facts explicit in the caller-owned folder transaction"
+)]
 pub fn commit_change(
     conn: &Connection,
     crew: &str,

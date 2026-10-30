@@ -459,7 +459,11 @@ impl Generated {
     }
     pub async fn arm(&self, r: &mut Rig, sid: &str) {
         std::fs::write(self.gate.join("arm"), []).unwrap();
-        let session = r.client.call("session.get", json!({"sessionId":sid})).await.unwrap();
+        let session = r
+            .client
+            .call("session.get", json!({"sessionId":sid}))
+            .await
+            .unwrap();
         r.client.call("message.post", json!({"channelId":format!("{}/lobby", session["crewId"].as_str().unwrap()),"text":"C13_CURRENT_HUMAN_BUSY_TASK","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
         t11::wait("actual managed task callback receipt", || {
             self.gate.join("busy-written").is_file()

@@ -799,159 +799,389 @@ fn notification_known() -> Value {
         "available":true,"enabled":true,"reason":"credentialsNotLoaded","revision":"2",
         "environment":"sandbox","topic":"com.example.synthetic"}})
 }
-async fn notification_cli(data:&Path, args:&[&str], input:Option<Vec<u8>>) -> std::process::Output {
-    let mut child=Command::new(env!("CARGO_BIN_EXE_crewd"))
-        .env_clear().env("PATH","/usr/bin:/bin").arg("--data-dir").arg(data).arg("notification").args(args)
-        .stdin(if input.is_some(){Stdio::piped()}else{Stdio::null()}).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .kill_on_drop(true).spawn().unwrap();
-    if let Some(input)=input {child.stdin.take().unwrap().write_all(&input).await.unwrap();}
-    tokio::time::timeout(Duration::from_secs(15),child.wait_with_output()).await.unwrap().unwrap()
+async fn notification_cli(
+    data: &Path,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_crewd"))
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .arg("--data-dir")
+        .arg(data)
+        .arg("notification")
+        .args(args)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    if let Some(input) = input {
+        child.stdin.take().unwrap().write_all(&input).await.unwrap();
+    }
+    tokio::time::timeout(Duration::from_secs(15), child.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap()
 }
-async fn notification_request(listener:&UnixListener, result:Option<Value>) -> Value {
-    let(stream,_)=tokio::time::timeout(Duration::from_secs(10),listener.accept()).await.unwrap().unwrap();
-    let(mut rd,mut wr)=stream.into_split();let mut line=String::new();
-    tokio::time::timeout(Duration::from_secs(10),BufReader::new(&mut rd).read_line(&mut line)).await.unwrap().unwrap();
-    let request:Value=serde_json::from_str(&line).unwrap();
-    if let Some(result)=result {wr.write_all((json!({"id":request["id"],"result":result}).to_string()+"\n").as_bytes()).await.unwrap();}
+async fn notification_request(listener: &UnixListener, result: Option<Value>) -> Value {
+    let (stream, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let (mut rd, mut wr) = stream.into_split();
+    let mut line = String::new();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        BufReader::new(&mut rd).read_line(&mut line),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let request: Value = serde_json::from_str(&line).unwrap();
+    if let Some(result) = result {
+        wr.write_all((json!({"id":request["id"],"result":result}).to_string() + "\n").as_bytes())
+            .await
+            .unwrap();
+    }
     request
 }
-fn assert_notification_secret_absent(output:&std::process::Output) {
+fn assert_notification_secret_absent(output: &std::process::Output) {
     assert!(!String::from_utf8_lossy(&output.stdout).contains(SYNTHETIC_PUSH_KEY));
     assert!(!String::from_utf8_lossy(&output.stderr).contains(SYNTHETIC_PUSH_KEY));
 }
 #[tokio::test]
 async fn notification_cli_typed_configuration_reaches_original_socket_once() {
     use std::os::unix::fs::PermissionsExt;
-    let root=tempfile::Builder::new().prefix("pcwn-").tempdir_in("/private/tmp").unwrap();
+    let root = tempfile::Builder::new()
+        .prefix("pcwn-")
+        .tempdir_in("/private/tmp")
+        .unwrap();
     crewd_server::ensure_data_dir(root.path()).unwrap();
-    let listener=UnixListener::bind(root.path().join("crewd.sock")).unwrap();
-    let server=tokio::spawn(async move {notification_request(&listener,Some(notification_known())).await});
-    let output=notification_cli(root.path(),&["configure"],Some(serde_json::to_vec(&notification_input()).unwrap())).await;
-    assert!(output.status.success(),"safe notification configuration command missing or failed: {}",String::from_utf8_lossy(&output.stderr));
+    let listener = UnixListener::bind(root.path().join("crewd.sock")).unwrap();
+    let server =
+        tokio::spawn(
+            async move { notification_request(&listener, Some(notification_known())).await },
+        );
+    let output = notification_cli(
+        root.path(),
+        &["configure"],
+        Some(serde_json::to_vec(&notification_input()).unwrap()),
+    )
+    .await;
+    assert!(
+        output.status.success(),
+        "safe notification configuration command missing or failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_notification_secret_absent(&output);
-    let request=tokio::time::timeout(Duration::from_secs(12),server).await.unwrap().unwrap();assert_eq!(request["method"],"notification.configure");
-    assert_eq!(request["params"]["requestId"],NOTIFICATION_REQUEST);
-    assert_eq!(request["params"]["provider"]["privateKeyPkcs8Base64"],SYNTHETIC_PUSH_KEY);
-    let witness=root.path().join("notification-cli").join(format!("notification-{NOTIFICATION_REQUEST}.json"));
-    let bytes=std::fs::read(&witness).unwrap();assert!(!String::from_utf8_lossy(&bytes).contains(SYNTHETIC_PUSH_KEY));
-    let record:Value=serde_json::from_slice(&bytes).unwrap();assert_eq!(record["requestId"],NOTIFICATION_REQUEST);
-    assert_eq!(record["kind"],"notificationConfiguration");assert_eq!(record.as_object().unwrap().len(),4);
-    assert_eq!(std::fs::metadata(witness).unwrap().permissions().mode()&0o777,0o600);
-    assert_eq!(std::fs::metadata(root.path().join("notification-cli")).unwrap().permissions().mode()&0o777,0o700);
+    let request = tokio::time::timeout(Duration::from_secs(12), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(request["method"], "notification.configure");
+    assert_eq!(request["params"]["requestId"], NOTIFICATION_REQUEST);
+    assert_eq!(
+        request["params"]["provider"]["privateKeyPkcs8Base64"],
+        SYNTHETIC_PUSH_KEY
+    );
+    let witness = root
+        .path()
+        .join("notification-cli")
+        .join(format!("notification-{NOTIFICATION_REQUEST}.json"));
+    let bytes = std::fs::read(&witness).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains(SYNTHETIC_PUSH_KEY));
+    let record: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(record["requestId"], NOTIFICATION_REQUEST);
+    assert_eq!(record["kind"], "notificationConfiguration");
+    assert_eq!(record.as_object().unwrap().len(), 4);
+    assert_eq!(
+        std::fs::metadata(witness).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(root.path().join("notification-cli"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
 }
 #[tokio::test]
 async fn notification_cli_lost_reply_retains_uuid_and_only_explicit_lookup_sends() {
-    let root=tempfile::Builder::new().prefix("pcwn-").tempdir_in("/private/tmp").unwrap();
+    let root = tempfile::Builder::new()
+        .prefix("pcwn-")
+        .tempdir_in("/private/tmp")
+        .unwrap();
     crewd_server::ensure_data_dir(root.path()).unwrap();
-    let listener=UnixListener::bind(root.path().join("crewd.sock")).unwrap();
-    let server=tokio::spawn(async move {
-        let first=notification_request(&listener,None).await;
-        let second=notification_request(&listener,Some(json!({"kind":"unknown","operation":"notification.configure"}))).await;
-        (first,second)
+    let listener = UnixListener::bind(root.path().join("crewd.sock")).unwrap();
+    let server = tokio::spawn(async move {
+        let first = notification_request(&listener, None).await;
+        let second = notification_request(
+            &listener,
+            Some(json!({"kind":"unknown","operation":"notification.configure"})),
+        )
+        .await;
+        (first, second)
     });
-    let input=serde_json::to_vec(&notification_input()).unwrap();
-    let first=notification_cli(root.path(),&["configure"],Some(input.clone())).await;
-    assert!(!first.status.success());assert_notification_secret_absent(&first);
+    let input = serde_json::to_vec(&notification_input()).unwrap();
+    let first = notification_cli(root.path(), &["configure"], Some(input.clone())).await;
+    assert!(!first.status.success());
+    assert_notification_secret_absent(&first);
     assert!(String::from_utf8_lossy(&first.stderr).contains(NOTIFICATION_REQUEST));
-    let retry=notification_cli(root.path(),&["configure"],Some(input)).await;
-    assert!(!retry.status.success());assert_notification_secret_absent(&retry);
-    let lookup=notification_cli(root.path(),&["lookup","--request-id",NOTIFICATION_REQUEST],None).await;
-    assert!(lookup.status.success(),"{}",String::from_utf8_lossy(&lookup.stderr));assert_notification_secret_absent(&lookup);
-    let(first,second)=tokio::time::timeout(Duration::from_secs(12),server).await.unwrap().unwrap();assert_eq!(first["method"],"notification.configure");
-    assert_eq!(second["method"],"notification.requestLookup");
-    assert_eq!(second["params"],json!({"requestId":NOTIFICATION_REQUEST}));
-    assert_eq!(serde_json::from_slice::<Value>(&lookup.stdout).unwrap()["result"]["kind"],"unknown");
+    let retry = notification_cli(root.path(), &["configure"], Some(input)).await;
+    assert!(!retry.status.success());
+    assert_notification_secret_absent(&retry);
+    let lookup = notification_cli(
+        root.path(),
+        &["lookup", "--request-id", NOTIFICATION_REQUEST],
+        None,
+    )
+    .await;
+    assert!(
+        lookup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lookup.stderr)
+    );
+    assert_notification_secret_absent(&lookup);
+    let (first, second) = tokio::time::timeout(Duration::from_secs(12), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first["method"], "notification.configure");
+    assert_eq!(second["method"], "notification.requestLookup");
+    assert_eq!(second["params"], json!({"requestId":NOTIFICATION_REQUEST}));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&lookup.stdout).unwrap()["result"]["kind"],
+        "unknown"
+    );
 }
 
 #[tokio::test]
 async fn notification_cli_invalid_input_or_private_paths_send_nothing() {
     use std::os::unix::fs::PermissionsExt;
-    for mode in ["bad-json","oversize","bad-uuid","bad-revision","unknown-field","file-mode","file-symlink","file-owner","root-mode","root-symlink","witness-symlink"] {
-        let root=tempfile::Builder::new().prefix("pcwn-").tempdir_in("/private/tmp").unwrap();
-    crewd_server::ensure_data_dir(root.path()).unwrap();
-        let listener=UnixListener::bind(root.path().join("crewd.sock")).unwrap();
-        let mut input=notification_input();let mut payload=None;let mut file=None;let mut data=root.path().to_owned();
+    for mode in [
+        "bad-json",
+        "oversize",
+        "bad-uuid",
+        "bad-revision",
+        "unknown-field",
+        "file-mode",
+        "file-symlink",
+        "file-owner",
+        "root-mode",
+        "root-symlink",
+        "witness-symlink",
+    ] {
+        let root = tempfile::Builder::new()
+            .prefix("pcwn-")
+            .tempdir_in("/private/tmp")
+            .unwrap();
+        crewd_server::ensure_data_dir(root.path()).unwrap();
+        let listener = UnixListener::bind(root.path().join("crewd.sock")).unwrap();
+        let mut input = notification_input();
+        let mut payload = None;
+        let mut file = None;
+        let mut data = root.path().to_owned();
         match mode {
-            "bad-json"=>payload=Some(format!("{{{SYNTHETIC_PUSH_KEY}").into_bytes()),
-            "oversize"=>payload=Some(vec![b'x';16385]),
-            "bad-uuid"=>input["requestId"]=json!("not-a-uuid"),
-            "bad-revision"=>input["expectedRevision"]=json!("01"),
-            "unknown-field"=>input["privateKey"]=json!(SYNTHETIC_PUSH_KEY),
-            "file-owner"=>file=Some(PathBuf::from("/etc/passwd")),
-            "root-mode"=>std::fs::set_permissions(root.path(),std::fs::Permissions::from_mode(0o755)).unwrap(),
-            "root-symlink"=>{data=root.path().join("data-link");std::os::unix::fs::symlink(root.path(),&data).unwrap();},
-            "witness-symlink"=>std::os::unix::fs::symlink(root.path(),root.path().join("notification-cli")).unwrap(),
-            "file-mode"|"file-symlink"=>{
-                let path=root.path().join("input.json");std::fs::write(&path,serde_json::to_vec(&input).unwrap()).unwrap();
-                std::fs::set_permissions(&path,std::fs::Permissions::from_mode(if mode=="file-mode"{0o644}else{0o600})).unwrap();
-                if mode=="file-symlink" {let alias=root.path().join("input-link");std::os::unix::fs::symlink(path,&alias).unwrap();file=Some(alias);}else{file=Some(path);}
-            },
-            _=>{},
+            "bad-json" => payload = Some(format!("{{{SYNTHETIC_PUSH_KEY}").into_bytes()),
+            "oversize" => payload = Some(vec![b'x'; 16385]),
+            "bad-uuid" => input["requestId"] = json!("not-a-uuid"),
+            "bad-revision" => input["expectedRevision"] = json!("01"),
+            "unknown-field" => input["privateKey"] = json!(SYNTHETIC_PUSH_KEY),
+            "file-owner" => file = Some(PathBuf::from("/etc/passwd")),
+            "root-mode" => {
+                std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755))
+                    .unwrap()
+            }
+            "root-symlink" => {
+                data = root.path().join("data-link");
+                std::os::unix::fs::symlink(root.path(), &data).unwrap();
+            }
+            "witness-symlink" => {
+                std::os::unix::fs::symlink(root.path(), root.path().join("notification-cli"))
+                    .unwrap()
+            }
+            "file-mode" | "file-symlink" => {
+                let path = root.path().join("input.json");
+                std::fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+                std::fs::set_permissions(
+                    &path,
+                    std::fs::Permissions::from_mode(if mode == "file-mode" {
+                        0o644
+                    } else {
+                        0o600
+                    }),
+                )
+                .unwrap();
+                if mode == "file-symlink" {
+                    let alias = root.path().join("input-link");
+                    std::os::unix::fs::symlink(path, &alias).unwrap();
+                    file = Some(alias);
+                } else {
+                    file = Some(path);
+                }
+            }
+            _ => {}
         }
-        if file.is_none() && payload.is_none(){payload=Some(serde_json::to_vec(&input).unwrap());}
-        let file_text=file.as_ref().map(|f|f.to_str().unwrap());
-        let args=if let Some(file)=file_text{vec!["configure","--input-file",file]}else{vec!["configure"]};
-        let output=notification_cli(&data,&args,payload).await;
-        assert!(!output.status.success(),"{mode} unexpectedly accepted");assert_notification_secret_absent(&output);
-        assert!(tokio::time::timeout(Duration::from_millis(30),listener.accept()).await.is_err(),"{mode} contacted Core before validation");
-        std::fs::set_permissions(root.path(),std::fs::Permissions::from_mode(0o700)).unwrap();
+        if file.is_none() && payload.is_none() {
+            payload = Some(serde_json::to_vec(&input).unwrap());
+        }
+        let file_text = file.as_ref().map(|f| f.to_str().unwrap());
+        let args = if let Some(file) = file_text {
+            vec!["configure", "--input-file", file]
+        } else {
+            vec!["configure"]
+        };
+        let output = notification_cli(&data, &args, payload).await;
+        assert!(!output.status.success(), "{mode} unexpectedly accepted");
+        assert_notification_secret_absent(&output);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), listener.accept())
+                .await
+                .is_err(),
+            "{mode} contacted Core before validation"
+        );
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 }
 
 #[tokio::test]
 async fn notification_cli_protected_file_and_lookup_not_found_never_replay() {
     use std::os::unix::fs::PermissionsExt;
-    let root=tempfile::Builder::new().prefix("pcwn-").tempdir_in("/private/tmp").unwrap();
+    let root = tempfile::Builder::new()
+        .prefix("pcwn-")
+        .tempdir_in("/private/tmp")
+        .unwrap();
     crewd_server::ensure_data_dir(root.path()).unwrap();
     // The real Core creator supplies its normal private data root beneath
     // ordinary0755 application-support parents; ancestors need not be0700.
-    let parent=root.path().join("Library/Application Support");std::fs::create_dir_all(&parent).unwrap();
-    std::fs::set_permissions(&parent,std::fs::Permissions::from_mode(0o755)).unwrap();
-    let data=parent.join("PendingCrewLocal");crewd_server::ensure_data_dir(&data).unwrap();
-    let file=root.path().join("input.json");let input=serde_json::to_vec(&notification_input()).unwrap();
-    std::fs::write(&file,&input).unwrap();std::fs::set_permissions(&file,std::fs::Permissions::from_mode(0o600)).unwrap();
-    let listener=UnixListener::bind(data.join("crewd.sock")).unwrap();
-    let server=tokio::spawn(async move {
-        let a=notification_request(&listener,Some(json!({"kind":"unknown","operation":"notification.configure"}))).await;
-        let b=notification_request(&listener,Some(json!({"kind":"notFound"}))).await;(a,b)
+    let parent = root.path().join("Library/Application Support");
+    std::fs::create_dir_all(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let data = parent.join("PendingCrewLocal");
+    crewd_server::ensure_data_dir(&data).unwrap();
+    let file = root.path().join("input.json");
+    let input = serde_json::to_vec(&notification_input()).unwrap();
+    std::fs::write(&file, &input).unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let listener = UnixListener::bind(data.join("crewd.sock")).unwrap();
+    let server = tokio::spawn(async move {
+        let a = notification_request(
+            &listener,
+            Some(json!({"kind":"unknown","operation":"notification.configure"})),
+        )
+        .await;
+        let b = notification_request(&listener, Some(json!({"kind":"notFound"}))).await;
+        (a, b)
     });
-    let configured=notification_cli(&data,&["configure","--input-file",file.to_str().unwrap()],None).await;
-    assert!(configured.status.success());assert_notification_secret_absent(&configured);
-    assert_eq!(std::fs::read(&file).unwrap(),input);
-    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode()&0o777,0o600);
-    let looked=notification_cli(&data,&["lookup","--request-id",NOTIFICATION_REQUEST],None).await;
-    assert!(looked.status.success());assert_notification_secret_absent(&looked);
-    assert_eq!(serde_json::from_slice::<Value>(&looked.stdout).unwrap()["result"]["kind"],"notFound");
-    let(a,b)=tokio::time::timeout(Duration::from_secs(12),server).await.unwrap().unwrap();assert_eq!(a["method"],"notification.configure");assert_eq!(b["method"],"notification.requestLookup");
+    let configured = notification_cli(
+        &data,
+        &["configure", "--input-file", file.to_str().unwrap()],
+        None,
+    )
+    .await;
+    assert!(configured.status.success());
+    assert_notification_secret_absent(&configured);
+    assert_eq!(std::fs::read(&file).unwrap(), input);
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let looked = notification_cli(
+        &data,
+        &["lookup", "--request-id", NOTIFICATION_REQUEST],
+        None,
+    )
+    .await;
+    assert!(looked.status.success());
+    assert_notification_secret_absent(&looked);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&looked.stdout).unwrap()["result"]["kind"],
+        "notFound"
+    );
+    let (a, b) = tokio::time::timeout(Duration::from_secs(12), server)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(a["method"], "notification.configure");
+    assert_eq!(b["method"], "notification.requestLookup");
 }
 
 #[tokio::test]
 async fn notification_cli_never_echoes_secret_in_invalid_reply_or_rpc_error() {
-    for mode in ["unknown-fields","status-topic","operation","rpc-error","malformed","oversize"] {
-        let root=tempfile::Builder::new().prefix("pcwn-").tempdir_in("/private/tmp").unwrap();
-    crewd_server::ensure_data_dir(root.path()).unwrap();
-        let listener=UnixListener::bind(root.path().join("crewd.sock")).unwrap();
-        let server=tokio::spawn(async move {
-            let(mut stream,_)=tokio::time::timeout(Duration::from_secs(10),listener.accept()).await.unwrap().unwrap();let mut line=String::new();
-            tokio::time::timeout(Duration::from_secs(10),BufReader::new(&mut stream).read_line(&mut line)).await.unwrap().unwrap();
-            let mut value=notification_known();
+    for mode in [
+        "unknown-fields",
+        "status-topic",
+        "operation",
+        "rpc-error",
+        "malformed",
+        "oversize",
+    ] {
+        let root = tempfile::Builder::new()
+            .prefix("pcwn-")
+            .tempdir_in("/private/tmp")
+            .unwrap();
+        crewd_server::ensure_data_dir(root.path()).unwrap();
+        let listener = UnixListener::bind(root.path().join("crewd.sock")).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut line = String::new();
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                BufReader::new(&mut stream).read_line(&mut line),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let mut value = notification_known();
             match mode {
-                "unknown-fields"=>value["result"]["privateKeyPkcs8Base64"]=json!(SYNTHETIC_PUSH_KEY),
-                "status-topic"=>value["result"]["topic"]=json!(SYNTHETIC_PUSH_KEY),
-                "operation"=>value["operation"]=json!(SYNTHETIC_PUSH_KEY),
-                _=>{},
+                "unknown-fields" => {
+                    value["result"]["privateKeyPkcs8Base64"] = json!(SYNTHETIC_PUSH_KEY)
+                }
+                "status-topic" => value["result"]["topic"] = json!(SYNTHETIC_PUSH_KEY),
+                "operation" => value["operation"] = json!(SYNTHETIC_PUSH_KEY),
+                _ => {}
             }
-            let reply=match mode {
-                "rpc-error"=>json!({"id":1,"error":{"code":-32009,"message":SYNTHETIC_PUSH_KEY}}).to_string()+"\n",
-                "malformed"=>SYNTHETIC_PUSH_KEY.to_owned()+"\n",
-                "oversize"=>format!("{}{}\n","x".repeat(16385),SYNTHETIC_PUSH_KEY),
-                _=>json!({"id":1,"result":value}).to_string()+"\n",
+            let reply = match mode {
+                "rpc-error" => {
+                    json!({"id":1,"error":{"code":-32009,"message":SYNTHETIC_PUSH_KEY}}).to_string()
+                        + "\n"
+                }
+                "malformed" => SYNTHETIC_PUSH_KEY.to_owned() + "\n",
+                "oversize" => format!("{}{}\n", "x".repeat(16385), SYNTHETIC_PUSH_KEY),
+                _ => json!({"id":1,"result":value}).to_string() + "\n",
             };
-            let _=stream.write_all(reply.as_bytes()).await;
+            let _ = stream.write_all(reply.as_bytes()).await;
         });
-        let output=notification_cli(root.path(),&["configure"],Some(serde_json::to_vec(&notification_input()).unwrap())).await;
-        if mode!="status-topic"{assert!(!output.status.success(),"{mode}");}
-        assert_notification_secret_absent(&output);tokio::time::timeout(Duration::from_secs(12),server).await.unwrap().unwrap();
-        assert!(root.path().join("notification-cli").join(format!("notification-{NOTIFICATION_REQUEST}.json")).is_file());
+        let output = notification_cli(
+            root.path(),
+            &["configure"],
+            Some(serde_json::to_vec(&notification_input()).unwrap()),
+        )
+        .await;
+        if mode != "status-topic" {
+            assert!(!output.status.success(), "{mode}");
+        }
+        assert_notification_secret_absent(&output);
+        tokio::time::timeout(Duration::from_secs(12), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            root.path()
+                .join("notification-cli")
+                .join(format!("notification-{NOTIFICATION_REQUEST}.json"))
+                .is_file()
+        );
     }
 }

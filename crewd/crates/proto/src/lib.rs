@@ -11,8 +11,8 @@
 //!   （握手是以后加字段、协商能力的地方）。
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
-pub mod host;
 pub mod commands;
+pub mod host;
 pub mod judgments;
 mod model;
 pub mod notifications;
@@ -506,7 +506,11 @@ pub enum ShutdownReason {
 
 /// 每个事件名 → 它的 `data` 类型。契约的 `events` 表与 `Event` 的 schema 都从这一张表来。
 fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value)> {
-    vec![("personalDraft.changed",sub::<personal_drafts::PersonalDraftChanged>(g)),
+    vec![
+        (
+            "personalDraft.changed",
+            sub::<personal_drafts::PersonalDraftChanged>(g),
+        ),
         (
             commands::TERMINAL_OUTPUT_EVENT,
             sub::<commands::TerminalWatchEvent>(g),
@@ -765,8 +769,17 @@ pub fn api_schema() -> Value {
                 sub::<judgments::JudgmentInspection>(g),
             ),
         ),
-        (methods::HOST_QUOTA, m(sub::<NoParams>(g), sub::<host::QuotaResult>(g))),
-        (methods::HOST_DIRECTORY_LIST, m(sub::<host::DirectoryParams>(g), sub::<host::DirectoryResult>(g))),
+        (
+            methods::HOST_QUOTA,
+            m(sub::<NoParams>(g), sub::<host::QuotaResult>(g)),
+        ),
+        (
+            methods::HOST_DIRECTORY_LIST,
+            m(
+                sub::<host::DirectoryParams>(g),
+                sub::<host::DirectoryResult>(g),
+            ),
+        ),
         (methods::HELLO, m(sub::<HelloParams>(g), sub::<Hello>(g))),
         (
             methods::REMOTE_STATUS,
@@ -1080,19 +1093,97 @@ pub fn api_schema() -> Value {
                 sub::<codex::CodexTools>(g),
             ),
         ),
-        (personal_drafts::STATUS,m(sub::<personal_drafts::PersonalDraftStatusParams>(g),sub::<personal_drafts::PersonalDraftStatus>(g))),
-        (personal_drafts::MEMBERS,m(sub::<personal_drafts::PersonalDraftMembersParams>(g),sub::<personal_drafts::PersonalDraftMembers>(g))),
-        (personal_drafts::CATALOG,m(sub::<personal_drafts::PersonalDraftCatalogParams>(g),sub::<personal_drafts::PersonalDraftCatalogPage>(g))),
-        (personal_drafts::BRANCHES,m(sub::<personal_drafts::PersonalDraftBranchesParams>(g),sub::<personal_drafts::PersonalDraftBranchPage>(g))),
-        (personal_drafts::REQUEST_FENCE,m(sub::<personal_drafts::PersonalDraftRequestFenceParams>(g),sub::<personal_drafts::PersonalDraftRequestFence>(g))),
-        (claude::INSPECT,m(sub::<claude::ClaudeSessionParams>(g),sub::<claude::ClaudeInspect>(g))),
-        (claude::RECOVERY_INSPECT,m(sub::<claude::ClaudeSessionParams>(g),sub::<claude::ClaudeRecoveryInspect>(g))),
-        (claude::HISTORY,m(sub::<claude::ClaudeHistoryParams>(g),sub::<claude::ClaudeHistoryPage>(g))),
-        (claude::TASK_GET,m(sub::<claude::ClaudeTaskGetParams>(g),sub::<claude::ClaudeTaskDetail>(g))),
-        (codex_inputs::INPUT_PREPARE,m(sub::<codex_inputs::CodexInputPrepareParams>(g),sub::<codex_inputs::CodexInputResult>(g))),
-        (codex_inputs::INPUT_LOOKUP,m(sub::<codex_inputs::CodexInputLookupParams>(g),sub::<codex_inputs::CodexInputLookup>(g))),
-        (codex_inputs::INPUT_DISCARD,m(sub::<codex_inputs::CodexInputDiscardParams>(g),sub::<codex_inputs::CodexInputResult>(g))),
-        (codex_inputs::PERMISSION_PROFILES,m(sub::<codex_inputs::CodexPermissionProfilesParams>(g),sub::<codex_inputs::CodexPermissionProfiles>(g))),
+        (
+            personal_drafts::STATUS,
+            m(
+                sub::<personal_drafts::PersonalDraftStatusParams>(g),
+                sub::<personal_drafts::PersonalDraftStatus>(g),
+            ),
+        ),
+        (
+            personal_drafts::MEMBERS,
+            m(
+                sub::<personal_drafts::PersonalDraftMembersParams>(g),
+                sub::<personal_drafts::PersonalDraftMembers>(g),
+            ),
+        ),
+        (
+            personal_drafts::CATALOG,
+            m(
+                sub::<personal_drafts::PersonalDraftCatalogParams>(g),
+                sub::<personal_drafts::PersonalDraftCatalogPage>(g),
+            ),
+        ),
+        (
+            personal_drafts::BRANCHES,
+            m(
+                sub::<personal_drafts::PersonalDraftBranchesParams>(g),
+                sub::<personal_drafts::PersonalDraftBranchPage>(g),
+            ),
+        ),
+        (
+            personal_drafts::REQUEST_FENCE,
+            m(
+                sub::<personal_drafts::PersonalDraftRequestFenceParams>(g),
+                sub::<personal_drafts::PersonalDraftRequestFence>(g),
+            ),
+        ),
+        (
+            claude::INSPECT,
+            m(
+                sub::<claude::ClaudeSessionParams>(g),
+                sub::<claude::ClaudeInspect>(g),
+            ),
+        ),
+        (
+            claude::RECOVERY_INSPECT,
+            m(
+                sub::<claude::ClaudeSessionParams>(g),
+                sub::<claude::ClaudeRecoveryInspect>(g),
+            ),
+        ),
+        (
+            claude::HISTORY,
+            m(
+                sub::<claude::ClaudeHistoryParams>(g),
+                sub::<claude::ClaudeHistoryPage>(g),
+            ),
+        ),
+        (
+            claude::TASK_GET,
+            m(
+                sub::<claude::ClaudeTaskGetParams>(g),
+                sub::<claude::ClaudeTaskDetail>(g),
+            ),
+        ),
+        (
+            codex_inputs::INPUT_PREPARE,
+            m(
+                sub::<codex_inputs::CodexInputPrepareParams>(g),
+                sub::<codex_inputs::CodexInputResult>(g),
+            ),
+        ),
+        (
+            codex_inputs::INPUT_LOOKUP,
+            m(
+                sub::<codex_inputs::CodexInputLookupParams>(g),
+                sub::<codex_inputs::CodexInputLookup>(g),
+            ),
+        ),
+        (
+            codex_inputs::INPUT_DISCARD,
+            m(
+                sub::<codex_inputs::CodexInputDiscardParams>(g),
+                sub::<codex_inputs::CodexInputResult>(g),
+            ),
+        ),
+        (
+            codex_inputs::PERMISSION_PROFILES,
+            m(
+                sub::<codex_inputs::CodexPermissionProfilesParams>(g),
+                sub::<codex_inputs::CodexPermissionProfiles>(g),
+            ),
+        ),
         (
             methods::SESSION_USAGE,
             m(sub::<RunnerUsageParams>(g), sub::<RunnerUsagePage>(g)),
@@ -1661,7 +1752,20 @@ mod tests {
         listed.sort();
         // Notification methods are schema-public on their dedicated actor
         // dispatch, not members of the ordinary client methods table.
-        let mut all: Vec<&str> = methods::ALL.iter().copied().chain(["notification.status", "notification.configure", "notification.installationRegister", "notification.installationRevoke", "notification.installationGet", "notification.requestLookup", "notification.deliveryGet", "notification.deliveryList"]).collect();
+        let mut all: Vec<&str> = methods::ALL
+            .iter()
+            .copied()
+            .chain([
+                "notification.status",
+                "notification.configure",
+                "notification.installationRegister",
+                "notification.installationRevoke",
+                "notification.installationGet",
+                "notification.requestLookup",
+                "notification.deliveryGet",
+                "notification.deliveryList",
+            ])
+            .collect();
         all.sort();
         assert_eq!(listed, all);
         assert_eq!(s["apiVersion"], 3);

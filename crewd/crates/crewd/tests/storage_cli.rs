@@ -153,7 +153,11 @@ fn backup_while_serving_then_restore_refuses_knowledge_rollback_after_stopping()
     drop(d);
 
     let backup_bytes = std::fs::read(&path).unwrap();
-    let refused = crewd(data.path()).args(["restore", "--from"]).arg(&path).output().unwrap();
+    let refused = crewd(data.path())
+        .args(["restore", "--from"])
+        .arg(&path)
+        .output()
+        .unwrap();
     assert!(!refused.status.success());
     assert!(stderr(&refused).contains("Core-only restore cannot replace a knowledge workspace"));
     assert_eq!(std::fs::read(&path).unwrap(), backup_bytes);

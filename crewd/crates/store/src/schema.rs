@@ -889,17 +889,21 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         tx.commit()?;
     }
     if v < 20 {
-        let tx=conn.unchecked_transaction()?;
+        let tx = conn.unchecked_transaction()?;
         // No released19 writer knew native input bytes. Reject unshipped
         // experimental19 staging rather than silently importing its authority.
         let experimental:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN('codex_native_inputs','codex_input_requests'))",[],|r|r.get(0))?;
-        if experimental{return Err(StoreError::Invalid("experimental pre20 Codex inputs are not a supported production authority".into()))}
+        if experimental {
+            return Err(StoreError::Invalid(
+                "experimental pre20 Codex inputs are not a supported production authority".into(),
+            ));
+        }
         tx.execute_batch(crate::codex_inputs::DDL)?;
         tx.execute_batch("PRAGMA user_version=20;")?;
         tx.commit()?;
     }
     if v < 21 {
-        let tx=conn.unchecked_transaction()?;
+        let tx = conn.unchecked_transaction()?;
         // Old20 restore cannot invalidate the independent private Draft stamp.
         // Never inherit experimental pre21 membership authority on upgrade.
         crate::personal_drafts::initialize_new_format(&tx)?;
@@ -3087,7 +3091,13 @@ mod resource17_tests {
         // Later current migrations may add their own tables/indexes; every
         // original non-notification schema object must remain byte-identical.
         for (name, original) in schema {
-            let after: Option<String> = c.query_row("SELECT sql FROM sqlite_master WHERE name=?1", [&name], |r| r.get(0)).unwrap();
+            let after: Option<String> = c
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name=?1",
+                    [&name],
+                    |r| r.get(0),
+                )
+                .unwrap();
             assert_eq!(after, original, "original schema object {name}");
         }
         assert_eq!(

@@ -5,8 +5,18 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone)]
 pub enum CodexOperation {
     Configure(CodexSettingsPatch),
-    PreparedQueue {id:u64,text:String,request_id:String,inputs:super::input::Prepared},
-    PreparedSteer {text:String,expected_turn_id:String,request_id:String,inputs:super::input::Prepared},
+    PreparedQueue {
+        id: u64,
+        text: String,
+        request_id: String,
+        inputs: super::input::Prepared,
+    },
+    PreparedSteer {
+        text: String,
+        expected_turn_id: String,
+        request_id: String,
+        inputs: super::input::Prepared,
+    },
     Queue {
         id: u64,
         text: String,
@@ -27,7 +37,10 @@ pub enum CodexOperation {
     Models,
     Tools,
     PermissionProfiles(crewd_proto::codex_inputs::CodexPermissionProfilesParams),
-    HistoryMutation { action: CodexHistoryAction, before_turn_id: Option<String> },
+    HistoryMutation {
+        action: CodexHistoryAction,
+        before_turn_id: Option<String>,
+    },
     Fork {
         last_turn_id: Option<String>,
     },

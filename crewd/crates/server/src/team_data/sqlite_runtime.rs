@@ -1474,7 +1474,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            schema, crewd_store::schema::SCHEMA_VERSION,
+            schema,
+            crewd_store::schema::SCHEMA_VERSION,
             "current production schema retains resource17 without activating experimental Native16"
         );
         assert!(

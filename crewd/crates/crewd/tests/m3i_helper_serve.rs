@@ -195,12 +195,28 @@ async fn c13_literal_stopped_mention_resume_firsttool_once() {
     let cg = r.generated(&cap);
     let mut c = cg.mcp(&r.f).await;
     post(&mut c, &lobby, Some(&worker), "C13_PRE_RESUME_NOT_AUTO").await;
-    assert_eq!(r.client.call("session.live",json!({"sessionId":worker})).await.unwrap()["running"],false);
-    r.client.call("session.resume",json!({"sessionId":worker})).await.unwrap();
-    t11::wait("explicit resumed birth", || r.records().iter().filter(|v|v["event"]=="launch"&&v["session_id"]==worker).count()>1).await;
+    assert_eq!(
+        r.client
+            .call("session.live", json!({"sessionId":worker}))
+            .await
+            .unwrap()["running"],
+        false
+    );
+    r.client
+        .call("session.resume", json!({"sessionId":worker}))
+        .await
+        .unwrap();
+    t11::wait("explicit resumed birth", || {
+        r.records()
+            .iter()
+            .filter(|v| v["event"] == "launch" && v["session_id"] == worker)
+            .count()
+            > 1
+    })
+    .await;
     let fresh = r.generated(&worker);
     fresh.arm(&mut r, &worker).await;
-    assert_eq!(r.count(&worker,"C13_PRE_RESUME_NOT_AUTO"),0);
+    assert_eq!(r.count(&worker, "C13_PRE_RESUME_NOT_AUTO"), 0);
     post(&mut c, &lobby, Some(&worker), "C13_STOPPED_RESUME").await;
     let target = r.message(&lobby, "C13_STOPPED_RESUME").await;
     let mut freshm = fresh.mcp(&r.f).await;
@@ -222,7 +238,7 @@ async fn c13_literal_stopped_mention_resume_firsttool_once() {
     assert_ne!(old.generation, fresh.generation);
     assert_eq!(old.agent_id, fresh.agent_id);
     assert!(fresh.resumed);
-    assert_eq!(context(&first).matches("C13_STOPPED_RESUME").count(),1);
+    assert_eq!(context(&first).matches("C13_STOPPED_RESUME").count(), 1);
     assert_eq!(context(&first).matches("C13_RESUMED_OTHER").count(), 1);
     assert!(!context(&next).contains("C13_RESUMED_OTHER"));
     assert_eq!(

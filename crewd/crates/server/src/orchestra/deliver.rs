@@ -161,12 +161,9 @@ impl<P: Port> Core<P> {
         let Some(ctx) = self.port.channel_ctx(&r.channel, now).await? else {
             return Ok(());
         };
-        if self
-            .cfg
-            .admission
-            .as_ref()
-            .is_some_and(|a| msg.created_at.0 < a.started_at || (!a.any() && msg.sender != Sender::Human))
-        {
+        if self.cfg.admission.as_ref().is_some_and(|a| {
+            msg.created_at.0 < a.started_at || (!a.any() && msg.sender != Sender::Human)
+        }) {
             return Ok(());
         }
         let arbiter_needed = plan::needs_arbiter(&msg, &ctx, now);
@@ -174,13 +171,18 @@ impl<P: Port> Core<P> {
             && msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
             && msg.at.seq > self.managed_human_boot_floor;
         if trusted_human {
-            if !self.seen_human_messages.insert(msg.at.seq) { return Ok(()); }
-            self.human_message_plans.insert(msg.at.seq, super::core::HumanMessagePlan {
-                msg: msg.clone(),
-                ctx: ctx.clone(),
-                answer: None,
-                waiting: arbiter_needed,
-            });
+            if !self.seen_human_messages.insert(msg.at.seq) {
+                return Ok(());
+            }
+            self.human_message_plans.insert(
+                msg.at.seq,
+                super::core::HumanMessagePlan {
+                    msg: msg.clone(),
+                    ctx: ctx.clone(),
+                    answer: None,
+                    waiting: arbiter_needed,
+                },
+            );
         }
         if arbiter_needed {
             // Jev 要联网：放到派生任务里问，答案（或超时）以 `Input::Arbitrated` 回来，不卡 actor。
@@ -327,7 +329,8 @@ impl<P: Port> Core<P> {
             // chain. A fresh Human send admits only its newly committed explicit
             // targets below; old/backlog events and duplicate queue rows do not.
             if let (Some(a), Sender::Session { id, .. }) = (&self.cfg.admission, &msg.sender)
-                && a.contains(id) && msg.created_at.0 >= a.started_at
+                && a.contains(id)
+                && msg.created_at.0 >= a.started_at
             {
                 a.allow(&t.session);
             }
@@ -468,7 +471,13 @@ impl<P: Port> Core<P> {
                 return Ok(false);
             }
             let mut pending = self.port.pending(session).await?;
-            if let Some(cut)=self.live.get(session).and_then(|l|l.managed_resume_wake_cut){pending.retain(|w|w.id>cut.wake_id);}
+            if let Some(cut) = self
+                .live
+                .get(session)
+                .and_then(|l| l.managed_resume_wake_cut)
+            {
+                pending.retain(|w| w.id > cut.wake_id);
+            }
 
             if self.cfg.admission.is_some() {
                 pending.retain(|w| w.id > self.held_watermark);
@@ -487,9 +496,28 @@ impl<P: Port> Core<P> {
                 })
             {
                 // Actual preparation precedes readonly causal filtering, so a new episode is durable.
-                self.port.prepare_causal_admission_after(session, now,self.live.get(session).and_then(|l|l.managed_resume_wake_cut).map(|c|c.message_seq)).await?;
+                self.port
+                    .prepare_causal_admission_after(
+                        session,
+                        now,
+                        self.live
+                            .get(session)
+                            .and_then(|l| l.managed_resume_wake_cut)
+                            .map(|c| c.message_seq),
+                    )
+                    .await?;
             }
-            let diagnostics = self.port.causal_diagnostics_after(session, now,self.live.get(session).and_then(|l|l.managed_resume_wake_cut).map(|c|c.message_seq)).await?;
+            let diagnostics = self
+                .port
+                .causal_diagnostics_after(
+                    session,
+                    now,
+                    self.live
+                        .get(session)
+                        .and_then(|l| l.managed_resume_wake_cut)
+                        .map(|c| c.message_seq),
+                )
+                .await?;
             let eligible = pending
                 .iter()
                 .filter(|w| causal_for(w, &diagnostics).is_none())
@@ -807,7 +835,17 @@ impl<P: Port> Core<P> {
         mut batch: Vec<QueuedWake>,
     ) -> anyhow::Result<Fitted> {
         loop {
-            let r = self.port.render_wake_after(session, &batch,self.live.get(session).and_then(|l|l.managed_resume_wake_cut).map(|c|c.message_seq)).await?;
+            let r = self
+                .port
+                .render_wake_after(
+                    session,
+                    &batch,
+                    self.live
+                        .get(session)
+                        .and_then(|l| l.managed_resume_wake_cut)
+                        .map(|c| c.message_seq),
+                )
+                .await?;
             let riders: Vec<QueuedWake> = batch
                 .iter()
                 .filter(|w| r.deferred.contains(&w.id))
@@ -4262,29 +4300,107 @@ mod tests {
         let mut admission = Admission::default();
         admission.started_at = T0.0 + SEC;
         let admission = Arc::new(admission);
-        let cfg = OrchestraConfig { admission: Some(admission.clone()), previous_clean: true, ..OrchestraConfig::for_tests() };
+        let cfg = OrchestraConfig {
+            admission: Some(admission.clone()),
+            previous_clean: true,
+            ..OrchestraConfig::for_tests()
+        };
         let mut rig = Rig::with_cfg(Hooks::default(), cfg).await;
-        rig.crew("c1", "cap"); rig.worker("c1", "selected"); rig.worker("c1", "unrelated");
-        rig.post(LOBBY,Sender::Human,at("selected"),"historical Human message before current-run admission").await;
-        rig.port.enqueue(NewWake {session:"selected".into(),kind:WakeKind::Timer,source:"timer:old".into(),priority:Priority::Auto,not_before:T0,note:Some("do not replay old work".into()),origin:"system".into()}).await.unwrap();
-        rig.core.boot().await.unwrap(); rig.tick(SEC).await; rig.settle().await;
+        rig.crew("c1", "cap");
+        rig.worker("c1", "selected");
+        rig.worker("c1", "unrelated");
+        rig.post(
+            LOBBY,
+            Sender::Human,
+            at("selected"),
+            "historical Human message before current-run admission",
+        )
+        .await;
+        rig.port
+            .enqueue(NewWake {
+                session: "selected".into(),
+                kind: WakeKind::Timer,
+                source: "timer:old".into(),
+                priority: Priority::Auto,
+                not_before: T0,
+                note: Some("do not replay old work".into()),
+                origin: "system".into(),
+            })
+            .await
+            .unwrap();
+        rig.core.boot().await.unwrap();
+        rig.tick(SEC).await;
+        rig.settle().await;
         rig.core.rescue_backlog().await.unwrap();
-        assert!(rig.exec.lock().launches.is_empty(), "boot and backlog observation are quiet");
-        let message = rig.post(LOBBY,Sender::Human,at("selected"),"explicit new Human send").await;
-        assert_eq!(rig.exec.launches("selected").len(),1,"committed Human message must wake its selected recipient");
+        assert!(
+            rig.exec.lock().launches.is_empty(),
+            "boot and backlog observation are quiet"
+        );
+        let message = rig
+            .post(
+                LOBBY,
+                Sender::Human,
+                at("selected"),
+                "explicit new Human send",
+            )
+            .await;
+        assert_eq!(
+            rig.exec.launches("selected").len(),
+            1,
+            "committed Human message must wake its selected recipient"
+        );
         assert!(admission.contains("selected"));
         assert!(rig.exec.launches("cap").is_empty() && rig.exec.launches("unrelated").is_empty());
-        assert!(!rig.exec.sent("selected").iter().any(|s| s.contains("do not replay old work")));
-        rig.post(LOBBY,Sender::Human,at("selected"),"another explicit send while already live").await;
-        assert_eq!(rig.exec.launches("selected").len(),1,"live/inflight receiver is not started twice");
-        rig.cmd(|reply| Cmd::Stop { session:"selected".into(),reply }).await.unwrap();
+        assert!(
+            !rig.exec
+                .sent("selected")
+                .iter()
+                .any(|s| s.contains("do not replay old work"))
+        );
+        rig.post(
+            LOBBY,
+            Sender::Human,
+            at("selected"),
+            "another explicit send while already live",
+        )
+        .await;
+        assert_eq!(
+            rig.exec.launches("selected").len(),
+            1,
+            "live/inflight receiver is not started twice"
+        );
+        rig.cmd(|reply| Cmd::Stop {
+            session: "selected".into(),
+            reply,
+        })
+        .await
+        .unwrap();
         assert!(!admission.contains("selected"));
-        rig.core.on_collab(CollabFact::MessageAppended {channel:message.channel,seq:message.seq}).await.unwrap();
+        rig.core
+            .on_collab(CollabFact::MessageAppended {
+                channel: message.channel,
+                seq: message.seq,
+            })
+            .await
+            .unwrap();
         rig.settle().await;
-        assert!(!admission.contains("selected"),"duplicate committed event must not re-admit a stopped session");
-        assert_eq!(rig.exec.launches("selected").len(),1);
-        rig.post(LOBBY,Sender::Human,vec![],"new untargeted group message for captain").await;
-        assert_eq!(rig.exec.launches("cap").len(),1,"ordinary group send must wake its captain");
+        assert!(
+            !admission.contains("selected"),
+            "duplicate committed event must not re-admit a stopped session"
+        );
+        assert_eq!(rig.exec.launches("selected").len(), 1);
+        rig.post(
+            LOBBY,
+            Sender::Human,
+            vec![],
+            "new untargeted group message for captain",
+        )
+        .await;
+        assert_eq!(
+            rig.exec.launches("cap").len(),
+            1,
+            "ordinary group send must wake its captain"
+        );
     }
 
     #[tokio::test]

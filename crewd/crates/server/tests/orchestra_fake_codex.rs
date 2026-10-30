@@ -1278,179 +1278,642 @@ async fn metadata_pending_public_stop_revokes_before_native_write() {
 }
 
 // The existing full serve/fake protocol seam; no provider account or project.
-async fn completion_receipt(c:&mut Client,identity:&Value,request:&str)->Value {
-    let until=tokio::time::Instant::now()+Duration::from_secs(8);
+async fn completion_receipt(c: &mut Client, identity: &Value, request: &str) -> Value {
+    let until = tokio::time::Instant::now() + Duration::from_secs(8);
     loop {
-        let receipt=c.call("command.lookup",json!({"dbId":identity["dbId"],"requestId":request})).await.unwrap();
-        if !matches!(receipt["phase"].as_str(),Some("admitted"|"dispatched")){return receipt}
-        assert!(tokio::time::Instant::now()<until,"original command did not settle: {receipt}");
+        let receipt = c
+            .call(
+                "command.lookup",
+                json!({"dbId":identity["dbId"],"requestId":request}),
+            )
+            .await
+            .unwrap();
+        if !matches!(receipt["phase"].as_str(), Some("admitted" | "dispatched")) {
+            return receipt;
+        }
+        assert!(
+            tokio::time::Instant::now() < until,
+            "original command did not settle: {receipt}"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
-async fn completion_command(c:&mut Client,identity:&Value,sid:&str,operation:&str,mut params:Value)->Value {
-    let request=uuid::Uuid::new_v4().to_string();
-    params["target"]=c.call("session.controlTarget",json!({"sessionId":sid})).await.unwrap();
+async fn completion_command(
+    c: &mut Client,
+    identity: &Value,
+    sid: &str,
+    operation: &str,
+    mut params: Value,
+) -> Value {
+    let request = uuid::Uuid::new_v4().to_string();
+    params["target"] = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
     c.call("command.submit",json!({"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":operation,"params":params}})).await.unwrap();
-    completion_receipt(c,identity,&request).await
+    completion_receipt(c, identity, &request).await
 }
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
-async fn completion_public_native_input_profile_and_history_have_one_real_callable_entry(){
-    use base64::{Engine,engine::general_purpose::STANDARD};
-    let f=Fixture::new();let mut options=f.options("ready");let o=options.orchestra.as_mut().unwrap();
-    o.claude=ClaudeProgram::Disabled;o.codex=CodexProgram::Path(artifact("fake_codex"));
-    o.codex_env=BTreeMap::from([("FAKE_CODEX_LOG".into(),f.log.display().to_string()),("FAKE_CODEX_MODE".into(),"completion".into())]);
-    let(stop_tx,stop_rx)=tokio::sync::oneshot::channel();let server=tokio::spawn(crewd_server::serve_with(f.data.clone(),options,async{let _=stop_rx.await;}));
-    let mut c=Client::connect(&f.data).await;
-    let identity=c.call("system.hello",json!({})).await.unwrap()["runtimeIdentity"].clone();
-    let crew=c.call("crew.create",json!({"title":"Native inputs history","workingDirectory":f.work})).await.unwrap();
-    let catalog=c.call("session.codex.tools",json!({"crewId":crew["id"]})).await.unwrap();
-    let selected_skill=json!({"name":catalog["skills"][0]["skills"][0]["name"],"path":catalog["skills"][0]["skills"][0]["path"]});
-    let first_profiles=c.call("session.codex.permissionProfiles",json!({"crewId":crew["id"]})).await.unwrap();assert_eq!(first_profiles["items"][0]["allowed"],true);
-    let sessions_before=c.call("session.list",json!({"crewId":crew["id"]})).await.unwrap();assert!(sessions_before.as_array().unwrap().is_empty());
-    assert!(c.call("session.codex.tools",json!({"crewId":crew["id"],"sessionId":"foreign"})).await.is_err());
-    assert!(c.call("session.codex.permissionProfiles",json!({})).await.is_err());
-    let bytes=b"Original separate attached text";let prepared_request=uuid::Uuid::new_v4().to_string();
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completion_public_native_input_profile_and_history_have_one_real_callable_entry() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let f = Fixture::new();
+    let mut options = f.options("ready");
+    let o = options.orchestra.as_mut().unwrap();
+    o.claude = ClaudeProgram::Disabled;
+    o.codex = CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env = BTreeMap::from([
+        ("FAKE_CODEX_LOG".into(), f.log.display().to_string()),
+        ("FAKE_CODEX_MODE".into(), "completion".into()),
+    ]);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = Client::connect(&f.data).await;
+    let identity = c.call("system.hello", json!({})).await.unwrap()["runtimeIdentity"].clone();
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Native inputs history","workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    let catalog = c
+        .call("session.codex.tools", json!({"crewId":crew["id"]}))
+        .await
+        .unwrap();
+    let selected_skill = json!({"name":catalog["skills"][0]["skills"][0]["name"],"path":catalog["skills"][0]["skills"][0]["path"]});
+    let first_profiles = c
+        .call(
+            "session.codex.permissionProfiles",
+            json!({"crewId":crew["id"]}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_profiles["items"][0]["allowed"], true);
+    let sessions_before = c
+        .call("session.list", json!({"crewId":crew["id"]}))
+        .await
+        .unwrap();
+    assert!(sessions_before.as_array().unwrap().is_empty());
+    assert!(
+        c.call(
+            "session.codex.tools",
+            json!({"crewId":crew["id"],"sessionId":"foreign"})
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        c.call("session.codex.permissionProfiles", json!({}))
+            .await
+            .is_err()
+    );
+    let bytes = b"Original separate attached text";
+    let prepared_request = uuid::Uuid::new_v4().to_string();
     let prepared=c.call("session.codex.inputPrepare",json!({"requestId":prepared_request,"crewId":crew["id"],"kind":"text","filename":"notes.txt","mimeType":"text/plain","sha256":crewd_store::codex_inputs::hash(bytes),"bytesBase64":STANDARD.encode(bytes)})).await.unwrap();
-    assert_eq!(prepared["operation"],"prepared");assert_eq!(native_calls(&f,"thread/start").len(),0,"prepare/catalog never opens native thread");assert_eq!(native_calls(&f,"turn/start").len(),0);
-    assert_eq!(c.call("session.codex.inputLookup",json!({"crewId":crew["id"],"requestId":prepared_request})).await.unwrap()["result"],prepared);
+    assert_eq!(prepared["operation"], "prepared");
+    assert_eq!(
+        native_calls(&f, "thread/start").len(),
+        0,
+        "prepare/catalog never opens native thread"
+    );
+    assert_eq!(native_calls(&f, "turn/start").len(), 0);
+    assert_eq!(
+        c.call(
+            "session.codex.inputLookup",
+            json!({"crewId":crew["id"],"requestId":prepared_request})
+        )
+        .await
+        .unwrap()["result"],
+        prepared
+    );
     assert!(c.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","brief":"Not dispatched legacy input","isolation":false,"codexInputs":{"inputs":[prepared["input"]]}})).await.is_err());
-    let request=uuid::Uuid::new_v4().to_string();
-    let task="Implement this exact task.\n你是 remains Human text.";
+    let request = uuid::Uuid::new_v4().to_string();
+    let task = "Implement this exact task.\n你是 remains Human text.";
     c.call("command.submit",json!({"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"session.start","params":{"crewId":crew["id"],"role":"captain","executor":"codex","title":"Native first input","brief":task,"isolation":false,"codexOptions":{"permissions":"synthetic-profile"},"codexInputs":{"inputs":[prepared["input"]],"skills":[selected_skill]}}}})).await.unwrap();
-    let receipt=completion_receipt(&mut c,&identity,&request).await;assert_eq!(receipt["phase"],"launched","{receipt}");
-    let sessions=c.call("session.list",json!({"crewId":crew["id"]})).await.unwrap();
-    let sid=sessions.as_array().unwrap()[0]["id"].as_str().unwrap().to_owned();
-    wait("original native first input",||native_calls(&f,"turn/start").len()==1).await;
-    let sent=native_calls(&f,"turn/start")[0].clone();assert_eq!(sent["params"]["input"][0]["text"],task);assert_eq!(sent["params"]["input"].as_array().unwrap().len(),3);
-    assert_eq!(native_calls(&f,"permissionProfile/list").len(),2);
-    assert_eq!(native_calls(&f,"thread/settings/update")[0]["params"]["permissions"],"synthetic-profile");
-    let profile=c.call("session.codex.permissionProfiles",json!({"sessionId":sid})).await.unwrap();assert_eq!(profile["items"][0]["id"],"synthetic-profile");
-    let before=std::fs::read_to_string(&f.log).unwrap();let methods:Vec<_>=before.lines().filter_map(|s|serde_json::from_str::<Value>(s).ok()).filter_map(|v|v["method"].as_str().map(str::to_owned)).collect();
-    assert!(methods.iter().position(|s|s=="thread/settings/update").unwrap()<methods.iter().position(|s|s=="turn/start").unwrap());
+    let receipt = completion_receipt(&mut c, &identity, &request).await;
+    assert_eq!(receipt["phase"], "launched", "{receipt}");
+    let sessions = c
+        .call("session.list", json!({"crewId":crew["id"]}))
+        .await
+        .unwrap();
+    let sid = sessions.as_array().unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    wait("original native first input", || {
+        native_calls(&f, "turn/start").len() == 1
+    })
+    .await;
+    let sent = native_calls(&f, "turn/start")[0].clone();
+    assert_eq!(sent["params"]["input"][0]["text"], task);
+    assert_eq!(sent["params"]["input"].as_array().unwrap().len(), 3);
+    assert_eq!(native_calls(&f, "permissionProfile/list").len(), 2);
+    assert_eq!(
+        native_calls(&f, "thread/settings/update")[0]["params"]["permissions"],
+        "synthetic-profile"
+    );
+    let profile = c
+        .call("session.codex.permissionProfiles", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    assert_eq!(profile["items"][0]["id"], "synthetic-profile");
+    let before = std::fs::read_to_string(&f.log).unwrap();
+    let methods: Vec<_> = before
+        .lines()
+        .filter_map(|s| serde_json::from_str::<Value>(s).ok())
+        .filter_map(|v| v["method"].as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        methods
+            .iter()
+            .position(|s| s == "thread/settings/update")
+            .unwrap()
+            < methods.iter().position(|s| s == "turn/start").unwrap()
+    );
     assert!(c.call("session.codex.inputDiscard",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew["id"],"input":prepared["input"]})).await.is_err());
     // Wait native completion before capturing the existing exact idle target.
-    let until=tokio::time::Instant::now()+Duration::from_secs(5);loop{if c.call("session.codex.inspect",json!({"sessionId":sid})).await.unwrap()["working"]==false{break}assert!(tokio::time::Instant::now()<until);tokio::task::yield_now().await;}
-    let reverted=completion_command(&mut c,&identity,&sid,"session.codex.revert",json!({"beforeTurnId":"original-turn"})).await;assert_eq!(reverted["phase"],"confirmed","{reverted}");
-    let refused=completion_command(&mut c,&identity,&sid,"session.codex.archive",json!({})).await;assert_eq!(refused["phase"],"suppressed");assert_eq!(native_calls(&f,"thread/archive").len(),0);
-    c.call("session.stop",json!({"sessionId":sid,"reason":"explicit history management"})).await.unwrap();c.stopped(&sid).await;
-    for(operation,status)in[("session.codex.archive","archived"),("session.codex.unarchive","active"),("session.codex.delete","deleted")]{
-        let before=native_calls(&f,"thread/resume").len();
-        let receipt=completion_command(&mut c,&identity,&sid,operation,if operation=="session.codex.delete"{json!({"confirmNativeHistoryDelete":true})}else{json!({})}).await;
-        assert_eq!(receipt["phase"],"confirmed","{receipt}");assert_eq!(c.call("session.codex.inspect",json!({"sessionId":sid})).await.unwrap()["nativeHistory"]["status"],status);
-        assert_eq!(native_calls(&f,"thread/resume").len(),before,"history operation cannot resume");
-        if status=="archived"||status=="deleted"{assert!(c.call("session.resume",json!({"sessionId":sid})).await.is_err());}
-    }
-    assert!(c.call("session.get",json!({"sessionId":sid})).await.is_ok(),"PCW session survives native delete");
-    stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
-}
-
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
-async fn completion_lost_history_ack_reopens_original_unknown_without_native_replay(){
-    let f=Fixture::new();let mut sid=String::new();let mut original_identity=Value::Null;let mut request=String::new();
-    for round in 0..2 {
-        let mut options=f.options("ready");let o=options.orchestra.as_mut().unwrap();o.claude=ClaudeProgram::Disabled;o.codex=CodexProgram::Path(artifact("fake_codex"));
-        o.codex_env=BTreeMap::from([("FAKE_CODEX_LOG".into(),f.log.display().to_string()),("FAKE_CODEX_MODE".into(),"completion,history_exit".into())]);
-        let(stop_tx,stop_rx)=tokio::sync::oneshot::channel();let server=tokio::spawn(crewd_server::serve_with(f.data.clone(),options,async{let _=stop_rx.await;}));
-        let mut c=Client::connect(&f.data).await;
-        if round==0 {
-            original_identity=c.call("system.hello",json!({})).await.unwrap()["runtimeIdentity"].clone();
-            let crew=c.call("crew.create",json!({"title":"Original uncertain history","workingDirectory":f.work})).await.unwrap();
-            let session=c.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","title":"Original history","brief":"","isolation":false})).await.unwrap();sid=session["id"].as_str().unwrap().to_owned();
-            wait("original empty runtime ready",||native_calls(&f,"thread/start").len()==1).await;
-            c.call("session.stop",json!({"sessionId":sid,"reason":"explicit native history"})).await.unwrap();c.stopped(&sid).await;
-            request=uuid::Uuid::new_v4().to_string();let target=c.call("session.controlTarget",json!({"sessionId":sid})).await.unwrap();
-            let original=json!({"requestId":request,"dbId":original_identity["dbId"],"runtimeBindingId":original_identity["runtimeBindingId"],"command":{"operation":"session.codex.archive","params":{"target":target}}});
-            c.call("command.submit",original.clone()).await.unwrap();let receipt=completion_receipt(&mut c,&original_identity,&request).await;assert_eq!(receipt["phase"],"unknown","{receipt}");
-            assert_eq!(native_calls(&f,"thread/archive").len(),1);
-            assert_eq!(c.call("command.submit",original.clone()).await.unwrap()["phase"],"unknown");
-            assert_eq!(native_calls(&f,"thread/archive").len(),1);
-            // Uncertain native history affects this source's mutation only; crew catalogs remain usable.
-            assert!(c.call("session.codex.permissionProfiles",json!({"crewId":crew["id"]})).await.is_ok());
-        } else {
-            assert!(c.call("session.resume",json!({"sessionId":sid})).await.is_err());
-            let receipt=c.call("command.lookup",json!({"dbId":original_identity["dbId"],"requestId":request})).await.unwrap();assert_eq!(receipt["phase"],"unknown");assert_eq!(receipt["historical"],true);
-            let inspection=c.call("session.codex.inspect",json!({"sessionId":sid})).await.unwrap();assert_eq!(inspection["nativeHistory"]["status"],"unknown");assert_eq!(inspection["running"],false);
+    let until = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if c.call("session.codex.inspect", json!({"sessionId":sid}))
+            .await
+            .unwrap()["working"]
+            == false
+        {
+            break;
         }
-        assert_eq!(native_calls(&f,"thread/resume").len(),0);assert_eq!(native_calls(&f,"turn/start").len(),0);
-        stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
+        assert!(tokio::time::Instant::now() < until);
+        tokio::task::yield_now().await;
     }
-    assert_eq!(native_calls(&f,"thread/start").len(),1);assert_eq!(native_calls(&f,"thread/archive").len(),1);
+    let reverted = completion_command(
+        &mut c,
+        &identity,
+        &sid,
+        "session.codex.revert",
+        json!({"beforeTurnId":"original-turn"}),
+    )
+    .await;
+    assert_eq!(reverted["phase"], "confirmed", "{reverted}");
+    let refused =
+        completion_command(&mut c, &identity, &sid, "session.codex.archive", json!({})).await;
+    assert_eq!(refused["phase"], "suppressed");
+    assert_eq!(native_calls(&f, "thread/archive").len(), 0);
+    c.call(
+        "session.stop",
+        json!({"sessionId":sid,"reason":"explicit history management"}),
+    )
+    .await
+    .unwrap();
+    c.stopped(&sid).await;
+    for (operation, status) in [
+        ("session.codex.archive", "archived"),
+        ("session.codex.unarchive", "active"),
+        ("session.codex.delete", "deleted"),
+    ] {
+        let before = native_calls(&f, "thread/resume").len();
+        let receipt = completion_command(
+            &mut c,
+            &identity,
+            &sid,
+            operation,
+            if operation == "session.codex.delete" {
+                json!({"confirmNativeHistoryDelete":true})
+            } else {
+                json!({})
+            },
+        )
+        .await;
+        assert_eq!(receipt["phase"], "confirmed", "{receipt}");
+        assert_eq!(
+            c.call("session.codex.inspect", json!({"sessionId":sid}))
+                .await
+                .unwrap()["nativeHistory"]["status"],
+            status
+        );
+        assert_eq!(
+            native_calls(&f, "thread/resume").len(),
+            before,
+            "history operation cannot resume"
+        );
+        if status == "archived" || status == "deleted" {
+            assert!(
+                c.call("session.resume", json!({"sessionId":sid}))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+    assert!(
+        c.call("session.get", json!({"sessionId":sid}))
+            .await
+            .is_ok(),
+        "PCW session survives native delete"
+    );
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(registry(&f.data).is_empty());
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
-#[ignore="requires exact approved immutable old19 helper path and hash"]
-async fn completion_exact_old19_writer_refuses20_before_spawn_and_preserves_owned_inputs(){
-    use base64::{Engine,engine::general_purpose::STANDARD};
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completion_lost_history_ack_reopens_original_unknown_without_native_replay() {
+    let f = Fixture::new();
+    let mut sid = String::new();
+    let mut original_identity = Value::Null;
+    let mut request = String::new();
+    for round in 0..2 {
+        let mut options = f.options("ready");
+        let o = options.orchestra.as_mut().unwrap();
+        o.claude = ClaudeProgram::Disabled;
+        o.codex = CodexProgram::Path(artifact("fake_codex"));
+        o.codex_env = BTreeMap::from([
+            ("FAKE_CODEX_LOG".into(), f.log.display().to_string()),
+            ("FAKE_CODEX_MODE".into(), "completion,history_exit".into()),
+        ]);
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async {
+            let _ = stop_rx.await;
+        }));
+        let mut c = Client::connect(&f.data).await;
+        if round == 0 {
+            original_identity =
+                c.call("system.hello", json!({})).await.unwrap()["runtimeIdentity"].clone();
+            let crew = c
+                .call(
+                    "crew.create",
+                    json!({"title":"Original uncertain history","workingDirectory":f.work}),
+                )
+                .await
+                .unwrap();
+            let session=c.call("session.start",json!({"crewId":crew["id"],"role":"captain","executor":"codex","title":"Original history","brief":"","isolation":false})).await.unwrap();
+            sid = session["id"].as_str().unwrap().to_owned();
+            wait("original empty runtime ready", || {
+                native_calls(&f, "thread/start").len() == 1
+            })
+            .await;
+            c.call(
+                "session.stop",
+                json!({"sessionId":sid,"reason":"explicit native history"}),
+            )
+            .await
+            .unwrap();
+            c.stopped(&sid).await;
+            request = uuid::Uuid::new_v4().to_string();
+            let target = c
+                .call("session.controlTarget", json!({"sessionId":sid}))
+                .await
+                .unwrap();
+            let original = json!({"requestId":request,"dbId":original_identity["dbId"],"runtimeBindingId":original_identity["runtimeBindingId"],"command":{"operation":"session.codex.archive","params":{"target":target}}});
+            c.call("command.submit", original.clone()).await.unwrap();
+            let receipt = completion_receipt(&mut c, &original_identity, &request).await;
+            assert_eq!(receipt["phase"], "unknown", "{receipt}");
+            assert_eq!(native_calls(&f, "thread/archive").len(), 1);
+            assert_eq!(
+                c.call("command.submit", original.clone()).await.unwrap()["phase"],
+                "unknown"
+            );
+            assert_eq!(native_calls(&f, "thread/archive").len(), 1);
+            // Uncertain native history affects this source's mutation only; crew catalogs remain usable.
+            assert!(
+                c.call(
+                    "session.codex.permissionProfiles",
+                    json!({"crewId":crew["id"]})
+                )
+                .await
+                .is_ok()
+            );
+        } else {
+            assert!(
+                c.call("session.resume", json!({"sessionId":sid}))
+                    .await
+                    .is_err()
+            );
+            let receipt = c
+                .call(
+                    "command.lookup",
+                    json!({"dbId":original_identity["dbId"],"requestId":request}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(receipt["phase"], "unknown");
+            assert_eq!(receipt["historical"], true);
+            let inspection = c
+                .call("session.codex.inspect", json!({"sessionId":sid}))
+                .await
+                .unwrap();
+            assert_eq!(inspection["nativeHistory"]["status"], "unknown");
+            assert_eq!(inspection["running"], false);
+        }
+        assert_eq!(native_calls(&f, "thread/resume").len(), 0);
+        assert_eq!(native_calls(&f, "turn/start").len(), 0);
+        stop_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(15), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(registry(&f.data).is_empty());
+    }
+    assert_eq!(native_calls(&f, "thread/start").len(), 1);
+    assert_eq!(native_calls(&f, "thread/archive").len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires exact approved immutable old19 helper path and hash"]
+async fn completion_exact_old19_writer_refuses20_before_spawn_and_preserves_owned_inputs() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
     use crewd_proto::codex_inputs::*;
-    let binary=std::path::PathBuf::from(std::env::var("PCW_CODEX_OLD19_CORE").unwrap());let expected=std::env::var("PCW_CODEX_OLD19_SHA256").unwrap();
-    assert_eq!(crewd_store::codex_inputs::hash(&std::fs::read(&binary).unwrap()),expected);
-    let f=Fixture::new();std::fs::create_dir_all(&f.data).unwrap();
-    let mut store=crewd_store::Store::open_data_dir(&f.data).unwrap();
+    let binary = std::path::PathBuf::from(std::env::var("PCW_CODEX_OLD19_CORE").unwrap());
+    let expected = std::env::var("PCW_CODEX_OLD19_SHA256").unwrap();
+    assert_eq!(
+        crewd_store::codex_inputs::hash(&std::fs::read(&binary).unwrap()),
+        expected
+    );
+    let f = Fixture::new();
+    std::fs::create_dir_all(&f.data).unwrap();
+    let mut store = crewd_store::Store::open_data_dir(&f.data).unwrap();
     store.conn().execute("INSERT INTO crews(id,title,working_directory,created_at,updated_at)VALUES('crew','Old writer controlled source',?1,'t','t')",[f.work.to_string_lossy().as_ref()]).unwrap();
     store.conn().execute("INSERT INTO sessions(id,crew_id,role,executor,agent_session_id,working_directory,desired,updated_at)VALUES('original-session','crew','worker','codex','original-native-thread',?1,'stopped','t')",[f.work.to_string_lossy().as_ref()]).unwrap();
-    let owner=crewd_store::codex_inputs::Owner{db_id:crewd_store::meta_get(store.conn(),"dbId").unwrap().unwrap(),principal:format!("local-human:{}",unsafe{libc::geteuid()})};
-    let body=b"Durable original owned input";let request=uuid::Uuid::new_v4().to_string();
-    let params=CodexInputPrepareParams{request_id:request.clone(),crew_id:"crew".into(),session_id:Some("original-session".into()),kind:CodexInputKind::Text,filename:"original.txt".into(),mime_type:"text/plain".into(),sha256:crewd_store::codex_inputs::hash(body),bytes_base64:STANDARD.encode(body)};
-    let prepared=store.with_tx(|c|crewd_store::codex_inputs::prepare(c,&owner,&params,body,"t")).unwrap();
-    let before_meta=crewd_store::meta_get(store.conn(),"codex.controls.v1/original-session").unwrap().unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&before_meta).unwrap()["version"],2);drop(store);
-    let log=std::fs::File::create(f.root.path().join("old19-terminal.log")).unwrap();
-    let mut old=tokio::process::Command::new(&binary).arg("--data-dir").arg(&f.data).arg("serve").arg("--codex").arg(artifact("fake_codex")).arg("--codex-env").arg(format!("FAKE_CODEX_LOG={}",f.log.display())).stdout(log.try_clone().unwrap()).stderr(log).kill_on_drop(true).spawn().unwrap();
-    let status=tokio::time::timeout(Duration::from_secs(10),old.wait()).await.unwrap().unwrap();
-    assert!(!status.success(),"old19 must refuse20 before socket or native startup");
-    let terminal=std::fs::read_to_string(f.root.path().join("old19-terminal.log")).unwrap();assert!(terminal.contains("20")&&terminal.contains("19"),"{terminal}");
+    let owner = crewd_store::codex_inputs::Owner {
+        db_id: crewd_store::meta_get(store.conn(), "dbId")
+            .unwrap()
+            .unwrap(),
+        principal: format!("local-human:{}", unsafe { libc::geteuid() }),
+    };
+    let body = b"Durable original owned input";
+    let request = uuid::Uuid::new_v4().to_string();
+    let params = CodexInputPrepareParams {
+        request_id: request.clone(),
+        crew_id: "crew".into(),
+        session_id: Some("original-session".into()),
+        kind: CodexInputKind::Text,
+        filename: "original.txt".into(),
+        mime_type: "text/plain".into(),
+        sha256: crewd_store::codex_inputs::hash(body),
+        bytes_base64: STANDARD.encode(body),
+    };
+    let prepared = store
+        .with_tx(|c| crewd_store::codex_inputs::prepare(c, &owner, &params, body, "t"))
+        .unwrap();
+    let before_meta = crewd_store::meta_get(store.conn(), "codex.controls.v1/original-session")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&before_meta).unwrap()["version"],
+        2
+    );
+    drop(store);
+    let log = std::fs::File::create(f.root.path().join("old19-terminal.log")).unwrap();
+    let mut old = tokio::process::Command::new(&binary)
+        .arg("--data-dir")
+        .arg(&f.data)
+        .arg("serve")
+        .arg("--codex")
+        .arg(artifact("fake_codex"))
+        .arg("--codex-env")
+        .arg(format!("FAKE_CODEX_LOG={}", f.log.display()))
+        .stdout(log.try_clone().unwrap())
+        .stderr(log)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(10), old.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !status.success(),
+        "old19 must refuse20 before socket or native startup"
+    );
+    let terminal = std::fs::read_to_string(f.root.path().join("old19-terminal.log")).unwrap();
+    assert!(
+        terminal.contains("20") && terminal.contains("19"),
+        "{terminal}"
+    );
     assert!(!f.data.join("crewd.sock").exists());
-    assert_eq!(native_calls(&f,"initialize").len(),0);assert_eq!(native_calls(&f,"thread/resume").len(),0);assert_eq!(native_calls(&f,"turn/start").len(),0);
-    let store=crewd_store::Store::open_data_dir(&f.data).unwrap();assert_eq!(crewd_store::meta_get(store.conn(),"codex.controls.v1/original-session").unwrap().unwrap(),before_meta);
-    assert_eq!(crewd_store::codex_inputs::lookup(store.conn(),&owner,&CodexInputLookupParams{crew_id:"crew".into(),request_id:request}).unwrap(),CodexInputLookup::Known{result:prepared});
-    assert_eq!(store.conn().query_row("SELECT body FROM codex_native_inputs",[],|r|r.get::<_,Vec<u8>>(0)).unwrap(),body);
-    assert_eq!(store.conn().query_row("SELECT agent_session_id FROM sessions WHERE id='original-session'",[],|r|r.get::<_,String>(0)).unwrap(),"original-native-thread");
-    assert_eq!(crewd_store::codex_inputs::hash(&std::fs::read(&binary).unwrap()),expected);
-    println!("PASS exact old19 refused20 before all native spawn/input, original binding/metadata/input/receipt unchanged");
+    assert_eq!(native_calls(&f, "initialize").len(), 0);
+    assert_eq!(native_calls(&f, "thread/resume").len(), 0);
+    assert_eq!(native_calls(&f, "turn/start").len(), 0);
+    let store = crewd_store::Store::open_data_dir(&f.data).unwrap();
+    assert_eq!(
+        crewd_store::meta_get(store.conn(), "codex.controls.v1/original-session")
+            .unwrap()
+            .unwrap(),
+        before_meta
+    );
+    assert_eq!(
+        crewd_store::codex_inputs::lookup(
+            store.conn(),
+            &owner,
+            &CodexInputLookupParams {
+                crew_id: "crew".into(),
+                request_id: request
+            }
+        )
+        .unwrap(),
+        CodexInputLookup::Known { result: prepared }
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row("SELECT body FROM codex_native_inputs", [], |r| r
+                .get::<_, Vec<u8>>(0))
+            .unwrap(),
+        body
+    );
+    assert_eq!(
+        store
+            .conn()
+            .query_row(
+                "SELECT agent_session_id FROM sessions WHERE id='original-session'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "original-native-thread"
+    );
+    assert_eq!(
+        crewd_store::codex_inputs::hash(&std::fs::read(&binary).unwrap()),
+        expected
+    );
+    println!(
+        "PASS exact old19 refused20 before all native spawn/input, original binding/metadata/input/receipt unchanged"
+    );
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
-async fn completion_crew_profile_result_cannot_be_laundered_into_tools_shape(){
-    let f=Fixture::new();let mut options=f.options("ready");let o=options.orchestra.as_mut().unwrap();o.claude=ClaudeProgram::Disabled;o.codex=CodexProgram::Path(artifact("fake_codex"));o.codex_env=BTreeMap::from([("FAKE_CODEX_LOG".into(),f.log.display().to_string()),("FAKE_CODEX_MODE".into(),"completion,profile_wrong_shape".into())]);
-    let(stop_tx,stop_rx)=tokio::sync::oneshot::channel();let server=tokio::spawn(crewd_server::serve_with(f.data.clone(),options,async{let _=stop_rx.await;}));let mut c=Client::connect(&f.data).await;
-    let crew=c.call("crew.create",json!({"title":"Closed catalog projection","workingDirectory":f.work})).await.unwrap();
-    assert!(c.call("session.codex.permissionProfiles",json!({"crewId":crew["id"]})).await.is_err(),"profile request must not accept a tools-shaped native response");
-    let tools=c.call("session.codex.tools",json!({"crewId":crew["id"]})).await.unwrap();assert!(tools["skills"].is_array());assert!(tools.get("items").is_none());assert!(native_calls(&f,"thread/start").is_empty());assert!(native_calls(&f,"turn/start").is_empty());
-    stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completion_crew_profile_result_cannot_be_laundered_into_tools_shape() {
+    let f = Fixture::new();
+    let mut options = f.options("ready");
+    let o = options.orchestra.as_mut().unwrap();
+    o.claude = ClaudeProgram::Disabled;
+    o.codex = CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env = BTreeMap::from([
+        ("FAKE_CODEX_LOG".into(), f.log.display().to_string()),
+        (
+            "FAKE_CODEX_MODE".into(),
+            "completion,profile_wrong_shape".into(),
+        ),
+    ]);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = Client::connect(&f.data).await;
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Closed catalog projection","workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        c.call(
+            "session.codex.permissionProfiles",
+            json!({"crewId":crew["id"]})
+        )
+        .await
+        .is_err(),
+        "profile request must not accept a tools-shaped native response"
+    );
+    let tools = c
+        .call("session.codex.tools", json!({"crewId":crew["id"]}))
+        .await
+        .unwrap();
+    assert!(tools["skills"].is_array());
+    assert!(tools.get("items").is_none());
+    assert!(native_calls(&f, "thread/start").is_empty());
+    assert!(native_calls(&f, "turn/start").is_empty());
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(registry(&f.data).is_empty());
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=2)]
-async fn completion_native_first_inputs_require_nonblank_original_task_before_any_admission(){
-    use base64::{Engine,engine::general_purpose::STANDARD};
-    let f=Fixture::new();let mut options=f.options("ready");let o=options.orchestra.as_mut().unwrap();
-    o.claude=ClaudeProgram::Disabled;o.codex=CodexProgram::Path(artifact("fake_codex"));
-    o.codex_env=BTreeMap::from([("FAKE_CODEX_LOG".into(),f.log.display().to_string()),("FAKE_CODEX_MODE".into(),"completion".into())]);
-    let(stop_tx,stop_rx)=tokio::sync::oneshot::channel();let server=tokio::spawn(crewd_server::serve_with(f.data.clone(),options,async{let _=stop_rx.await;}));
-    let mut c=Client::connect(&f.data).await;let identity=c.call("system.hello",json!({})).await.unwrap()["runtimeIdentity"].clone();
-    let mut violations=vec![];
-    for (brief,skill_only) in [("",false),(" \n\t",false),("",true),(" \n\t",true)]{
-        let crew=c.call("crew.create",json!({"title":"No orphan first input","workingDirectory":f.work})).await.unwrap();
-        let original=uuid::Uuid::new_v4().to_string();let bytes=b"Unused original input survives refusal";
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completion_native_first_inputs_require_nonblank_original_task_before_any_admission() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let f = Fixture::new();
+    let mut options = f.options("ready");
+    let o = options.orchestra.as_mut().unwrap();
+    o.claude = ClaudeProgram::Disabled;
+    o.codex = CodexProgram::Path(artifact("fake_codex"));
+    o.codex_env = BTreeMap::from([
+        ("FAKE_CODEX_LOG".into(), f.log.display().to_string()),
+        ("FAKE_CODEX_MODE".into(), "completion".into()),
+    ]);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = Client::connect(&f.data).await;
+    let identity = c.call("system.hello", json!({})).await.unwrap()["runtimeIdentity"].clone();
+    let mut violations = vec![];
+    for (brief, skill_only) in [("", false), (" \n\t", false), ("", true), (" \n\t", true)] {
+        let crew = c
+            .call(
+                "crew.create",
+                json!({"title":"No orphan first input","workingDirectory":f.work}),
+            )
+            .await
+            .unwrap();
+        let original = uuid::Uuid::new_v4().to_string();
+        let bytes = b"Unused original input survives refusal";
         let prepared=c.call("session.codex.inputPrepare",json!({"requestId":original,"crewId":crew["id"],"kind":"text","filename":"original.txt","mimeType":"text/plain","sha256":crewd_store::codex_inputs::hash(bytes),"bytesBase64":STANDARD.encode(bytes)})).await.unwrap();
-        let selection=if skill_only{json!({"skills":[{"name":"synthetic-skill","path":f.work.canonicalize().unwrap().join("SKILL.md")} ]})}else{json!({"inputs":[prepared["input"]]})};
-        let request=uuid::Uuid::new_v4().to_string();
+        let selection = if skill_only {
+            json!({"skills":[{"name":"synthetic-skill","path":f.work.canonicalize().unwrap().join("SKILL.md")} ]})
+        } else {
+            json!({"inputs":[prepared["input"]]})
+        };
+        let request = uuid::Uuid::new_v4().to_string();
         let submitted=c.call("command.submit",json!({"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"session.start","params":{"crewId":crew["id"],"role":"worker","executor":"codex","title":"Input","brief":brief,"isolation":false,"codexInputs":selection}}})).await;
-        let receipt=if submitted.is_ok(){completion_receipt(&mut c,&identity,&request).await}else{c.call("command.lookup",json!({"dbId":identity["dbId"],"requestId":request})).await.unwrap()};
-        let sessions=c.call("session.list",json!({"crewId":crew["id"]})).await.unwrap();
-        let db=rusqlite::Connection::open_with_flags(f.data.join(crewd_store::DB_FILE),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        let state:String=db.query_row("SELECT state FROM codex_native_inputs WHERE id=?1",[prepared["input"]["inputId"].as_str().unwrap()],|r|r.get(0)).unwrap();drop(db);
-        let lookup=c.call("session.codex.inputLookup",json!({"crewId":crew["id"],"requestId":original})).await.unwrap();assert_eq!(lookup["result"],prepared);
-        println!("blank={brief:?} skill_only={skill_only} submit_error={} receipt={receipt} sessions={} ref_state={state} turn_count={}",submitted.is_err(),sessions.as_array().unwrap().len(),native_calls(&f,"turn/start").len());
-        if submitted.is_ok()||!receipt.is_null()||!sessions.as_array().unwrap().is_empty()||state!="prepared"{violations.push(format!("blank={brief:?} skill_only={skill_only} admitted or consumed"));}
+        let receipt = if submitted.is_ok() {
+            completion_receipt(&mut c, &identity, &request).await
+        } else {
+            c.call(
+                "command.lookup",
+                json!({"dbId":identity["dbId"],"requestId":request}),
+            )
+            .await
+            .unwrap()
+        };
+        let sessions = c
+            .call("session.list", json!({"crewId":crew["id"]}))
+            .await
+            .unwrap();
+        let db = rusqlite::Connection::open_with_flags(
+            f.data.join(crewd_store::DB_FILE),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let state: String = db
+            .query_row(
+                "SELECT state FROM codex_native_inputs WHERE id=?1",
+                [prepared["input"]["inputId"].as_str().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        drop(db);
+        let lookup = c
+            .call(
+                "session.codex.inputLookup",
+                json!({"crewId":crew["id"],"requestId":original}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(lookup["result"], prepared);
+        println!(
+            "blank={brief:?} skill_only={skill_only} submit_error={} receipt={receipt} sessions={} ref_state={state} turn_count={}",
+            submitted.is_err(),
+            sessions.as_array().unwrap().len(),
+            native_calls(&f, "turn/start").len()
+        );
+        if submitted.is_ok()
+            || !receipt.is_null()
+            || !sessions.as_array().unwrap().is_empty()
+            || state != "prepared"
+        {
+            violations.push(format!(
+                "blank={brief:?} skill_only={skill_only} admitted or consumed"
+            ));
+        }
     }
-    if !native_calls(&f,"initialize").is_empty()||!native_calls(&f,"thread/start").is_empty()||!native_calls(&f,"turn/start").is_empty(){violations.push("blank native input physically spawned".into());}
+    if !native_calls(&f, "initialize").is_empty()
+        || !native_calls(&f, "thread/start").is_empty()
+        || !native_calls(&f, "turn/start").is_empty()
+    {
+        violations.push("blank native input physically spawned".into());
+    }
     // No selection still permits the original intentionally empty session.
-    let crew=c.call("crew.create",json!({"title":"Original empty session","workingDirectory":f.work})).await.unwrap();let request=uuid::Uuid::new_v4().to_string();
+    let crew = c
+        .call(
+            "crew.create",
+            json!({"title":"Original empty session","workingDirectory":f.work}),
+        )
+        .await
+        .unwrap();
+    let request = uuid::Uuid::new_v4().to_string();
     c.call("command.submit",json!({"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":{"operation":"session.start","params":{"crewId":crew["id"],"role":"worker","executor":"codex","title":"Empty","brief":"","isolation":false}}})).await.unwrap();
-    assert_eq!(completion_receipt(&mut c,&identity,&request).await["phase"],"launched");
-    assert_eq!(native_calls(&f,"turn/start").len(),0);
-    stop_tx.send(()).unwrap();tokio::time::timeout(Duration::from_secs(15),server).await.unwrap().unwrap().unwrap();assert!(registry(&f.data).is_empty());
-    assert!(violations.is_empty(),"{}",violations.join("; "));
+    assert_eq!(
+        completion_receipt(&mut c, &identity, &request).await["phase"],
+        "launched"
+    );
+    assert_eq!(native_calls(&f, "turn/start").len(), 0);
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(15), server)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(registry(&f.data).is_empty());
+    assert!(violations.is_empty(), "{}", violations.join("; "));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1471,18 +1934,34 @@ async fn unread_public_start_reply_does_not_relaunch_after_disconnect_or_restart
             ("FAKE_CODEX_MODE".into(), "completion".into()),
         ]);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async { let _ = rx.await; }));
+        let server = tokio::spawn(crewd_server::serve_with(f.data.clone(), options, async {
+            let _ = rx.await;
+        }));
         let mut c = Client::connect(&f.data).await;
         if round == 0 {
             identity = c.call("system.hello", json!({})).await.unwrap()["runtimeIdentity"].clone();
-            let crew = c.call("crew.create", json!({"title":"Unread public start","workingDirectory":f.work})).await.unwrap();
+            let crew = c
+                .call(
+                    "crew.create",
+                    json!({"title":"Unread public start","workingDirectory":f.work}),
+                )
+                .await
+                .unwrap();
             let command = json!({"operation":"session.start","params":{"crewId":crew["id"],"role":"worker","executor":"codex","brief":"SYNTHETIC_UNREAD_START_ONCE","isolation":false,"model":null,"effort":null,"title":null}});
-            let mut submitter = tokio::net::UnixStream::connect(f.data.join("crewd.sock")).await.unwrap();
+            let mut submitter = tokio::net::UnixStream::connect(f.data.join("crewd.sock"))
+                .await
+                .unwrap();
             let packet = json!({"id":1,"method":"command.submit","params":{"requestId":request,"dbId":identity["dbId"],"runtimeBindingId":identity["runtimeBindingId"],"command":command}});
-            submitter.write_all(format!("{packet}\n").as_bytes()).await.unwrap();
+            submitter
+                .write_all(format!("{packet}\n").as_bytes())
+                .await
+                .unwrap();
             // Independent native evidence proves dispatch before disconnect;
             // no byte of the submit response is ever read.
-            wait("unread public start executed", || turn_count(&f,"SYNTHETIC_UNREAD_START_ONCE") == 1).await;
+            wait("unread public start executed", || {
+                turn_count(&f, "SYNTHETIC_UNREAD_START_ONCE") == 1
+            })
+            .await;
             drop(submitter);
             original = completion_receipt(&mut c, &identity, &request).await;
             assert_eq!(original["phase"], "launched", "{original}");
@@ -1490,20 +1969,43 @@ async fn unread_public_start_reply_does_not_relaunch_after_disconnect_or_restart
             sid = original["result"]["sessionId"].as_str().unwrap().to_owned();
             drop(c);
             c = Client::connect(&f.data).await;
-            assert_eq!(c.call("command.lookup", json!({"requestId":request,"dbId":identity["dbId"]})).await.unwrap(), original);
+            assert_eq!(
+                c.call(
+                    "command.lookup",
+                    json!({"requestId":request,"dbId":identity["dbId"]})
+                )
+                .await
+                .unwrap(),
+                original
+            );
         } else {
-            let recovered = c.call("command.lookup", json!({"requestId":request,"dbId":identity["dbId"]})).await.unwrap();
+            let recovered = c
+                .call(
+                    "command.lookup",
+                    json!({"requestId":request,"dbId":identity["dbId"]}),
+                )
+                .await
+                .unwrap();
             assert_eq!(recovered["historical"], true);
             assert_eq!(recovered["requestId"], request);
             assert_eq!(recovered["command"], original["command"]);
             assert_eq!(recovered["result"], original["result"]);
-            assert_eq!(c.call("session.live", json!({"sessionId":sid})).await.unwrap()["running"], false);
+            assert_eq!(
+                c.call("session.live", json!({"sessionId":sid}))
+                    .await
+                    .unwrap()["running"],
+                false
+            );
         }
         tx.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(15), server).await.unwrap().unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(15), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         assert!(registry(&f.data).is_empty());
     }
-    assert_eq!(native_calls(&f,"thread/start").len(), 1);
-    assert_eq!(native_calls(&f,"thread/resume").len(), 0);
-    assert_eq!(native_calls(&f,"turn/start").len(), 1);
+    assert_eq!(native_calls(&f, "thread/start").len(), 1);
+    assert_eq!(native_calls(&f, "thread/resume").len(), 0);
+    assert_eq!(native_calls(&f, "turn/start").len(), 1);
 }

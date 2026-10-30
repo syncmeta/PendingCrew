@@ -440,7 +440,10 @@ impl Knowledge {
     ) -> Result<Option<DataChangeResult>> {
         self.existing(id, origin, principal, payload)
     }
-    #[expect(clippy::too_many_arguments, reason = "Keep request identity, authority, mutations and Human confirmation explicit at the atomic transaction boundary")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep request identity, authority, mutations and Human confirmation explicit at the atomic transaction boundary"
+    )]
     pub fn apply(
         &mut self,
         id: &str,
@@ -832,7 +835,8 @@ impl Knowledge {
                 }
             };
             for capture in &mut stored.captures {
-                if capture.live && capture.namespace == p.context.namespace
+                if capture.live
+                    && capture.namespace == p.context.namespace
                     && let Some(revision) =
                         restored_revisions.get(&(capture.kind.clone(), capture.id.clone()))
                 {

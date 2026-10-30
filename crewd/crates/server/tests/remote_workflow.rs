@@ -554,8 +554,7 @@ async fn remote_human_knowledge_recovery_routes_keep_context_and_live_grant() {
 }
 
 #[tokio::test]
-async fn public_pair_backup_refusal_preserves_revocation_same_server_identity_and_accept_witness()
- {
+async fn public_pair_backup_refusal_preserves_revocation_same_server_identity_and_accept_witness() {
     let root = tempfile::tempdir().unwrap().keep();
     eprintln!("Public remote restore evidence: {}", root.display());
     let mut original = service(&root).await;
@@ -571,7 +570,11 @@ async fn public_pair_backup_refusal_preserves_revocation_same_server_identity_an
     stopped(original).await;
     let lock = crewd_server::lock_data_dir(&root).unwrap();
     let refusal = crewd_store::backup::restore(&root, &backup).unwrap_err();
-    assert!(refusal.to_string().contains("Core-only restore cannot replace a knowledge workspace"));
+    assert!(
+        refusal
+            .to_string()
+            .contains("Core-only restore cannot replace a knowledge workspace")
+    );
     drop(lock);
     assert_eq!(std::fs::read(&backup).unwrap(), old_bytes);
     assert_eq!(
@@ -1075,7 +1078,12 @@ async fn slow_tls_reader_revoke_cancels_partial_frame_denies_queued_mutation_and
     // This validates transport cancellation without withdrawn document CRUD.
     let channel = format!("{}/lobby", crew["id"].as_str().unwrap());
     for _ in 0..4 {
-        local(&mut running.owner, "message.post", json!({"channelId":channel,"text":"x".repeat(250_000)})).await;
+        local(
+            &mut running.owner,
+            "message.post",
+            json!({"channelId":channel,"text":"x".repeat(250_000)}),
+        )
+        .await;
     }
     let mut wire = serde_json::to_vec(
         &json!({"id":1000,"method":"message.list","params":{"channelId":channel}}),
@@ -1329,7 +1337,12 @@ async fn remote_global_shutdown_retires_a_still_authorized_kernel_blocked_writer
     // This validates transport cancellation without withdrawn document CRUD.
     let channel = format!("{}/lobby", crew["id"].as_str().unwrap());
     for _ in 0..4 {
-        local(&mut running.owner, "message.post", json!({"channelId":channel,"text":"d".repeat(250_000)})).await;
+        local(
+            &mut running.owner,
+            "message.post",
+            json!({"channelId":channel,"text":"d".repeat(250_000)}),
+        )
+        .await;
     }
     let mut wire = serde_json::to_vec(
         &json!({"id":9000,"method":"message.list","params":{"channelId":channel}}),

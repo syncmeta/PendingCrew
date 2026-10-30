@@ -386,10 +386,17 @@ impl Fake {
                     "PostToolUse",
                     serde_json::json!({"prompt_id":prompt,"tool_name":"Synthetic","tool_input":{}}),
                 );
-                if let Some(c) = C13_FIXTURE.get().filter(|c| c.gate.join("arm").is_file() && !c.gate.join("released").is_file()) {
+                if let Some(c) = C13_FIXTURE
+                    .get()
+                    .filter(|c| c.gate.join("arm").is_file() && !c.gate.join("released").is_file())
+                {
                     assert!(self.managed_hook("PreToolUse", serde_json::json!({"prompt_id":prompt,"tool_name":"Synthetic","tool_input":{}})));
                     std::fs::write(c.gate.join("managed-prompt"), prompt.as_bytes()).unwrap();
-                    std::fs::write(c.gate.join("busy-written"), b"authenticated task callback completed").unwrap();
+                    std::fs::write(
+                        c.gate.join("busy-written"),
+                        b"authenticated task callback completed",
+                    )
+                    .unwrap();
                     while !c.gate.join("release").is_file() {
                         c.check();
                         std::thread::sleep(Duration::from_millis(10));

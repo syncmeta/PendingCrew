@@ -95,7 +95,10 @@ impl CodexSettingsPatch {
         if self.permissions.is_some() && self.sandbox.is_some() {
             return Err("native permissions and sandbox are mutually exclusive");
         }
-        for s in [&self.model, &self.effort, &self.permissions].into_iter().flatten() {
+        for s in [&self.model, &self.effort, &self.permissions]
+            .into_iter()
+            .flatten()
+        {
             if s.trim().is_empty() || s.len() > 256 || s.chars().any(char::is_control) {
                 return Err("invalid Codex model/effort");
             }
@@ -223,10 +226,20 @@ pub struct CodexHistoryPage {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum CodexHistoryAction { Archive, Unarchive, Delete, Revert }
+pub enum CodexHistoryAction {
+    Archive,
+    Unarchive,
+    Delete,
+    Revert,
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum CodexNativeHistoryStatus { Active, Archived, Deleted, Unknown }
+pub enum CodexNativeHistoryStatus {
+    Active,
+    Archived,
+    Deleted,
+    Unknown,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CodexNativeHistoryState {
@@ -370,25 +383,44 @@ mod completion_contract_tests {
 
     #[test]
     fn completion_named_permission_selection_is_closed_and_excludes_sandbox() {
-        let selected: CodexSettingsPatch = serde_json::from_value(json!({"permissions":"read-only"})).expect("typed native permission selector must be wired");
+        let selected: CodexSettingsPatch =
+            serde_json::from_value(json!({"permissions":"read-only"}))
+                .expect("typed native permission selector must be wired");
         selected.validate().unwrap();
-        let conflict: CodexSettingsPatch = serde_json::from_value(json!({"permissions":"read-only","sandbox":{"type":"dangerFullAccess"}})).unwrap();
+        let conflict: CodexSettingsPatch = serde_json::from_value(
+            json!({"permissions":"read-only","sandbox":{"type":"dangerFullAccess"}}),
+        )
+        .unwrap();
         assert!(conflict.validate().is_err());
-        assert!(serde_json::from_value::<CodexSettingsPatch>(json!({"config":{"permissions":"anything"}})).is_err());
+        assert!(
+            serde_json::from_value::<CodexSettingsPatch>(
+                json!({"config":{"permissions":"anything"}})
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn completion_native_history_commands_are_original_typed_human_operations() {
-        let target=json!({"sessionId":"original","generation":"birth","controlRevision":"7","turnId":null});
-        for (operation,extra) in [
-            ("session.codex.archive",json!({})),
-            ("session.codex.unarchive",json!({})),
-            ("session.codex.delete",json!({"confirmNativeHistoryDelete":true})),
-            ("session.codex.revert",json!({"beforeTurnId":"original-turn"})),
+        let target = json!({"sessionId":"original","generation":"birth","controlRevision":"7","turnId":null});
+        for (operation, extra) in [
+            ("session.codex.archive", json!({})),
+            ("session.codex.unarchive", json!({})),
+            (
+                "session.codex.delete",
+                json!({"confirmNativeHistoryDelete":true}),
+            ),
+            (
+                "session.codex.revert",
+                json!({"beforeTurnId":"original-turn"}),
+            ),
         ] {
-            let mut params=extra;params["target"]=target.clone();
-            let cmd:PublicCommand=serde_json::from_value(json!({"operation":operation,"params":params})).expect("native history operation is a closed public command, never a raw RPC");
-            assert_eq!(cmd.method(),operation);
+            let mut params = extra;
+            params["target"] = target.clone();
+            let cmd: PublicCommand =
+                serde_json::from_value(json!({"operation":operation,"params":params}))
+                    .expect("native history operation is a closed public command, never a raw RPC");
+            assert_eq!(cmd.method(), operation);
         }
     }
 }

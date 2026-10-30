@@ -488,11 +488,7 @@ fn rpc_drives_every_client_method() {
             r#"{"crewId":"local-aaaa","title":"missing create request"}"#,
             Code(-32602),
         ),
-        (
-            "document.get",
-            r#"{"id":7}"#,
-            Code(-32602),
-        ),
+        ("document.get", r#"{"id":7}"#, Code(-32602)),
         ("document.list", r#"{"crewId":7}"#, Code(-32602)),
         (
             "document.update",
@@ -645,30 +641,102 @@ fn rpc_drives_every_client_method() {
         ("judgment.inspect", "null", Code(-32602)),
         // Knowledge writes require a request/revision/source envelope; a channel
         // alone must be rejected before a link or workspace can be created.
-        ("channel.knowledgeLink", r#"{"channelId":"local-aaaa/lobby"}"#, Code(-32602)),
-        ("channel.knowledgeUnlink", r#"{"channelId":"local-aaaa/lobby"}"#, Code(-32602)),
-        ("channel.knowledgeList", r#"{"channelId":"local-aaaa/lobby","limit":-1}"#, Code(-32602)),
-        ("channel.workTagsSet", r#"{"channelId":"local-aaaa/lobby","tags":[]}"#, Code(-32602)),
+        (
+            "channel.knowledgeLink",
+            r#"{"channelId":"local-aaaa/lobby"}"#,
+            Code(-32602),
+        ),
+        (
+            "channel.knowledgeUnlink",
+            r#"{"channelId":"local-aaaa/lobby"}"#,
+            Code(-32602),
+        ),
+        (
+            "channel.knowledgeList",
+            r#"{"channelId":"local-aaaa/lobby","limit":-1}"#,
+            Code(-32602),
+        ),
+        (
+            "channel.workTagsSet",
+            r#"{"channelId":"local-aaaa/lobby","tags":[]}"#,
+            Code(-32602),
+        ),
         // A crew ID is not a bound DataContext. Each route must parse its own
         // closed DTO and reject the missing authority/DB/epoch/generation before
         // any workspace initialization, SQL submission, preview or restore.
-        ("data.confirm", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.history", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.object.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.object.list", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.preview", r#"{"context":{"crewId":"local-aaaa"},"statements":[]}"#, Code(-32602)),
-        ("data.preview.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.query", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.request.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.restore", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.schema.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.snapshots", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.submit", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
-        ("data.table.get", r#"{"context":{"crewId":"local-aaaa"}}"#, Code(-32602)),
+        (
+            "data.confirm",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.history",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.object.get",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.object.list",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.preview",
+            r#"{"context":{"crewId":"local-aaaa"},"statements":[]}"#,
+            Code(-32602),
+        ),
+        (
+            "data.preview.get",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.query",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.request.get",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.restore",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.schema.get",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.snapshots",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.submit",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
+        (
+            "data.table.get",
+            r#"{"context":{"crewId":"local-aaaa"}}"#,
+            Code(-32602),
+        ),
         // Workspace inspection itself is a safe read, including uninitialized.
         ("data.workspace.get", r#"{"crewId":"local-aaaa"}"#, Ok),
         // Missing Human task text/request is not permission to create an ask.
-        ("humanTask.create", r#"{"crewId":"local-aaaa","channelId":"local-aaaa/lobby"}"#, Code(-32602)),
+        (
+            "humanTask.create",
+            r#"{"crewId":"local-aaaa","channelId":"local-aaaa/lobby"}"#,
+            Code(-32602),
+        ),
         // Each rpc CLI invocation is an independent observer connection. Do not
         // claim management or exit the fixture: malformed empty-DTO objects are
         // rejected; an actual exit by a non-owner is forbidden.
@@ -679,36 +747,100 @@ fn rpc_drives_every_client_method() {
         ("local.clientTrust.status", "{}", Ok),
         ("personalDraft.status", "{}", Ok),
         // A partial space/member scope cannot authorize personal draft access.
-        ("personalDraft.branches", r#"{"scope":{"spaceId":"not-approved"}}"#, Code(-32602)),
-        ("personalDraft.catalog", r#"{"scope":{"spaceId":"not-approved"}}"#, Code(-32602)),
-        ("personalDraft.members", r#"{"spaceId":"not-approved"}"#, Code(-32602)),
-        ("personalDraft.requestFence", r#"{"original":{}}"#, Code(-32602)),
+        (
+            "personalDraft.branches",
+            r#"{"scope":{"spaceId":"not-approved"}}"#,
+            Code(-32602),
+        ),
+        (
+            "personalDraft.catalog",
+            r#"{"scope":{"spaceId":"not-approved"}}"#,
+            Code(-32602),
+        ),
+        (
+            "personalDraft.members",
+            r#"{"spaceId":"not-approved"}"#,
+            Code(-32602),
+        ),
+        (
+            "personalDraft.requestFence",
+            r#"{"original":{}}"#,
+            Code(-32602),
+        ),
         // No token is generated or enrollment begun: the signed/UUID envelopes
         // remain required even while the fixture listener is disabled.
-        ("remote.enrollmentCreate", r#"{"computerLabel":"offline fixture"}"#, Code(-32602)),
-        ("remote.enrollmentLookup", r#"{"enrollmentId":"11111111-1111-4111-8111-111111111111"}"#, Code(-32602)),
+        (
+            "remote.enrollmentCreate",
+            r#"{"computerLabel":"offline fixture"}"#,
+            Code(-32602),
+        ),
+        (
+            "remote.enrollmentLookup",
+            r#"{"enrollmentId":"11111111-1111-4111-8111-111111111111"}"#,
+            Code(-32602),
+        ),
         ("resource.requestLookup", r#"{"requestId":7}"#, Code(-32602)),
         // These DTO negatives exercise the public typed parsers, not provider
         // history/model execution. No valid input bytes or live source is given.
         ("session.claude.history", r#"{"sessionId":7}"#, Code(-32602)),
         ("session.claude.inspect", r#"{"sessionId":7}"#, Code(-32602)),
-        ("session.claude.recoveryInspect", r#"{"sessionId":7}"#, Code(-32602)),
+        (
+            "session.claude.recoveryInspect",
+            r#"{"sessionId":7}"#,
+            Code(-32602),
+        ),
         // The imported worker is Codex: a typed existing-session recovery read
         // must refuse Claude recovery evidence, rather than invent eligibility.
-        ("session.claude.recoveryInspect", r#"{"sessionId":"worker-2222bbbb"}"#, Code(-32009)),
-        ("session.claude.taskGet", r#"{"sessionId":"worker-2222bbbb"}"#, Code(-32602)),
+        (
+            "session.claude.recoveryInspect",
+            r#"{"sessionId":"worker-2222bbbb"}"#,
+            Code(-32009),
+        ),
+        (
+            "session.claude.taskGet",
+            r#"{"sessionId":"worker-2222bbbb"}"#,
+            Code(-32602),
+        ),
         ("session.codex.history", r#"{"sessionId":7}"#, Code(-32602)),
         ("session.codex.inspect", r#"{"sessionId":7}"#, Code(-32602)),
         ("session.codex.models", r#"{"sessionId":7}"#, Code(-32602)),
-        ("session.codex.permissionProfiles", r#"{"sessionId":7}"#, Code(-32602)),
+        (
+            "session.codex.permissionProfiles",
+            r#"{"sessionId":7}"#,
+            Code(-32602),
+        ),
         ("session.codex.tools", r#"{"sessionId":7}"#, Code(-32602)),
-        ("session.codex.inputDiscard", r#"{"crewId":"local-aaaa"}"#, Code(-32602)),
-        ("session.codex.inputLookup", r#"{"crewId":"local-aaaa"}"#, Code(-32602)),
-        ("session.codex.inputPrepare", r#"{"crewId":"local-aaaa","filename":"not-uploaded.txt"}"#, Code(-32602)),
+        (
+            "session.codex.inputDiscard",
+            r#"{"crewId":"local-aaaa"}"#,
+            Code(-32602),
+        ),
+        (
+            "session.codex.inputLookup",
+            r#"{"crewId":"local-aaaa"}"#,
+            Code(-32602),
+        ),
+        (
+            "session.codex.inputPrepare",
+            r#"{"crewId":"local-aaaa","filename":"not-uploaded.txt"}"#,
+            Code(-32602),
+        ),
         // Existing object identities remain typed, not arbitrary todo strings.
-        ("todo.assign", r#"{"channelId":"local-aaaa/lobby","object":{"kind":"invalid"}}"#, Code(-32602)),
-        ("todo.attributesGet", r#"{"object":{"kind":"invalid"}}"#, Code(-32602)),
-        ("todo.setState", r#"{"channelId":"local-aaaa/lobby","object":{"kind":"invalid"}}"#, Code(-32602)),
+        (
+            "todo.assign",
+            r#"{"channelId":"local-aaaa/lobby","object":{"kind":"invalid"}}"#,
+            Code(-32602),
+        ),
+        (
+            "todo.attributesGet",
+            r#"{"object":{"kind":"invalid"}}"#,
+            Code(-32602),
+        ),
+        (
+            "todo.setState",
+            r#"{"channelId":"local-aaaa/lobby","object":{"kind":"invalid"}}"#,
+            Code(-32602),
+        ),
         // Hibernate ends the server, so it is the final method in this table.
         ("crewd.hibernate", "null", Ok),
     ];
@@ -738,12 +870,23 @@ fn rpc_drives_every_client_method() {
         if method == "host.directoryList" && out.status.success() {
             let listing: crewd_proto::host::DirectoryResult =
                 serde_json::from_slice(&out.stdout).expect("typed host directory response");
-            assert_eq!(Path::new(&listing.path), TEST_HOME.path().canonicalize().unwrap());
-            assert!(listing.entries.iter().all(|entry| Path::new(&entry.path).is_dir()));
+            assert_eq!(
+                Path::new(&listing.path),
+                TEST_HOME.path().canonicalize().unwrap()
+            );
+            assert!(
+                listing
+                    .entries
+                    .iter()
+                    .all(|entry| Path::new(&entry.path).is_dir())
+            );
             assert!(listing.next_after.is_none(), "synthetic HOME fits one page");
         }
         if method == "session.claude.recoveryInspect" && params.contains("worker-2222bbbb") {
-            assert!(err.contains("original Claude recovery evidence changed or unavailable"), "{err}");
+            assert!(
+                err.contains("original Claude recovery evidence changed or unavailable"),
+                "{err}"
+            );
         }
         if method == "work.create" {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -795,7 +938,11 @@ fn rpc_drives_every_client_method() {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             let folder = first["folders"][0]["id"].as_str().unwrap();
             let work = &created_work[0];
-            let original = rpc(data.path(), "work.get", &serde_json::json!({"id":work}).to_string());
+            let original = rpc(
+                data.path(),
+                "work.get",
+                &serde_json::json!({"id":work}).to_string(),
+            );
             let assigned=rpc(data.path(),"viewFolder.assign",&serde_json::json!({"crewId":"local-aaaa","view":"progress","expectedTreeRevision":first["treeRevision"],"object":{"kind":"work","id":work},"folderId":folder}).to_string());
             assert_eq!(assigned["assignments"][0]["object"]["id"], work.as_str());
             let updated=rpc(data.path(),"viewFolder.update",&serde_json::json!({"crewId":"local-aaaa","view":"progress","id":folder,"expectedTreeRevision":assigned["treeRevision"],"name":"renamed","position":0}).to_string());
@@ -803,7 +950,14 @@ fn rpc_drives_every_client_method() {
             let deleted=rpc(data.path(),"viewFolder.delete",&serde_json::json!({"crewId":"local-aaaa","view":"progress","id":folder,"expectedTreeRevision":updated["treeRevision"]}).to_string());
             assert_eq!(deleted["folders"], serde_json::json!([]));
             assert_eq!(deleted["assignments"], serde_json::json!([]));
-            assert_eq!(rpc(data.path(), "work.get", &serde_json::json!({"id":work}).to_string()), original);
+            assert_eq!(
+                rpc(
+                    data.path(),
+                    "work.get",
+                    &serde_json::json!({"id":work}).to_string()
+                ),
+                original
+            );
         } else if method == "channel.workList" {
             let first: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
             assert_eq!(first["items"], serde_json::json!([]));
@@ -934,35 +1088,74 @@ fn explicit_claude_disable_and_existing_selection_contract() {
         std::fs::create_dir(&tools).unwrap();
         let invoked = root.path().join("provider-was-invoked");
         let fake = tools.join("claude");
-        std::fs::write(&fake, format!("#!/bin/sh\ntouch '{}'\nexit 90\n", invoked.display())).unwrap();
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\ntouch '{}'\nexit 90\n", invoked.display()),
+        )
+        .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
         {
             let store = crewd_store::Store::open_data_dir(&data).unwrap();
-            crewd_store::crews::upsert(store.conn(), &crewd_proto::Crew {
-                id: "disabled-crew".into(), title: "Synthetic configuration".into(),
-                working_directory: Some(work.display().to_string()),
-                created_at: "2026-10-25T00:00:00.000Z".into(), updated_at: "2026-10-25T00:00:00.000Z".into(),
-                ..Default::default()
-            }, None).unwrap();
-            crewd_store::sessions::upsert(store.conn(), &crewd_proto::Session {
-                id: "disabled-session".into(), crew_id: "disabled-crew".into(), role: crewd_proto::Role::Worker,
-                executor: "claude".into(), agent_session_id: Some("00000000-0000-4000-8000-000000000001".into()),
-                working_directory: Some(work.display().to_string()), desired: crewd_proto::Desired::Stopped,
-                updated_at: "2026-10-25T00:00:00.000Z".into(), ..Default::default()
-            }, None).unwrap();
+            crewd_store::crews::upsert(
+                store.conn(),
+                &crewd_proto::Crew {
+                    id: "disabled-crew".into(),
+                    title: "Synthetic configuration".into(),
+                    working_directory: Some(work.display().to_string()),
+                    created_at: "2026-10-25T00:00:00.000Z".into(),
+                    updated_at: "2026-10-25T00:00:00.000Z".into(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+            crewd_store::sessions::upsert(
+                store.conn(),
+                &crewd_proto::Session {
+                    id: "disabled-session".into(),
+                    crew_id: "disabled-crew".into(),
+                    role: crewd_proto::Role::Worker,
+                    executor: "claude".into(),
+                    agent_session_id: Some("00000000-0000-4000-8000-000000000001".into()),
+                    working_directory: Some(work.display().to_string()),
+                    desired: crewd_proto::Desired::Stopped,
+                    updated_at: "2026-10-25T00:00:00.000Z".into(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
         }
         let mut command = crewd(&data);
-        command.env_remove("CREWD_CLAUDE").env("PATH", format!("{}:/usr/bin:/bin", tools.display())).arg("serve");
+        command
+            .env_remove("CREWD_CLAUDE")
+            .env("PATH", format!("{}:/usr/bin:/bin", tools.display()))
+            .arg("serve");
         match mode {
-            "disabled" => { command.arg("--disable-claude"); }
-            "explicit" => { command.arg("--claude").arg(&fake); }
+            "disabled" => {
+                command.arg("--disable-claude");
+            }
+            "explicit" => {
+                command.arg("--claude").arg(&fake);
+            }
             _ => {}
         }
-        let mut daemon = Daemon(command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).spawn().unwrap());
+        let mut daemon = Daemon(
+            command
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
         let deadline = Instant::now() + Duration::from_secs(10);
         while !data.join("crewd.sock").exists() {
-            if let Some(status) = daemon.0.try_wait().unwrap() { panic!("{mode} serve exited before readiness: {status}"); }
-            assert!(Instant::now() < deadline, "{mode} socket readiness timed out");
+            if let Some(status) = daemon.0.try_wait().unwrap() {
+                panic!("{mode} serve exited before readiness: {status}");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{mode} socket readiness timed out"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
         let expected = mode != "disabled";
@@ -970,20 +1163,60 @@ fn explicit_claude_disable_and_existing_selection_contract() {
         let profiles = listed["profiles"].as_array().unwrap();
         let claude = profiles.iter().find(|p| p["id"] == "claude").unwrap();
         assert_eq!(claude["available"], expected, "{mode}: {listed}");
-        if !expected { assert_eq!(claude["unavailableReason"], "notConfigured"); }
-        assert_eq!(profiles.iter().find(|p| p["id"] == "codex").unwrap()["available"], false);
-        let inspection = rpc(&data, "session.claude.inspect", r#"{"sessionId":"disabled-session"}"#);
-        assert_eq!(inspection["manualResume"]["eligibility"], if expected {"eligible"} else {"notConfigured"}, "{mode}: {inspection}");
-        assert_eq!(inspection["manualResume"]["originalAgentSessionId"], "00000000-0000-4000-8000-000000000001");
+        if !expected {
+            assert_eq!(claude["unavailableReason"], "notConfigured");
+        }
+        assert_eq!(
+            profiles.iter().find(|p| p["id"] == "codex").unwrap()["available"],
+            false
+        );
+        let inspection = rpc(
+            &data,
+            "session.claude.inspect",
+            r#"{"sessionId":"disabled-session"}"#,
+        );
+        assert_eq!(
+            inspection["manualResume"]["eligibility"],
+            if expected {
+                "eligible"
+            } else {
+                "notConfigured"
+            },
+            "{mode}: {inspection}"
+        );
+        assert_eq!(
+            inspection["manualResume"]["originalAgentSessionId"],
+            "00000000-0000-4000-8000-000000000001"
+        );
         let hello = rpc(&data, "system.hello", "null");
-        assert_eq!(hello["capabilities"].as_array().unwrap().iter().any(|v| v == "session.terminal"), expected, "{mode}: {hello}");
-        assert!(!invoked.exists(), "{mode} ran a provider during configuration reads");
+        assert_eq!(
+            hello["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "session.terminal"),
+            expected,
+            "{mode}: {hello}"
+        );
+        assert!(
+            !invoked.exists(),
+            "{mode} ran a provider during configuration reads"
+        );
         // Only this fixture's owned daemon; no production process is signaled.
-        assert_eq!(unsafe { libc::kill(daemon.0.id() as i32, libc::SIGTERM) }, 0);
+        assert_eq!(
+            unsafe { libc::kill(daemon.0.id() as i32, libc::SIGTERM) },
+            0
+        );
         let deadline = Instant::now() + Duration::from_secs(12);
         loop {
-            if let Some(status) = daemon.0.try_wait().unwrap() { assert!(status.success(), "{mode}: {status}"); break; }
-            assert!(Instant::now() < deadline, "{mode} normal shutdown timed out");
+            if let Some(status) = daemon.0.try_wait().unwrap() {
+                assert!(status.success(), "{mode}: {status}");
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{mode} normal shutdown timed out"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -995,13 +1228,21 @@ fn explicit_claude_disable_conflicts_with_path_and_environment_before_storage() 
     let data = root.path().join("must-not-exist");
     for environment in [false, true] {
         let mut command = crewd(&data);
-        command.env_remove("CREWD_CLAUDE").args(["serve", "--disable-claude"]);
-        if environment { command.env("CREWD_CLAUDE", "/usr/bin/false"); }
-        else { command.args(["--claude", "/usr/bin/false"]); }
+        command
+            .env_remove("CREWD_CLAUDE")
+            .args(["serve", "--disable-claude"]);
+        if environment {
+            command.env("CREWD_CLAUDE", "/usr/bin/false");
+        } else {
+            command.args(["--claude", "/usr/bin/false"]);
+        }
         let output = command.output().unwrap();
         assert!(!output.status.success());
         let error = String::from_utf8_lossy(&output.stderr);
-        assert!(error.contains("cannot be used with"), "must reject an option conflict, not an unknown flag: {error}");
+        assert!(
+            error.contains("cannot be used with"),
+            "must reject an option conflict, not an unknown flag: {error}"
+        );
         assert!(!data.exists(), "argument rejection created storage");
     }
 }

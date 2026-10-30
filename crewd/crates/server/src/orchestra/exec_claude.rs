@@ -102,7 +102,9 @@ impl Executor for ClaudeExecutor {
     fn accepts_resume(&self) -> bool {
         true
     }
-    fn requires_exact_managed_resume(&self)->bool {self.managed_factory.is_some()}
+    fn requires_exact_managed_resume(&self) -> bool {
+        self.managed_factory.is_some()
+    }
     fn profile(&self) -> Option<crewd_proto::executors::ExecutorProfile> {
         use crewd_proto::executors::{
             ExecutorBackend, ExecutorFeatures, ExecutorProfile, ExecutorUnavailableReason,
@@ -164,21 +166,39 @@ impl Executor for ClaudeExecutor {
     fn launch(&self, req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         Box::pin(async move {
             self.check_launch()?;
-            let managed=self.managed_factory.is_some();
+            let managed = self.managed_factory.is_some();
             if managed {
-                let ledger=req.ledger.clone();
-                let recorded=tokio::task::spawn_blocking(move||ledger.recorded()).await.map_err(|e|LaunchError::Failed(e.to_string()))?.map_err(|e|LaunchError::Failed(e.to_string()))?;
+                let ledger = req.ledger.clone();
+                let recorded = tokio::task::spawn_blocking(move || ledger.recorded())
+                    .await
+                    .map_err(|e| LaunchError::Failed(e.to_string()))?
+                    .map_err(|e| LaunchError::Failed(e.to_string()))?;
                 match(recorded.as_deref(),req.managed_resume_id.as_deref()) {
                     (None,None)=>{},
                     (Some(id),Some(expected)) if crewd_exec::driver::exact_managed_id(id)&&id==expected&&req.initial_prompt.is_none()=>{},
                     _=>return Err(LaunchError::Failed("Claude requires exact original UUID and explicit managed resume intent; no input or native launch".into())),
                 }
                 if let Some(native) = req.managed_resume_id.clone() {
-                    let session=req.session_id.clone();
-                    let blocked=self.managed_factory.as_ref().unwrap().db.call_result(move|s|crate::claude_recovery::unresolved_resume(s.conn(),&session,&native)).await.map_err(|e|LaunchError::Failed(e.to_string()))?.map_err(|e|LaunchError::Failed(e.to_string()))?;
-                    if blocked {return Err(LaunchError::Failed("original managed resume remains unresolved; inspect original request".into()))}
+                    let session = req.session_id.clone();
+                    let blocked = self
+                        .managed_factory
+                        .as_ref()
+                        .unwrap()
+                        .db
+                        .call_result(move |s| {
+                            crate::claude_recovery::unresolved_resume(s.conn(), &session, &native)
+                        })
+                        .await
+                        .map_err(|e| LaunchError::Failed(e.to_string()))?
+                        .map_err(|e| LaunchError::Failed(e.to_string()))?;
+                    if blocked {
+                        return Err(LaunchError::Failed(
+                            "original managed resume remains unresolved; inspect original request"
+                                .into(),
+                        ));
+                    }
                 }
-                let session=req.session_id.clone();
+                let session = req.session_id.clone();
                 self.managed_factory.as_ref().unwrap().db.call_result(move|store| {
                     let mut q=store.conn().prepare("SELECT native_pid,native_start,native_boot FROM native_execution_runtimes WHERE session_id=?1")?;
                     let births=q.query_map([session],|r|Ok((r.get::<_,i32>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?)))?;
@@ -189,7 +209,11 @@ impl Executor for ClaudeExecutor {
                     };if !gone {return Err(crewd_store::StoreError::Invalid("previous managed birth live or unknown".into()))}}
                     Ok(())
                 }).await.map_err(|e|LaunchError::Failed(e.to_string()))?.map_err(|e|LaunchError::Failed(e.to_string()))?;
-            } else if req.managed_resume_id.is_some() {return Err(LaunchError::Failed("managed intent cannot enter legacy launch".into()))}
+            } else if req.managed_resume_id.is_some() {
+                return Err(LaunchError::Failed(
+                    "managed intent cannot enter legacy launch".into(),
+                ));
+            }
             let (program, child_path) = self.program().await?;
             // Discovery can await a login shell; recheck immediately before creating launch files.
             self.check_launch()?;
@@ -226,7 +250,7 @@ impl Executor for ClaudeExecutor {
             };
             let mut config = DriverConfig::new(self.runtime_dir.clone());
             config.managed_hook_producer = managed;
-            config.managed_resume_id=req.managed_resume_id.clone();
+            config.managed_resume_id = req.managed_resume_id.clone();
             config.registry = self.registry.clone();
             config.terminal_observer = Some(Arc::new(
                 crewd_exec::acp::terminal::TerminalTap::new(1, 64)
@@ -238,7 +262,11 @@ impl Executor for ClaudeExecutor {
                 req.delivery_observer.clone()
             };
             // Managed history/auth is witnessed by PTY/hooks, never private JSONL.
-            config.claude_projects_dir = if managed {None}else{self.projects_dir.clone()};
+            config.claude_projects_dir = if managed {
+                None
+            } else {
+                self.projects_dir.clone()
+            };
             let mut comms = comms_for(
                 &self.helper,
                 &self.data_dir,
@@ -302,7 +330,9 @@ impl Executor for ClaudeExecutor {
     }
 
     fn locate_transcript(&self, agent_session_id: &str) -> Option<PathBuf> {
-        if self.managed_factory.is_some(){return None}
+        if self.managed_factory.is_some() {
+            return None;
+        }
         // 会话号要当路径段用：先过 M2b 的字符集校验。
         if !valid_agent_session_id(agent_session_id) {
             return None;
@@ -459,25 +489,77 @@ mod tests {
         assert_eq!(exec.locate_transcript("../p2/abc-1"), None);
     }
     #[tokio::test]
-    async fn owned_managed_resume_proves_previous_physical_birth_before_program_or_files(){
-        use crewd_exec::registry::{self,ProbeResult};
-        let ProbeResult::Found(birth)=registry::probe(std::process::id() as i32)else{panic!("actual owned test birth must be readable")};
-        let id="71bd51cf-3df2-4638-9a3f-d0d58d630174";
-        for stale in [false,true] {
-            let root=tempfile::tempdir().unwrap();let mut store=crewd_store::Store::open_in_memory().unwrap();
+    async fn owned_managed_resume_proves_previous_physical_birth_before_program_or_files() {
+        use crewd_exec::registry::{self, ProbeResult};
+        let ProbeResult::Found(birth) = registry::probe(std::process::id() as i32) else {
+            panic!("actual owned test birth must be readable")
+        };
+        let id = "71bd51cf-3df2-4638-9a3f-d0d58d630174";
+        for stale in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut store = crewd_store::Store::open_in_memory().unwrap();
             store.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at)VALUES('c1','fixture','t','t');INSERT INTO sessions(id,crew_id,role,executor,updated_at)VALUES('owned','c1','worker','claude','t')").unwrap();
-            let runtime=crewd_store::native_execution::Runtime{id:uuid::Uuid::new_v4().to_string(),session:"owned".into(),generation:uuid::Uuid::new_v4().to_string(),epoch:1,native_pid:birth.pid,native_start:birth.start_time+u64::from(stale),native_boot:birth.boot_id.clone()};
-            store.with_tx(|tx|{crewd_store::native_execution::register(tx,&runtime)?;tx.execute("UPDATE native_execution_runtimes SET revoked=1",[])?;Ok(())}).unwrap();
-            let db=crewd_store::Db::spawn(store).unwrap();let registry=Arc::new(ProcessRegistry::load(&root.path().join("registry.json")).unwrap());
-            let factory=Arc::new(crate::native_helpers::NativeFactory::new(db,registry,root.path().join("no-helper")));
-            let mut exec=executor(ClaudeProgram::Path(root.path().join("no-program")),root.path());exec.managed_factory=Some(factory);
-            let ledger=Arc::new(MemoryLedger::with(Some(id)));let mut req=request("owned",root.path());req.ledger=ledger.clone();req.managed_resume_id=Some(id.into());
-            let error=exec.launch(req).await.err().unwrap();
-            if stale {assert!(matches!(error,LaunchError::NotConfigured(_)),"dead original identity may reach only the missing-program gate: {error}")}
-            else {assert!(error.to_string().contains("previous managed birth live or unknown"),"revoked row does not prove physical exit: {error}")}
-            assert_eq!(ledger.current().as_deref(),Some(id));assert!(!root.path().join("run").exists());
-            let project=root.path().join("synthetic-project");std::fs::create_dir(&project).unwrap();std::fs::write(project.join(format!("{id}.jsonl")),"synthetic, never imported").unwrap();exec.projects_dir=Some(root.path().into());assert!(exec.locate_transcript(id).is_none(),"managed diagnostic never scans private transcript roots");
+            let runtime = crewd_store::native_execution::Runtime {
+                id: uuid::Uuid::new_v4().to_string(),
+                session: "owned".into(),
+                generation: uuid::Uuid::new_v4().to_string(),
+                epoch: 1,
+                native_pid: birth.pid,
+                native_start: birth.start_time + u64::from(stale),
+                native_boot: birth.boot_id.clone(),
+            };
+            store
+                .with_tx(|tx| {
+                    crewd_store::native_execution::register(tx, &runtime)?;
+                    tx.execute("UPDATE native_execution_runtimes SET revoked=1", [])?;
+                    Ok(())
+                })
+                .unwrap();
+            let db = crewd_store::Db::spawn(store).unwrap();
+            let registry =
+                Arc::new(ProcessRegistry::load(&root.path().join("registry.json")).unwrap());
+            let factory = Arc::new(crate::native_helpers::NativeFactory::new(
+                db,
+                registry,
+                root.path().join("no-helper"),
+            ));
+            let mut exec = executor(
+                ClaudeProgram::Path(root.path().join("no-program")),
+                root.path(),
+            );
+            exec.managed_factory = Some(factory);
+            let ledger = Arc::new(MemoryLedger::with(Some(id)));
+            let mut req = request("owned", root.path());
+            req.ledger = ledger.clone();
+            req.managed_resume_id = Some(id.into());
+            let error = exec.launch(req).await.err().unwrap();
+            if stale {
+                assert!(
+                    matches!(error, LaunchError::NotConfigured(_)),
+                    "dead original identity may reach only the missing-program gate: {error}"
+                )
+            } else {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("previous managed birth live or unknown"),
+                    "revoked row does not prove physical exit: {error}"
+                )
+            }
+            assert_eq!(ledger.current().as_deref(), Some(id));
+            assert!(!root.path().join("run").exists());
+            let project = root.path().join("synthetic-project");
+            std::fs::create_dir(&project).unwrap();
+            std::fs::write(
+                project.join(format!("{id}.jsonl")),
+                "synthetic, never imported",
+            )
+            .unwrap();
+            exec.projects_dir = Some(root.path().into());
+            assert!(
+                exec.locate_transcript(id).is_none(),
+                "managed diagnostic never scans private transcript roots"
+            );
         }
     }
-
 }

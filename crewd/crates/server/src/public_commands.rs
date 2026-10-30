@@ -289,11 +289,17 @@ fn sql_effect(
         }
         PublicCommand::CrewCreate(p) => serde_json::to_value(create(tx, p)?),
         PublicCommand::CrewCreateFirstMessage(p) => {
-            let crew = create(tx, crewd_proto::CrewCreateParams {
-                title: p.crew.title,
-                working_directory: p.crew.working_directory.ok_or_else(|| collab::resource_invalid("workingDirectory"))?,
-                parent_id: p.crew.parent_id,
-            })?;
+            let crew = create(
+                tx,
+                crewd_proto::CrewCreateParams {
+                    title: p.crew.title,
+                    working_directory: p
+                        .crew
+                        .working_directory
+                        .ok_or_else(|| collab::resource_invalid("workingDirectory"))?,
+                    parent_id: p.crew.parent_id,
+                },
+            )?;
             let channel = if crews::is_home(tx.conn(), &crew.id)? {
                 channels::ensure_human_channel(tx, &crew.id)?.id
             } else {
@@ -349,7 +355,9 @@ async fn submit(
         | PublicCommand::PersonalDraftMember(_)
         | PublicCommand::PersonalDraftConsent(_)
         | PublicCommand::PersonalDraftCheckpoint(_)
-        | PublicCommand::PersonalDraftResolve(_) => crate::personal_drafts::submit(state,actor,p).await,
+        | PublicCommand::PersonalDraftResolve(_) => {
+            crate::personal_drafts::submit(state, actor, p).await
+        }
         PublicCommand::LocalClientTrust(_)
         | PublicCommand::LocalClientTrustRevoke(_)
         | PublicCommand::CrewCreate(_)
@@ -362,7 +370,10 @@ async fn submit(
         | PublicCommand::CodexReview(_)
         | PublicCommand::CodexTitleSet(_)
         | PublicCommand::CodexFork(_)
-        | PublicCommand::CodexArchive(_) | PublicCommand::CodexUnarchive(_) | PublicCommand::CodexDelete(_) | PublicCommand::CodexRevert(_)
+        | PublicCommand::CodexArchive(_)
+        | PublicCommand::CodexUnarchive(_)
+        | PublicCommand::CodexDelete(_)
+        | PublicCommand::CodexRevert(_)
         | PublicCommand::SessionAnswer(_)
         | PublicCommand::SessionRespondRunnerRequest(_)
         | PublicCommand::Hibernate(_)
@@ -399,7 +410,9 @@ pub(crate) async fn submit_sql(
     submit_sql_with_home(state, actor, p, None).await
 }
 async fn submit_sql_with_home(
-    state: &Arc<AppState>, actor: &Actor, p: CommandSubmitParams,
+    state: &Arc<AppState>,
+    actor: &Actor,
+    p: CommandSubmitParams,
     service_home: Option<std::path::PathBuf>,
 ) -> Result<Value, RpcError> {
     let principal = actor.principal(state).await?;
@@ -449,10 +462,15 @@ async fn submit_sql_with_home(
             match reserved {
                 Reserved::Existing(r) => Ok(r),
                 Reserved::New(_) => {
-                    let (command, directory) = resolve_first_message_directory(p.command.clone(), service_home.as_deref())?;
+                    let (command, directory) = resolve_first_message_directory(
+                        p.command.clone(),
+                        service_home.as_deref(),
+                    )?;
                     let result = sql_effect(tx, command, &own_actor)?;
                     // Existing receipts return above without any filesystem effect.
-                    if let Some(directory) = directory { create_first_message_directory(&directory)?; }
+                    if let Some(directory) = directory {
+                        create_first_message_directory(&directory)?;
+                    }
                     Ok(receipts::transition(
                         tx.conn(),
                         &principal,
@@ -572,7 +590,12 @@ pub(crate) async fn lookup(
                 for method in r.command.authorized_methods() {
                     own_actor.authorize_tx(&own_state, s.conn(), method)?;
                 }
-                crate::personal_drafts::receipt_allowed_tx(&own_state,&own_actor,s.conn(),r).map_err(|_|collab::CollabError::Forbidden(collab::refusal::Refusal::new(collab::refusal::Code::ResourceForbidden)))?;
+                crate::personal_drafts::receipt_allowed_tx(&own_state, &own_actor, s.conn(), r)
+                    .map_err(|_| {
+                        collab::CollabError::Forbidden(collab::refusal::Refusal::new(
+                            collab::refusal::Code::ResourceForbidden,
+                        ))
+                    })?;
             }
             Ok(result)
         })
@@ -584,9 +607,23 @@ pub(crate) async fn lookup(
             actor.authorize(state, method).await?;
         }
     }
-    if result.as_ref().is_some_and(|r|crewd_store::personal_drafts::is_command(&r.command)) {
-        let current=result.clone();let owner=state.clone();let source=actor.clone();
-        state.db.call(move|s|{if let Some(r)=&current{crate::personal_drafts::receipt_allowed_tx(&owner,&source,s.conn(),r)?}Ok::<_,RpcError>(())}).await.map_err(dispatch::internal)??;
+    if result
+        .as_ref()
+        .is_some_and(|r| crewd_store::personal_drafts::is_command(&r.command))
+    {
+        let current = result.clone();
+        let owner = state.clone();
+        let source = actor.clone();
+        state
+            .db
+            .call(move |s| {
+                if let Some(r) = &current {
+                    crate::personal_drafts::receipt_allowed_tx(&owner, &source, s.conn(), r)?
+                }
+                Ok::<_, RpcError>(())
+            })
+            .await
+            .map_err(dispatch::internal)??;
     }
     if let Some(r) = &mut result {
         r.historical |= r.runtime_binding_id != state.runtime_binding_id;
@@ -614,20 +651,28 @@ pub(crate) async fn list_unknown(
     let (records, next_after) = state
         .db
         .call(move |s| -> collab::Result<_> {
-            let mut rows = receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
+            let mut rows =
+                receipts::list_unknown(s.conn(), &principal, &p.db_id, p.after.as_deref(), limit)?;
             // Keep the original bounded ledger cursor even when a private scope
             // became unavailable. Otherwise hidden rows would terminate traversal
             // before unrelated original command receipts can be reached.
             let more = rows.len() > usize::from(limit);
             rows.truncate(usize::from(limit));
-            let next = if more { rows.last().map(|r|r.request_id.clone()) } else { None };
-            rows.retain(|r|crate::personal_drafts::receipt_allowed_tx(&own_state,&own_actor,s.conn(),r).is_ok());
+            let next = if more {
+                rows.last().map(|r| r.request_id.clone())
+            } else {
+                None
+            };
+            rows.retain(|r| {
+                crate::personal_drafts::receipt_allowed_tx(&own_state, &own_actor, s.conn(), r)
+                    .is_ok()
+            });
             for r in &rows {
                 for method in r.command.authorized_methods() {
                     own_actor.authorize_tx(&own_state, s.conn(), method)?;
                 }
             }
-            Ok((rows,next))
+            Ok((rows, next))
         })
         .await
         .map_err(dispatch::internal)?
@@ -664,80 +709,265 @@ pub(crate) mod tests {
         assert!(matches!(peer.authority(), crate::peer::Authority::Human));
         (state, Actor::Local(peer), db)
     }
-    fn default_first_message(s: &AppState, db: &str, title: &str, directory: Option<&str>, text: &str) -> CommandSubmitParams {
+    fn default_first_message(
+        s: &AppState,
+        db: &str,
+        title: &str,
+        directory: Option<&str>,
+        text: &str,
+    ) -> CommandSubmitParams {
         serde_json::from_value(serde_json::json!({"requestId":uuid::Uuid::new_v4().to_string(),"dbId":db,"runtimeBindingId":s.runtime_binding_id,
             "command":{"operation":"crew.createFirstMessage","params":{"crew":{"title":title,"workingDirectory":directory,"parentId":null},"text":text}}})).unwrap()
     }
     async fn default_first_counts(s: &AppState) -> Vec<i64> {
         s.db.call(|store| -> rusqlite::Result<Vec<i64>> {
-            ["crews","channels","messages","public_command_receipts"].iter().map(|table|
-                store.conn().query_row(&format!("SELECT COUNT(*) FROM {table}"),[],|r|r.get(0))).collect()
-        }).await.unwrap().unwrap()
+            ["crews", "channels", "messages", "public_command_receipts"]
+                .iter()
+                .map(|table| {
+                    store
+                        .conn()
+                        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                })
+                .collect()
+        })
+        .await
+        .unwrap()
+        .unwrap()
     }
     #[tokio::test]
     async fn first_message_default_directory_uses_selected_home_and_original_receipt() {
-        let(s,a,db)=state_actor().await;let home=tempfile::tempdir().unwrap();let other=tempfile::tempdir().unwrap();
-        let p=default_first_message(&s,&db,"Reykjavik",None,"static human introduction");
-        let _=lookup(&s,&a,CommandLookupParams{request_id:p.request_id.clone(),db_id:db.clone()}).await;
+        let (s, a, db) = state_actor().await;
+        let home = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let p = default_first_message(&s, &db, "Reykjavik", None, "static human introduction");
+        let _ = lookup(
+            &s,
+            &a,
+            CommandLookupParams {
+                request_id: p.request_id.clone(),
+                db_id: db.clone(),
+            },
+        )
+        .await;
         assert!(!home.path().join("CrewGround").exists());
-        let first=submit_sql_with_home(&s,&a,p.clone(),Some(home.path().into())).await.unwrap();let target=home.path().canonicalize().unwrap().join("CrewGround/Reykjavik");assert!(target.is_dir());
-        assert_eq!(first["result"]["crew"]["workingDirectory"],target.to_str().unwrap());let raw=s.db.call(|store|store.conn().query_row("SELECT json_type(payload_json,'$.params.crew.workingDirectory') FROM public_command_receipts",[],|r|r.get::<_,String>(0))).await.unwrap().unwrap();assert_eq!(raw,"null","receipt retains unexpanded client intent");
-        let repeated=submit_sql_with_home(&s,&a,p.clone(),Some(other.path().into())).await.unwrap();assert_eq!(first,repeated);assert!(!other.path().join("CrewGround").exists());
-        assert_eq!(default_first_counts(&s).await,vec![2,3,1,1]);
-        let read=lookup(&s,&a,CommandLookupParams{request_id:p.request_id.clone(),db_id:db.clone()}).await.unwrap();assert_eq!(read,first);
-        let mut changed=p;if let PublicCommand::CrewCreateFirstMessage(v)=&mut changed.command{v.crew.title="Kyoto".into();}
-        assert_eq!(submit_sql_with_home(&s,&a,changed,Some(home.path().into())).await.unwrap_err().code,RpcError::CONFLICT);assert!(!home.path().join("CrewGround/Kyoto").exists());s.db.clone().shutdown();
+        let first = submit_sql_with_home(&s, &a, p.clone(), Some(home.path().into()))
+            .await
+            .unwrap();
+        let target = home
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("CrewGround/Reykjavik");
+        assert!(target.is_dir());
+        assert_eq!(
+            first["result"]["crew"]["workingDirectory"],
+            target.to_str().unwrap()
+        );
+        let raw=s.db.call(|store|store.conn().query_row("SELECT json_type(payload_json,'$.params.crew.workingDirectory') FROM public_command_receipts",[],|r|r.get::<_,String>(0))).await.unwrap().unwrap();
+        assert_eq!(raw, "null", "receipt retains unexpanded client intent");
+        let repeated = submit_sql_with_home(&s, &a, p.clone(), Some(other.path().into()))
+            .await
+            .unwrap();
+        assert_eq!(first, repeated);
+        assert!(!other.path().join("CrewGround").exists());
+        assert_eq!(default_first_counts(&s).await, vec![2, 3, 1, 1]);
+        let read = lookup(
+            &s,
+            &a,
+            CommandLookupParams {
+                request_id: p.request_id.clone(),
+                db_id: db.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(read, first);
+        let mut changed = p;
+        if let PublicCommand::CrewCreateFirstMessage(v) = &mut changed.command {
+            v.crew.title = "Kyoto".into();
+        }
+        assert_eq!(
+            submit_sql_with_home(&s, &a, changed, Some(home.path().into()))
+                .await
+                .unwrap_err()
+                .code,
+            RpcError::CONFLICT
+        );
+        assert!(!home.path().join("CrewGround/Kyoto").exists());
+        s.db.clone().shutdown();
     }
     #[tokio::test]
     async fn first_message_default_directory_rejects_names_and_invalid_text_without_effects() {
-        let(s,a,db)=state_actor().await;let home=tempfile::tempdir().unwrap();
-        for title in ["", ".", "..", "../outside", "/absolute", "nested/leaf", "nested\\leaf", "line\nbreak"] {
-            let p=default_first_message(&s,&db,title,None,"message");assert!(submit_sql_with_home(&s,&a,p,Some(home.path().into())).await.is_err(),"{title:?}");
+        let (s, a, db) = state_actor().await;
+        let home = tempfile::tempdir().unwrap();
+        for title in [
+            "",
+            ".",
+            "..",
+            "../outside",
+            "/absolute",
+            "nested/leaf",
+            "nested\\leaf",
+            "line\nbreak",
+        ] {
+            let p = default_first_message(&s, &db, title, None, "message");
+            assert!(
+                submit_sql_with_home(&s, &a, p, Some(home.path().into()))
+                    .await
+                    .is_err(),
+                "{title:?}"
+            );
         }
-        let p=default_first_message(&s,&db,"Kyoto",None,"");assert!(submit_sql_with_home(&s,&a,p,Some(home.path().into())).await.is_err());
-        assert!(!home.path().join("CrewGround").exists());assert_eq!(default_first_counts(&s).await,vec![0,0,0,0]);s.db.clone().shutdown();
+        let p = default_first_message(&s, &db, "Kyoto", None, "");
+        assert!(
+            submit_sql_with_home(&s, &a, p, Some(home.path().into()))
+                .await
+                .is_err()
+        );
+        assert!(!home.path().join("CrewGround").exists());
+        assert_eq!(default_first_counts(&s).await, vec![0, 0, 0, 0]);
+        s.db.clone().shutdown();
     }
     #[tokio::test]
     async fn first_message_default_directory_filesystem_failures_preserve_data_and_rollback_sql() {
-        for kind in ["root-file","existing-leaf","symlink-root"] {
-            let(s,a,db)=state_actor().await;let home=tempfile::tempdir().unwrap();let outside=tempfile::tempdir().unwrap();let root=home.path().join("CrewGround");
+        for kind in ["root-file", "existing-leaf", "symlink-root"] {
+            let (s, a, db) = state_actor().await;
+            let home = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let root = home.path().join("CrewGround");
             match kind {
-                "root-file"=>std::fs::write(&root,"original").unwrap(),
-                "existing-leaf"=>{std::fs::create_dir(&root).unwrap();std::fs::create_dir(root.join("Lisbon")).unwrap();std::fs::write(root.join("Lisbon/keep.txt"),"original").unwrap();},
-                _=>std::os::unix::fs::symlink(outside.path(),&root).unwrap(),
+                "root-file" => std::fs::write(&root, "original").unwrap(),
+                "existing-leaf" => {
+                    std::fs::create_dir(&root).unwrap();
+                    std::fs::create_dir(root.join("Lisbon")).unwrap();
+                    std::fs::write(root.join("Lisbon/keep.txt"), "original").unwrap();
+                }
+                _ => std::os::unix::fs::symlink(outside.path(), &root).unwrap(),
             }
-            let p=default_first_message(&s,&db,"Lisbon",None,"message");assert!(submit_sql_with_home(&s,&a,p,Some(home.path().into())).await.is_err(),"{kind}");assert_eq!(default_first_counts(&s).await,vec![0,0,0,0]);
-            if kind=="root-file"{assert_eq!(std::fs::read_to_string(&root).unwrap(),"original");}
-            if kind=="existing-leaf"{assert_eq!(std::fs::read_to_string(root.join("Lisbon/keep.txt")).unwrap(),"original");}
-            assert!(!outside.path().join("Lisbon").exists());s.db.clone().shutdown();
+            let p = default_first_message(&s, &db, "Lisbon", None, "message");
+            assert!(
+                submit_sql_with_home(&s, &a, p, Some(home.path().into()))
+                    .await
+                    .is_err(),
+                "{kind}"
+            );
+            assert_eq!(default_first_counts(&s).await, vec![0, 0, 0, 0]);
+            if kind == "root-file" {
+                assert_eq!(std::fs::read_to_string(&root).unwrap(), "original");
+            }
+            if kind == "existing-leaf" {
+                assert_eq!(
+                    std::fs::read_to_string(root.join("Lisbon/keep.txt")).unwrap(),
+                    "original"
+                );
+            }
+            assert!(!outside.path().join("Lisbon").exists());
+            s.db.clone().shutdown();
         }
     }
     #[tokio::test]
     async fn first_message_default_directory_explicit_paths_remain_storage_only() {
-        let(s,a,db)=state_actor().await;let home=tempfile::tempdir().unwrap();let path=home.path().join("explicit-not-created");
-        let p=default_first_message(&s,&db,"../display/title",Some(path.to_str().unwrap()),"message");let r=submit_sql_with_home(&s,&a,p,Some(home.path().into())).await.unwrap();
-        assert_eq!(r["result"]["crew"]["workingDirectory"],path.to_str().unwrap());assert!(!path.exists());assert!(!home.path().join("CrewGround").exists());s.db.clone().shutdown();
+        let (s, a, db) = state_actor().await;
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("explicit-not-created");
+        let p = default_first_message(
+            &s,
+            &db,
+            "../display/title",
+            Some(path.to_str().unwrap()),
+            "message",
+        );
+        let r = submit_sql_with_home(&s, &a, p, Some(home.path().into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            r["result"]["crew"]["workingDirectory"],
+            path.to_str().unwrap()
+        );
+        assert!(!path.exists());
+        assert!(!home.path().join("CrewGround").exists());
+        s.db.clone().shutdown();
     }
     #[tokio::test]
     async fn first_message_default_directory_commit_failure_preserves_uncertain_directory() {
-        let(s,a,db)=state_actor().await;let home=tempfile::tempdir().unwrap();
+        let (s, a, db) = state_actor().await;
+        let home = tempfile::tempdir().unwrap();
         s.db.call(|store|store.conn().execute_batch("CREATE TRIGGER fail_first_message_receipt BEFORE UPDATE ON public_command_receipts BEGIN SELECT RAISE(ABORT,'synthetic receipt failure'); END")).await.unwrap().unwrap();
-        let p=default_first_message(&s,&db,"Tallinn",None,"message");assert!(submit_sql_with_home(&s,&a,p.clone(),Some(home.path().into())).await.is_err());
-        let target=home.path().join("CrewGround/Tallinn");assert!(target.is_dir());std::fs::write(target.join("keep.txt"),"possibly used").unwrap();assert_eq!(default_first_counts(&s).await,vec![0,0,0,0]);
-        s.db.call(|store|store.conn().execute_batch("DROP TRIGGER fail_first_message_receipt")).await.unwrap().unwrap();
-        assert!(submit_sql_with_home(&s,&a,p,Some(home.path().into())).await.is_err());assert_eq!(std::fs::read_to_string(target.join("keep.txt")).unwrap(),"possibly used");assert_eq!(default_first_counts(&s).await,vec![0,0,0,0]);s.db.clone().shutdown();
+        let p = default_first_message(&s, &db, "Tallinn", None, "message");
+        assert!(
+            submit_sql_with_home(&s, &a, p.clone(), Some(home.path().into()))
+                .await
+                .is_err()
+        );
+        let target = home.path().join("CrewGround/Tallinn");
+        assert!(target.is_dir());
+        std::fs::write(target.join("keep.txt"), "possibly used").unwrap();
+        assert_eq!(default_first_counts(&s).await, vec![0, 0, 0, 0]);
+        s.db.call(|store| {
+            store
+                .conn()
+                .execute_batch("DROP TRIGGER fail_first_message_receipt")
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            submit_sql_with_home(&s, &a, p, Some(home.path().into()))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("keep.txt")).unwrap(),
+            "possibly used"
+        );
+        assert_eq!(default_first_counts(&s).await, vec![0, 0, 0, 0]);
+        s.db.clone().shutdown();
     }
 
     #[tokio::test]
     async fn core_personal_draft_owner_uses_original_receipt_and_real_local_authority() {
-        let(state,actor,db)=state_actor().await;
-        let request=uuid::Uuid::new_v4().to_string();
-        let p=CommandSubmitParams{request_id:request.clone(),db_id:db.clone(),runtime_binding_id:state.runtime_binding_id.clone(),command:PublicCommand::PersonalDraftOwner(crewd_proto::personal_drafts::PersonalDraftOwnerParams{owner_epoch:state.db.call(|s|crewd_store::personal_drafts::epoch(s.conn())).await.unwrap().unwrap(),expected_space_id:None,expected_space_revision:"0".into(),local_enabled:true,acknowledge_restore:false})};
-        let result=submit(&state,&actor,p.clone()).await;
-        assert!(result.is_ok(),"real original command route must commit the new personal-space fact and receipt: {result:?}");
-        let r=result.unwrap();assert_eq!(r["phase"],"committed");assert_eq!(r["requestId"],request);
-        let repeated=submit(&state,&actor,p).await.unwrap();assert_eq!(r,repeated,"same immutable UUID is attribution only");
-        let lookup=lookup(&state,&actor,CommandLookupParams{request_id:request,db_id:db}).await.unwrap();assert_eq!(lookup,r);
+        let (state, actor, db) = state_actor().await;
+        let request = uuid::Uuid::new_v4().to_string();
+        let p = CommandSubmitParams {
+            request_id: request.clone(),
+            db_id: db.clone(),
+            runtime_binding_id: state.runtime_binding_id.clone(),
+            command: PublicCommand::PersonalDraftOwner(
+                crewd_proto::personal_drafts::PersonalDraftOwnerParams {
+                    owner_epoch: state
+                        .db
+                        .call(|s| crewd_store::personal_drafts::epoch(s.conn()))
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    expected_space_id: None,
+                    expected_space_revision: "0".into(),
+                    local_enabled: true,
+                    acknowledge_restore: false,
+                },
+            ),
+        };
+        let result = submit(&state, &actor, p.clone()).await;
+        assert!(
+            result.is_ok(),
+            "real original command route must commit the new personal-space fact and receipt: {result:?}"
+        );
+        let r = result.unwrap();
+        assert_eq!(r["phase"], "committed");
+        assert_eq!(r["requestId"], request);
+        let repeated = submit(&state, &actor, p).await.unwrap();
+        assert_eq!(r, repeated, "same immutable UUID is attribution only");
+        let lookup = lookup(
+            &state,
+            &actor,
+            CommandLookupParams {
+                request_id: request,
+                db_id: db,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(lookup, r);
     }
     #[tokio::test]
     async fn local_trust_status_is_readonly_and_bound_to_current_caller() {
@@ -949,14 +1179,22 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("crewd.db");
         let store = crewd_store::Store::open(&path).unwrap();
-        let db = crewd_store::meta_get(store.conn(), "dbId").unwrap().unwrap();
+        let db = crewd_store::meta_get(store.conn(), "dbId")
+            .unwrap()
+            .unwrap();
         let state = Arc::new(AppState::new(crewd_store::Db::spawn(store).unwrap()));
         let policy = Arc::new(crate::peer::PeerPolicy::new(None).unwrap());
         let (server, _client) = tokio::net::UnixStream::pair().unwrap();
         let actor = Actor::Local(policy.accept(&server).unwrap());
         let work = directory.path().join("work");
         std::fs::create_dir(&work).unwrap();
-        let command = default_first_message(&state, &db, "lost reply", Some(work.to_str().unwrap()), "one original message");
+        let command = default_first_message(
+            &state,
+            &db,
+            "lost reply",
+            Some(work.to_str().unwrap()),
+            "one original message",
+        );
         let request = command.request_id.clone();
         let payload = serde_json::to_value(&command.command).unwrap();
         // The caller never consumes the committed response. Recreate only the
@@ -971,7 +1209,16 @@ pub(crate) mod tests {
         let policy = Arc::new(crate::peer::PeerPolicy::new(None).unwrap());
         let (server, _client) = tokio::net::UnixStream::pair().unwrap();
         let next_actor = Actor::Local(policy.accept(&server).unwrap());
-        let receipt = lookup(&next, &next_actor, CommandLookupParams { request_id: request.clone(), db_id: db }).await.unwrap();
+        let receipt = lookup(
+            &next,
+            &next_actor,
+            CommandLookupParams {
+                request_id: request.clone(),
+                db_id: db,
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(receipt["requestId"], request);
         assert_eq!(receipt["command"], payload);
         assert_eq!(receipt["phase"], "committed");

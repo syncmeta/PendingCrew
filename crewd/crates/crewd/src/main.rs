@@ -392,7 +392,9 @@ fn call_notification(
     let directory = dir.to_owned();
     let method = method.to_owned();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || { let _ = tx.send(call_inner(&directory, &method, params, true)); });
+    std::thread::spawn(move || {
+        let _ = tx.send(call_inner(&directory, &method, params, true));
+    });
     rx.recv_timeout(std::time::Duration::from_secs(10))
         .map_err(|_| anyhow::anyhow!("notification result deadline exceeded"))?
 }
@@ -423,7 +425,9 @@ fn call_inner(
         let mut buf = String::new();
         let length = if bounded {
             Read::by_ref(&mut reader).take(16_385).read_line(&mut buf)?
-        } else { reader.read_line(&mut buf)? };
+        } else {
+            reader.read_line(&mut buf)?
+        };
         if length == 0 {
             bail!("crewd 在回复前关闭了连接");
         }

@@ -112,7 +112,9 @@ pub fn thread_resume_params(thread_id: &str, cwd: &Path, o: &ThreadOptions) -> V
             config.remove("model_reasoning_effort");
         }
     }
-    p.as_object_mut().expect("thread params object").remove("historyMode");
+    p.as_object_mut()
+        .expect("thread params object")
+        .remove("historyMode");
     p["threadId"] = json!(thread_id);
     p["excludeTurns"] = json!(true);
     p

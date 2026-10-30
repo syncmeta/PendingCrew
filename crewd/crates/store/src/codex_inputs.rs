@@ -57,7 +57,9 @@ fn transaction(c: &Connection) -> Result<()> {
 }
 fn activate(c: &Connection) -> Result<()> {
     transaction(c)?;
-    if c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? != crate::schema::SCHEMA_VERSION {
+    if c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?
+        != crate::schema::SCHEMA_VERSION
+    {
         return Err(invalid());
     }
     if !exists(c)? {
@@ -238,7 +240,16 @@ fn payload(
     crew: &str,
     reference: &CodexInputRef,
 ) -> Result<(Payload, String, Option<String>, Option<String>)> {
-    type PayloadRow = (String, String, String, String, Vec<u8>, String, Option<String>, Option<String>);
+    type PayloadRow = (
+        String,
+        String,
+        String,
+        String,
+        Vec<u8>,
+        String,
+        Option<String>,
+        Option<String>,
+    );
     let row:Option<PayloadRow>=c.query_row("SELECT kind,filename,mime_type,sha256,body,CASE WHEN invalidated=1 THEN 'restore_unconfirmed' ELSE state END,bound_session_id,consumed_request FROM codex_native_inputs WHERE id=?1 AND db_id=?2 AND principal=?3 AND crew_id=?4 AND body IS NOT NULL",params![reference.input_id,owner.db_id,owner.principal,crew],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?;
     let Some((kind, filename, mime_type, sha, body, state, bound, request)) = row else {
         return Err(invalid());
@@ -990,7 +1001,10 @@ mod tests {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with(&format!("crewd-v19-pre-v{}-", crate::schema::SCHEMA_VERSION))
+                    .starts_with(&format!(
+                        "crewd-v19-pre-v{}-",
+                        crate::schema::SCHEMA_VERSION
+                    ))
             })
             .collect::<Vec<_>>();
         assert_eq!(backups.len(), 1);

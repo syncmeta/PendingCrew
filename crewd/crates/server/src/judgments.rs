@@ -363,7 +363,8 @@ impl Runtime {
                     Ok::<_, crewd_collab::CollabError>((
                         crate::wake_adapter::channel_context(s.conn(), &m.channel_id, now)?
                             .is_some_and(|ctx| plan::needs_arbiter(&f, &ctx, now)),
-                        !recovery && f.sender == plan::Sender::Human
+                        !recovery
+                            && f.sender == plan::Sender::Human
                             && f.provenance == plan::MessageProvenance::Ordinary
                             && f.created_at.0 >= started_at,
                     ))
@@ -390,7 +391,9 @@ impl Runtime {
             JudgmentResult::Deferred {
                 reason: if recovery {
                     "restart_unknown"
-                } else if !state.admission.can_admit() || (!state.admission.any() && !fresh_human_message) {
+                } else if !state.admission.can_admit()
+                    || (!state.admission.any() && !fresh_human_message)
+                {
                     "awaiting_manual_resume"
                 } else {
                     "deadline"
@@ -514,7 +517,8 @@ impl Runtime {
                             origin: None,
                         },
                     )?;
-                    if fresh_human_message && priority == crewd_collab::wakes::WakePriority::Human
+                    if fresh_human_message
+                        && priority == crewd_collab::wakes::WakePriority::Human
                         && let crewd_collab::wakes::Enqueued::New(wake) = enqueued
                     {
                         admitted.push((target, wake));
@@ -527,23 +531,35 @@ impl Runtime {
         // with Human stop writes: a stop between commit and admission has already
         // dropped this exact row and must not be undone by a late evaluation.
         let admission = state.admission.clone();
-        let admitted = state.db.call_result(move |store| {
-            let mut ready = Vec::new();
-            for (target, wake) in admitted {
-                let pending = crewd_collab::wakes::by_ids(store.conn(), &[wake])?.into_iter().any(|row|
-                    row.session == target && row.state == crewd_collab::wakes::WakeState::Pending);
-                if pending && wake > crewd_collab::wakes::human_stop_floor(store.conn(), &target)? {
-                    admission.allow(&target);
-                    if admission.contains(&target) { ready.push(target); }
+        let admitted = state
+            .db
+            .call_result(move |store| {
+                let mut ready = Vec::new();
+                for (target, wake) in admitted {
+                    let pending = crewd_collab::wakes::by_ids(store.conn(), &[wake])?
+                        .into_iter()
+                        .any(|row| {
+                            row.session == target
+                                && row.state == crewd_collab::wakes::WakeState::Pending
+                        });
+                    if pending
+                        && wake > crewd_collab::wakes::human_stop_floor(store.conn(), &target)?
+                    {
+                        admission.allow(&target);
+                        if admission.contains(&target) {
+                            ready.push(target);
+                        }
+                    }
                 }
-            }
-            Ok::<_, crewd_collab::CollabError>(ready)
-        }).await??;
+                Ok::<_, crewd_collab::CollabError>(ready)
+            })
+            .await??;
         // Hub may already have delivered WakeEnqueued before the read above;
         // notify only these exact targets using the existing idempotent event.
         for target in admitted {
             if let Some(orchestra) = state.orchestra.get() {
-                orchestra.collab(crate::orchestra::core::CollabFact::WakeEnqueued { session: target });
+                orchestra
+                    .collab(crate::orchestra::core::CollabFact::WakeEnqueued { session: target });
             }
         }
         Ok(())

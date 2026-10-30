@@ -123,7 +123,9 @@ impl Snapshot {
         Ok(())
     }
 
-    pub(crate) fn automatic_after(&self,base:i64)->i64{base.max(self.automatic_after.unwrap_or(0))}
+    pub(crate) fn automatic_after(&self, base: i64) -> i64 {
+        base.max(self.automatic_after.unwrap_or(0))
+    }
     pub(crate) fn causal_session(&self) -> &str {
         &self.session
     }
@@ -295,11 +297,19 @@ pub fn snapshot(
     channels: &[String],
     now_ms: i64,
 ) -> Result<Snapshot> {
-    snapshot_after(conn,session,channels,now_ms,None)
+    snapshot_after(conn, session, channels, now_ms, None)
 }
 /// Trusted per-runtime rendering projection; never writes a read cursor or crosses IPC.
-pub fn snapshot_after(conn:&Connection,session:&str,channels:&[String],now_ms:i64,automatic_after:Option<i64>)->Result<Snapshot>{
-    if automatic_after.is_some_and(|n|n<0){return Err(invalid("negative automatic message floor"))}
+pub fn snapshot_after(
+    conn: &Connection,
+    session: &str,
+    channels: &[String],
+    now_ms: i64,
+    automatic_after: Option<i64>,
+) -> Result<Snapshot> {
+    if automatic_after.is_some_and(|n| n < 0) {
+        return Err(invalid("negative automatic message floor"));
+    }
     let state = load(conn, session)?;
     let reader = crate::sessions::get(conn, session)?;
     let reader_enabled = !crate::crews::is_archived(conn, &reader.crew_id)?;
@@ -333,7 +343,12 @@ pub fn snapshot_after(conn:&Connection,session:&str,channels:&[String],now_ms:i6
         if surface.contains(channel) && channel_enabled {
             eligible.insert(channel.clone());
             if let Some(base) = base {
-                let (msgs, _) = cursors::scan_unread(conn, session, channel, base.max(automatic_after.unwrap_or(0)))?;
+                let (msgs, _) = cursors::scan_unread(
+                    conn,
+                    session,
+                    channel,
+                    base.max(automatic_after.unwrap_or(0)),
+                )?;
                 prefixes.insert(channel.clone(), msgs.iter().map(Identity::from).collect());
             }
         }
@@ -361,7 +376,13 @@ pub fn prepare_unread(tx: &mut Tx<'_>, session: &str) -> Result<PreparedUnread> 
 
 fn validate_prepared(tx: &Tx<'_>, prepared: &Snapshot, windows: &[Window]) -> Result<bool> {
     let channels: Vec<String> = prepared.bases.keys().cloned().collect();
-    let current = snapshot_after(tx.conn(), &prepared.session, &channels, tx.now_ms(),prepared.automatic_after)?;
+    let current = snapshot_after(
+        tx.conn(),
+        &prepared.session,
+        &channels,
+        tx.now_ms(),
+        prepared.automatic_after,
+    )?;
     if !current.reader_enabled
         || current.reader_enabled != prepared.reader_enabled
         || current.state != prepared.state
@@ -863,22 +884,32 @@ pub struct PreparedCausalUnread {
     pub causes: crate::causal::CausalSnapshot,
 }
 pub fn prepare_causal_unread(tx: &mut Tx<'_>, session: &str) -> Result<PreparedCausalUnread> {
-    prepare_causal_unread_after(tx,session,None)
+    prepare_causal_unread_after(tx, session, None)
 }
-pub fn prepare_causal_unread_after(tx:&mut Tx<'_>,session:&str,after:Option<i64>)->Result<PreparedCausalUnread>{
+pub fn prepare_causal_unread_after(
+    tx: &mut Tx<'_>,
+    session: &str,
+    after: Option<i64>,
+) -> Result<PreparedCausalUnread> {
     let mut prepared = prepare_unread(tx, session)?;
-    if let Some(after)=after {
-        if after<0{return Err(invalid("negative automatic message floor"))}
-        let mut blocks=Vec::new();
-        for channel in cursors::injection_channels(tx.conn(),session,tx.now_ms())? {
-            if let Some(base)=cursors::cursor(tx.conn(),session,&channel)? {
-                let (messages,_)=cursors::scan_unread(tx.conn(),session,&channel,base.max(after))?;
-                if !messages.is_empty(){blocks.push((channel,messages));}
+    if let Some(after) = after {
+        if after < 0 {
+            return Err(invalid("negative automatic message floor"));
+        }
+        let mut blocks = Vec::new();
+        for channel in cursors::injection_channels(tx.conn(), session, tx.now_ms())? {
+            if let Some(base) = cursors::cursor(tx.conn(), session, &channel)? {
+                let (messages, _) =
+                    cursors::scan_unread(tx.conn(), session, &channel, base.max(after))?;
+                if !messages.is_empty() {
+                    blocks.push((channel, messages));
+                }
             }
         }
-        let channels:Vec<_>=blocks.iter().map(|(ch,_)|ch.clone()).collect();
-        prepared.snapshot=snapshot_after(tx.conn(),session,&channels,tx.now_ms(),Some(after))?;
-        prepared.blocks=blocks;
+        let channels: Vec<_> = blocks.iter().map(|(ch, _)| ch.clone()).collect();
+        prepared.snapshot =
+            snapshot_after(tx.conn(), session, &channels, tx.now_ms(), Some(after))?;
+        prepared.blocks = blocks;
     }
     let ends = prepared
         .blocks

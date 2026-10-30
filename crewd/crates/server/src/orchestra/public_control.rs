@@ -329,7 +329,8 @@ impl<P: Port> Core<P> {
         use crewd_proto::commands::{CommandPhase, PublicCommand};
         if let PublicCommand::ClaudeRecoveryResolve(p) = &call.request.command {
             let current = !self.shutting_down && self.matches_public_target(&p.target);
-            let running = self.live.contains_key(&p.target.session_id) || self.starting.contains_key(&p.target.session_id);
+            let running = self.live.contains_key(&p.target.session_id)
+                || self.starting.contains_key(&p.target.session_id);
             return crate::claude_recovery::resolve(call, current, running).await;
         }
         if let PublicCommand::SessionInterrupt(target) = &call.request.command
@@ -402,15 +403,39 @@ impl<P: Port> Core<P> {
             return serde_json::to_value(receipt).map_err(crate::dispatch::internal);
         }
         if matches!(call.request.command, PublicCommand::SessionResume(_))
-            && self.port.session(&target.session_id).await.map_err(crate::dispatch::internal)?.is_some_and(|r|r.executor=="claude") {
-            let state=call.state()?;let owner=state.clone();let actor=call.actor().clone();
-            let principal=call.principal().to_owned();let original=call.request.request_id.clone();let pinned=target.clone();
-            let running=self.live.contains_key(&target.session_id)||self.starting.contains_key(&target.session_id);
-            let allowed=state.db.call(move|s|->Result<bool,crewd_proto::RpcError>{
-                actor.authorize_tx(&owner,s.conn(),"session.resume").map_err(crate::dispatch::collab_err)?;
-                let v=crate::claude_recovery::snapshot(s.conn(),&owner,&principal,&pinned,running,Some(&original))?;
-                Ok(v["eligibility"]=="noUnresolvedRequests")
-            }).await.map_err(crate::dispatch::internal)??;
+            && self
+                .port
+                .session(&target.session_id)
+                .await
+                .map_err(crate::dispatch::internal)?
+                .is_some_and(|r| r.executor == "claude")
+        {
+            let state = call.state()?;
+            let owner = state.clone();
+            let actor = call.actor().clone();
+            let principal = call.principal().to_owned();
+            let original = call.request.request_id.clone();
+            let pinned = target.clone();
+            let running = self.live.contains_key(&target.session_id)
+                || self.starting.contains_key(&target.session_id);
+            let allowed = state
+                .db
+                .call(move |s| -> Result<bool, crewd_proto::RpcError> {
+                    actor
+                        .authorize_tx(&owner, s.conn(), "session.resume")
+                        .map_err(crate::dispatch::collab_err)?;
+                    let v = crate::claude_recovery::snapshot(
+                        s.conn(),
+                        &owner,
+                        &principal,
+                        &pinned,
+                        running,
+                        Some(&original),
+                    )?;
+                    Ok(v["eligibility"] == "noUnresolvedRequests")
+                })
+                .await
+                .map_err(crate::dispatch::internal)??;
             if !allowed {
                 let receipt=call.settle(CommandPhase::Admitted,CommandPhase::Suppressed,serde_json::json!({"refusal":"claude.recovery_evidence_unavailable","effectsDispatched":false})).await?;
                 return serde_json::to_value(receipt).map_err(crate::dispatch::internal);
@@ -730,9 +755,15 @@ impl<P: Port> Core<P> {
         if let Some(admission) = &self.cfg.admission {
             admission.allow(&row.id);
         }
-        let inputs=call.codex_original_inputs(&row.id).await.map_err(|e|ControlError::Internal(format!("original initial native input: {e:?}")))?;
-        let batch=super::port::Batch{session:row.id.clone(),..Default::default()};
-        self.launch_carrying_inputs(row.clone(),executor,brief,batch,inputs)
+        let inputs = call
+            .codex_original_inputs(&row.id)
+            .await
+            .map_err(|e| ControlError::Internal(format!("original initial native input: {e:?}")))?;
+        let batch = super::port::Batch {
+            session: row.id.clone(),
+            ..Default::default()
+        };
+        self.launch_carrying_inputs(row.clone(), executor, brief, batch, inputs)
             .await
             .map_err(ControlError::from_port)?;
         if let Some(starting) = self.starting.get(&row.id) {

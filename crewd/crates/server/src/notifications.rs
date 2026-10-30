@@ -689,9 +689,7 @@ impl Runtime {
         let hash = facts::hash(&serde_json::to_vec(&p).map_err(|_| bad())?);
         let id = p.request_id.clone();
         let operation = "notification.configure";
-        let identity = authority
-            .read(self, operation, crate_identity)
-            .await?;
+        let identity = authority.read(self, operation, crate_identity).await?;
         let owner = format!("local:{}", identity.db_id);
         let key = owner.clone();
         let request = id.clone();

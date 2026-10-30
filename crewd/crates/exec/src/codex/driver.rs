@@ -144,7 +144,11 @@ pub async fn start_codex(
         .await
         .map_err(|e| StartError::Ledger(io::Error::other(e)))?
         .map_err(StartError::Ledger)?;
-    if recorded.is_some() && start.spec.initial_inputs.is_some(){return Err(StartError::Ledger(io::Error::other("consumed initial native inputs cannot be replayed on resume")))}
+    if recorded.is_some() && start.spec.initial_inputs.is_some() {
+        return Err(StartError::Ledger(io::Error::other(
+            "consumed initial native inputs cannot be replayed on resume",
+        )));
+    }
     // 要续的那条先占住：同一个 thread 被两个 app-server 同时接着写，对话会乱。
     let live = match recorded
         .as_deref()
@@ -259,7 +263,9 @@ pub async fn start_codex(
         unix_now,
     };
     let mut core = CodexCore::new(opening, config.core, Instant::now());
-    if let Some(inputs)=start.spec.initial_inputs.clone(){core.initial_inputs(inputs);}
+    if let Some(inputs) = start.spec.initial_inputs.clone() {
+        core.initial_inputs(inputs);
+    }
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
     let (tx, cmd_rx) = mpsc::unbounded_channel();
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -473,7 +479,10 @@ fn execute(
                 let _ = t
                     .proc
                     .writer
-                    .send(super::transport::WriterMessage::ControlledLine { line, permit: Box::new(permit) });
+                    .send(super::transport::WriterMessage::ControlledLine {
+                        line,
+                        permit: Box::new(permit),
+                    });
             }
             CodexAction::Write(line) => {
                 let _ = t.proc.writer.send(line.into());
@@ -574,7 +583,9 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
         }
         Command::Stop => return t.core.is_running(),
         Command::ClearQuotaHealth => t.core.clear_quota_health(now),
-        Command::StartupPrompt { reply } => { let _ = reply.send(None); }
+        Command::StartupPrompt { reply } => {
+            let _ = reply.send(None);
+        }
         Command::ScreenText { max_lines, reply } => {
             let _ = reply.send(t.core.transcript_text(max_lines));
         }

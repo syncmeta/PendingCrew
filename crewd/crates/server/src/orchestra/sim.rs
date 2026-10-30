@@ -1850,125 +1850,125 @@ impl Walk {
 // all seed/step/cleanup assertions remain identical.
 fn run(seed: u64, steps: usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = Walk>>> {
     Box::pin(async move {
-    let mut w = Walk::new(seed);
-    // Small synthetic loop thresholds exercise the same real breaker/latch
-    // persistence path within 400 steps; this is not a production settings edit.
-    let mut cfg = super::OrchestraConfig::for_tests();
-    cfg.jitter_seed = Some(seed);
-    cfg.retry_jitter = queue::RETRY_JITTER;
-    cfg.stagger_ms = 250;
-    cfg.loops.edge_max = 2;
-    cfg.loops.target_max = 2;
-    let mut r = Rig::with_cfg(super::hooks::Hooks::default(), cfg).await;
-    r.port.lock().window_cap = Some(2);
-    r.crew("c", "cap");
-    r.worker("c", "w1");
-    r.worker("c", "w2");
-    r.channel("c/dm", "c", None, &["w1", "w2"]);
-    r.port.lock().channels.get_mut("c/dm").unwrap().kind = MemKind::Dm;
-    r.channel("c/topic", "c", None, &["cap", "w1", "w2"]);
-    for step in 0..steps {
-        w.step = step;
-        let op = w.rng.operation();
-        *w.selected.entry(op).or_default() += 1;
-        let result = if op == Op::Crash {
-            let (next, applied) = match w.random_crash(r).await {
-                Ok(result) => result,
-                Err(e) => w.failed(e),
+        let mut w = Walk::new(seed);
+        // Small synthetic loop thresholds exercise the same real breaker/latch
+        // persistence path within 400 steps; this is not a production settings edit.
+        let mut cfg = super::OrchestraConfig::for_tests();
+        cfg.jitter_seed = Some(seed);
+        cfg.retry_jitter = queue::RETRY_JITTER;
+        cfg.stagger_ms = 250;
+        cfg.loops.edge_max = 2;
+        cfg.loops.target_max = 2;
+        let mut r = Rig::with_cfg(super::hooks::Hooks::default(), cfg).await;
+        r.port.lock().window_cap = Some(2);
+        r.crew("c", "cap");
+        r.worker("c", "w1");
+        r.worker("c", "w2");
+        r.channel("c/dm", "c", None, &["w1", "w2"]);
+        r.port.lock().channels.get_mut("c/dm").unwrap().kind = MemKind::Dm;
+        r.channel("c/topic", "c", None, &["cap", "w1", "w2"]);
+        for step in 0..steps {
+            w.step = step;
+            let op = w.rng.operation();
+            *w.selected.entry(op).or_default() += 1;
+            let result = if op == Op::Crash {
+                let (next, applied) = match w.random_crash(r).await {
+                    Ok(result) => result,
+                    Err(e) => w.failed(e),
+                };
+                r = next;
+                Ok(applied)
+            } else {
+                w.apply(&mut r, op).await
             };
-            r = next;
-            Ok(applied)
-        } else {
-            w.apply(&mut r, op).await
-        };
-        match result {
-            Ok(true) => *w.applied.entry(op).or_default() += 1,
-            Ok(false) => {}
+            match result {
+                Ok(true) => *w.applied.entry(op).or_default() += 1,
+                Ok(false) => {}
+                Err(e) => w.failed(e),
+            }
+            if let Err(e) = w.check(&r).await {
+                w.failed(e);
+            }
+            if let Err(e) = w.freshness(&mut r).await {
+                w.failed(e);
+            }
+        }
+        w.step = steps;
+        w.phase = "cleanup";
+        r.port.faults_off();
+        r.exec.lock().fail_next.clear();
+        if let Err(e) = w.release_replies(&mut r).await {
+            w.failed(e);
+        }
+        if let Err(e) = w.check(&r).await {
+            w.failed(e);
+        }
+        // Final crash also proves every recorded orphan was reclaimed. It reopens a
+        // shutdown/hibernate gate before the non-vacuous quiescence check.
+        let before = r.port.lock().wakes.clone();
+        w.record("cleanup crash+boot");
+        r = match r.crash().await {
+            Ok(r) => r,
             Err(e) => w.failed(e),
+        };
+        if let Err(e) = w.oracle.after_crash(before, &r).await {
+            w.failed(e);
         }
+        w.restart_answer(&mut r, true).await;
+        r.tick(6 * HOUR + 180_001).await;
         if let Err(e) = w.check(&r).await {
             w.failed(e);
         }
-        if let Err(e) = w.freshness(&mut r).await {
-            w.failed(e);
+        // Restart's silent rows and a newly started stagger can create another
+        // runnable tier. Drive real ticks to quiescence; one large tick is not it.
+        let bound = {
+            let st = r.port.lock();
+            st.wakes.len() + st.sessions.len() + 1
+        };
+        let mut quiescent = false;
+        for round in 0..=bound {
+            if w.oracle.quiescence(&r).await.is_ok() {
+                quiescent = true;
+                break;
+            }
+            w.record(format!(
+                "quiescence tick round={round} past current stagger"
+            ));
+            r.tick(r.core.cfg.stagger_ms.max(0) + 1).await;
+            if let Err(e) = w.check(&r).await {
+                w.failed(e);
+            }
         }
-    }
-    w.step = steps;
-    w.phase = "cleanup";
-    r.port.faults_off();
-    r.exec.lock().fail_next.clear();
-    if let Err(e) = w.release_replies(&mut r).await {
-        w.failed(e);
-    }
-    if let Err(e) = w.check(&r).await {
-        w.failed(e);
-    }
-    // Final crash also proves every recorded orphan was reclaimed. It reopens a
-    // shutdown/hibernate gate before the non-vacuous quiescence check.
-    let before = r.port.lock().wakes.clone();
-    w.record("cleanup crash+boot");
-    r = match r.crash().await {
-        Ok(r) => r,
-        Err(e) => w.failed(e),
-    };
-    if let Err(e) = w.oracle.after_crash(before, &r).await {
-        w.failed(e);
-    }
-    w.restart_answer(&mut r, true).await;
-    r.tick(6 * HOUR + 180_001).await;
-    if let Err(e) = w.check(&r).await {
-        w.failed(e);
-    }
-    // Restart's silent rows and a newly started stagger can create another
-    // runnable tier. Drive real ticks to quiescence; one large tick is not it.
-    let bound = {
-        let st = r.port.lock();
-        st.wakes.len() + st.sessions.len() + 1
-    };
-    let mut quiescent = false;
-    for round in 0..=bound {
-        if w.oracle.quiescence(&r).await.is_ok() {
-            quiescent = true;
-            break;
+        if !quiescent {
+            w.failed(w.oracle.quiescence(&r).await.unwrap_err());
         }
-        w.record(format!(
-            "quiescence tick round={round} past current stagger"
-        ));
-        r.tick(r.core.cfg.stagger_ms.max(0) + 1).await;
+        w.record("cleanup Input::Shutdown");
+        let (tx, rx) = oneshot::channel();
+        w.replies.add("cleanup shutdown".into(), rx);
+        r.core.handle(Input::Shutdown(tx)).await;
+        r.settle().await;
+        r.core.shutdown_done();
         if let Err(e) = w.check(&r).await {
             w.failed(e);
         }
-    }
-    if !quiescent {
-        w.failed(w.oracle.quiescence(&r).await.unwrap_err());
-    }
-    w.record("cleanup Input::Shutdown");
-    let (tx, rx) = oneshot::channel();
-    w.replies.add("cleanup shutdown".into(), rx);
-    r.core.handle(Input::Shutdown(tx)).await;
-    r.settle().await;
-    r.core.shutdown_done();
-    if let Err(e) = w.check(&r).await {
-        w.failed(e);
-    }
-    if let Err(e) = w.replies.complete() {
-        w.failed(e);
-    }
-    for hit in &r.port.lock().fault_hits {
-        *w.fired_faults.entry(hit.fault).or_default() += 1;
-    }
-    for (_, ok) in &r.exec.lock().launch_outcomes {
-        if *ok {
-            w.launch_ok += 1;
-        } else {
-            w.launch_error += 1;
+        if let Err(e) = w.replies.complete() {
+            w.failed(e);
         }
-    }
-    eprintln!(
-        "SIM FaultLatch skip_reason_counts seed={seed} counts={:?}",
-        w.latch_skip_reasons
-    );
-    w
+        for hit in &r.port.lock().fault_hits {
+            *w.fired_faults.entry(hit.fault).or_default() += 1;
+        }
+        for (_, ok) in &r.exec.lock().launch_outcomes {
+            if *ok {
+                w.launch_ok += 1;
+            } else {
+                w.launch_error += 1;
+            }
+        }
+        eprintln!(
+            "SIM FaultLatch skip_reason_counts seed={seed} counts={:?}",
+            w.latch_skip_reasons
+        );
+        w
     })
 }
 

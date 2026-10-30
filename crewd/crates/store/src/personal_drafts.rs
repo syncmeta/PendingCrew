@@ -444,9 +444,7 @@ pub fn authorize_command(
             .members
             .iter()
             .find(|m| {
-                m.value.member_id == scope.member_id
-                    && !m.value.revoked
-                    && who.member_matches(m)
+                m.value.member_id == scope.member_id && !m.value.revoked && who.member_matches(m)
             })
             .ok_or_else(bad)?;
         if b.value.writer_id != m.value.writer_id || b.value.key != p.key {

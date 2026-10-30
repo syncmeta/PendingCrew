@@ -524,7 +524,10 @@ async fn registry_failure_kills_the_child_even_if_it_floods_the_pty() {
     // not erase provenance merely because orphan-file IO is unavailable.
     let entries = registry.entries();
     assert_eq!(entries.len(), 1);
-    assert!(matches!(crewd_exec::registry::probe(entries[0].1.pid), crewd_exec::registry::ProbeResult::Missing));
+    assert!(matches!(
+        crewd_exec::registry::probe(entries[0].1.pid),
+        crewd_exec::registry::ProbeResult::Missing
+    ));
     assert!(!env.dir.path().join("missing/r.json").exists());
 }
 

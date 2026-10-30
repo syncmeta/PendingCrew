@@ -3599,7 +3599,7 @@ mod self_tests {
         let exec = StandIn::default();
         let (h, _rx) = exec
             .launch(LaunchRequest {
-            managed_resume_id: None,
+                managed_resume_id: None,
                 initial_inputs: None,
                 codex_options: None,
                 title: None,

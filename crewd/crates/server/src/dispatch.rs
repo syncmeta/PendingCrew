@@ -176,29 +176,62 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
     let p = req.params;
     match req.method.as_str() {
         "host.quota" => {
-            use crewd_exec::codex::{control::{CodexOperation, CodexOutcome}, metadata::MetadataRequest};
+            use crewd_exec::codex::{
+                control::{CodexOperation, CodexOutcome},
+                metadata::MetadataRequest,
+            };
             if !p.is_null() && (!p.is_object() || !p.as_object().unwrap().is_empty()) {
-                return Err(RpcError::new(RpcError::INVALID_PARAMS, "host.quota takes no parameters"));
+                return Err(RpcError::new(
+                    RpcError::INVALID_PARAMS,
+                    "host.quota takes no parameters",
+                ));
             }
-            let h = state.orchestra.get().ok_or_else(|| RpcError::new(RpcError::CONFLICT, "host executor unavailable"))?;
-            let workdir = std::env::var_os("HOME").map(std::path::PathBuf::from)
+            let h = state
+                .orchestra
+                .get()
+                .ok_or_else(|| RpcError::new(RpcError::CONFLICT, "host executor unavailable"))?;
+            let workdir = std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
                 .ok_or_else(|| RpcError::new(RpcError::CONFLICT, "host home unavailable"))?;
-            let outcome = h.codex_metadata(MetadataRequest { session_id: "host-quota".into(), thread_id: String::new(), workdir, operation: CodexOperation::RateLimits, permit: None }).await;
+            let outcome = h
+                .codex_metadata(MetadataRequest {
+                    session_id: "host-quota".into(),
+                    thread_id: String::new(),
+                    workdir,
+                    operation: CodexOperation::RateLimits,
+                    permit: None,
+                })
+                .await;
             match outcome {
                 CodexOutcome::Observed(v) => {
-                    let native = v.get("providerResult").ok_or_else(|| RpcError::new(RpcError::CONFLICT, "quota response missing"))?;
+                    let native = v.get("providerResult").ok_or_else(|| {
+                        RpcError::new(RpcError::CONFLICT, "quota response missing")
+                    })?;
                     if !native.get("rateLimits").is_some_and(Value::is_object) {
-                        return Err(RpcError::new(RpcError::CONFLICT, "quota response shape unsupported"));
+                        return Err(RpcError::new(
+                            RpcError::CONFLICT,
+                            "quota response shape unsupported",
+                        ));
                     }
-                    Ok(serde_json::json!({"codex":native,"fetchedAt":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs,true)}))
+                    Ok(
+                        serde_json::json!({"codex":native,"fetchedAt":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs,true)}),
+                    )
                 }
-                CodexOutcome::Rejected(e) => Err(RpcError::new(RpcError::CONFLICT,e).with_refusal("host.quota_rejected")),
-                CodexOutcome::Unknown{detail,..} => Err(RpcError::new(RpcError::CONFLICT,detail).with_refusal("host.quota_unconfirmed")),
+                CodexOutcome::Rejected(e) => {
+                    Err(RpcError::new(RpcError::CONFLICT, e).with_refusal("host.quota_rejected"))
+                }
+                CodexOutcome::Unknown { detail, .. } => {
+                    Err(RpcError::new(RpcError::CONFLICT, detail)
+                        .with_refusal("host.quota_unconfirmed"))
+                }
             }
         }
         "host.directoryList" => {
-            let p = serde_json::from_value(p).map_err(|e| RpcError::new(RpcError::INVALID_PARAMS, e.to_string()))?;
-            tokio::task::spawn_blocking(move || crate::host_directory::list(p)).await.map_err(internal)?
+            let p = serde_json::from_value(p)
+                .map_err(|e| RpcError::new(RpcError::INVALID_PARAMS, e.to_string()))?;
+            tokio::task::spawn_blocking(move || crate::host_directory::list(p))
+                .await
+                .map_err(internal)?
         }
         methods::HELLO => {
             // U1：客户端报自己是谁（记一行）；太老的拒掉，比 crewd 新的照收（客户端自己决定怎么降级）。

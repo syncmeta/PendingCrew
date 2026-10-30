@@ -139,7 +139,7 @@ impl std::fmt::Debug for ClaudeTaskText {
 
 pub const RECOVERY_INSPECT: &str = "session.claude.recoveryInspect";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all="camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClaudeRecoveryResolveParams {
     pub target: crate::commands::CommandRuntimeTarget,
     pub original_agent_session_id: String,
@@ -190,23 +190,47 @@ pub struct ClaudeRecoveryInspect {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all="camelCase")]
-pub enum ClaudeRecoveryUnknownPhase { Unknown }
+#[serde(rename_all = "camelCase")]
+pub enum ClaudeRecoveryUnknownPhase {
+    Unknown,
+}
 
 #[cfg(test)]
 mod recovery_contract_tests {
     #[test]
     fn recovery_inspection_has_a_typed_registered_contract() {
-        let api=crate::api_schema();
+        let api = crate::api_schema();
         assert!(crate::methods::ALL.contains(&super::RECOVERY_INSPECT));
-        assert_eq!(api["methods"][super::RECOVERY_INSPECT]["result"]["$ref"],"#/$defs/ClaudeRecoveryInspect");
-        assert_eq!(api["$defs"]["ClaudeRecoveryInspect"]["additionalProperties"],false);
-        assert_eq!(api["$defs"]["ClaudeRecoveryUnknownPhase"]["enum"],serde_json::json!(["unknown"]));
-        assert_eq!(api["$defs"]["ClaudeRecoveryEligibility"]["enum"].as_array().unwrap().len(),9);
+        assert_eq!(
+            api["methods"][super::RECOVERY_INSPECT]["result"]["$ref"],
+            "#/$defs/ClaudeRecoveryInspect"
+        );
+        assert_eq!(
+            api["$defs"]["ClaudeRecoveryInspect"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            api["$defs"]["ClaudeRecoveryUnknownPhase"]["enum"],
+            serde_json::json!(["unknown"])
+        );
+        assert_eq!(
+            api["$defs"]["ClaudeRecoveryEligibility"]["enum"]
+                .as_array()
+                .unwrap()
+                .len(),
+            9
+        );
         for key in ["originalAgentSessionId", "evidenceToken"] {
-            assert!(api["$defs"]["ClaudeRecoveryInspect"]["required"].as_array().unwrap().contains(&serde_json::json!(key)));
-            assert_eq!(api["$defs"]["ClaudeRecoveryInspect"]["properties"][key]["type"],serde_json::json!(["string","null"]));
+            assert!(
+                api["$defs"]["ClaudeRecoveryInspect"]["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!(key))
+            );
+            assert_eq!(
+                api["$defs"]["ClaudeRecoveryInspect"]["properties"][key]["type"],
+                serde_json::json!(["string", "null"])
+            );
         }
-
     }
 }

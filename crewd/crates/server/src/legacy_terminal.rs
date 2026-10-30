@@ -260,11 +260,20 @@ impl LegacyTerminal {
         let generation = self.generation.clone();
         self.db.call_result(move|store|->crewd_store::Result<bool>{Ok(store.conn().query_row("SELECT EXISTS(SELECT 1 FROM native_execution_runtimes WHERE session_id=?1 AND generation=?2 AND revoked=0 AND manual=1)",rusqlite::params![session,generation],|r|r.get(0))?)}).await.ok().and_then(Result::ok).unwrap_or(false)
     }
-    pub(crate) async fn startup_prompt(&self) -> io::Result<crewd_exec::startup_prompt::StartupPrompt> {
+    pub(crate) async fn startup_prompt(
+        &self,
+    ) -> io::Result<crewd_exec::startup_prompt::StartupPrompt> {
         self.binding()?;
-        let (epoch, prompt) = self.driver.startup_prompt().await.map_err(|_|refused())?.ok_or_else(refused)?;
+        let (epoch, prompt) = self
+            .driver
+            .startup_prompt()
+            .await
+            .map_err(|_| refused())?
+            .ok_or_else(refused)?;
         self.binding()?;
-        if epoch != self.binding.epoch { return Err(refused()); }
+        if epoch != self.binding.epoch {
+            return Err(refused());
+        }
         Ok(prompt)
     }
     pub(crate) async fn snapshot(&self) -> io::Result<Value> {

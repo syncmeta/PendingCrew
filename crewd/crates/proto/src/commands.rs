@@ -119,17 +119,17 @@ pub struct LocalClientTrustRevokeParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "params", deny_unknown_fields)]
 pub enum PublicCommand {
-    #[serde(rename="session.claude.recoveryResolve")]
+    #[serde(rename = "session.claude.recoveryResolve")]
     ClaudeRecoveryResolve(crate::claude::ClaudeRecoveryResolveParams),
-    #[serde(rename="personalDraft.ownerConfigure")]
+    #[serde(rename = "personalDraft.ownerConfigure")]
     PersonalDraftOwner(crate::personal_drafts::PersonalDraftOwnerParams),
-    #[serde(rename="personalDraft.memberSet")]
+    #[serde(rename = "personalDraft.memberSet")]
     PersonalDraftMember(crate::personal_drafts::PersonalDraftMemberSetParams),
-    #[serde(rename="personalDraft.consentSet")]
+    #[serde(rename = "personalDraft.consentSet")]
     PersonalDraftConsent(crate::personal_drafts::PersonalDraftConsentParams),
-    #[serde(rename="personalDraft.checkpoint")]
+    #[serde(rename = "personalDraft.checkpoint")]
     PersonalDraftCheckpoint(crate::personal_drafts::PersonalDraftCheckpointParams),
-    #[serde(rename="personalDraft.resolve")]
+    #[serde(rename = "personalDraft.resolve")]
     PersonalDraftResolve(crate::personal_drafts::PersonalDraftResolveParams),
     #[serde(rename = "local.clientTrust")]
     LocalClientTrust(LocalClientTrustParams),
@@ -191,16 +191,28 @@ pub enum PublicCommand {
 impl PublicCommand {
     pub fn codex_target(&self) -> Option<&CommandRuntimeTarget> {
         match self {
-            Self::CodexConfigure(p)=>Some(&p.target), Self::CodexCompact(p)=>Some(&p.target),
-            Self::CodexSteer(p)|Self::CodexQueue(p)=>Some(&p.target),Self::CodexReview(p)=>Some(&p.target),
-            Self::CodexTitleSet(p)=>Some(&p.target),Self::CodexFork(p)=>Some(&p.target),
-            Self::CodexArchive(p)|Self::CodexUnarchive(p)=>Some(&p.target),Self::CodexDelete(p)=>Some(&p.target),Self::CodexRevert(p)=>Some(&p.target),
-            Self::SessionInterrupt(p)=>Some(p),_=>None,
+            Self::CodexConfigure(p) => Some(&p.target),
+            Self::CodexCompact(p) => Some(&p.target),
+            Self::CodexSteer(p) | Self::CodexQueue(p) => Some(&p.target),
+            Self::CodexReview(p) => Some(&p.target),
+            Self::CodexTitleSet(p) => Some(&p.target),
+            Self::CodexFork(p) => Some(&p.target),
+            Self::CodexArchive(p) | Self::CodexUnarchive(p) => Some(&p.target),
+            Self::CodexDelete(p) => Some(&p.target),
+            Self::CodexRevert(p) => Some(&p.target),
+            Self::SessionInterrupt(p) => Some(p),
+            _ => None,
         }
     }
     pub fn native_history_action(&self) -> Option<crate::codex::CodexHistoryAction> {
         use crate::codex::CodexHistoryAction as A;
-        match self { Self::CodexArchive(_)=>Some(A::Archive),Self::CodexUnarchive(_)=>Some(A::Unarchive),Self::CodexDelete(_)=>Some(A::Delete),Self::CodexRevert(_)=>Some(A::Revert),_=>None }
+        match self {
+            Self::CodexArchive(_) => Some(A::Archive),
+            Self::CodexUnarchive(_) => Some(A::Unarchive),
+            Self::CodexDelete(_) => Some(A::Delete),
+            Self::CodexRevert(_) => Some(A::Revert),
+            _ => None,
+        }
     }
     pub fn authorized_methods(&self) -> &'static [&'static str] {
         match self {

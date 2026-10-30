@@ -133,10 +133,16 @@ fn start_pair(f: &Fixture) -> (String, String, String) {
     });
     // Body logging precedes Stop/idle hooks. Only the matched durable receipts
     // establish that both managed turns may accept the next Human task.
-    let conn = rusqlite::Connection::open_with_flags(f.data.join("crewd.db"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-    wait("initial managed idle receipts", || conn.query_row(
+    let conn = rusqlite::Connection::open_with_flags(
+        f.data.join("crewd.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    wait("initial managed idle receipts", || {
+        conn.query_row(
         "SELECT COUNT(*) FROM native_execution_receipts r JOIN native_execution_runtimes n USING(runtime_id) WHERE n.session_id IN (?1,?2) AND r.phase='completed'",
-        rusqlite::params![cap,worker], |r|r.get::<_,i64>(0)).unwrap()==2);
+        rusqlite::params![cap,worker], |r|r.get::<_,i64>(0)).unwrap()==2
+    });
 
     (crew["id"].as_str().unwrap().to_string(), cap, worker)
 }
@@ -268,13 +274,22 @@ fn crash_reopen_and_explicit_resume_preserve_old_wakes_without_automatic_replay(
         );
     }
     assert_eq!(f.count("SYNTHETIC_TIMER"), 0);
-    rpc(&f, "restart.answer", json!({"id":prompt["id"],"answer":"later"})).unwrap();
+    rpc(
+        &f,
+        "restart.answer",
+        json!({"id":prompt["id"],"answer":"later"}),
+    )
+    .unwrap();
     rpc(&f, "session.resume", json!({"sessionId":worker})).unwrap();
-    wait("explicit original session resumed", || rpc(&f,"session.live",json!({"sessionId":worker})).unwrap()["running"] == true);
+    wait("explicit original session resumed", || {
+        rpc(&f, "session.live", json!({"sessionId":worker})).unwrap()["running"] == true
+    });
     assert_eq!(f.count("SYNTHETIC_TIMER"), 0);
     assert_eq!(f.count(note("restart.interrupted")), 0);
     rpc(&f,"message.post",json!({"channelId":format!("{cid}/lobby"),"text":"SYNTHETIC_NEW_AFTER_EXPLICIT_RESUME","mentions":[{"kind":"session","targetId":worker}]})).unwrap();
-    wait("new Human task reaches explicit resumed session", || f.count("SYNTHETIC_NEW_AFTER_EXPLICIT_RESUME") == 1);
+    wait("new Human task reaches explicit resumed session", || {
+        f.count("SYNTHETIC_NEW_AFTER_EXPLICIT_RESUME") == 1
+    });
     assert_eq!(f.count("SYNTHETIC_TIMER"), 0);
     assert_eq!(f.count("SYNTHETIC_ALPHA"), 1);
     assert_eq!(f.count("SYNTHETIC_BETA"), 1);
@@ -309,14 +324,19 @@ fn hibernate_response_and_physical_cleanup_reopen_without_implicit_tasks() {
     assert_storage(&f);
     let mut second = Serve::start(&f);
     for sid in [&cap, &worker] {
-        assert_eq!(rpc(&f,"session.live",json!({"sessionId":sid})).unwrap()["running"],false);
+        assert_eq!(
+            rpc(&f, "session.live", json!({"sessionId":sid})).unwrap()["running"],
+            false
+        );
     }
     assert_eq!(f.count("SYNTHETIC_ALPHA"), 1);
     assert_eq!(f.count("SYNTHETIC_BETA"), 1);
     assert_eq!(f.count(note("hibernate.interrupted")), 0);
-    rpc(&f,"session.resume",json!({"sessionId":cap})).unwrap();
+    rpc(&f, "session.resume", json!({"sessionId":cap})).unwrap();
     rpc(&f,"message.post",json!({"channelId":format!("{cid}/lobby"),"text":"SYNTHETIC_NEW_AFTER_HIBERNATE","mentions":[{"kind":"session","targetId":cap}]})).unwrap();
-    wait("new Human task after explicit hibernate resume",||f.count("SYNTHETIC_NEW_AFTER_HIBERNATE")==1);
+    wait("new Human task after explicit hibernate resume", || {
+        f.count("SYNTHETIC_NEW_AFTER_HIBERNATE") == 1
+    });
     assert_eq!(f.count(note("hibernate.interrupted")), 0);
     let resumed = registry(&f.data);
     second.term();

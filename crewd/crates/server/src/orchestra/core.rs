@@ -1061,9 +1061,7 @@ impl<P: Port> Core<P> {
                 Ok(())
             }
             Input::Collab(f) => self.on_collab(f).await,
-            Input::Arbitrated { msg, ctx, answer } => {
-                self.on_arbitrated(msg, ctx, answer).await
-            }
+            Input::Arbitrated { msg, ctx, answer } => self.on_arbitrated(msg, ctx, answer).await,
             Input::Progress { session } => {
                 self.breaker.progress(&session);
                 Ok(())
@@ -1532,7 +1530,8 @@ impl<P: Port> Core<P> {
                 .map_err(ControlError::from_port)?
         {
             return Err(ControlError::Invalid(
-                Refusal::new(Code::ResourceInvalid).arg("field", "codex.nativeHistoryUnavailableOrUnknown"),
+                Refusal::new(Code::ResourceInvalid)
+                    .arg("field", "codex.nativeHistoryUnavailableOrUnknown"),
             ));
         }
         let exec = self
@@ -1617,10 +1616,20 @@ impl<P: Port> Core<P> {
         {
             return Err(ControlError::NotFound(session.into()));
         }
-        let message_floor = self.port.managed_human_message_floor().await
+        let message_floor = self
+            .port
+            .managed_human_message_floor()
+            .await
             .map_err(ControlError::from_port)?
-            .max(self.seen_human_messages.iter().copied().max().unwrap_or(self.managed_human_boot_floor));
-        self.managed_human_stop_floors.insert(session.to_owned(), message_floor);
+            .max(
+                self.seen_human_messages
+                    .iter()
+                    .copied()
+                    .max()
+                    .unwrap_or(self.managed_human_boot_floor),
+            );
+        self.managed_human_stop_floors
+            .insert(session.to_owned(), message_floor);
         self.human_resume_intents.remove(session);
         let pending = self
             .due
@@ -2013,8 +2022,15 @@ impl<P: Port> Core<P> {
 
     /// 同 [`launch`](Self::launch)，带一整批（含随批的窗口外行 `Batch::riders`）。这批在拉起之前 claim。
     pub(crate) async fn launch_carrying(
-        &mut self,row:SessionRow,exec:Arc<dyn Executor>,text:Option<String>,batch:Batch,
-    )->anyhow::Result<bool>{self.launch_carrying_inputs(row,exec,text,batch,None).await}
+        &mut self,
+        row: SessionRow,
+        exec: Arc<dyn Executor>,
+        text: Option<String>,
+        batch: Batch,
+    ) -> anyhow::Result<bool> {
+        self.launch_carrying_inputs(row, exec, text, batch, None)
+            .await
+    }
     pub(crate) async fn launch_carrying_inputs(
         &mut self,
         row: SessionRow,
@@ -2259,7 +2275,12 @@ impl<P: Port> Core<P> {
         }
         let st = self.starting.remove(session).expect("上面查过");
         if result.is_err() {
-            if st.managed_resume_wake_cut.is_some(){if let Some(a)=&self.cfg.admission{a.revoke(session);}self.held.insert(session.to_owned());}
+            if st.managed_resume_wake_cut.is_some() {
+                if let Some(a) = &self.cfg.admission {
+                    a.revoke(session);
+                }
+                self.held.insert(session.to_owned());
+            }
             self.public_physical_lost(session, generator, "launch_failed_without_confirmed_birth")
                 .await;
         }
@@ -3096,11 +3117,41 @@ impl<P: Port> Core<P> {
         let (crew, name, executor) = (l.crew.clone(), l.name.clone(), l.executor.clone());
         let lang = self.lang();
         let (id_s, said_s) = (safe_name(id), safe_name(said));
-        if self.execs.get(&executor).is_ok_and(|e|e.requires_exact_managed_resume()) {
-            if let Some(a)=&self.cfg.admission {a.revoke(session);}
+        if self
+            .execs
+            .get(&executor)
+            .is_ok_and(|e| e.requires_exact_managed_resume())
+        {
+            if let Some(a) = &self.cfg.admission {
+                a.revoke(session);
+            }
             self.held.insert(session.to_owned());
-            self.port.patch_session(session,SessionPatch{resume_failed_at:Some(Some(self.now())),..Default::default()}).await?;
-            self.port.post_system(Audience::HumanChannel{crew,mention_human:false},text::render(lang,"resume.refused.managed",&[("name",&safe_name(&name)),("id",&id_s),("said",&said_s)])).await?;
+            self.port
+                .patch_session(
+                    session,
+                    SessionPatch {
+                        resume_failed_at: Some(Some(self.now())),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            self.port
+                .post_system(
+                    Audience::HumanChannel {
+                        crew,
+                        mention_human: false,
+                    },
+                    text::render(
+                        lang,
+                        "resume.refused.managed",
+                        &[
+                            ("name", &safe_name(&name)),
+                            ("id", &id_s),
+                            ("said", &said_s),
+                        ],
+                    ),
+                )
+                .await?;
             return Ok(());
         }
         let diag = match self

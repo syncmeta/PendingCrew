@@ -21,7 +21,7 @@ pub type Context = BTreeMap<String, String>;
 
 pub struct LaunchRequest {
     pub managed_resume_id: Option<String>,
-    pub initial_inputs:Option<crewd_exec::codex::input::Submission>,
+    pub initial_inputs: Option<crewd_exec::codex::input::Submission>,
     pub session_id: String,
     pub crew_id: String,
     pub workdir: PathBuf,
@@ -83,7 +83,9 @@ pub trait Executor: Send + Sync {
     fn accepts_initial_context(&self) -> bool {
         false
     }
-    fn requires_exact_managed_resume(&self) -> bool {false}
+    fn requires_exact_managed_resume(&self) -> bool {
+        false
+    }
     /// Full provider resume must be explicitly supported by this adapter.
     fn accepts_resume(&self) -> bool {
         true
@@ -159,8 +161,15 @@ pub trait ExecHandle: Send + Sync {
     ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
         Box::pin(async { Ok(crewd_exec::codex::control::CodexOutcome::unsupported()) })
     }
-    fn codex_submit_inputs(&self,_text:String,_request_id:String,_expected_turn_id:Option<String>,_inputs:crewd_exec::codex::input::Submission,_permit:crewd_exec::driver::ManualWritePermit)->BoxFut<'_,Result<crewd_exec::codex::control::CodexOutcome,Closed>>{
-        Box::pin(async{Ok(crewd_exec::codex::control::CodexOutcome::unsupported())})
+    fn codex_submit_inputs(
+        &self,
+        _text: String,
+        _request_id: String,
+        _expected_turn_id: Option<String>,
+        _inputs: crewd_exec::codex::input::Submission,
+        _permit: crewd_exec::driver::ManualWritePermit,
+    ) -> BoxFut<'_, Result<crewd_exec::codex::control::CodexOutcome, Closed>> {
+        Box::pin(async { Ok(crewd_exec::codex::control::CodexOutcome::unsupported()) })
     }
     fn codex_queue_controlled(
         &self,
@@ -382,7 +391,6 @@ pub(crate) fn executable_metadata(path: &std::path::Path) -> bool {
     // SAFETY: owned NUL-terminated path remains live throughout access(2).
     unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
 }
-
 
 #[cfg(test)]
 mod tests {

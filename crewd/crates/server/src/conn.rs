@@ -225,7 +225,10 @@ struct ConnectionSignals<'a> {
     writer_done: &'a mut oneshot::Receiver<()>,
 }
 
-#[expect(clippy::too_many_arguments, reason = "Keep peer authority, connection IO, forwarding, drain and exit tasks explicit in the owned read loop")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep peer authority, connection IO, forwarding, drain and exit tasks explicit in the owned read loop"
+)]
 async fn read_loop<R: AsyncRead + Unpin>(
     state: &Arc<AppState>,
     rd: R,
@@ -358,7 +361,10 @@ async fn s5_poll_fault(state: &AppState, id: u64) {
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "Keep exact peer, request, agent state and connection lifecycle signals explicit at the authorization boundary")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep exact peer, request, agent state and connection lifecycle signals explicit at the authorization boundary"
+)]
 async fn request_step(
     state: &Arc<AppState>,
     parsed: Result<Request, serde_json::Error>,
@@ -600,18 +606,45 @@ async fn request_step(
             }
         }
         Ok(req) if crate::personal_drafts::is_method(&req.method) => {
-            if agent.is_attached(){ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"Agent cannot access personal drafts")))}
-            else {ServerFrame::Response(crate::personal_drafts::handle(state,&peer.command_actor(),req).await)}
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(RpcError::FORBIDDEN, "Agent cannot access personal drafts"),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::personal_drafts::handle(state, &peer.command_actor(), req).await,
+                )
+            }
         }
         Ok(req) if crate::claude_history::is_method(&req.method) => {
-            if agent.is_attached(){ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"Agent cannot read Human managed task bodies")))}
-            else{ServerFrame::Response(crate::claude_history::handle(state,&peer.command_actor(),req).await)}
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "Agent cannot read Human managed task bodies",
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::claude_history::handle(state, &peer.command_actor(), req).await,
+                )
+            }
         }
         Ok(req) if crate::codex_inputs::is_method(&req.method) => {
             if agent.is_attached() {
-                ServerFrame::Response(Response::err(req.id,RpcError::new(RpcError::FORBIDDEN,"Agent cannot stage Human native inputs")))
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "Agent cannot stage Human native inputs",
+                    ),
+                ))
             } else {
-                ServerFrame::Response(crate::codex_inputs::handle(state,&peer.command_actor(),req).await)
+                ServerFrame::Response(
+                    crate::codex_inputs::handle(state, &peer.command_actor(), req).await,
+                )
             }
         }
         Ok(req) if crate::notifications::is_method(&req.method) => {
@@ -665,9 +698,12 @@ async fn request_step(
                 }
             };
             if agent.is_attached()
-                && p.topics
-                    .iter()
-                    .any(|t| matches!(t.as_str(), "documents" | "viewFolders" | "data" | "personalDraft"))
+                && p.topics.iter().any(|t| {
+                    matches!(
+                        t.as_str(),
+                        "documents" | "viewFolders" | "data" | "personalDraft"
+                    )
+                })
             {
                 return RequestStep::Reply(ServerFrame::Response(Response::err(
                     id,
@@ -921,7 +957,8 @@ fn spawn_forwarder(
                     if attached.load(std::sync::atomic::Ordering::Acquire)
                         && matches!(
                             e.event.as_str(),
-                            "personalDraft.changed" | events::TODO_ATTRIBUTES_CHANGED
+                            "personalDraft.changed"
+                                | events::TODO_ATTRIBUTES_CHANGED
                                 | events::DATA_CHANGED
                                 | events::DOCUMENT_CHANGED
                                 | events::FOLDER_CHANGED
@@ -931,7 +968,11 @@ fn spawn_forwarder(
                     continue;
                 }
                 Ok(e) if topics.iter().any(|t| t == topic_of(&e.event)) => {
-                    if e.event=="personalDraft.changed"&&!crate::personal_drafts::event_allowed(&state,&actor,&e.data).await{continue;}
+                    if e.event == "personalDraft.changed"
+                        && !crate::personal_drafts::event_allowed(&state, &actor, &e.data).await
+                    {
+                        continue;
+                    }
                     if e.event == events::DATA_CHANGED
                         && !data_event_allowed(&state, &actor, &e.data).await
                     {

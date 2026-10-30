@@ -437,12 +437,14 @@ async fn human_resume_denied_target_does_not_drop_other_target_from_same_message
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn managed_sessions_owned_history_exact_resume_cut_and_zero_reopen_input() {
     let f = Fixture::new();
-    let mut options=f.options("ready");
-    options.orchestra.as_mut().unwrap().config.heartbeat_ms=25;
-    let(tx,rx)=tokio::sync::oneshot::channel();
-    let data=f.data.clone();
-    let server=tokio::spawn(crewd_server::serve_with(data,options,async {let _=rx.await;}));
-    let mut c=Client::connect(&f.data).await;
+    let mut options = f.options("ready");
+    options.orchestra.as_mut().unwrap().config.heartbeat_ms = 25;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let data = f.data.clone();
+    let server = tokio::spawn(crewd_server::serve_with(data, options, async {
+        let _ = rx.await;
+    }));
+    let mut c = Client::connect(&f.data).await;
     let crew = c
         .call(
             "crew.create",
@@ -477,73 +479,196 @@ async fn managed_sessions_owned_history_exact_resume_cut_and_zero_reopen_input()
     {
         let mut store = crewd_store::Store::open_data_dir(&f.data).unwrap();
         crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
-            let message = crewd_collab::messages::post(tx, crewd_collab::Sender::Human, crewd_collab::messages::NewPost {
-                channel_id:format!("{cid}/lobby"),
-                text:"SYNTHETIC_MUST_NOT_RESUME".into(),
-                mentions:vec![crewd_proto::Mention { kind:crewd_proto::MentionKind::Session, target_id:Some(sid.into()) }],
-                ..Default::default()
-            })?.message;
-            crewd_collab::wakes::enqueue(tx, crewd_collab::wakes::WakeRequest {
-                session:sid.into(), kind:crewd_collab::wakes::WakeKind::Message,
-                source:crewd_collab::wakes::source::message(&message.id),
-                priority:crewd_collab::wakes::WakePriority::Human,
-                not_before_ms:None, note:None, origin:None,
-            })?;
+            let message = crewd_collab::messages::post(
+                tx,
+                crewd_collab::Sender::Human,
+                crewd_collab::messages::NewPost {
+                    channel_id: format!("{cid}/lobby"),
+                    text: "SYNTHETIC_MUST_NOT_RESUME".into(),
+                    mentions: vec![crewd_proto::Mention {
+                        kind: crewd_proto::MentionKind::Session,
+                        target_id: Some(sid.into()),
+                    }],
+                    ..Default::default()
+                },
+            )?
+            .message;
+            crewd_collab::wakes::enqueue(
+                tx,
+                crewd_collab::wakes::WakeRequest {
+                    session: sid.into(),
+                    kind: crewd_collab::wakes::WakeKind::Message,
+                    source: crewd_collab::wakes::source::message(&message.id),
+                    priority: crewd_collab::wakes::WakePriority::Human,
+                    not_before_ms: None,
+                    note: None,
+                    origin: None,
+                },
+            )?;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
     }
     let (tx, server, mut c) = start(&f, "ready").await;
     assert!(registry(&f.data).is_empty());
-    let before=c.call("session.claude.inspect",json!({"sessionId":sid})).await.unwrap();
-    assert_eq!(before["manualResume"]["eligibility"],"eligible","{before}");
-    assert_eq!(before["fullHistoryLoad"],false);
-    let original_id=before["manualResume"]["originalAgentSessionId"].clone();
-    let history=c.call("session.claude.history",json!({"sessionId":sid,"limit":32})).await.unwrap();
-    let task_request=history["tasks"].as_array().unwrap().last().unwrap()["requestId"].as_str().unwrap().to_owned();
-    let detail=c.call("session.claude.taskGet",json!({"sessionId":sid,"requestId":task_request})).await.unwrap();
-    assert_eq!(detail["originalTask"]["text"],"SYNTHETIC_BETA");
-    assert!(detail["observations"].as_array().unwrap().iter().any(|o|o["text"]=="Synthetic response only"),"{detail}");
-    let hello=c.call("system.hello",json!({})).await.unwrap();
-    let target=c.call("session.controlTarget",json!({"sessionId":sid})).await.unwrap();
-    let resume_id=uuid::Uuid::new_v4().to_string();
+    let before = c
+        .call("session.claude.inspect", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    assert_eq!(
+        before["manualResume"]["eligibility"], "eligible",
+        "{before}"
+    );
+    assert_eq!(before["fullHistoryLoad"], false);
+    let original_id = before["manualResume"]["originalAgentSessionId"].clone();
+    let history = c
+        .call(
+            "session.claude.history",
+            json!({"sessionId":sid,"limit":32}),
+        )
+        .await
+        .unwrap();
+    let task_request = history["tasks"].as_array().unwrap().last().unwrap()["requestId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let detail = c
+        .call(
+            "session.claude.taskGet",
+            json!({"sessionId":sid,"requestId":task_request}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail["originalTask"]["text"], "SYNTHETIC_BETA");
+    assert!(
+        detail["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["text"] == "Synthetic response only"),
+        "{detail}"
+    );
+    let hello = c.call("system.hello", json!({})).await.unwrap();
+    let target = c
+        .call("session.controlTarget", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    let resume_id = uuid::Uuid::new_v4().to_string();
     let mut receipt=c.call("command.submit",json!({"requestId":resume_id,"dbId":hello["runtimeIdentity"]["dbId"],"runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],"command":{"operation":"session.resume","params":target}})).await.unwrap();
-    let until=tokio::time::Instant::now()+Duration::from_secs(12);
-    while receipt["phase"]=="dispatched" {
-        assert!(tokio::time::Instant::now()<until,"resume receipt did not settle {receipt}");
+    let until = tokio::time::Instant::now() + Duration::from_secs(12);
+    while receipt["phase"] == "dispatched" {
+        assert!(
+            tokio::time::Instant::now() < until,
+            "resume receipt did not settle {receipt}"
+        );
         tokio::time::sleep(Duration::from_millis(25)).await;
-        receipt=c.call("command.lookup",json!({"requestId":resume_id,"dbId":hello["runtimeIdentity"]["dbId"]})).await.unwrap();
+        receipt = c
+            .call(
+                "command.lookup",
+                json!({"requestId":resume_id,"dbId":hello["runtimeIdentity"]["dbId"]}),
+            )
+            .await
+            .unwrap();
     }
-    assert_eq!(receipt["phase"],"launched","{receipt}");
-    let resumed=c.call("session.claude.inspect",json!({"sessionId":sid})).await.unwrap();
-    assert_eq!(resumed["manualResume"]["originalAgentSessionId"],original_id);
-    assert_eq!(resumed["manualResume"]["eligibility"],"running");
-    assert_eq!(f.count("SYNTHETIC_MUST_NOT_RESUME"),0,"first launch scan must not deliver old pending input");
+    assert_eq!(receipt["phase"], "launched", "{receipt}");
+    let resumed = c
+        .call("session.claude.inspect", json!({"sessionId":sid}))
+        .await
+        .unwrap();
+    assert_eq!(
+        resumed["manualResume"]["originalAgentSessionId"],
+        original_id
+    );
+    assert_eq!(resumed["manualResume"]["eligibility"], "running");
+    assert_eq!(
+        f.count("SYNTHETIC_MUST_NOT_RESUME"),
+        0,
+        "first launch scan must not deliver old pending input"
+    );
     tokio::time::sleep(Duration::from_millis(250)).await;
-    assert_eq!(f.count("SYNTHETIC_MUST_NOT_RESUME"),0,"subsequent actual heartbeat scans must keep the same cut");
-    let old_queue=c.call("wake.list",json!({"sessionId":sid})).await.unwrap();
-    assert!(old_queue["wakes"].as_array().unwrap().iter().any(|w|w["state"]=="pending"&&w["attempts"]==0),"{old_queue}");
-    let old_ids:Vec<_>=old_queue["wakes"].as_array().unwrap().iter().filter(|w|w["state"]=="pending"&&w["attempts"]==0).map(|w|w["id"].clone()).collect();
+    assert_eq!(
+        f.count("SYNTHETIC_MUST_NOT_RESUME"),
+        0,
+        "subsequent actual heartbeat scans must keep the same cut"
+    );
+    let old_queue = c.call("wake.list", json!({"sessionId":sid})).await.unwrap();
+    assert!(
+        old_queue["wakes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["state"] == "pending" && w["attempts"] == 0),
+        "{old_queue}"
+    );
+    let old_ids: Vec<_> = old_queue["wakes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|w| w["state"] == "pending" && w["attempts"] == 0)
+        .map(|w| w["id"].clone())
+        .collect();
     c.call("message.post",json!({"channelId":format!("{cid}/lobby"),"text":"SYNTHETIC_FRESH_AFTER_RESUME","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
-    wait("post-cut new task still reaches exact resumed native session",||f.count("SYNTHETIC_FRESH_AFTER_RESUME")==1).await;
-    assert_eq!(f.count("SYNTHETIC_MUST_NOT_RESUME"),0,"new automatic context must not smuggle a pre-resume body");
-    let until=tokio::time::Instant::now()+Duration::from_secs(10);
-    let after_new=loop {
-        let rows=c.call("wake.list",json!({"sessionId":sid})).await.unwrap();
-        if rows["wakes"].as_array().unwrap().iter().any(|w|!old_ids.contains(&w["id"])&&w["id"].as_i64().unwrap()>old_ids.last().unwrap().as_i64().unwrap()&&w["state"]=="delivered"){break rows}
-        assert!(tokio::time::Instant::now()<until,"fresh task did not reach original Delivered ACK: {rows}");
+    wait(
+        "post-cut new task still reaches exact resumed native session",
+        || f.count("SYNTHETIC_FRESH_AFTER_RESUME") == 1,
+    )
+    .await;
+    assert_eq!(
+        f.count("SYNTHETIC_MUST_NOT_RESUME"),
+        0,
+        "new automatic context must not smuggle a pre-resume body"
+    );
+    let until = tokio::time::Instant::now() + Duration::from_secs(10);
+    let after_new = loop {
+        let rows = c.call("wake.list", json!({"sessionId":sid})).await.unwrap();
+        if rows["wakes"].as_array().unwrap().iter().any(|w| {
+            !old_ids.contains(&w["id"])
+                && w["id"].as_i64().unwrap() > old_ids.last().unwrap().as_i64().unwrap()
+                && w["state"] == "delivered"
+        }) {
+            break rows;
+        }
+        assert!(
+            tokio::time::Instant::now() < until,
+            "fresh task did not reach original Delivered ACK: {rows}"
+        );
         tokio::time::sleep(Duration::from_millis(25)).await;
     };
     eprintln!("old IDs after fresh task: {old_ids:?}; current rows={after_new}");
     for id in &old_ids {
-        let row=after_new["wakes"].as_array().unwrap().iter().find(|w|&w["id"]==id).expect("original pending row retained");
-        assert_eq!(row["state"],"pending","original wake cannot be claimed by new task: {row}");
-        assert_eq!(row["attempts"],0,"original wake retains attempts: {row}");
+        let row = after_new["wakes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| &w["id"] == id)
+            .expect("original pending row retained");
+        assert_eq!(
+            row["state"], "pending",
+            "original wake cannot be claimed by new task: {row}"
+        );
+        assert_eq!(row["attempts"], 0, "original wake retains attempts: {row}");
     }
-    assert_eq!(f.count("SYNTHETIC_BETA"),1,"original brief never accompanies resume");
+    assert_eq!(
+        f.count("SYNTHETIC_BETA"),
+        1,
+        "original brief never accompanies resume"
+    );
     c.call("message.post",json!({"channelId":format!("{cid}/lobby"),"text":"SYNTHETIC_EXPLICIT_QUOTE SYNTHETIC_MUST_NOT_RESUME","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
-    wait("Human explicitly quoting old text is not censored",||f.count("SYNTHETIC_EXPLICIT_QUOTE")==1).await;
-    assert_eq!(f.count("SYNTHETIC_MUST_NOT_RESUME"),1,"only the explicit new Human quote may contain this text");
-    c.call("session.stop",json!({"sessionId":sid,"reason":"synthetic cleanup"})).await.unwrap();
+    wait("Human explicitly quoting old text is not censored", || {
+        f.count("SYNTHETIC_EXPLICIT_QUOTE") == 1
+    })
+    .await;
+    assert_eq!(
+        f.count("SYNTHETIC_MUST_NOT_RESUME"),
+        1,
+        "only the explicit new Human quote may contain this text"
+    );
+    c.call(
+        "session.stop",
+        json!({"sessionId":sid,"reason":"synthetic cleanup"}),
+    )
+    .await
+    .unwrap();
     c.stopped(sid).await;
     c.call(
         "session.stop",
@@ -554,14 +679,33 @@ async fn managed_sessions_owned_history_exact_resume_cut_and_zero_reopen_input()
     c.stopped(capid).await;
     assert!(registry(&f.data).is_empty());
     stop(tx, server, &f).await;
-    let count=std::fs::read_to_string(&f.log).unwrap();
-    let(tx,server,mut c)=start(&f,"ready").await;
-    assert!(registry(&f.data).is_empty(),"Core reopen must not spawn Claude");
-    let reopened=c.call("session.claude.history",json!({"sessionId":sid,"limit":32})).await.unwrap();
-    assert!(reopened["tasks"].as_array().unwrap().len()>=2);
-    assert!(reopened["tasks"].as_array().unwrap().iter().all(|t|t["currentRuntime"]==false&&t["waitingObserved"]==false));
-    assert_eq!(std::fs::read_to_string(&f.log).unwrap(),count,"history/reopen sends zero new task bytes");
-    stop(tx,server,&f).await;
+    let count = std::fs::read_to_string(&f.log).unwrap();
+    let (tx, server, mut c) = start(&f, "ready").await;
+    assert!(
+        registry(&f.data).is_empty(),
+        "Core reopen must not spawn Claude"
+    );
+    let reopened = c
+        .call(
+            "session.claude.history",
+            json!({"sessionId":sid,"limit":32}),
+        )
+        .await
+        .unwrap();
+    assert!(reopened["tasks"].as_array().unwrap().len() >= 2);
+    assert!(
+        reopened["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["currentRuntime"] == false && t["waitingObserved"] == false)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&f.log).unwrap(),
+        count,
+        "history/reopen sends zero new task bytes"
+    );
+    stop(tx, server, &f).await;
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn isolated_start_creates_worktree_and_failed_start_leaves_nothing() {
@@ -884,7 +1028,13 @@ async fn managed_hook_faults_never_promote_screen_idle_or_replay_unknown_inputs(
         // custody may publish either edge while Unknown is retained; exact
         // durable phase above and the custody health are the safety proof.
         if expected == "unknown" {
-            assert!(matches!(live["health"]["kind"].as_str(), Some("turn_failed" | "prompt_undelivered")), "{case}: Unknown must retain failure/manual-custody health: {live}");
+            assert!(
+                matches!(
+                    live["health"]["kind"].as_str(),
+                    Some("turn_failed" | "prompt_undelivered")
+                ),
+                "{case}: Unknown must retain failure/manual-custody health: {live}"
+            );
         } else {
             assert_eq!(live["working"], expected != "completed", "{case}: {live}");
         }
@@ -1146,57 +1296,178 @@ async fn managed_manual_custody_allows_only_a_current_human_lease_and_never_auto
     stop(tx, server, &f).await;
 }
 
-#[tokio::test(flavor="multi_thread",worker_threads=4)]
-async fn owned_managed_resume_refusal_and_wrong_source_keep_original_uuid_and_never_submit(){
-    for fault in ["refuse","wrong-resume-source"] {
-        let f=Fixture::new();let(tx,server,mut c)=start(&f,"ready").await;
-        let crew=c.call("crew.create",json!({"title":"Owned fault","workingDirectory":f.work})).await.unwrap();
-        let row=c.call("session.start",json!({"crewId":crew["id"],"role":"worker","executor":"claude","brief":"SYNTHETIC_MANUAL_FAULT_ORIGINAL","isolation":false})).await.unwrap();let sid=row["id"].as_str().unwrap();
-        wait("initial managed task",||f.count("SYNTHETIC_MANUAL_FAULT_ORIGINAL")==1).await;
-        let original=c.call("session.claude.inspect",json!({"sessionId":sid})).await.unwrap()["manualResume"]["originalAgentSessionId"].clone();
-        c.call("session.stop",json!({"sessionId":sid,"reason":"fixture stop"})).await.unwrap();c.stopped(sid).await;stop(tx,server,&f).await;
-        let mut options=f.options(if fault=="refuse"{"refuse"}else{"ready"});options.orchestra.as_mut().unwrap().config.heartbeat_ms=25;
-        if fault!="refuse"{options.orchestra.as_mut().unwrap().claude_env.insert("FAKE_CLAUDE_MANAGED_CASE".into(),fault.into());}
-        let(tx,rx)=tokio::sync::oneshot::channel();let data=f.data.clone();let server=tokio::spawn(crewd_server::serve_with(data,options,async{let _=rx.await;}));let mut c=Client::connect(&f.data).await;
-        assert!(registry(&f.data).is_empty());let hello=c.call("system.hello",json!({})).await.unwrap();let target=c.call("session.controlTarget",json!({"sessionId":sid})).await.unwrap();let request=uuid::Uuid::new_v4().to_string();
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owned_managed_resume_refusal_and_wrong_source_keep_original_uuid_and_never_submit() {
+    for fault in ["refuse", "wrong-resume-source"] {
+        let f = Fixture::new();
+        let (tx, server, mut c) = start(&f, "ready").await;
+        let crew = c
+            .call(
+                "crew.create",
+                json!({"title":"Owned fault","workingDirectory":f.work}),
+            )
+            .await
+            .unwrap();
+        let row=c.call("session.start",json!({"crewId":crew["id"],"role":"worker","executor":"claude","brief":"SYNTHETIC_MANUAL_FAULT_ORIGINAL","isolation":false})).await.unwrap();
+        let sid = row["id"].as_str().unwrap();
+        wait("initial managed task", || {
+            f.count("SYNTHETIC_MANUAL_FAULT_ORIGINAL") == 1
+        })
+        .await;
+        let original = c
+            .call("session.claude.inspect", json!({"sessionId":sid}))
+            .await
+            .unwrap()["manualResume"]["originalAgentSessionId"]
+            .clone();
+        c.call(
+            "session.stop",
+            json!({"sessionId":sid,"reason":"fixture stop"}),
+        )
+        .await
+        .unwrap();
+        c.stopped(sid).await;
+        stop(tx, server, &f).await;
+        let mut options = f.options(if fault == "refuse" { "refuse" } else { "ready" });
+        options.orchestra.as_mut().unwrap().config.heartbeat_ms = 25;
+        if fault != "refuse" {
+            options
+                .orchestra
+                .as_mut()
+                .unwrap()
+                .claude_env
+                .insert("FAKE_CLAUDE_MANAGED_CASE".into(), fault.into());
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let data = f.data.clone();
+        let server = tokio::spawn(crewd_server::serve_with(data, options, async {
+            let _ = rx.await;
+        }));
+        let mut c = Client::connect(&f.data).await;
+        assert!(registry(&f.data).is_empty());
+        let hello = c.call("system.hello", json!({})).await.unwrap();
+        let target = c
+            .call("session.controlTarget", json!({"sessionId":sid}))
+            .await
+            .unwrap();
+        let request = uuid::Uuid::new_v4().to_string();
         let mut receipt=c.call("command.submit",json!({"requestId":request,"dbId":hello["runtimeIdentity"]["dbId"],"runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],"command":{"operation":"session.resume","params":target}})).await.unwrap();
-        let until=tokio::time::Instant::now()+Duration::from_secs(15);
-        while receipt["phase"]=="dispatched"{assert!(tokio::time::Instant::now()<until,"{fault}: {receipt}");tokio::time::sleep(Duration::from_millis(25)).await;receipt=c.call("command.lookup",json!({"requestId":request,"dbId":hello["runtimeIdentity"]["dbId"]})).await.unwrap();}
+        let until = tokio::time::Instant::now() + Duration::from_secs(15);
+        while receipt["phase"] == "dispatched" {
+            assert!(tokio::time::Instant::now() < until, "{fault}: {receipt}");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            receipt = c
+                .call(
+                    "command.lookup",
+                    json!({"requestId":request,"dbId":hello["runtimeIdentity"]["dbId"]}),
+                )
+                .await
+                .unwrap();
+        }
         eprintln!("strict resume fault={fault} receipt={receipt}");
-        assert!(!["confirmed","launched"].iter().any(|p|receipt["phase"]==*p));
-        c.stopped(sid).await;wait("faulted owned native cleanup",||registry(&f.data).is_empty()).await;
-        assert_eq!(c.call("session.claude.inspect",json!({"sessionId":sid})).await.unwrap()["manualResume"]["originalAgentSessionId"],original);
-        assert_eq!(f.count("SYNTHETIC_MANUAL_FAULT_ORIGINAL"),1);
+        assert!(
+            !["confirmed", "launched"]
+                .iter()
+                .any(|p| receipt["phase"] == *p)
+        );
+        c.stopped(sid).await;
+        wait("faulted owned native cleanup", || {
+            registry(&f.data).is_empty()
+        })
+        .await;
+        assert_eq!(
+            c.call("session.claude.inspect", json!({"sessionId":sid}))
+                .await
+                .unwrap()["manualResume"]["originalAgentSessionId"],
+            original
+        );
+        assert_eq!(f.count("SYNTHETIC_MANUAL_FAULT_ORIGINAL"), 1);
         // A genuinely new Human send may recheck the original strict source.
         // It is not an automatic retry of the prior public-control UUID.
-        let failed_before = c.call("session.get", json!({"sessionId":sid})).await.unwrap()["resumeFailedAt"].clone();
+        let failed_before = c
+            .call("session.get", json!({"sessionId":sid}))
+            .await
+            .unwrap()["resumeFailedAt"]
+            .clone();
         c.call("message.post", json!({"channelId":format!("{}/lobby",crew["id"].as_str().unwrap()),"text":"SYNTHETIC_NO_AUTO_AFTER_FAILED_RESUME","mentions":[{"kind":"session","targetId":sid}]})).await.unwrap();
         let until = tokio::time::Instant::now() + Duration::from_secs(15);
         let failed_after = loop {
-            let current = c.call("session.get", json!({"sessionId":sid})).await.unwrap()["resumeFailedAt"].clone();
-            if current != failed_before && !current.is_null() { break current; }
-            assert!(tokio::time::Instant::now() < until, "new Human strict recheck did not settle: {fault}");
+            let current = c
+                .call("session.get", json!({"sessionId":sid}))
+                .await
+                .unwrap()["resumeFailedAt"]
+                .clone();
+            if current != failed_before && !current.is_null() {
+                break current;
+            }
+            assert!(
+                tokio::time::Instant::now() < until,
+                "new Human strict recheck did not settle: {fault}"
+            );
             tokio::time::sleep(Duration::from_millis(25)).await;
         };
-        wait("new Human refused birth cleanup", || registry(&f.data).is_empty()).await;
+        wait("new Human refused birth cleanup", || {
+            registry(&f.data).is_empty()
+        })
+        .await;
         tokio::time::sleep(Duration::from_millis(250)).await;
-        assert_eq!(c.call("session.get", json!({"sessionId":sid})).await.unwrap()["resumeFailedAt"], failed_after, "heartbeat never retries a consumed Human intent");
+        assert_eq!(
+            c.call("session.get", json!({"sessionId":sid}))
+                .await
+                .unwrap()["resumeFailedAt"],
+            failed_after,
+            "heartbeat never retries a consumed Human intent"
+        );
         assert!(registry(&f.data).is_empty());
         assert_eq!(f.count("SYNTHETIC_NO_AUTO_AFTER_FAILED_RESUME"), 0);
-        assert_eq!(c.call("command.lookup",json!({"requestId":request,"dbId":hello["runtimeIdentity"]["dbId"]})).await.unwrap(),receipt,"only the original UUID is queried, never resubmitted");
-        stop(tx,server,&f).await;
+        assert_eq!(
+            c.call(
+                "command.lookup",
+                json!({"requestId":request,"dbId":hello["runtimeIdentity"]["dbId"]})
+            )
+            .await
+            .unwrap(),
+            receipt,
+            "only the original UUID is queried, never resubmitted"
+        );
+        stop(tx, server, &f).await;
     }
 }
 
 #[tokio::test]
-async fn owned_managed_history_attached_agent_cannot_enter_any_human_read(){
-    use crewd_server::agent::testkit::{Fixture as AgentFixture,RpcClient};
-    let fixture=AgentFixture::new().await;let(stop,rx)=tokio::sync::oneshot::channel();let server=fixture.spawn_owned_socket(rx).await;
-    let mut c=RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
-    c.call("agent.attach",json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)})).await.unwrap();
-    for method in ["session.claude.inspect","session.claude.history","session.claude.taskGet","session.claude.recoveryInspect"] {
-        let denied=c.call(method,json!({"sessionId":fixture.worker,"requestId":uuid::Uuid::new_v4().to_string()})).await.unwrap_err();
-        assert_eq!(denied.0,crewd_proto::RpcError::FORBIDDEN,"{method}: {denied:?}");
+async fn owned_managed_history_attached_agent_cannot_enter_any_human_read() {
+    use crewd_server::agent::testkit::{Fixture as AgentFixture, RpcClient};
+    let fixture = AgentFixture::new().await;
+    let (stop, rx) = tokio::sync::oneshot::channel();
+    let server = fixture.spawn_owned_socket(rx).await;
+    let mut c = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    c.call(
+        "agent.attach",
+        json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)}),
+    )
+    .await
+    .unwrap();
+    for method in [
+        "session.claude.inspect",
+        "session.claude.history",
+        "session.claude.taskGet",
+        "session.claude.recoveryInspect",
+    ] {
+        let denied = c
+            .call(
+                method,
+                json!({"sessionId":fixture.worker,"requestId":uuid::Uuid::new_v4().to_string()}),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            denied.0,
+            crewd_proto::RpcError::FORBIDDEN,
+            "{method}: {denied:?}"
+        );
     }
-    stop.send(()).unwrap();tokio::time::timeout(Duration::from_secs(10),server).await.unwrap().unwrap();
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), server)
+        .await
+        .unwrap()
+        .unwrap();
 }

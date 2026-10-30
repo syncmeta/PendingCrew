@@ -190,8 +190,8 @@ pub struct CodexCore {
     native_settings_epoch: u64,
     native_name: Option<String>,
     native_history_mode: Option<String>,
-    native_input_files:Vec<super::input::Prepared>,
-    native_queued_inputs:std::collections::BTreeMap<u64,super::input::Prepared>,
+    native_input_files: Vec<super::input::Prepared>,
+    native_queued_inputs: std::collections::BTreeMap<u64, super::input::Prepared>,
     public_input_ids:
         std::collections::BTreeMap<u64, (String, Option<crate::driver::ManualWritePermit>)>,
     initial_settings_gate: bool,
@@ -226,7 +226,10 @@ pub struct CodexCore {
 }
 
 impl CodexCore {
-    pub(crate) fn initial_inputs(&mut self,inputs:super::input::Prepared){self.native_queued_inputs.insert(crate::session::BRIEF_DELIVERY_ID,inputs);}
+    pub(crate) fn initial_inputs(&mut self, inputs: super::input::Prepared) {
+        self.native_queued_inputs
+            .insert(crate::session::BRIEF_DELIVERY_ID, inputs);
+    }
     /// 建核心并发出 `initialize`。
     pub fn new(opening: Opening, config: CodexCoreConfig, now: Instant) -> Self {
         let mut queue = VecDeque::new();
@@ -240,8 +243,8 @@ impl CodexCore {
             native_settings_epoch: 0,
             native_name: None,
             native_history_mode: None,
-            native_input_files:Vec::new(),
-            native_queued_inputs:Default::default(),
+            native_input_files: Vec::new(),
+            native_queued_inputs: Default::default(),
             public_input_ids: Default::default(),
             initial_settings_gate: false,
             initial_settings_failed: false,
@@ -874,7 +877,10 @@ impl CodexCore {
 
     fn opened(&mut self, thread: String, resumed: bool, result: &Value, now: Instant) {
         self.opened_profile = proto::profile_of(result);
-        self.native_history_mode = result.pointer("/thread/historyMode").and_then(Value::as_str).map(str::to_owned);
+        self.native_history_mode = result
+            .pointer("/thread/historyMode")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         self.native_settings = result.clone();
         if let Some(settings) = result.get("threadSettings") {
             self.native_settings = settings.clone();
@@ -928,7 +934,7 @@ impl CodexCore {
     fn on_result(&mut self, tag: Tag, result: Result<Value, RpcFailure>, now: Instant) {
         match tag {
             Tag::Native { ticket, op } => self.native_result(ticket, op, result, now),
-            Tag::PermissionCheck(state)=>self.permission_checked(*state,result,now),
+            Tag::PermissionCheck(state) => self.permission_checked(*state, result, now),
             Tag::NativeToolsSkills { ticket, servers } => {
                 self.native_tools_result(ticket, servers, result)
             }
@@ -1248,7 +1254,7 @@ impl CodexCore {
         };
         let thread = self.thread_id.clone().unwrap_or_default();
         let mut params = proto::turn_start_params(&thread, &next.text, &next.context);
-        if let Some(inputs)=self.native_queued_inputs.remove(&next.id){
+        if let Some(inputs) = self.native_queued_inputs.remove(&next.id) {
             inputs.append(&mut params["input"]);
             self.native_input_files.push(inputs);
         }
@@ -3211,75 +3217,201 @@ mod tests {
         assert_eq!(t.count("turn/start"), 0);
         assert!(t.other.iter().any(|a| matches!(a, CodexAction::Failed(_))));
     }
-    fn completion_prepared(root:&std::path::Path)->crate::codex::input::Prepared {
+    fn completion_prepared(root: &std::path::Path) -> crate::codex::input::Prepared {
         use crewd_proto::codex_inputs::CodexInputKind;
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(root,std::fs::Permissions::from_mode(0o700)).unwrap();
-        crate::codex::input::Submission{payloads:vec![crate::codex::input::Payload{kind:CodexInputKind::Text,filename:"notes.txt".into(),mime_type:"text/plain".into(),sha256:"a".repeat(64),body:b"Separate original attachment".to_vec()}],skills:vec![]}.prepare(root).unwrap()
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::codex::input::Submission {
+            payloads: vec![crate::codex::input::Payload {
+                kind: CodexInputKind::Text,
+                filename: "notes.txt".into(),
+                mime_type: "text/plain".into(),
+                sha256: "a".repeat(64),
+                body: b"Separate original attachment".to_vec(),
+            }],
+            skills: vec![],
+        }
+        .prepare(root)
+        .unwrap()
     }
     #[test]
-    fn completion_native_input_preserves_task_bytes_and_next_turn_queue_boundary(){
+    fn completion_native_input_preserves_task_bytes_and_next_turn_queue_boundary() {
         use crate::codex::control::CodexOperation as Op;
-        let root=tempfile::tempdir().unwrap();let mut t=T::ready(None);
-        t.notify("turn/started",json!({"threadId":"thr-1","turn":{"id":"busy"}}));
-        let text="Task first: exact \n你是用户原文";
-        t.core.codex_control(201,Op::PreparedQueue{id:800,text:text.into(),request_id:uuid::Uuid::new_v4().to_string(),inputs:completion_prepared(root.path())},t.at(1.0));t.pump();
-        assert_eq!(t.count("turn/start"),0);
-        t.notify("turn/completed",json!({"threadId":"thr-1","turn":{"id":"busy","status":"completed"}}));
-        assert_eq!(t.count("turn/start"),1);let sent=t.last("turn/start");
-        assert_eq!(sent["params"]["input"][0]["text"],text);
-        assert!(sent["params"]["input"][1]["text"].as_str().unwrap().contains("Separate original attachment"));
-        assert_eq!(sent["params"]["input"].as_array().unwrap().len(),2);
+        let root = tempfile::tempdir().unwrap();
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"busy"}}),
+        );
+        let text = "Task first: exact \n你是用户原文";
+        t.core.codex_control(
+            201,
+            Op::PreparedQueue {
+                id: 800,
+                text: text.into(),
+                request_id: uuid::Uuid::new_v4().to_string(),
+                inputs: completion_prepared(root.path()),
+            },
+            t.at(1.0),
+        );
+        t.pump();
+        assert_eq!(t.count("turn/start"), 0);
+        t.notify(
+            "turn/completed",
+            json!({"threadId":"thr-1","turn":{"id":"busy","status":"completed"}}),
+        );
+        assert_eq!(t.count("turn/start"), 1);
+        let sent = t.last("turn/start");
+        assert_eq!(sent["params"]["input"][0]["text"], text);
+        assert!(
+            sent["params"]["input"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Separate original attachment")
+        );
+        assert_eq!(sent["params"]["input"].as_array().unwrap().len(), 2);
     }
     #[test]
-    fn completion_first_input_waits_for_record_and_never_rewrites_prompt(){
-        let root=tempfile::tempdir().unwrap();let mut t=T::new(None,Some("Specific first task"));
+    fn completion_first_input_waits_for_record_and_never_rewrites_prompt() {
+        let root = tempfile::tempdir().unwrap();
+        let mut t = T::new(None, Some("Specific first task"));
         t.core.initial_inputs(completion_prepared(root.path()));
-        t.reply("initialize",json!({"userAgent":"synthetic"}));
-        assert_eq!(t.last("thread/start")["params"]["historyMode"],"paginated");
-        t.reply("thread/start",json!({"thread":{"id":"thr-1","historyMode":"paginated"}}));assert_eq!(t.count("turn/start"),0);
-        t.core.on_recorded(Ok(()),t.at(0.2));t.pump();assert_eq!(t.count("turn/start"),1);
-        assert_eq!(t.last("turn/start")["params"]["input"][0]["text"],"Specific first task");assert_eq!(t.last("turn/start")["params"]["input"].as_array().unwrap().len(),2);
+        t.reply("initialize", json!({"userAgent":"synthetic"}));
+        assert_eq!(t.last("thread/start")["params"]["historyMode"], "paginated");
+        t.reply(
+            "thread/start",
+            json!({"thread":{"id":"thr-1","historyMode":"paginated"}}),
+        );
+        assert_eq!(t.count("turn/start"), 0);
+        t.core.on_recorded(Ok(()), t.at(0.2));
+        t.pump();
+        assert_eq!(t.count("turn/start"), 1);
+        assert_eq!(
+            t.last("turn/start")["params"]["input"][0]["text"],
+            "Specific first task"
+        );
+        assert_eq!(
+            t.last("turn/start")["params"]["input"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
     #[test]
-    fn completion_prepared_steer_requires_exact_active_turn_and_never_queues(){
+    fn completion_prepared_steer_requires_exact_active_turn_and_never_queues() {
         use crate::codex::control::CodexOperation as Op;
-        let root=tempfile::tempdir().unwrap();let mut t=T::ready(None);
-        let op=|turn:&str|Op::PreparedSteer{text:"Change current task".into(),expected_turn_id:turn.into(),request_id:uuid::Uuid::new_v4().to_string(),inputs:completion_prepared(root.path())};
-        t.core.codex_control(1,op("wrong"),t.at(1.0));t.pump();assert_eq!(t.count("turn/steer"),0);assert_eq!(t.count("turn/start"),0);
-        t.notify("turn/started",json!({"threadId":"thr-1","turn":{"id":"active"}}));
-        t.core.codex_control(2,op("active"),t.at(1.1));t.pump();assert_eq!(t.count("turn/steer"),1);assert_eq!(t.last("turn/steer")["params"]["input"].as_array().unwrap().len(),2);
-        t.core.stop(t.at(1.2));t.pump();t.core.codex_control(3,op("active"),t.at(1.3));t.pump();assert_eq!(t.count("turn/steer"),1);
+        let root = tempfile::tempdir().unwrap();
+        let mut t = T::ready(None);
+        let op = |turn: &str| Op::PreparedSteer {
+            text: "Change current task".into(),
+            expected_turn_id: turn.into(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            inputs: completion_prepared(root.path()),
+        };
+        t.core.codex_control(1, op("wrong"), t.at(1.0));
+        t.pump();
+        assert_eq!(t.count("turn/steer"), 0);
+        assert_eq!(t.count("turn/start"), 0);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"active"}}),
+        );
+        t.core.codex_control(2, op("active"), t.at(1.1));
+        t.pump();
+        assert_eq!(t.count("turn/steer"), 1);
+        assert_eq!(
+            t.last("turn/steer")["params"]["input"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        t.core.stop(t.at(1.2));
+        t.pump();
+        t.core.codex_control(3, op("active"), t.at(1.3));
+        t.pump();
+        assert_eq!(t.count("turn/steer"), 1);
     }
     #[test]
-    fn completion_permission_profile_is_current_allowed_catalog_and_stop_fenced(){
+    fn completion_permission_profile_is_current_allowed_catalog_and_stop_fenced() {
         use crate::codex::control::CodexOperation as Op;
         use crewd_proto::codex::CodexSettingsPatch;
-        for mode in ["allowed","disabled","missing","stop"] {
-            let mut t=T::ready(None);
-            t.core.codex_control(1,Op::Configure(CodexSettingsPatch{permissions:Some("workspace-custom".into()),..Default::default()}),t.at(1.0));t.pump();
-            assert_eq!(t.count("permissionProfile/list"),1);assert_eq!(t.count("thread/settings/update"),0);
-            assert_eq!(t.last("permissionProfile/list")["params"]["cwd"],"/repo");
-            if mode=="stop"{t.core.stop(t.at(1.1));t.pump();}
+        for mode in ["allowed", "disabled", "missing", "stop"] {
+            let mut t = T::ready(None);
+            t.core.codex_control(
+                1,
+                Op::Configure(CodexSettingsPatch {
+                    permissions: Some("workspace-custom".into()),
+                    ..Default::default()
+                }),
+                t.at(1.0),
+            );
+            t.pump();
+            assert_eq!(t.count("permissionProfile/list"), 1);
+            assert_eq!(t.count("thread/settings/update"), 0);
+            assert_eq!(t.last("permissionProfile/list")["params"]["cwd"], "/repo");
+            if mode == "stop" {
+                t.core.stop(t.at(1.1));
+                t.pump();
+            }
             t.reply("permissionProfile/list",json!({"data":if mode=="missing"{vec![]}else{vec![json!({"id":"workspace-custom","allowed":mode!="disabled","description":"Synthetic"})]}}));
-            assert_eq!(t.count("thread/settings/update"),usize::from(mode=="allowed"));
-            if mode=="allowed"{assert_eq!(t.last("thread/settings/update")["params"]["permissions"],"workspace-custom");assert!(t.last("thread/settings/update")["params"].get("sandboxPolicy").is_none());}
+            assert_eq!(
+                t.count("thread/settings/update"),
+                usize::from(mode == "allowed")
+            );
+            if mode == "allowed" {
+                assert_eq!(
+                    t.last("thread/settings/update")["params"]["permissions"],
+                    "workspace-custom"
+                );
+                assert!(
+                    t.last("thread/settings/update")["params"]
+                        .get("sandboxPolicy")
+                        .is_none()
+                );
+            }
         }
     }
     #[test]
-    fn completion_revert_requires_observed_paginated_idle_and_unknown_holds_queue(){
+    fn completion_revert_requires_observed_paginated_idle_and_unknown_holds_queue() {
         use crate::codex::control::CodexOperation as Op;
         use crewd_proto::codex::CodexHistoryAction;
-        for mode in ["legacy","paginated","unknown"] {
-            let mut t=T::new(None,None);t.reply("initialize",json!({"userAgent":"synthetic"}));
-            t.reply("thread/start",json!({"thread":{"id":"thr-1","historyMode":if mode=="legacy"{"legacy"}else{"paginated"}}}));t.core.on_recorded(Ok(()),t.at(0.2));t.pump();
-            t.core.codex_control(7,Op::HistoryMutation{action:CodexHistoryAction::Revert,before_turn_id:Some("original-turn".into())},t.at(1.0));t.pump();
-            assert_eq!(t.count("thread/revert"),usize::from(mode!="legacy"));
-            if mode=="legacy"{continue}
-            if mode=="unknown"{t.tick(40.0);}else{t.reply("thread/revert",json!({"thread":{"id":"thr-1"}}));}
-            t.core.codex_control(8,Op::Queue{id:80,text:"Next explicit task".into(),request_id:uuid::Uuid::new_v4().to_string()},t.at(41.0));t.pump();
-            assert_eq!(t.count("turn/start"),usize::from(mode=="paginated"));
+        for mode in ["legacy", "paginated", "unknown"] {
+            let mut t = T::new(None, None);
+            t.reply("initialize", json!({"userAgent":"synthetic"}));
+            t.reply("thread/start",json!({"thread":{"id":"thr-1","historyMode":if mode=="legacy"{"legacy"}else{"paginated"}}}));
+            t.core.on_recorded(Ok(()), t.at(0.2));
+            t.pump();
+            t.core.codex_control(
+                7,
+                Op::HistoryMutation {
+                    action: CodexHistoryAction::Revert,
+                    before_turn_id: Some("original-turn".into()),
+                },
+                t.at(1.0),
+            );
+            t.pump();
+            assert_eq!(t.count("thread/revert"), usize::from(mode != "legacy"));
+            if mode == "legacy" {
+                continue;
+            }
+            if mode == "unknown" {
+                t.tick(40.0);
+            } else {
+                t.reply("thread/revert", json!({"thread":{"id":"thr-1"}}));
+            }
+            t.core.codex_control(
+                8,
+                Op::Queue {
+                    id: 80,
+                    text: "Next explicit task".into(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                },
+                t.at(41.0),
+            );
+            t.pump();
+            assert_eq!(t.count("turn/start"), usize::from(mode == "paginated"));
         }
     }
-
 }

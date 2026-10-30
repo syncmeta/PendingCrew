@@ -16,7 +16,7 @@ use crewd_store::{Db, native_execution as n};
 use serde_json::{Value, json};
 use std::sync::{
     Arc, Weak,
-    atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -83,8 +83,10 @@ pub(crate) async fn supported_program(
     qualified
 }
 fn envelope(request: &str, text: &str) -> Result<String, SendError> {
-    if text.trim().is_empty(){return Err(SendError::EmptyText)}
-    n::managed_observations::envelope(request,text).map_err(|_|refused())
+    if text.trim().is_empty() {
+        return Err(SendError::EmptyText);
+    }
+    n::managed_observations::envelope(request, text).map_err(|_| refused())
 }
 
 struct Submission {
@@ -118,8 +120,18 @@ pub(crate) struct ManagedHandle {
     working: Arc<AtomicBool>,
     manual: Arc<AtomicBool>,
 }
-pub(crate) fn observation_live(factory:&NativeFactory,session:&str)->bool{
- factory.managed.lock().ok().and_then(|m|m.get(session).and_then(|w|w.upgrade())).is_some_and(|h|!h.blocked.load(Ordering::Acquire)&&!h.stopping.load(Ordering::Acquire)&&!h.manual.load(Ordering::Acquire)&&!h.driver.is_closed())
+pub(crate) fn observation_live(factory: &NativeFactory, session: &str) -> bool {
+    factory
+        .managed
+        .lock()
+        .ok()
+        .and_then(|m| m.get(session).and_then(|w| w.upgrade()))
+        .is_some_and(|h| {
+            !h.blocked.load(Ordering::Acquire)
+                && !h.stopping.load(Ordering::Acquire)
+                && !h.manual.load(Ordering::Acquire)
+                && !h.driver.is_closed()
+        })
 }
 impl ManagedHandle {
     pub(crate) async fn create(
@@ -206,7 +218,7 @@ impl ManagedHandle {
             terminal,
             db: factory.db.clone(),
             seal: Arc::new(seal),
-            expected_start_source: if resumed {"resume"} else {"startup"},
+            expected_start_source: if resumed { "resume" } else { "startup" },
             agent_session: status.agent_session_id,
             pending: None,
             last_waiting: None,
@@ -236,23 +248,39 @@ impl ManagedHandle {
                 tick.tick().await;
                 let prompt = match &diagnostic_terminal {
                     TerminalRuntime::Legacy(terminal) => tokio::time::timeout(
-                        std::time::Duration::from_millis(100), terminal.startup_prompt()).await.ok().and_then(Result::ok),
+                        std::time::Duration::from_millis(100),
+                        terminal.startup_prompt(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(Result::ok),
                     TerminalRuntime::Native(_) => None,
                 };
-                screen_observation.store(prompt.map_or(3, |p|p as u8), Ordering::Release);
+                screen_observation.store(prompt.map_or(3, |p| p as u8), Ordering::Release);
             }
         };
         // Sampling is cancelled with this same deadline; no diagnostic work is
         // awaited after timeout and no detached sampler can postpone Stop.
-        let readiness = async { tokio::select! { biased;
-            result = ready_rx => result,
-            _ = sample => unreachable!("sampler ends only by cancellation"),
-        }};
+        let readiness = async {
+            tokio::select! { biased;
+                result = ready_rx => result,
+                _ = sample => unreachable!("sampler ends only by cancellation"),
+            }
+        };
         tokio::time::timeout(std::time::Duration::from_secs(8), readiness)
             .await
             .map_err(|_| {
                 let hook = startup_observation.load(Ordering::Acquire);
-                let observation = if hook == 0 { match screen_observation.load(Ordering::Acquire) { 1=>8, 2=>9, 3=>10, _=>0 } } else { hook };
+                let observation = if hook == 0 {
+                    match screen_observation.load(Ordering::Acquire) {
+                        1 => 8,
+                        2 => 9,
+                        3 => 10,
+                        _ => 0,
+                    }
+                } else {
+                    hook
+                };
                 startup_failure(observation)
             })?
             .map_err(|_| "managed native exited before guard readiness")?;
@@ -336,7 +364,9 @@ fn startup_failure(observation: u8) -> String {
         10 => "no SessionStart hook observed; startup screen observation unavailable",
         _ => "startup observation unavailable",
     };
-    format!("managed startup not ready: {reason}; initial task not enqueued; original request retained, do not resend")
+    format!(
+        "managed startup not ready: {reason}; initial task not enqueued; original request retained, do not resend"
+    )
 }
 fn denied_hook() -> HookResult {
     HookResult{stdout:Some(json!({"decision":"block","reason":"PendingCrew managed input has no matching current durable authorization"}).to_string())}
@@ -454,14 +484,22 @@ impl Actor {
         let runtime = self.seal.runtime().id.clone();
         let request = input.request.clone();
         let body = input.body.as_bytes().to_vec();
-        let original_task=input.original_task.clone();
-        let seal=self.seal.clone();
+        let original_task = input.original_task.clone();
+        let seal = self.seal.clone();
         let prepared = self
             .db
             .call_result(move |store| {
                 store.with_tx(|tx| {
-                    let prepared=n::prepare(tx,&runtime,&request,&body,&crewd_store::now_ts())?;
-                    if !prepared.1 {n::managed_observations::record_task(tx,&seal,&request,original_task.as_deref())?;}
+                    let prepared =
+                        n::prepare(tx, &runtime, &request, &body, &crewd_store::now_ts())?;
+                    if !prepared.1 {
+                        n::managed_observations::record_task(
+                            tx,
+                            &seal,
+                            &request,
+                            original_task.as_deref(),
+                        )?;
+                    }
                     Ok(prepared)
                 })
             })
@@ -487,9 +525,13 @@ impl Actor {
     }
     async fn hook(&mut self, kind: HookKind, payload: Value) -> HookResult {
         let startup = kind == HookKind::SessionStart && self.ready.is_some();
-        if startup { self.startup_observation.store(1, Ordering::Release); }
+        if startup {
+            self.startup_observation.store(1, Ordering::Release);
+        }
         if self.terminal.manual_hook_allowed().await {
-            if startup { self.startup_observation.store(2, Ordering::Release); }
+            if startup {
+                self.startup_observation.store(2, Ordering::Release);
+            }
             if self.stopping.load(Ordering::Acquire) {
                 return denied_hook();
             }
@@ -515,7 +557,9 @@ impl Actor {
             };
         }
         if !self.current().await {
-            if startup { self.startup_observation.store(3, Ordering::Release); }
+            if startup {
+                self.startup_observation.store(3, Ordering::Release);
+            }
             return denied_hook();
         }
         let event = payload["hook_event_name"].as_str().unwrap_or("");
@@ -530,14 +574,18 @@ impl Actor {
             HookKind::ManagedActivity => event == "PreToolUse",
         };
         if !valid {
-            if startup { self.startup_observation.store(4, Ordering::Release); }
+            if startup {
+                self.startup_observation.store(4, Ordering::Release);
+            }
             if self.pending.is_some() {
                 self.invalidate().await;
             }
             return denied_hook();
         }
         if payload.get("agent_id").is_some() {
-            if startup { self.startup_observation.store(4, Ordering::Release); }
+            if startup {
+                self.startup_observation.store(4, Ordering::Release);
+            }
             return if kind == HookKind::UserPromptSubmit {
                 if self.pending.is_some() {
                     self.invalidate().await;
@@ -548,16 +596,20 @@ impl Actor {
             };
         }
         if payload["session_id"].as_str() != Some(self.agent_session.as_str()) {
-            if startup { self.startup_observation.store(5, Ordering::Release); }
+            if startup {
+                self.startup_observation.store(5, Ordering::Release);
+            }
             if self.pending.is_some() {
                 self.invalidate().await;
             }
             return denied_hook();
         }
-        if startup { self.startup_observation.store(6, Ordering::Release); }
+        if startup {
+            self.startup_observation.store(6, Ordering::Release);
+        }
         if kind == HookKind::SessionStart
             && self.ready.is_some()
-            && payload["source"].as_str()==Some(self.expected_start_source)
+            && payload["source"].as_str() == Some(self.expected_start_source)
         {
             self.startup_observation.store(7, Ordering::Release);
             let _ = self.ready.take().unwrap().send(());
@@ -692,9 +744,12 @@ impl Actor {
                     HookKind::PostToolUse | HookKind::ManagedActivity | HookKind::Stop
                 )
             {
-                if kind==HookKind::Stop {
-                    let seal=self.seal.clone();let prompt=prompt.clone().unwrap();
-                    let text=payload["last_assistant_message"].as_str().map(str::to_owned);
+                if kind == HookKind::Stop {
+                    let seal = self.seal.clone();
+                    let prompt = prompt.clone().unwrap();
+                    let text = payload["last_assistant_message"]
+                        .as_str()
+                        .map(str::to_owned);
                     let _=self.db.call_result(move|s|s.with_tx(|tx| {
                         use rusqlite::OptionalExtension;
                         let request:Option<String>=tx.query_row("SELECT request_id FROM native_execution_receipts WHERE runtime_id=?1 AND prompt_id=?2 AND turn_id IS NULL",rusqlite::params![seal.runtime().id,prompt],|r|r.get(0)).optional()?;
@@ -702,7 +757,9 @@ impl Actor {
                         n::managed_response_resumed(tx,&seal,&prompt,&crewd_store::now_ts())?;
                         Ok(())
                     })).await;
-                } else {self.retract_waiting().await;}
+                } else {
+                    self.retract_waiting().await;
+                }
                 self.invalidate().await;
             }
             return HookResult { stdout: None };
@@ -732,13 +789,32 @@ impl Actor {
                 self.pending.as_mut().unwrap().stopped = false;
             }
             HookKind::Stop => {
-                let request=self.pending.as_ref().unwrap().request.clone();
-                let prompt=prompt.as_ref().unwrap().clone();
-                let text=payload["last_assistant_message"].as_str().map(str::to_owned);
-                let seal=self.seal.clone();
-                let saved=self.db.call_result(move |s|s.with_tx(|tx|n::managed_observations::observe_stop(tx,&seal,&request,&prompt,text.as_deref(),&crewd_store::now_ts()))).await;
-                if !matches!(saved,Ok(Ok(())))||!self.current().await {self.invalidate().await;return HookResult{stdout:None}}
-                self.pending.as_mut().unwrap().stopped=true;
+                let request = self.pending.as_ref().unwrap().request.clone();
+                let prompt = prompt.as_ref().unwrap().clone();
+                let text = payload["last_assistant_message"]
+                    .as_str()
+                    .map(str::to_owned);
+                let seal = self.seal.clone();
+                let saved = self
+                    .db
+                    .call_result(move |s| {
+                        s.with_tx(|tx| {
+                            n::managed_observations::observe_stop(
+                                tx,
+                                &seal,
+                                &request,
+                                &prompt,
+                                text.as_deref(),
+                                &crewd_store::now_ts(),
+                            )
+                        })
+                    })
+                    .await;
+                if !matches!(saved, Ok(Ok(()))) || !self.current().await {
+                    self.invalidate().await;
+                    return HookResult { stdout: None };
+                }
+                self.pending.as_mut().unwrap().stopped = true;
             }
             HookKind::Notification if payload["notification_type"] == "idle_prompt" => {
                 let input = self.pending.as_ref().unwrap();
@@ -756,8 +832,15 @@ impl Actor {
                     .db
                     .call_result(move |store| {
                         store.with_tx(|tx| {
-                            let receipt=n::managed_response_waiting(tx,&seal,&request,revision,&witness,&crewd_store::now_ts())?;
-                            n::managed_observations::mark_waiting(tx,&seal,&request,&witness)?;
+                            let receipt = n::managed_response_waiting(
+                                tx,
+                                &seal,
+                                &request,
+                                revision,
+                                &witness,
+                                &crewd_store::now_ts(),
+                            )?;
+                            n::managed_observations::mark_waiting(tx, &seal, &request, &witness)?;
                             Ok(receipt)
                         })
                     })
@@ -1179,33 +1262,79 @@ mod tests {
         startup_timeout_fixture("trust").await;
     }
     async fn startup_timeout_fixture(mode: &str) {
-        use crewd_exec::{driver::{ClaudeStart, DriverConfig, start_claude},
-            launch::ClaudeSpec, resume::MemoryLedger};
+        use crewd_exec::{
+            driver::{ClaudeStart, DriverConfig, start_claude},
+            launch::ClaudeSpec,
+            resume::MemoryLedger,
+        };
         let fixture = crate::agent::testkit::Fixture::new().await;
         let root = tempfile::tempdir().unwrap();
-        let registry = Arc::new(registry::ProcessRegistry::load(&root.path().join("registry.json")).unwrap());
-        let factory = Arc::new(NativeFactory::new(fixture.state.db.clone(), registry.clone(), root.path().join("unused-helper")));
+        let registry =
+            Arc::new(registry::ProcessRegistry::load(&root.path().join("registry.json")).unwrap());
+        let factory = Arc::new(NativeFactory::new(
+            fixture.state.db.clone(),
+            registry.clone(),
+            root.path().join("unused-helper"),
+        ));
         let trace = root.path().join("input.trace");
         let submissions = root.path().join("submissions.log");
         let mut config = DriverConfig::new(root.path().join("runtime"));
         config.registry = Some(registry.clone());
-        config.terminal_observer = Some(Arc::new(crewd_exec::acp::terminal::TerminalTap::new(1, 64).unwrap()));
+        config.terminal_observer = Some(Arc::new(
+            crewd_exec::acp::terminal::TerminalTap::new(1, 64).unwrap(),
+        ));
         config.stop_grace = std::time::Duration::from_millis(100);
-        let fake = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("fake_claude");
-        let (driver, events) = start_claude(ClaudeStart {
-            session_id: fixture.worker.clone(), program: fake, child_path: "/usr/bin:/bin".into(),
-            spec: ClaudeSpec { workdir: root.path().into(), additional_env: [
-                ("FAKE_CLAUDE_MODE".into(), mode.into()),
-                ("FAKE_CLAUDE_TRACE".into(), trace.to_string_lossy().into_owned()),
-                ("FAKE_CLAUDE_LOG".into(), submissions.to_string_lossy().into_owned()),
-            ].into(), ..Default::default() }, ledger: Arc::new(MemoryLedger::default()),
-        }, config).await.unwrap();
+        let fake = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fake_claude");
+        let (driver, events) = start_claude(
+            ClaudeStart {
+                session_id: fixture.worker.clone(),
+                program: fake,
+                child_path: "/usr/bin:/bin".into(),
+                spec: ClaudeSpec {
+                    workdir: root.path().into(),
+                    additional_env: [
+                        ("FAKE_CLAUDE_MODE".into(), mode.into()),
+                        (
+                            "FAKE_CLAUDE_TRACE".into(),
+                            trace.to_string_lossy().into_owned(),
+                        ),
+                        (
+                            "FAKE_CLAUDE_LOG".into(),
+                            submissions.to_string_lossy().into_owned(),
+                        ),
+                    ]
+                    .into(),
+                    ..Default::default()
+                },
+                ledger: Arc::new(MemoryLedger::default()),
+            },
+            config,
+        )
+        .await
+        .unwrap();
         let started = std::time::Instant::now();
-        let result = ManagedHandle::create(&factory, fixture.worker.clone(), false, driver.clone(), events,
-            Some("synthetic initial task must never be delivered".into()), None).await;
+        let result = ManagedHandle::create(
+            &factory,
+            fixture.worker.clone(),
+            false,
+            driver.clone(),
+            events,
+            Some("synthetic initial task must never be delivered".into()),
+            None,
+        )
+        .await;
         let error = result.err().expect("no hook must fail readiness");
         assert!(started.elapsed() >= std::time::Duration::from_secs(8));
-        assert!(started.elapsed() < std::time::Duration::from_secs(9), "diagnostic must fit the original readiness deadline");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(9),
+            "diagnostic must fit the original readiness deadline"
+        );
         if mode == "trust" {
             assert!(error.contains("observed folder trust prompt"), "{error}");
         } else {
@@ -1213,10 +1342,23 @@ mod tests {
         }
         assert!(!error.contains("synthetic initial"));
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while !driver.is_closed() { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
-        }).await.expect("failed startup stops its driver");
+            while !driver.is_closed() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("failed startup stops its driver");
         assert!(!observation_live(&factory, &fixture.worker));
-        assert!(factory.managed.lock().unwrap().get(&fixture.worker).unwrap().upgrade().is_none());
+        assert!(
+            factory
+                .managed
+                .lock()
+                .unwrap()
+                .get(&fixture.worker)
+                .unwrap()
+                .upgrade()
+                .is_none()
+        );
         // The fake reader was running; no write, even a partial prompt, reached it.
         assert!(trace.exists(), "real fake reader trace initialized");
         assert_eq!(std::fs::read_to_string(&trace).unwrap(), "");
@@ -1224,7 +1366,11 @@ mod tests {
         let counts = fixture.state.db.call_result(|store| -> crewd_store::Result<_> {
             Ok(store.conn().query_row("SELECT (SELECT COUNT(*) FROM native_execution_runtimes), (SELECT COUNT(*) FROM native_execution_runtimes WHERE revoked=0), (SELECT COUNT(*) FROM native_execution_receipts), (SELECT COUNT(*) FROM native_execution_inputs)", [], |r| Ok((r.get::<_,i64>(0)?, r.get::<_,i64>(1)?, r.get::<_,i64>(2)?, r.get::<_,i64>(3)?)))?)
         }).await.unwrap().unwrap();
-        assert_eq!(counts, (1, 0, 0, 0), "one stopped runtime, no retry or initial enqueue");
+        assert_eq!(
+            counts,
+            (1, 0, 0, 0),
+            "one stopped runtime, no retry or initial enqueue"
+        );
         let _ = registry::reap_orphans(&registry);
     }
     fn human_actor(registry: Arc<registry::ProcessRegistry>) -> crate::public_commands::Actor {
@@ -1321,30 +1467,81 @@ mod tests {
         let request = uuid::Uuid::new_v4().to_string();
         let prompt = uuid::Uuid::new_v4().to_string();
         let body = envelope(&request, "Specific owned task, exact text").unwrap();
-        let seal = run.actor.seal.clone(); let rid = request.clone();
-        let pid = prompt.clone(); let original = body.as_bytes().to_vec();
-        let receipt = run.actor.db.call_result(move |s| s.with_tx(|tx| {
-            n::prepare(tx, &seal.runtime().id, &rid, &original, "t")?;
-            n::managed_accept_content(tx, &seal, &rid, 0, &pid, &original, "t")
-        })).await.unwrap().unwrap();
+        let seal = run.actor.seal.clone();
+        let rid = request.clone();
+        let pid = prompt.clone();
+        let original = body.as_bytes().to_vec();
+        let receipt = run
+            .actor
+            .db
+            .call_result(move |s| {
+                s.with_tx(|tx| {
+                    n::prepare(tx, &seal.runtime().id, &rid, &original, "t")?;
+                    n::managed_accept_content(tx, &seal, &rid, 0, &pid, &original, "t")
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap();
         run.actor.pending = Some(Submission {
-            request:request.clone(), external:1, subject:Subject::Brief, body,
-            local:None, receipt:Some(receipt), prompt:Some(prompt.clone()), stopped:false,
-            original_task:None, delivered:false, unobserved_delivery:None,
+            request: request.clone(),
+            external: 1,
+            subject: Subject::Brief,
+            body,
+            local: None,
+            receipt: Some(receipt),
+            prompt: Some(prompt.clone()),
+            stopped: false,
+            original_task: None,
+            delivered: false,
+            unobserved_delivery: None,
         });
         let text = "  Exactly observed reply\n世界\nnot business Done  ";
-        assert!(run.actor.current().await, "original sealed runtime must be current before Stop");
-        run.actor.hook(HookKind::Stop, json!({"session_id":run.actor.agent_session,
-            "hook_event_name":"Stop","prompt_id":prompt,"last_assistant_message":text})).await;
-        assert!(run.actor.pending.as_ref().unwrap().stopped, "actual matched Stop must have been accepted by the original actor");
+        assert!(
+            run.actor.current().await,
+            "original sealed runtime must be current before Stop"
+        );
+        run.actor
+            .hook(
+                HookKind::Stop,
+                json!({"session_id":run.actor.agent_session,
+            "hook_event_name":"Stop","prompt_id":prompt,"last_assistant_message":text}),
+            )
+            .await;
+        assert!(
+            run.actor.pending.as_ref().unwrap().stopped,
+            "actual matched Stop must have been accepted by the original actor"
+        );
         let key = format!("claude.managed.observations.v1/{request}");
-        let observed = run.actor.db.call_result(move |s| crewd_store::meta_get(s.conn(), &key)).await.unwrap().unwrap();
-        let value:Value = serde_json::from_str(&observed.expect("same-seal Stop text must survive actor drop before idle")).unwrap();
-        assert_eq!(value["requestId"],request); assert_eq!(value["runtimeId"],run.actor.seal.runtime().id);
-        assert_eq!(value["observations"][0]["promptId"],prompt);
-        assert_eq!(value["observations"][0]["text"],text);
-        let rid=request.clone(); let receipt=run.actor.db.call_result(move |s|n::get(s.conn(), &rid)).await.unwrap().unwrap().unwrap();
-        assert_ne!(receipt.phase,n::Phase::Completed,"Stop alone is provisional");
+        let observed = run
+            .actor
+            .db
+            .call_result(move |s| crewd_store::meta_get(s.conn(), &key))
+            .await
+            .unwrap()
+            .unwrap();
+        let value: Value = serde_json::from_str(
+            &observed.expect("same-seal Stop text must survive actor drop before idle"),
+        )
+        .unwrap();
+        assert_eq!(value["requestId"], request);
+        assert_eq!(value["runtimeId"], run.actor.seal.runtime().id);
+        assert_eq!(value["observations"][0]["promptId"], prompt);
+        assert_eq!(value["observations"][0]["text"], text);
+        let rid = request.clone();
+        let receipt = run
+            .actor
+            .db
+            .call_result(move |s| n::get(s.conn(), &rid))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            receipt.phase,
+            n::Phase::Completed,
+            "Stop alone is provisional"
+        );
     }
 
     #[tokio::test]
@@ -1354,13 +1551,25 @@ mod tests {
         run.actor.ready = Some(tx);
         let id = run.actor.agent_session.clone();
         for (payload, expected) in [
-            (json!({"hook_event_name":"SessionStart","session_id":"foreign","source":"startup"}), 5),
-            (json!({"hook_event_name":"SessionStart","session_id":id,"source":"resume"}), 6),
+            (
+                json!({"hook_event_name":"SessionStart","session_id":"foreign","source":"startup"}),
+                5,
+            ),
+            (
+                json!({"hook_event_name":"SessionStart","session_id":id,"source":"resume"}),
+                6,
+            ),
         ] {
             run.actor.hook(HookKind::SessionStart, payload).await;
-            assert!(matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+            assert!(matches!(
+                rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
             assert!(run.actor.pending.is_none());
-            assert_eq!(run.actor.startup_observation.load(Ordering::Acquire), expected);
+            assert_eq!(
+                run.actor.startup_observation.load(Ordering::Acquire),
+                expected
+            );
         }
         // Wrong source invalidates this runtime; a correct-hook control needs
         // a separate fresh runtime, never revive the rejected one.
@@ -1369,8 +1578,16 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         run.actor.ready = Some(tx);
         let id = run.actor.agent_session.clone();
-        run.actor.hook(HookKind::SessionStart,json!({"hook_event_name":"SessionStart","session_id":id,"source":"startup"})).await;
-        tokio::time::timeout(std::time::Duration::from_secs(2), rx).await.unwrap().unwrap();
+        run.actor
+            .hook(
+                HookKind::SessionStart,
+                json!({"hook_event_name":"SessionStart","session_id":id,"source":"startup"}),
+            )
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(run.actor.startup_observation.load(Ordering::Acquire), 7);
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -189,7 +189,6 @@ async fn guarded_run(data_dir: &Path, args: HookArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
