@@ -1,5 +1,14 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-30 最终组合五项失败与有界夹具修正
+
+cd066ea8最终组合format/clippy通过，但nextest239.725秒后2915 run／2910 pass／5 fail／22 skip，doc未执行；run.json、失败log及原JUnit保留final-workspace-cd066ea8-20261030，绝不改标该运行。三shell fixture首次执行存在独立可复现延迟（fresh直接4.025s、显式解释器0.010s），未归因具体安全软件；新增有界且立即exit的fixture预热，将冷执行准备与生命周期计时隔离。产品login_shell_path、setsid及原1s/3s/killpg断言均未改。
+
+恢复fixture此前在registry已有birth却原public请求尚未launched时stop，可能诚实增加Unknown；现保留两个原UUID，只等唯一原赢家launched且竞争者suppressed后cleanup，Unknown立即失败，最终len1与零重投断言保留。C13原15s body超时仅增加library/sid/marker阶段诊断，本次未复现，原因仍未证实，不能写作已修产品缺陷。
+
+三测试源修改后同flags仅五例定向：5/5通过7.427秒（shell0.579/1.575/1.576s，recovery6.567s，C13 7.424s）。日志、JUnit及精确源hash另存five-affected结果；完整源码标准组合仍需另立基线验证。无产品、真实provider、日用或设备操作。
+
+
 ## 2026-10-30 工作区静态检查完整通过，冻结组合验证
 
 collab等价条件、server层24机械问题、两处conn函数级职责expect、测试共享fixture局部expect与生产项位置整理，连同CLI两个冗余借用及test/helper原封位置调整已收口；共21源文件186+/189-。workspace/all-targets clippy -D warnings终态0（10.77秒），独立逐源审查通过，无权限票据、短路、await、事务或wire语义变化；collab owner原有2例通过。

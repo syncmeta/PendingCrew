@@ -292,15 +292,64 @@ async fn original_unknowns_disposition_restart_competition_and_fresh_evidence_ga
     let hello = c.call("system.hello", json!({})).await.unwrap();
     let make_resume = || json!({"requestId":uuid::Uuid::new_v4().to_string(),"dbId":hello["runtimeIdentity"]["dbId"],"runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],"command":{"operation":"session.resume","params":after["target"]}});
     let mut other = support::Client::connect(&f.data).await;
+    let first_request = make_resume();
+    let second_request = make_resume();
     let (first, second) = tokio::join!(
-        c.call("command.submit", make_resume()),
-        other.call("command.submit", make_resume())
+        c.call("command.submit", first_request.clone()),
+        other.call("command.submit", second_request.clone())
     );
     let first = first.unwrap();
     let second = second.unwrap();
-    assert!(
-        first["phase"] == "suppressed" || second["phase"] == "suppressed",
+    eprintln!("recovery competing resume submit receipts: first={first} second={second}");
+    assert_ne!(
+        first["phase"] == "suppressed",
+        second["phase"] == "suppressed",
         "{first} {second}"
+    );
+    let (resumed_request, suppressed_request) = if first["phase"] == "suppressed" {
+        (&second_request, &first_request)
+    } else {
+        (&first_request, &second_request)
+    };
+    // A registry entry precedes the Core's exact-generation Spawned observation.
+    // Wait for the original public receipt before fixture cleanup; stopping an
+    // unconfirmed launch would honestly add another Unknown to the later set.
+    let launched = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let receipt = c
+                .call(
+                    "command.lookup",
+                    json!({
+                        "requestId":resumed_request["requestId"], "dbId":resumed_request["dbId"]
+                    }),
+                )
+                .await
+                .unwrap();
+            assert_eq!(receipt["requestId"], resumed_request["requestId"]);
+            assert_eq!(receipt["command"], resumed_request["command"]);
+            match receipt["phase"].as_str() {
+                Some("launched") => break receipt,
+                Some("dispatched") => tokio::time::sleep(Duration::from_millis(25)).await,
+                _ => panic!("original resume did not confirm its physical launch: {receipt}"),
+            }
+        }
+    })
+    .await
+    .expect("original resume receipt must reach Launched before fixture cleanup");
+    let suppressed = c
+        .call(
+            "command.lookup",
+            json!({
+                "requestId":suppressed_request["requestId"], "dbId":suppressed_request["dbId"]
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(suppressed["requestId"], suppressed_request["requestId"]);
+    assert_eq!(suppressed["command"], suppressed_request["command"]);
+    assert_eq!(suppressed["phase"], "suppressed", "{suppressed}");
+    eprintln!(
+        "recovery competing resume settled receipts: launched={launched} suppressed={suppressed}"
     );
     support::wait("one resumed process", || {
         support::registry(&f.data).len() == 1
@@ -344,7 +393,11 @@ async fn original_unknowns_disposition_restart_competition_and_fresh_evidence_ga
         .await
         .unwrap();
     assert_eq!(current["eligibility"], "eligible");
-    assert_eq!(current["unresolved"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        current["unresolved"].as_array().unwrap().len(),
+        1,
+        "{current}"
+    );
     let blocked=c.call("command.submit",json!({"requestId":uuid::Uuid::new_v4().to_string(),"dbId":hello["runtimeIdentity"]["dbId"],"runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],"command":{"operation":"session.resume","params":current["target"]}})).await.unwrap();
     assert_eq!(blocked["phase"], "suppressed");
     let _ = c.call("session.resume", json!({"sessionId":sid})).await;

@@ -162,10 +162,16 @@ impl Rig {
         seen
     }
     pub async fn body(&mut self, sid: &str, marker: &str) {
-        t11::wait("actual per-session submitted body", || {
-            self.count(sid, marker) > 0
-        })
-        .await;
+        let stage = format!(
+            "actual per-session submitted body library={} session={sid} marker={marker}",
+            self.library
+        );
+        eprintln!("C13 body observation start: {stage}");
+        t11::wait(&stage, || self.count(sid, marker) > 0).await;
+        eprintln!(
+            "C13 body observed: {stage} count={}",
+            self.count(sid, marker)
+        );
         self.working(sid, false).await;
     }
     pub async fn pair(&mut self) -> (String, String, String) {

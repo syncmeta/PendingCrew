@@ -239,9 +239,35 @@ mod tests {
 
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\n[ \"$1\" = --fixture-warmup ] && exit 0\n{body}\n"),
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    // A newly written executable script can spend seconds in host execution admission
+    // before its first instruction. Prepare the fixture before timing its lifecycle;
+    // the real invocation below still exercises spawn, setsid, timeout and killpg.
+    async fn warm_script(shell: &Path) {
+        let mut child = tokio::process::Command::new(shell)
+            .arg("--fixture-warmup")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn fixture warmup");
+        match tokio::time::timeout(LOGIN_SHELL_TIMEOUT, child.wait()).await {
+            Ok(status) => assert!(status.expect("wait for fixture warmup").success()),
+            Err(_) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                panic!("fixture warmup timed out before lifecycle measurement");
+            }
+        }
     }
 
     #[test]
@@ -320,6 +346,7 @@ mod tests {
             "stuck-shell",
             &format!("echo $$ > {}; sleep 30", pidfile.display()),
         );
+        warm_script(&shell).await;
         let started = Instant::now();
         // 超时要留够脚本冷启动写下 pidfile 的时间，否则测不到进程组。
         let got = login_shell_path(&shell, Duration::from_secs(1)).await;
@@ -340,6 +367,7 @@ mod tests {
             "slow-shell",
             &format!("echo $$ > {}; sleep 30", pidfile.display()),
         );
+        warm_script(&shell).await;
         let inspect = async {
             let deadline = Instant::now() + Duration::from_secs(5);
             let pid = loop {
@@ -376,6 +404,7 @@ mod tests {
                 pidfile.display()
             ),
         );
+        warm_script(&shell).await;
         let started = Instant::now();
         let got = login_shell_path(&shell, Duration::from_secs(5)).await;
         assert_eq!(got.as_deref(), Some("/x/bin"));
