@@ -1,5 +1,12 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-30 静态检查十处条件与局部类型整理
+
+7个Rust文件仅合并等价短路条件、同分支和引入局部SQL row别名，净55+/56-；不改查询、事务顺序、权限或返回形状。定向store/exec all-targets clippy确认原十处消失，仅余原六个布局/参数类问题；不称整个工作区clippy通过。相关现有测试先80/80通过10.097秒，再按实际模块别名补SQLite授权/restore与实际kernel写入/身份8/8通过0.057秒，不重跑已验范围。包含active hibernate真实CLI/fake完整场景。
+
+准确文件hash、clippy日志和两组测试/JUnit保留clippy-mechanical-20261030。格式只读检查还发现约66文件历史差异，暂不混入本语义单元；最终源冻结后单独格式整理。真实目录信任仍待用户完成官方交互，其既有授权不变。
+
+
 ## 2026-10-30 静态检查协议层最小修复
 
 仓库标准clippy先在proto六项失败。将RpcError可选详情及enrollment较大payload以Box间接保存，唯一错误构造同步，不改JSON字段/serde规则/权限或调用点；折叠schema normalize原短路条件。三源最小修改经过独立只读源审，完整workspace/all-targets check exit0、proto57/57及实际committed_schema_matches_generated 1/1通过，checked schema不变。完整日志与准确源hash保留proto-layout-clippy-20261030。

@@ -831,12 +831,11 @@ impl Knowledge {
                 }
             };
             for capture in &mut stored.captures {
-                if capture.live && capture.namespace == p.context.namespace {
-                    if let Some(revision) =
+                if capture.live && capture.namespace == p.context.namespace
+                    && let Some(revision) =
                         restored_revisions.get(&(capture.kind.clone(), capture.id.clone()))
-                    {
-                        capture.revision = revision.clone();
-                    }
+                {
+                    capture.revision = revision.clone();
                 }
             }
             let raw = serde_json::to_string(&stored)?;
@@ -1028,9 +1027,7 @@ fn authorize(
         Update { table_name, .. } | Delete { table_name } => {
             if table_name == "sqlite_master" || table_name == "sqlite_schema" {
                 !readonly
-            } else if protected(table_name) {
-                false
-            } else if readonly {
+            } else if protected(table_name) || readonly {
                 false
             } else if confirmed {
                 true

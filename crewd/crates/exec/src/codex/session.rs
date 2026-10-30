@@ -1255,11 +1255,11 @@ impl CodexCore {
             now,
             timeout,
         );
-        if let Some((_, Some(permit))) = public {
-            if let Some(CodexAction::Write(line)) = self.actions.pop() {
-                self.actions
-                    .push(CodexAction::ControlledWrite { line, permit });
-            }
+        if let Some((_, Some(permit))) = public
+            && let Some(CodexAction::Write(line)) = self.actions.pop()
+        {
+            self.actions
+                .push(CodexAction::ControlledWrite { line, permit });
         }
         self.in_flight = true;
     }

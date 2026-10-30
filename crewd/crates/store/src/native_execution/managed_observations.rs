@@ -182,12 +182,12 @@ pub fn record_task(
     }
     let original = original_input(tx, &seal.runtime.id, request)?
         .ok_or_else(|| invalid("managed task input absent"))?;
-    if let Some(task) = task {
-        if envelope(request, task)?.as_bytes() != original.bytes() {
-            return Err(invalid(
-                "managed authorized task differs from immutable envelope",
-            ));
-        }
+    if let Some(task) = task
+        && envelope(request, task)?.as_bytes() != original.bytes()
+    {
+        return Err(invalid(
+            "managed authorized task differs from immutable envelope",
+        ));
     }
     let prior = load(tx, &seal.runtime.id, request)?;
     if let Some(prior) = prior {
@@ -306,11 +306,11 @@ pub fn mark_waiting(
     {
         return Err(invalid("managed observed waiting unbound"));
     }
-    if let Some(mut state) = load(tx, &seal.runtime.id, request)? {
-        if state.latest.as_ref().is_some_and(|o| o.prompt_id == prompt) {
-            state.waiting_observation_no = Some(state.latest_observation_no);
-            save(tx, &mut state)?;
-        }
+    if let Some(mut state) = load(tx, &seal.runtime.id, request)?
+        && state.latest.as_ref().is_some_and(|o| o.prompt_id == prompt)
+    {
+        state.waiting_observation_no = Some(state.latest_observation_no);
+        save(tx, &mut state)?;
     }
     Ok(())
 }

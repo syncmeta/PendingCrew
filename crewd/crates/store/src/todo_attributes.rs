@@ -53,7 +53,8 @@ pub struct Mutation {
     pub result: serde_json::Value,
 }
 pub fn request(c: &Connection, id: &str) -> Result<Option<Mutation>> {
-    let row:Option<(String,String,String,String,String,Vec<u8>,String)>=c.query_row("SELECT operation,crew_id,channel_id,object_kind,object_id,payload_digest,result FROM resource_mutation_requests WHERE request_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+    type RequestRow = (String, String, String, String, String, Vec<u8>, String);
+    let row:Option<RequestRow>=c.query_row("SELECT operation,crew_id,channel_id,object_kind,object_id,payload_digest,result FROM resource_mutation_requests WHERE request_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
     row.map(|(operation, crew, channel, kind, id, digest, result)| {
         Ok(Mutation {
             operation,

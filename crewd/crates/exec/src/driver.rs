@@ -785,10 +785,10 @@ impl SessionHandle {
         .await
     }
     pub fn fence_provider_input(&self) {
-        if let Some(f) = &self.provider_fence {
-            if let Ok(mut live) = f.lock() {
-                *live = false;
-            }
+        if let Some(f) = &self.provider_fence
+            && let Ok(mut live) = f.lock()
+        {
+            *live = false;
         }
     }
     pub(crate) fn with_provider_fence(mut self, fence: Arc<Mutex<bool>>) -> Self {
@@ -976,18 +976,18 @@ pub async fn start_claude(
     if let Some(why) = &decision.ignored {
         eprintln!("crewd: session {}: {why}", start.session_id);
     }
-    if config.managed_hook_producer {
-        if let Some(registry)=&config.registry {
-            let mut births=registry.try_entries().map_err(StartError::Ledger)?;
-            births.extend(registry.authority_snapshot().map_err(StartError::Ledger)?.spawned);
-            for (_,birth) in births.into_iter().filter(|(session,_)|session==&start.session_id) {
-                let gone=match crate::registry::probe(birth.pid) {
-                    crate::registry::ProbeResult::Missing=>true,
-                    crate::registry::ProbeResult::Found(actual)=>actual.start_time!=birth.start_time||actual.boot_id!=birth.boot_id,
-                    crate::registry::ProbeResult::Unreadable(_)=>false,
-                };
-                if !gone {return Err(StartError::Ledger(io::Error::new(io::ErrorKind::PermissionDenied,"previous managed birth live or unknown")))}
-            }
+    if config.managed_hook_producer
+        && let Some(registry)=&config.registry
+    {
+        let mut births=registry.try_entries().map_err(StartError::Ledger)?;
+        births.extend(registry.authority_snapshot().map_err(StartError::Ledger)?.spawned);
+        for (_,birth) in births.into_iter().filter(|(session,_)|session==&start.session_id) {
+            let gone=match crate::registry::probe(birth.pid) {
+                crate::registry::ProbeResult::Missing=>true,
+                crate::registry::ProbeResult::Found(actual)=>actual.start_time!=birth.start_time||actual.boot_id!=birth.boot_id,
+                crate::registry::ProbeResult::Unreadable(_)=>false,
+            };
+            if !gone {return Err(StartError::Ledger(io::Error::new(io::ErrorKind::PermissionDenied,"previous managed birth live or unknown")))}
         }
     }
     let (auth_tx, auth_rx) = mpsc::unbounded_channel();

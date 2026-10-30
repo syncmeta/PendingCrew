@@ -437,20 +437,20 @@ pub fn authorize_command(
     if let Some(k) = key {
         key_authorized(c, k)?
     }
-    if let PublicCommand::PersonalDraftCheckpoint(p) = command {
-        if let Some(b) = s.branches.iter().find(|b| b.value.branch_id == p.branch_id) {
-            let m = s
-                .members
-                .iter()
-                .find(|m| {
-                    m.value.member_id == scope.member_id
-                        && !m.value.revoked
-                        && who.member_matches(m)
-                })
-                .ok_or_else(bad)?;
-            if b.value.writer_id != m.value.writer_id || b.value.key != p.key {
-                return Err(bad());
-            }
+    if let PublicCommand::PersonalDraftCheckpoint(p) = command
+        && let Some(b) = s.branches.iter().find(|b| b.value.branch_id == p.branch_id)
+    {
+        let m = s
+            .members
+            .iter()
+            .find(|m| {
+                m.value.member_id == scope.member_id
+                    && !m.value.revoked
+                    && who.member_matches(m)
+            })
+            .ok_or_else(bad)?;
+        if b.value.writer_id != m.value.writer_id || b.value.key != p.key {
+            return Err(bad());
         }
     }
     Ok(())
