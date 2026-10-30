@@ -205,7 +205,7 @@ pub async fn run(
             .send(match &request.permit {
                 Some(permit) => transport::WriterMessage::ControlledLine {
                     line: json!({"id":2,"method":method,"params":params}).to_string(),
-                    permit: permit.clone(),
+                    permit: Box::new(permit.clone()),
                 },
                 None => json!({"id":2,"method":method,"params":params})
                     .to_string()

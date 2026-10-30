@@ -63,7 +63,7 @@ pub struct Capture {
 #[derive(Clone, Debug)]
 pub enum Mutation {
     PutObject {
-        object: DataObject,
+        object: Box<DataObject>,
         expected_revision: Option<String>,
         captures: Vec<Capture>,
     },
@@ -440,6 +440,7 @@ impl Knowledge {
     ) -> Result<Option<DataChangeResult>> {
         self.existing(id, origin, principal, payload)
     }
+    #[expect(clippy::too_many_arguments, reason = "Keep request identity, authority, mutations and Human confirmation explicit at the atomic transaction boundary")]
     pub fn apply(
         &mut self,
         id: &str,
@@ -494,7 +495,7 @@ impl Knowledge {
                         id: key.into(),
                     };
                     let raw = serde_json::to_string(&Stored {
-                        object: object.clone(),
+                        object: object.as_ref().clone(),
                         captures,
                     })?;
                     if raw.len() > 1024 * 1024 {
@@ -1237,7 +1238,7 @@ mod tests {
             id: id.clone(),
         };
         let mutations = vec![Mutation::PutObject {
-            object: object(&id, "1", "original"),
+            object: Box::new(object(&id, "1", "original")),
             expected_revision: None,
             captures: vec![],
         }];
@@ -1270,7 +1271,7 @@ mod tests {
         apply(
             &mut k,
             vec![Mutation::PutObject {
-                object: object(&id, "2", "new"),
+                object: Box::new(object(&id, "2", "new")),
                 expected_revision: Some("1".into()),
                 captures: vec![],
             }],

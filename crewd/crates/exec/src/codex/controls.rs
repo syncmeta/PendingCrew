@@ -104,7 +104,7 @@ impl CodexCore {
                     baseline: self.native_settings_epoch,
                 });
                 if p.permissions.is_some() {
-                    self.request(Tag::PermissionCheck{ticket,patch:p.clone(),permit:permit.clone(),cursors:BTreeSet::new(),pages:1},"permissionProfile/list",&json!({"cwd":self.cwd,"limit":100}),now,self.config.request_timeout);
+                    self.request(Tag::PermissionCheck(Box::new(PermissionCheckState{ticket,patch:p.clone(),permit:permit.clone(),cursors:BTreeSet::new(),pages:1})),"permissionProfile/list",&json!({"cwd":self.cwd,"limit":100}),now,self.config.request_timeout);
                     return;
                 }
                 ("thread/settings/update", params)
@@ -235,10 +235,9 @@ impl CodexCore {
         });
     }
     pub(super) fn permission_checked(
-        &mut self,ticket:Option<u64>,patch:crewd_proto::codex::CodexSettingsPatch,
-        permit:Option<crate::driver::ManualWritePermit>,mut cursors:BTreeSet<String>,pages:u8,
-        result:Result<Value,RpcFailure>,now:Instant,
+        &mut self,state:PermissionCheckState,result:Result<Value,RpcFailure>,now:Instant,
     ) {
+        let PermissionCheckState{ticket,patch,permit,mut cursors,pages}=state;
         if self.stopped_by_user || self.phase!=Phase::Ready || self.native_echo.is_none() {
             self.native_echo=None;self.native_initial_failed(ticket,now);
             self.native_done(ticket,Out::Unknown{provider_accepted:false,detail:"original runtime changed before permission profile validation; no settings write".into()});return;
@@ -266,7 +265,7 @@ impl CodexCore {
                 self.actions.push(match permit {Some(permit)=>CodexAction::ControlledWrite{line,permit},None=>CodexAction::Write(line)});
             },
             Ok((false,Some(next))) if pages<4 && next.len()<=8192 && cursors.insert(next.clone())=>{
-                self.request(Tag::PermissionCheck{ticket,patch,permit,cursors,pages:pages+1},"permissionProfile/list",&json!({"cwd":self.cwd,"limit":100,"cursor":next}),now,self.config.request_timeout);
+                self.request(Tag::PermissionCheck(Box::new(PermissionCheckState{ticket,patch,permit,cursors,pages:pages+1})),"permissionProfile/list",&json!({"cwd":self.cwd,"limit":100,"cursor":next}),now,self.config.request_timeout);
             },
             other=>{
                 let detail=match other {Err(e)=>e,_=>"selected permission profile is absent from the bounded current catalog".into()};

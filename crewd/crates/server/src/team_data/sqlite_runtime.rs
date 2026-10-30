@@ -437,7 +437,7 @@ fn route_sync(
                                 &digest,
                                 Default::default(),
                                 vec![Mutation::PutObject {
-                                    object: old.object,
+                                    object: Box::new(old.object),
                                     expected_revision: Some(expected_revision.clone()),
                                     captures: old.captures,
                                 }],

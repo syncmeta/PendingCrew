@@ -140,15 +140,21 @@ enum Phase {
 }
 
 #[derive(Clone, Debug)]
+struct PermissionCheckState {
+    ticket: Option<u64>,
+    patch: crewd_proto::codex::CodexSettingsPatch,
+    permit: Option<crate::driver::ManualWritePermit>,
+    cursors: BTreeSet<String>,
+    pages: u8,
+}
+
+#[derive(Clone, Debug)]
 enum Tag {
     Native {
         ticket: Option<u64>,
         op: super::control::CodexOperation,
     },
-    PermissionCheck {
-        ticket: Option<u64>, patch: crewd_proto::codex::CodexSettingsPatch,
-        permit: Option<crate::driver::ManualWritePermit>, cursors: BTreeSet<String>, pages: u8,
-    },
+    PermissionCheck(Box<PermissionCheckState>),
     NativeToolsSkills {
         ticket: u64,
         servers: Value,
@@ -773,7 +779,14 @@ impl CodexCore {
                     ticket,
                     outcome: ControlOutcome::Rejected("codex 进程已退出".into()),
                 }),
-                Tag::Native { ticket, .. } | Tag::PermissionCheck { ticket, .. } => self.native_done(
+                Tag::PermissionCheck(state) => self.native_done(
+                    state.ticket,
+                    super::control::CodexOutcome::Unknown {
+                        provider_accepted: false,
+                        detail: "runtime disconnected".into(),
+                    },
+                ),
+                Tag::Native { ticket, .. } => self.native_done(
                     ticket,
                     super::control::CodexOutcome::Unknown {
                         provider_accepted: false,
@@ -915,7 +928,7 @@ impl CodexCore {
     fn on_result(&mut self, tag: Tag, result: Result<Value, RpcFailure>, now: Instant) {
         match tag {
             Tag::Native { ticket, op } => self.native_result(ticket, op, result, now),
-            Tag::PermissionCheck{ticket,patch,permit,cursors,pages}=>self.permission_checked(ticket,patch,permit,cursors,pages,result,now),
+            Tag::PermissionCheck(state)=>self.permission_checked(*state,result,now),
             Tag::NativeToolsSkills { ticket, servers } => {
                 self.native_tools_result(ticket, servers, result)
             }

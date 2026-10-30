@@ -473,7 +473,7 @@ fn execute(
                 let _ = t
                     .proc
                     .writer
-                    .send(super::transport::WriterMessage::ControlledLine { line, permit });
+                    .send(super::transport::WriterMessage::ControlledLine { line, permit: Box::new(permit) });
             }
             CodexAction::Write(line) => {
                 let _ = t.proc.writer.send(line.into());

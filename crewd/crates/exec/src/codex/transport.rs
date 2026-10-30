@@ -53,7 +53,7 @@ pub struct CodexProcessSpec {
 pub enum WriterMessage {
     ControlledLine {
         line: String,
-        permit: crate::driver::ManualWritePermit,
+        permit: Box<crate::driver::ManualWritePermit>,
     },
     Line(String),
     /// Completes after all preceding lines have been written and flushed.
@@ -546,7 +546,7 @@ mod tests {
         p.writer
             .send(WriterMessage::ControlledLine {
                 line: "FORBIDDEN_OLD_REQUEST".into(),
-                permit,
+                permit: Box::new(permit),
             })
             .unwrap();
         *connection.lock().unwrap() = false;

@@ -729,7 +729,7 @@ pub fn compile(
             return Err("one explicit edit per object per batch required".into());
         }
         out.push(Mutation::PutObject {
-            object,
+            object: Box::new(object),
             expected_revision: expected,
             captures,
         });

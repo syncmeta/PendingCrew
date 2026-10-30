@@ -1,5 +1,12 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-30 权限与SQLite内部布局整理已验
+
+9文件35+/21-：私有PermissionCheckState装箱，保留原首发clone、翻页move及ticket失败归属；WriterMessage仅装箱原permit，逐poll校验/fence原位置不动；仅store Mutation对象装箱，Stored仍序列化同DataObject。两处事务函数保留明确参数边界，仅有带职责理由的函数级too_many_arguments expect，无crate/global屏蔽。
+
+store/exec all-targets clippy通过5.99秒；86项相关既有权限/catalog/transport/metadata/SQLite restore/document-folder及schema测试通过3.734秒，独立逐源及日志审阅通过。准确源hash、两类clippy日志和测试/JUnit保留clippy-layout-20261030。整个workspace静态检查尚在collab一处嵌套条件停止，下一批另处理；不称标准检查整门通过。
+
+
 ## 2026-10-30 静态检查十处条件与局部类型整理
 
 7个Rust文件仅合并等价短路条件、同分支和引入局部SQL row别名，净55+/56-；不改查询、事务顺序、权限或返回形状。定向store/exec all-targets clippy确认原十处消失，仅余原六个布局/参数类问题；不称整个工作区clippy通过。相关现有测试先80/80通过10.097秒，再按实际模块别名补SQLite授权/restore与实际kernel写入/身份8/8通过0.057秒，不重跑已验范围。包含active hibernate真实CLI/fake完整场景。
