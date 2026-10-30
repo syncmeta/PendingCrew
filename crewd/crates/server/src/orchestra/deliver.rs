@@ -326,10 +326,10 @@ impl<P: Port> Core<P> {
             // Current admitted Agent work may delegate along the existing planner/ACL
             // chain. A fresh Human send admits only its newly committed explicit
             // targets below; old/backlog events and duplicate queue rows do not.
-            if let (Some(a), Sender::Session { id, .. }) = (&self.cfg.admission, &msg.sender) {
-                if a.contains(id) && msg.created_at.0 >= a.started_at {
-                    a.allow(&t.session);
-                }
+            if let (Some(a), Sender::Session { id, .. }) = (&self.cfg.admission, &msg.sender)
+                && a.contains(id) && msg.created_at.0 >= a.started_at
+            {
+                a.allow(&t.session);
             }
             let w = NewWake {
                 session: t.session.clone(),
@@ -341,20 +341,19 @@ impl<P: Port> Core<P> {
                 origin: message_origin(msg, &t.session),
             };
             if let Some(wake_id) = self.enqueue_with_id(w).await? {
-                if let (Some(a), Sender::Human) = (&self.cfg.admission, &msg.sender) {
-                    if msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
-                        && msg.created_at.0 >= a.started_at
-                        && t.priority == Priority::Human
-                        && (!trusted_human
-                            || msg.at.seq
-                                > self
-                                    .managed_human_stop_floors
-                                    .get(&t.session)
-                                    .copied()
-                                    .unwrap_or(self.managed_human_boot_floor))
-                    {
-                        a.allow(&t.session);
-                    }
+                if let (Some(a), Sender::Human) = (&self.cfg.admission, &msg.sender)
+                    && msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
+                    && msg.created_at.0 >= a.started_at
+                    && t.priority == Priority::Human
+                    && (!trusted_human
+                        || msg.at.seq
+                            > self
+                                .managed_human_stop_floors
+                                .get(&t.session)
+                                .copied()
+                                .unwrap_or(self.managed_human_boot_floor))
+                {
+                    a.allow(&t.session);
                 }
                 if trusted_human
                     && t.priority == Priority::Human

@@ -281,11 +281,11 @@ impl ManagedHandle {
                 return Err(e);
             }
         };
-        if let Some(binding) = binding {
-            if let Err(e) = binding.register(id) {
-                self.busy.store(false, Ordering::Release);
-                return Err(e);
-            }
+        if let Some(binding) = binding
+            && let Err(e) = binding.register(id)
+        {
+            self.busy.store(false, Ordering::Release);
+            return Err(e);
         }
         self.working.store(true, Ordering::Release);
         if self
@@ -1004,10 +1004,10 @@ impl LaunchGuard {
 }
 impl Drop for LaunchGuard {
     fn drop(&mut self) {
-        if let Some(factory) = self.factory.upgrade() {
-            if let Ok(mut expected) = factory.managed_expected.lock() {
-                expected.remove(&self.session);
-            }
+        if let Some(factory) = self.factory.upgrade()
+            && let Ok(mut expected) = factory.managed_expected.lock()
+        {
+            expected.remove(&self.session);
         }
     }
 }

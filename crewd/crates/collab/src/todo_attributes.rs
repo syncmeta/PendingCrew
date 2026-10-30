@@ -145,14 +145,14 @@ pub fn assign(tx: &mut Tx<'_>, by: &Sender, p: TodoAssignParams) -> Result<TodoA
     }
     let mut a = authorize(tx.conn(), by, &p.channel_id, &p.object)?;
     let rev = cas(&a, &p.expected_revision)?;
-    if let Some(MemberRef::Session { id }) = &p.owner {
-        if !crate::channels::is_member(
+    if let Some(MemberRef::Session { id }) = &p.owner
+        && !crate::channels::is_member(
             tx.conn(),
             &p.channel_id,
             &MemberRef::Session { id: id.clone() },
-        )? {
-            return Err(acl::invalid("owner"));
-        }
+        )?
+    {
+        return Err(acl::invalid("owner"));
     }
     a.owner = p.owner;
     save(tx, &mut a, rev)?;

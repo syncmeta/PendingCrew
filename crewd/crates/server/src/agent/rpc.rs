@@ -52,21 +52,21 @@ fn invalid() -> RpcError {
 /// Only input-only, closed public refusals may cross the MCP boundary in
 /// detail. Never forward arbitrary Core messages, SQL errors or ACL facts.
 fn knowledge_failure_text(error: &RpcError) -> String {
-    if error.code == RpcError::INVALID_PARAMS {
-        if let Some(problem) = error.data.as_ref().and_then(|data| {
+    if error.code == RpcError::INVALID_PARAMS
+        && let Some(problem) = error.data.as_ref().and_then(|data| {
             crewd_proto::team_data::DataPlacementIdentityError::from_refusal(&data.refusal)
-        }) {
-            return serde_json::json!({
-                "error": {
-                    "code": error.code,
-                    "refusal": problem.refusal(),
-                    "message": problem.message()
-                },
-                "thisCallApplied": false,
-                "originalRequestOutcome": "notDetermined",
-                "guidance": "Retain the original request UUID. Never resend an Unknown request; use data_request_get with the original context to determine any prior outcome."
-            }).to_string();
-        }
+        })
+    {
+        return serde_json::json!({
+            "error": {
+                "code": error.code,
+                "refusal": problem.refusal(),
+                "message": problem.message()
+            },
+            "thisCallApplied": false,
+            "originalRequestOutcome": "notDetermined",
+            "guidance": "Retain the original request UUID. Never resend an Unknown request; use data_request_get with the original context to determine any prior outcome."
+        }).to_string();
     }
     format!(
         "Data operation unavailable or refused (RPC code {}); check the tool argument schema and current crew ACL. Obtain context from data_workspace_get; reads do not initialize a workspace. Retain the original request UUID and use pure lookup after an unknown outcome.",

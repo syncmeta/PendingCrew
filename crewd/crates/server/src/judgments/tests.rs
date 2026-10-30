@@ -2,6 +2,7 @@ use super::*;
 use crate::public_commands::Actor;
 use crewd_collab::{Sender, crews, messages, requirements, sessions};
 use crewd_proto::{Request, Role};
+#[expect(clippy::duplicate_mod, reason = "Reuse the existing fake HTTP fixture in this test-only judgment namespace and the independent SQLite projection tests")]
 #[path = "../../../jev/tests/support/mod.rs"]
 mod support;
 use support::{FakeJev, Reply};

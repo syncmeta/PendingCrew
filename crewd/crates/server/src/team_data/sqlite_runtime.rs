@@ -782,29 +782,27 @@ fn project(
             .anchor
             .strip_prefix("source:")
             .and_then(|n| n.parse::<usize>().ok())
+            && let Some(s) = provenance.sources.get_mut(n)
         {
-            if let Some(s) = provenance.sources.get_mut(n) {
-                s.reference = Some(target);
-                if pinned {
-                    s.at_revision = revision;
-                }
+            s.reference = Some(target);
+            if pinned {
+                s.at_revision = revision;
             }
         }
     }
     // Historical SQL cannot silently evaluate against today's business tables.
-    if historical {
-        if let DataObject::View {
+    if historical
+        && let DataObject::View {
             definition: DataViewDefinition::Web { bindings, .. },
             ..
         } = &mut stored.object
-        {
-            bindings.retain(|b| {
-                !matches!(
-                    b.source,
-                    DataBindingSource::Query { .. } | DataBindingSource::Objects { .. }
-                )
-            });
-        }
+    {
+        bindings.retain(|b| {
+            !matches!(
+                b.source,
+                DataBindingSource::Query { .. } | DataBindingSource::Objects { .. }
+            )
+        });
     }
     Ok((stored.object, refs))
 }

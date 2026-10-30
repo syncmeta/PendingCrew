@@ -332,16 +332,15 @@ impl<P: Port> Core<P> {
             let running = self.live.contains_key(&p.target.session_id) || self.starting.contains_key(&p.target.session_id);
             return crate::claude_recovery::resolve(call, current, running).await;
         }
-        if let PublicCommand::SessionInterrupt(target) = &call.request.command {
-            if self
+        if let PublicCommand::SessionInterrupt(target) = &call.request.command
+            && self
                 .port
                 .session(&target.session_id)
                 .await
                 .map_err(crate::dispatch::internal)?
                 .is_some_and(|row| row.executor == "codex")
-            {
-                return self.execute_public_codex(call).await;
-            }
+        {
+            return self.execute_public_codex(call).await;
         }
         if matches!(
             &call.request.command,

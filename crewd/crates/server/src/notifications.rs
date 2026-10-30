@@ -267,9 +267,7 @@ impl Runtime {
             Some(Cache::Unavailable(revision)) if *revision == s.revision => return None,
             _ => {}
         }
-        let Some(binding) = s.binding.as_ref() else {
-            return None;
-        };
+        let binding = s.binding.as_ref()?;
         let key = self.load(&binding.db_id, &binding.key_slot).await;
         let seal = self.load(&binding.db_id, &binding.seal_slot).await;
         let result = match (key, seal) {
@@ -692,7 +690,7 @@ impl Runtime {
         let id = p.request_id.clone();
         let operation = "notification.configure";
         let identity = authority
-            .read(self, operation, |c| crate_identity(c))
+            .read(self, operation, crate_identity)
             .await?;
         let owner = format!("local:{}", identity.db_id);
         let key = owner.clone();

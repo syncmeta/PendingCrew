@@ -514,10 +514,10 @@ impl Runtime {
                             origin: None,
                         },
                     )?;
-                    if fresh_human_message && priority == crewd_collab::wakes::WakePriority::Human {
-                        if let crewd_collab::wakes::Enqueued::New(wake) = enqueued {
-                            admitted.push((target, wake));
-                        }
+                    if fresh_human_message && priority == crewd_collab::wakes::WakePriority::Human
+                        && let crewd_collab::wakes::Enqueued::New(wake) = enqueued
+                    {
+                        admitted.push((target, wake));
                     }
                 }
                 Ok(admitted)

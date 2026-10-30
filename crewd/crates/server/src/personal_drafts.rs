@@ -230,28 +230,26 @@ async fn execute(state: &Arc<AppState>, captured: Captured) -> Result<Value, Rpc
     } else {
         Some(&mut result.0)
     };
-    if let Some(receipt) = receipt {
-        if receipt
+    if let Some(receipt) = receipt
+        && receipt
             .get("runtimeBindingId")
             .and_then(Value::as_str)
             .is_some_and(|id| id != state.runtime_binding_id)
-        {
-            receipt["historical"] = json!(true);
-        }
+    {
+        receipt["historical"] = json!(true);
     }
-    if result.1 {
-        if let Some(r) = result.0.get("result") {
-            if let (Some(space), Some(epoch), Some(revision)) = (
-                r.get("spaceId"),
-                r.get("spaceEpoch"),
-                r.get("spaceRevision"),
-            ) {
-                state.hub.publish(crewd_proto::Event {
-                    event: "personalDraft.changed".into(),
-                    data: json!({"spaceId":space,"spaceEpoch":epoch,"revision":revision}),
-                });
-            }
-        }
+    if result.1
+        && let Some(r) = result.0.get("result")
+        && let (Some(space), Some(epoch), Some(revision)) = (
+            r.get("spaceId"),
+            r.get("spaceEpoch"),
+            r.get("spaceRevision"),
+        )
+    {
+        state.hub.publish(crewd_proto::Event {
+            event: "personalDraft.changed".into(),
+            data: json!({"spaceId":space,"spaceEpoch":epoch,"revision":revision}),
+        });
     }
     origin.before(state, original.command.method()).await?;
     let owner = state.clone();

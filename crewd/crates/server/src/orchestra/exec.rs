@@ -367,6 +367,23 @@ impl Executors {
     }
 }
 
+/// Metadata-only executable readiness; never execute version/login or a shell.
+pub(crate) fn executable_metadata(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    if !std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+        return false;
+    }
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: owned NUL-terminated path remains live throughout access(2).
+    unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,20 +420,4 @@ mod tests {
             );
         }
     }
-}
-
-/// Metadata-only executable readiness; never execute version/login or a shell.
-pub(crate) fn executable_metadata(path: &std::path::Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(path) = std::fs::canonicalize(path) else {
-        return false;
-    };
-    if !std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
-        return false;
-    }
-    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
-        return false;
-    };
-    // SAFETY: owned NUL-terminated path remains live throughout access(2).
-    unsafe { libc::access(path.as_ptr(), libc::X_OK) == 0 }
 }

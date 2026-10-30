@@ -1172,17 +1172,16 @@ async fn metadata_pending_case(stop_first: bool, public_stop: bool) {
             .call("session.controlTarget", json!({"sessionId":sid}))
             .await
             .unwrap();
-        let stopped = control_receipt(
+        // A stopped source has no new owned birth to certify. The original
+        // physical Stop receipt may be Unknown; do not weaken it for this test.
+        control_receipt(
             &mut c,
             &identity,
             &uuid::Uuid::new_v4().to_string(),
             "session.stop",
             json!({"target":target,"reason":"cancel metadata through normal public Stop"}),
         )
-        .await;
-        // A stopped source has no new owned birth to certify. The original
-        // physical Stop receipt may be Unknown; do not weaken it for this test.
-        stopped
+        .await
     } else if stop_first {
         c.call(
             "session.stop",

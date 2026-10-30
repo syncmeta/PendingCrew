@@ -66,8 +66,11 @@ impl<P: Port> Core<P> {
             }
         };
         if !call.codex_native_ready().await? {return self.codex_suppress(&call,"command.native_history_unavailable_or_unknown").await}
-        if let Cmd::CodexQueue(p)|Cmd::CodexSteer(p)=&call.request.command {
-            if let Some(inputs)=&p.inputs {if let Err(e)=inputs.validate(){return self.codex_suppress(&call,e).await}}
+        if let Cmd::CodexQueue(p)|Cmd::CodexSteer(p)=&call.request.command
+            && let Some(inputs)=&p.inputs
+            && let Err(e)=inputs.validate()
+        {
+            return self.codex_suppress(&call,e).await;
         }
         let live = self
             .live

@@ -137,38 +137,6 @@ pub async fn run(data_dir: &Path, args: HookArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn argv(a: &[&str]) -> Vec<std::ffi::OsString> {
-        a.iter().map(|s| s.into()).collect()
-    }
-
-    #[test]
-    fn a_hook_call_is_recognised_around_flags() {
-        let is = |a: &[&str]| is_hook_argv(&argv(a));
-        assert!(is(&["crewd", "hook", "pre-tool-use", "--bogus"]));
-        assert!(is(&[
-            "crewd",
-            "--data-dir",
-            "hook",
-            "hook",
-            "--session",
-            "stop",
-            "post-tool-use"
-        ]));
-        assert!(is(&["crewd", "--data-dir=/d", "hook", "--x", "stop"]));
-        assert!(is(&["crewd", "hook"]));
-        assert!(!is(&["crewd", "mcp", "--session", "s"]));
-        assert!(
-            !is(&["crewd", "--data-dir", "hook", "mcp"]),
-            "a flag value is not the subcommand"
-        );
-        assert!(!is(&["crewd", "--bogus"]));
-    }
-}
-
 /// Unlike observational hooks, missing/malformed input or ACK must never allow
 /// a managed prompt. The caller exits2 on every error, including parse/panic.
 async fn guarded_run(data_dir: &Path, args: HookArgs) -> anyhow::Result<()> {
@@ -219,4 +187,37 @@ async fn guarded_run(data_dir: &Path, args: HookArgs) -> anyhow::Result<()> {
     );
     println!("{}", serde_json::to_string(&value)?);
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(a: &[&str]) -> Vec<std::ffi::OsString> {
+        a.iter().map(|s| s.into()).collect()
+    }
+
+    #[test]
+    fn a_hook_call_is_recognised_around_flags() {
+        let is = |a: &[&str]| is_hook_argv(&argv(a));
+        assert!(is(&["crewd", "hook", "pre-tool-use", "--bogus"]));
+        assert!(is(&[
+            "crewd",
+            "--data-dir",
+            "hook",
+            "hook",
+            "--session",
+            "stop",
+            "post-tool-use"
+        ]));
+        assert!(is(&["crewd", "--data-dir=/d", "hook", "--x", "stop"]));
+        assert!(is(&["crewd", "hook"]));
+        assert!(!is(&["crewd", "mcp", "--session", "s"]));
+        assert!(
+            !is(&["crewd", "--data-dir", "hook", "mcp"]),
+            "a flag value is not the subcommand"
+        );
+        assert!(!is(&["crewd", "--bogus"]));
+    }
 }

@@ -157,8 +157,8 @@ pub fn run(data: &Path, args: &NotificationArgs) -> Result<()> {
             (request, OPERATION, params)
         },
         Action::Lookup { request_id } => {
-            if !crewd_proto::valid_remote_uuid(&request_id) { bail!("canonical notification request UUID required"); }
-            require_witness(data, &request_id)?;
+            if !crewd_proto::valid_remote_uuid(request_id) { bail!("canonical notification request UUID required"); }
+            require_witness(data, request_id)?;
             (request_id.clone(), "notification.requestLookup", json!({"requestId":request_id}))
         },
     };

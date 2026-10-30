@@ -241,28 +241,27 @@ fn list(
             let current = k.context()?;
             if !stable(&source.context, &current) {
                 item.state = "contextChanged".into();
-            } else if let Ok(stored) = k.get(&source.reference, None) {
-                if let DataObject::View {
+            } else if let Ok(stored) = k.get(&source.reference, None)
+                && let DataObject::View {
                     title,
                     revision,
                     archived,
                     definition,
                     ..
                 } = stored.object
-                {
-                    item.state = "ready".into();
-                    item.view_kind = Some(
-                        match definition {
-                            DataViewDefinition::Document { .. } => "document",
-                            DataViewDefinition::Web { .. } => "web",
-                        }
-                        .into(),
-                    );
-                    item.source.context = current;
-                    item.title = Some(title);
-                    item.revision = Some(revision);
-                    item.archived = Some(archived);
-                }
+            {
+                item.state = "ready".into();
+                item.view_kind = Some(
+                    match definition {
+                        DataViewDefinition::Document { .. } => "document",
+                        DataViewDefinition::Web { .. } => "web",
+                    }
+                    .into(),
+                );
+                item.source.context = current;
+                item.title = Some(title);
+                item.revision = Some(revision);
+                item.archived = Some(archived);
             }
         }
         items.push(item);

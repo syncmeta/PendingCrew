@@ -225,6 +225,7 @@ struct ConnectionSignals<'a> {
     writer_done: &'a mut oneshot::Receiver<()>,
 }
 
+#[expect(clippy::too_many_arguments, reason = "Keep peer authority, connection IO, forwarding, drain and exit tasks explicit in the owned read loop")]
 async fn read_loop<R: AsyncRead + Unpin>(
     state: &Arc<AppState>,
     rd: R,
@@ -357,6 +358,7 @@ async fn s5_poll_fault(state: &AppState, id: u64) {
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "Keep exact peer, request, agent state and connection lifecycle signals explicit at the authorization boundary")]
 async fn request_step(
     state: &Arc<AppState>,
     parsed: Result<Request, serde_json::Error>,

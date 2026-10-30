@@ -41,14 +41,14 @@ impl PublicExecution {
                     .with_refusal("command.invalid"),
             );
         }
-        if let PublicCommand::SessionStart(p)=&request.command {
-            if let Some(inputs)=&p.codex_inputs {
-                if p.brief.trim().is_empty() {
-                    return Err(RpcError::new(RpcError::INVALID_PARAMS,"native inputs require a nonblank original task").with_refusal("command.invalid"));
-                }
-                if p.executor!="codex" {return Err(RpcError::new(RpcError::INVALID_PARAMS,"native inputs require Codex"))}
-                inputs.validate().map_err(|e|RpcError::new(RpcError::INVALID_PARAMS,e))?;
+        if let PublicCommand::SessionStart(p)=&request.command
+            && let Some(inputs)=&p.codex_inputs
+        {
+            if p.brief.trim().is_empty() {
+                return Err(RpcError::new(RpcError::INVALID_PARAMS,"native inputs require a nonblank original task").with_refusal("command.invalid"));
             }
+            if p.executor!="codex" {return Err(RpcError::new(RpcError::INVALID_PARAMS,"native inputs require Codex"))}
+            inputs.validate().map_err(|e|RpcError::new(RpcError::INVALID_PARAMS,e))?;
         }
         let principal = actor.principal(state).await?;
         crate::public_commands::validate_database(state, &request.db_id).await?;
@@ -152,10 +152,10 @@ impl PublicExecution {
         tx: &crewd_collab::Tx<'_>,
         session: &str,
     ) -> crewd_collab::Result<()> {
-        if let PublicCommand::SessionStart(p)=&self.request.command {
-            if let Some(inputs)=&p.codex_inputs {
-                crewd_store::codex_inputs::consume(tx.conn(),&self.input_owner(),&p.crew_id,session,&self.request.request_id,inputs)?;
-            }
+        if let PublicCommand::SessionStart(p)=&self.request.command
+            && let Some(inputs)=&p.codex_inputs
+        {
+            crewd_store::codex_inputs::consume(tx.conn(),&self.input_owner(),&p.crew_id,session,&self.request.request_id,inputs)?;
         }
         Ok(receipts::record_registered(
             tx.conn(),
@@ -254,11 +254,11 @@ impl PublicExecution {
                         crewd_store::notifications::suppress_session(tx.conn(),&target.session_id,"native_history_changed")?;
                     }
                 }
-                if let PublicCommand::CodexQueue(p)|PublicCommand::CodexSteer(p)=&call.request.command {
-                    if let Some(inputs)=&p.inputs {
-                        let session=crewd_collab::sessions::get(tx.conn(),&p.target.session_id)?;
-                        crewd_store::codex_inputs::consume(tx.conn(),&call.input_owner(),&session.crew_id,&session.id,&call.request.request_id,inputs)?;
-                    }
+                if let PublicCommand::CodexQueue(p)|PublicCommand::CodexSteer(p)=&call.request.command
+                    && let Some(inputs)=&p.inputs
+                {
+                    let session=crewd_collab::sessions::get(tx.conn(),&p.target.session_id)?;
+                    crewd_store::codex_inputs::consume(tx.conn(),&call.input_owner(),&session.crew_id,&session.id,&call.request.request_id,inputs)?;
                 }
                 if let PublicCommand::CodexConfigure(p)=&call.request.command {
                     crewd_store::codex_controls::configure_intent(tx.conn(),&p.target.session_id,&p.patch,&call.request.request_id)?;

@@ -94,9 +94,8 @@ pub(crate) async fn read(
         ].into_iter().map(|(id,needs_run,experimental)|{
             let requires_thread=!matches!(id,"models"|"tools"|"permissionProfiles");
             let unavailable=if requires_thread&&row.agent_session_id.as_deref().is_none_or(str::is_empty){Some("original native thread identity unavailable")}
-                else if matches!(id,"models"|"tools"|"permissionProfiles"|"history"){None}
-                else if id=="unarchive"&&native_status==Some(CodexNativeHistoryStatus::Archived){None}
-                else if id=="delete"&&native_status==Some(CodexNativeHistoryStatus::Archived){None}
+                else if matches!(id,"models"|"tools"|"permissionProfiles"|"history")
+                    || matches!(id,"unarchive"|"delete")&&native_status==Some(CodexNativeHistoryStatus::Archived){None}
                 else if blocked{Some("native history/fork is archived, deleted or unconfirmed; query original receipt")}
                 else if matches!(id,"archive"|"unarchive"|"delete")&&live.running{Some("native history management requires physical runtime exit")}
                 else if id=="revert"&&(history_mode.as_deref()!=Some("paginated")||live.working||queued>0||live.pending_decision.is_some()){Some("revert requires observed paginated history, idle runtime, empty queue and no pending decision; files are not reverted")}

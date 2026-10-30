@@ -1,5 +1,12 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-30 工作区静态检查完整通过，冻结组合验证
+
+collab等价条件、server层24机械问题、两处conn函数级职责expect、测试共享fixture局部expect与生产项位置整理，连同CLI两个冗余借用及test/helper原封位置调整已收口；共21源文件186+/189-。workspace/all-targets clippy -D warnings终态0（10.77秒），独立逐源审查通过，无权限票据、短路、await、事务或wire语义变化；collab owner原有2例通过。
+
+精确源hash、原失败和最终成功日志保留clippy-server-20261030。本21文件未额外启动大范围定向测试，避免与后续统一回归重复；下步单独rustfmt标准格式提交后，对最终组合执行完整nextest及doc。不能先以clippy通过代替最终组合运行证据。
+
+
 ## 2026-10-30 权限与SQLite内部布局整理已验
 
 9文件35+/21-：私有PermissionCheckState装箱，保留原首发clone、翻页move及ticket失败归属；WriterMessage仅装箱原permit，逐poll校验/fence原位置不动；仅store Mutation对象装箱，Stored仍序列化同DataObject。两处事务函数保留明确参数边界，仅有带职责理由的函数级too_many_arguments expect，无crate/global屏蔽。

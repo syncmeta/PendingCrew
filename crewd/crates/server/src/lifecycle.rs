@@ -34,10 +34,10 @@ impl Admission {
         !self.closed.load(Ordering::Acquire) && !self.blocked.load(Ordering::Acquire)
     }
     pub fn allow(&self, id: &str) {
-        if !self.closed.load(Ordering::Acquire) && !self.blocked.load(Ordering::Acquire) {
-            if let Ok(mut s) = self.sessions.lock() {
-                s.insert(id.into());
-            }
+        if !self.closed.load(Ordering::Acquire) && !self.blocked.load(Ordering::Acquire)
+            && let Ok(mut s) = self.sessions.lock()
+        {
+            s.insert(id.into());
         }
     }
     pub fn contains(&self, id: &str) -> bool {
