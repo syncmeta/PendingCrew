@@ -206,14 +206,37 @@ async fn c13_literal_stopped_mention_resume_firsttool_once() {
         .call("session.resume", json!({"sessionId":worker}))
         .await
         .unwrap();
-    t11::wait("explicit resumed birth", || {
-        r.records()
-            .iter()
-            .filter(|v| v["event"] == "launch" && v["session_id"] == worker)
-            .count()
-            > 1
+    // A child can write its launch witness before the parent records its birth.
+    // Keep one original 15s bound for Core readiness and physical identity;
+    // neither a journal entry nor queue admission certifies a resumed runtime.
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        r.working(&worker, false).await;
+        t11::wait("explicit resumed registered exact birth", || {
+            let identities: Vec<_> = t11::registry(&r.f.data)
+                .into_iter()
+                .filter(|(sid, _)| sid == &worker)
+                .collect();
+            if identities.len() != 1 {
+                return false;
+            }
+            let identity = &identities[0].1;
+            identity != &old.identity
+                && matches!(crewd_exec::registry::probe(identity.pid),
+                    crewd_exec::registry::ProbeResult::Found(ref actual) if actual == identity)
+                && r.records()
+                    .iter()
+                    .filter(|v| {
+                        v["event"] == "launch"
+                            && v["session_id"] == worker
+                            && v["pid"] == identity.pid
+                    })
+                    .count()
+                    == 1
+        })
+        .await;
     })
-    .await;
+    .await
+    .expect("explicit resume must reach Core-ready and exact registered birth within original 15s");
     let fresh = r.generated(&worker);
     fresh.arm(&mut r, &worker).await;
     assert_eq!(r.count(&worker, "C13_PRE_RESUME_NOT_AUTO"), 0);

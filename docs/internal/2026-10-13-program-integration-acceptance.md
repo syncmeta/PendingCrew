@@ -1,5 +1,14 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-30 新组合2913通过与两处观察竞态收口
+
+e9f5a027完整组合format/clippy通过，nextest221.789秒2915 run／2913 pass／2 fail／22 skip，doc因失败未执行；此前五例本轮全部通过，C13 library超时例6.063秒通过但原历史超时原因仍未证实。原失败log/JUnit/run.json不改标，保留final-workspace-e9f5a027-20261030。
+
+两新失败经源码事件顺序定位：C13 stopped-resume先看到child launch日志不能证明parent已登记/actor已ready，现同原15s总预算内核Core ready、唯一新birth、完整probe与同sid/pid恰一launch，再执行原generated强断言。managed fault原等Notification但后续还有PreToolUse/StopFailure，且Unknown事务先于独立Health事件；现等精确最终JSON callback、DB phase与严格Unknown health在同一15s内收敛，原running/working/零重投与stop后phase断言不变。
+
+仅两测试修改，无产品变化；定向2/2通过17.589秒，独立逐源审查通过。随后当前源码format、workspace/all-targets clippy与workspace/all-features doc全部exit0（doc3项通过）。准确源hash、两例日志/JUnit及三检查结果在同目录affected/two-affected材料。证据为2913原通过＋2项受影响范围复验＋完整格式/静态/doc，不冒一次新全量全绿运行。
+
+
 ## 2026-10-30 最终组合五项失败与有界夹具修正
 
 cd066ea8最终组合format/clippy通过，但nextest239.725秒后2915 run／2910 pass／5 fail／22 skip，doc未执行；run.json、失败log及原JUnit保留final-workspace-cd066ea8-20261030，绝不改标该运行。三shell fixture首次执行存在独立可复现延迟（fresh直接4.025s、显式解释器0.010s），未归因具体安全软件；新增有界且立即exit的fixture预热，将冷执行准备与生命周期计时隔离。产品login_shell_path、setsid及原1s/3s/killpg断言均未改。

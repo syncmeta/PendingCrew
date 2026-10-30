@@ -986,17 +986,12 @@ async fn managed_hook_faults_never_promote_screen_idle_or_replay_unknown_inputs(
         let callbacks = f.log.with_extension("hooks.jsonl");
         let last = match case {
             "missing-prompt" | "subagent" | "extra-submit" => "UserPromptSubmit",
-            "stop-failure" => "StopFailure",
+            "stop-failure" | "failure-after-idle" => "StopFailure",
+            "activity-after-idle" => "PreToolUse",
             "session-end" => "SessionEnd",
             "stop-only" => "Stop",
             _ => "Notification",
         };
-        wait(case, || {
-            std::fs::read_to_string(&callbacks)
-                .unwrap_or_default()
-                .contains(last)
-        })
-        .await;
         let db = rusqlite::Connection::open_with_flags(
             f.data.join(crewd_store::DB_FILE),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -1009,17 +1004,42 @@ async fn managed_hook_faults_never_promote_screen_idle_or_replay_unknown_inputs(
         } else {
             "unknown"
         };
-        wait("durable fault classification", || {
-            db.query_row("SELECT phase FROM native_execution_receipts", [], |r| {
-                r.get::<_, String>(0)
-            })
-            .is_ok_and(|p| p == expected)
+        // Callback acknowledgement, durable classification and the live health
+        // projection cross separate queues. Observe all three in one budget:
+        // retract_waiting can commit Unknown before invalidate publishes Health.
+        let live = tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let callback_seen = std::fs::read_to_string(&callbacks)
+                    .unwrap_or_default()
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .any(|callback| callback["event"] == last);
+                let classified = db
+                    .query_row("SELECT phase FROM native_execution_receipts", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .is_ok_and(|p| p == expected);
+                if callback_seen && classified {
+                    let live = c
+                        .call("session.live", json!({"sessionId":sid}))
+                        .await
+                        .unwrap();
+                    if expected != "unknown"
+                        || matches!(
+                            live["health"]["kind"].as_str(),
+                            Some("turn_failed" | "prompt_undelivered")
+                        )
+                    {
+                        break live;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
         })
-        .await;
-        let live = c
-            .call("session.live", json!({"sessionId":sid}))
-            .await
-            .unwrap();
+        .await
+        .unwrap_or_else(|_| {
+            panic!("{case}: final callback, phase and custody health did not converge")
+        });
         assert_eq!(
             live["running"], true,
             "{case}: Stop/Unknown cannot kill runtime"
