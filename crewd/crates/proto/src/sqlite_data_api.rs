@@ -48,10 +48,10 @@ fn normalize_model_schema(schema: &mut Value) {
         }
     }
     for key in ["items", "additionalProperties"] {
-        if let Some(child) = fields.get_mut(key) {
-            if key != "additionalProperties" || !child.is_boolean() {
-                normalize_model_schema(child);
-            }
+        if let Some(child) = fields.get_mut(key)
+            && (key != "additionalProperties" || !child.is_boolean())
+        {
+            normalize_model_schema(child);
         }
     }
     for key in ["anyOf", "oneOf", "allOf", "prefixItems"] {

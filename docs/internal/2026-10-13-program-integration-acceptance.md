@@ -1,5 +1,17 @@
 # 后端与客户端组合验收（2026-10-13）
 
+## 2026-10-30 静态检查协议层最小修复
+
+仓库标准clippy先在proto六项失败。将RpcError可选详情及enrollment较大payload以Box间接保存，唯一错误构造同步，不改JSON字段/serde规则/权限或调用点；折叠schema normalize原短路条件。三源最小修改经过独立只读源审，完整workspace/all-targets check exit0、proto57/57及实际committed_schema_matches_generated 1/1通过，checked schema不变。完整日志与准确源hash保留proto-layout-clippy-20261030。
+
+这只关闭协议层静态检查阻断。下一层当前暴露store10、exec6项，尚非整个标准检查通过：8个条件写法、2处局部row类型复杂度、3个内部enum布局、3个参数数量。后续分批处理，不全局禁warnings或为静态提示大改授权/协议。实际目录信任已授权但官方Terminal交互受工具限制，继续等待用户手动完成。
+
+
+## 2026-10-30 目录信任已授权，官方交互受工具限制
+
+用户明确答复“授权仅此验收目录”，准确范围为/private/tmp/pcw-claude-acceptance-20261029，不能继续当未授权。尝试通过正常Terminal进行官方交互时，CUA返回“Computer Use is not allowed to use the app com.apple.Terminal for safety reasons”；未打开该app、未改变trust、未换工具/终端路径重试。该步骤须用户手动进行，后台静态检查继续。原目录授权、工具返回与范围记录在57e4b476交付目录directory-trust-authorization-20261030.json。
+
+
 ## 2026-10-29 完整全特性回归与四项测试漂移修复
 
 准确821f96f3执行cargo nextest run --offline --locked --workspace --all-features --profile ci --retries 0 --no-fail-fast --test-threads 4，终态100，235.867秒：2915 run，2911 passed、4 failed、22 skipped。源码冻结保持，原全量日志、JUnit与run.json保留full-nextest-821f96f3-20261029，不改标该失败运行。

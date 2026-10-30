@@ -347,7 +347,7 @@ pub struct RpcError {
     pub message: String,
     /// 规则拒绝的稳定码（N1 Task 10）：客户端按码本地化，`message` 只是中文缺省。只加不改——老客户端忽略它。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<RpcErrorData>,
+    pub data: Option<Box<RpcErrorData>>,
 }
 
 /// `RpcError.data`：规则拒绝带的机器可读部分。
@@ -397,7 +397,7 @@ impl RpcError {
 
     /// 带上规则拒绝码（`data.refusal`）。
     pub fn with_refusal(mut self, code: &str) -> Self {
-        self.data = Some(RpcErrorData {
+        self.data = Some(Box::new(RpcErrorData {
             current_todo_attributes: None,
             refusal: code.to_string(),
             decision: None,
@@ -406,7 +406,7 @@ impl RpcError {
             current_tree_revision: None,
             current_link_revision: None,
             current_source_revision: None,
-        });
+        }));
         self
     }
 

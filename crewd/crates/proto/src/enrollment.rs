@@ -122,6 +122,6 @@ pub struct HostEnrollmentLookupParams {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "state", rename_all = "camelCase", deny_unknown_fields)]
 pub enum HostEnrollmentLookupResult {
-    Created { created: HostEnrollmentCreated },
+    Created { created: Box<HostEnrollmentCreated> },
     NotFound,
 }
