@@ -1,8 +1,10 @@
 //! crewd 服务端：Unix socket 上的 NDJSON RPC。
+mod admin_cases;
 pub mod agent;
 mod apns;
 pub mod build_info;
 pub mod causal_fence;
+mod channel_archive;
 mod claude_history;
 mod claude_recovery;
 mod codex_inputs;
@@ -14,10 +16,9 @@ mod group_knowledge;
 pub mod host_admin;
 pub mod hub;
 mod judgments;
-mod message_attribution;
-mod channel_archive;
 pub mod ledger;
 mod legacy_terminal;
+mod message_attribution;
 pub mod native_helpers;
 pub mod native_receipts;
 mod notifications;

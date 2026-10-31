@@ -1,5 +1,206 @@
 {
   "$defs": {
+    "AdminCaseDecision": {
+      "enum": [
+        "observed"
+      ],
+      "type": "string"
+    },
+    "AdminCaseExecution": {
+      "enum": [
+        "not_started"
+      ],
+      "type": "string"
+    },
+    "AdminCaseGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "AdminCaseList": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseView"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "AdminCaseListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "AdminCaseRetirement": {
+      "enum": [
+        "not_started"
+      ],
+      "type": "string"
+    },
+    "AdminCaseScope": {
+      "enum": [
+        "in_scope",
+        "out_of_scope"
+      ],
+      "type": "string"
+    },
+    "AdminCaseSource": {
+      "additionalProperties": false,
+      "properties": {
+        "announcementId": {
+          "type": "string"
+        },
+        "budgetEpoch": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "restoreEpoch": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "budgetEpoch",
+        "restoreEpoch",
+        "announcementId"
+      ],
+      "type": "object"
+    },
+    "AdminCaseTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/AdminCaseTargetKind"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/AdminCaseScope"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "revision",
+        "kind",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "AdminCaseTargetKind": {
+      "enum": [
+        "unanswered",
+        "overdue",
+        "ready_unscheduled"
+      ],
+      "type": "string"
+    },
+    "AdminCaseView": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/AdminCaseDecision"
+        },
+        "execution": {
+          "$ref": "#/$defs/AdminCaseExecution"
+        },
+        "id": {
+          "type": "string"
+        },
+        "retirement": {
+          "$ref": "#/$defs/AdminCaseRetirement"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/AdminCaseSource"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTarget"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "revision",
+        "createdAt",
+        "source",
+        "targets",
+        "decision",
+        "execution",
+        "retirement"
+      ],
+      "type": "object"
+    },
     "Ask": {
       "description": "一条人类待确认；H 号全组织签发，旧机组编号仅保留为显式别名。",
       "properties": {
@@ -15948,6 +16149,22 @@
     }
   },
   "methods": {
+    "adminCase.get": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseView"
+      }
+    },
+    "adminCase.list": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseList"
+      }
+    },
     "ask.answer": {
       "params": {
         "$ref": "#/$defs/AskAnswerParams"

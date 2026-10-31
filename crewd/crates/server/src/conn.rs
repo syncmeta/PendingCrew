@@ -632,6 +632,26 @@ async fn request_step(
                 )
             }
         }
+        Ok(req)
+            if matches!(
+                req.method.as_str(),
+                crewd_proto::admin_cases::LIST | crewd_proto::admin_cases::GET
+            ) =>
+        {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "Attached agents cannot use the Human administrative records surface",
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::admin_cases::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
         Ok(req) if crewd_proto::judgments::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(

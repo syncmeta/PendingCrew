@@ -1008,6 +1008,8 @@ fn allowed_method(method: &str) -> bool {
             | "judgment.inspect"
             | "message.attribution.get"
             | "channel.archiveCheck"
+            | "adminCase.list"
+            | "adminCase.get"
             | "executor.list"
             | "data.workspace.get"
             | "data.submit"

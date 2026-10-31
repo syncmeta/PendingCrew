@@ -2,11 +2,11 @@
 //! 同步、不碰 tokio、不读时钟：每个写操作是 `fn(&mut Tx, ..) -> Result<T>`，时间是 `Tx` 里调用方给的
 //! `now_ms`；操作把「改了什么」记成 `Change`，`run` 提交成功才交回（服务层据此发事件）。
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
-pub mod patrol_runtime;
+pub mod admin_cases;
 pub mod asks;
 pub mod causal;
-pub mod channel_work;
 pub mod channel_archive;
+pub mod channel_work;
 pub mod channels;
 pub mod checkpoints;
 pub mod crews;
@@ -19,15 +19,17 @@ mod global_workflow_core;
 pub mod hibernate;
 pub mod judgments;
 pub mod listens;
-pub mod message_provenance;
 pub mod message_attribution;
+pub mod message_provenance;
 pub mod messages;
+pub mod patrol_runtime;
 pub mod prompts;
 pub mod refusal;
 pub mod render;
 pub mod requirements;
 pub(crate) mod resource_acl;
 pub mod restart;
+pub mod session_retirement;
 pub mod sessions;
 pub mod settings;
 pub mod stop_checks;
@@ -38,15 +40,14 @@ pub mod todos;
 pub mod turn_trace;
 pub mod view_folders;
 pub mod wakes;
-pub mod session_retirement;
-pub mod work_reassignment;
-pub mod work_coordination;
 pub mod work;
-pub mod work_close;
 pub mod work_block;
+pub mod work_close;
+pub mod work_coordination;
 pub mod work_followups;
 pub mod work_lost;
 pub mod work_patrol;
+pub mod work_reassignment;
 pub mod work_transfer;
 pub mod worldview;
 

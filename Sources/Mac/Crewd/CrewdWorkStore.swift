@@ -307,6 +307,33 @@ final class CrewdWorkStore: ObservableObject {
         guard (result["channel"]["archivedAt"] == .null) == restore else {throw CrewdClientError(message:"群归档回执状态不符，请重新核对，不会重发。")}
         return result
     }
+    private func validateAdminCase(_ row:CrewdValue,crew:String)throws {
+        guard row["crewId"] == .string(crew),row["id"].string?.isEmpty == false,row["revision"].string?.isEmpty == false,row["createdAt"].int != nil,
+              row["source"]["sessionId"].string?.isEmpty == false,row["source"]["budgetEpoch"].int != nil,row["source"]["restoreEpoch"].string?.isEmpty == false,row["source"]["announcementId"].string?.isEmpty == false,
+              row["decision"] == .string("observed"),row["execution"] == .string("not_started"),row["retirement"] == .string("not_started"),case .array(let targets)=row["targets"] else {throw CrewdClientError(message:"行政记录身份、来源或状态不完整。")}
+        for target in targets {
+            guard CrewdWorkID(target["id"].string ?? "",kind:.plan) != nil,target["crewId"].string?.isEmpty == false,target["revision"].string?.isEmpty == false,
+                  ["unanswered","overdue","ready_unscheduled"].contains(target["kind"].string ?? ""),["in_scope","out_of_scope"].contains(target["scope"].string ?? "") else {throw CrewdClientError(message:"行政记录目标格式无效。")}
+        }
+    }
+    func adminCases(after:String?=nil) async throws -> CrewdValue {
+        let crew=selectedCrew,token=generation
+        guard !crew.isEmpty else {throw CrewdClientError(message:"请先选择机组。")}
+        var params:[String:CrewdValue]=["crewId":.string(crew),"limit":.integer(20)]
+        if let after {params["after"] = .string(after)}
+        let page=try await call("adminCase.list",.object(params));try check(token)
+        guard case .object(let fields)=page,page["crewId"] == .string(crew),case .array(let items)?=fields["items"],let next=fields["nextAfter"],next == .null || next.string?.isEmpty == false else {throw CrewdClientError(message:"行政记录分页身份或格式不符。")}
+        guard next == .null || next.string != after else {throw CrewdClientError(message:"行政记录分页未推进。")}
+        for item in items {try validateAdminCase(item,crew:crew)}
+        return page
+    }
+    func adminCase(id:String) async throws -> CrewdValue {
+        let crew=selectedCrew,token=generation
+        let row=try await call("adminCase.get",.object(["crewId":.string(crew),"id":.string(id)]));try check(token)
+        try validateAdminCase(row,crew:crew)
+        guard row["id"] == .string(id) else {throw CrewdClientError(message:"行政详情返回了其他案件。")}
+        return row
+    }
     func inspectJudgment(crew: String, kind: String, id: String) async throws -> CrewdValue {
         let token = generation
         let source: CrewdValue = .object(["crewId": .string(crew), "kind": .string(kind), "id": .string(id)])

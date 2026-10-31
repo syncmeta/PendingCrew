@@ -9,6 +9,7 @@ struct CrewdPatrolView: View {
     @State private var statusRequest = UUID()
     @State private var scan = "work"
     @State private var archiveTarget:String?
+    @State private var casesPresented=false
     @State private var archived:[CrewdValue]=[]
     @State private var archivedLoaded=false
     @State private var rows: [CrewdValue] = []
@@ -24,6 +25,7 @@ struct CrewdPatrolView: View {
             Text("只检查事实，不调用模型，也不会自动派活、关闭事项或归档群。分页期间状态可能变化。")
                 .font(.caption).foregroundStyle(.secondary)
             backgroundSection
+            Button("行政处理记录") {casesPresented=true}
             Button("读取当前机组已归档群") {readArchived()}
             if archivedLoaded && archived.isEmpty {Text("当前机组没有已归档群。")}
             if !archived.isEmpty {
@@ -65,8 +67,9 @@ struct CrewdPatrolView: View {
         .sheet(isPresented:Binding(get:{archiveTarget != nil},set:{if !$0 {archiveTarget=nil}})) {
             if let channel=archiveTarget {CrewdChannelArchiveView(store:store,channel:channel,crew:store.selectedCrew)}
         }
+        .sheet(isPresented:$casesPresented) {CrewdAdminCasesView(store:store)}
         .onChange(of: scan) { _, _ in reset() }
-        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; archived=[]; archivedLoaded=false }
+        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; archived=[]; archivedLoaded=false }
         .onDisappear { cancel(); clearStatus() }
     }
     private func readArchived() {

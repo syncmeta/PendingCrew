@@ -38,8 +38,10 @@ pub mod resources;
 pub use resources::*;
 pub mod knowledge_channels;
 pub use knowledge_channels::*;
-pub mod channel_work;
+pub mod admin_cases;
 pub mod channel_archive;
+pub mod channel_work;
+pub use admin_cases::*;
 pub use channel_work::*;
 pub mod todo_attributes;
 pub use todo_attributes::*;
@@ -167,6 +169,8 @@ pub mod methods {
         crate::judgments::SETTINGS_GET,
         crate::judgments::SETTINGS_SET,
         crate::judgments::INSPECT,
+        crate::admin_cases::LIST,
+        crate::admin_cases::GET,
         crate::channel_archive::CHECK,
         crate::channel_archive::ARCHIVE,
         crate::channel_archive::RESTORE,
@@ -790,6 +794,14 @@ pub fn api_schema() -> Value {
             ),
         ),
         (
+            admin_cases::LIST,
+            m(sub::<AdminCaseListParams>(g), sub::<AdminCaseList>(g)),
+        ),
+        (
+            admin_cases::GET,
+            m(sub::<AdminCaseGetParams>(g), sub::<AdminCaseView>(g)),
+        ),
+        (
             channel_archive::CHECK,
             m(
                 sub::<channel_archive::ChannelArchiveCheckParams>(g),
@@ -1095,8 +1107,17 @@ pub fn api_schema() -> Value {
             methods::WORK_CREATE,
             m(sub::<WorkCreateParams>(g), sub::<WorkPlan>(g)),
         ),
-        (methods::WORK_CLOSE,m(sub::<WorkCloseParams>(g),sub::<WorkPlan>(g))),
-        (methods::WORK_CLOSURE_HISTORY,m(sub::<WorkClosureHistoryParams>(g),sub::<WorkClosureHistoryPage>(g))),
+        (
+            methods::WORK_CLOSE,
+            m(sub::<WorkCloseParams>(g), sub::<WorkPlan>(g)),
+        ),
+        (
+            methods::WORK_CLOSURE_HISTORY,
+            m(
+                sub::<WorkClosureHistoryParams>(g),
+                sub::<WorkClosureHistoryPage>(g),
+            ),
+        ),
         (
             methods::WORK_UPDATE,
             m(sub::<WorkUpdateParams>(g), sub::<WorkPlan>(g)),
@@ -1256,10 +1277,31 @@ pub fn api_schema() -> Value {
             methods::WORK_PATROL,
             m(sub::<WorkPatrolParams>(g), sub::<WorkPatrolPage>(g)),
         ),
-        (methods::SESSION_RETIREMENT_STATUS,m(sub::<SessionRetirementStatusParams>(g),sub::<SessionRetirementStatus>(g))),
-        (methods::WORK_REASSIGNMENT_STATUS,m(sub::<ReassignmentStatusParams>(g),sub::<ReassignmentStatus>(g))),
-        (methods::WORK_COORDINATION_STATUS,m(sub::<CoordinationStatusParams>(g),sub::<CoordinationStatus>(g))),
-        (methods::WORK_PATROL_STATUS, m(sub::<PatrolStatusParams>(g), sub::<PatrolStatus>(g))),
+        (
+            methods::SESSION_RETIREMENT_STATUS,
+            m(
+                sub::<SessionRetirementStatusParams>(g),
+                sub::<SessionRetirementStatus>(g),
+            ),
+        ),
+        (
+            methods::WORK_REASSIGNMENT_STATUS,
+            m(
+                sub::<ReassignmentStatusParams>(g),
+                sub::<ReassignmentStatus>(g),
+            ),
+        ),
+        (
+            methods::WORK_COORDINATION_STATUS,
+            m(
+                sub::<CoordinationStatusParams>(g),
+                sub::<CoordinationStatus>(g),
+            ),
+        ),
+        (
+            methods::WORK_PATROL_STATUS,
+            m(sub::<PatrolStatusParams>(g), sub::<PatrolStatus>(g)),
+        ),
         (
             methods::WORK_LIST,
             m(sub::<WorkListParams>(g), sub::<WorkPage>(g)),

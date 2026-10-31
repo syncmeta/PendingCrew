@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Target {
-    id: String,
-    revision: String,
-    kind: StopKind,
+pub(crate) struct Target {
+    pub(crate) id: String,
+    pub(crate) revision: String,
+    pub(crate) kind: StopKind,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -163,12 +163,18 @@ pub fn accept(tx: &mut Tx<'_>, c: &Candidate) -> Result<Accepted> {
         StopDecision::Escalate(_) => {
             let home = crews::management(tx.conn())?
                 .ok_or_else(|| invalid("stop escalation requires management crew"))?;
-            messages::announce_to_human(
+            let announcement = messages::announce_to_human(
                 tx,
                 &home,
                 Sender::System,
                 format!("Stop-check escalation for {}: {}", c.session, note),
                 "work_stop_escalation",
+            )?;
+            crate::admin_cases::record_stop_escalation(
+                tx,
+                &c.session,
+                &c.targets,
+                &announcement.message.id,
             )?;
             Ok(Accepted::Escalated)
         }
@@ -258,6 +264,44 @@ mod tests {
             .unwrap();
         let c = candidate(s.conn(), "w-a1", NOW).unwrap().unwrap();
         ok(s, |tx| accept(tx, &c))
+    }
+    #[test]
+    fn escalation_persists_full_scoped_case_in_accept_transaction() {
+        let mut s = store();
+        let own = seed(&mut s, "crew-a");
+        let foreign = seed(&mut s, "crew-b");
+        for _ in 0..3 {
+            assert!(matches!(next(&mut s), Accepted::Rewake(_)));
+        }
+        assert_eq!(next(&mut s), Accepted::Escalated);
+        let page = crate::admin_cases::list(
+            s.conn(),
+            &crewd_proto::AdminCaseListParams {
+                crew_id: "crew-a".into(),
+                after: None,
+                limit: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(page.items.len(), 1);
+        let case = &page.items[0];
+        assert_eq!(case.targets.len(), 2);
+        assert_eq!(case.source.budget_epoch, 4);
+        assert!(case.targets.iter().any(|t| t.id == own.id
+            && t.revision == own.revision
+            && t.scope == crewd_proto::AdminCaseScope::InScope));
+        assert!(
+            case.targets
+                .iter()
+                .any(|t| t.id == foreign.id && t.scope == crewd_proto::AdminCaseScope::OutOfScope)
+        );
+        assert_eq!(
+            messages::get(s.conn(), &case.source.announcement_id)
+                .unwrap()
+                .category
+                .as_deref(),
+            Some("work_stop_escalation")
+        );
     }
     #[test]
     fn global_idle_read_is_free_and_three_reminders_escalate_once() {
