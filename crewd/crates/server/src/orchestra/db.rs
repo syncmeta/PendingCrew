@@ -224,7 +224,18 @@ fn acked_origins(b: &Batch) -> Vec<String> {
 impl Port for DbPort {
     async fn accept_retirement(&self, s: &collab::session_retirement::Snapshot) -> Result<bool> {
         let s = s.clone();
-        self.write(move |tx| collab::session_retirement::accept(tx, &s))
+        let owner = self.state.clone();
+        self.write(move |tx| {
+            let accepted = collab::session_retirement::accept(tx, &s)?;
+            if accepted && collab::admin_case_execution::session_binding(tx.conn(), &s.session)?.is_some() {
+                // Fence queued collaboration calls in the same DB acceptance
+                // order, before requesting physical exit. A failed stop must
+                // not leave an authenticated case executor accepting new work.
+                owner.tokens.revoke(&s.session);
+                owner.admission.revoke(&s.session);
+            }
+            Ok(accepted)
+        })
             .await
     }
     async fn retirement_stale(&self, s: &collab::session_retirement::Snapshot) -> Result<()> {

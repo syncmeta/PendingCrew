@@ -42,6 +42,14 @@ pub enum AdminCaseExecution {
 #[serde(rename_all = "snake_case")]
 pub enum AdminCaseRetirement {
     NotStarted,
+    Prepared,
+    Dispatched,
+    DecisionReady,
+    ExitRequested,
+    Parked,
+    Unknown,
+    Stale,
+    Suppressed,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -89,6 +97,8 @@ pub struct AdminCaseView {
     #[serde(default)]
     pub execution_record: Option<AdminCaseExecutionView>,
     pub retirement: AdminCaseRetirement,
+    #[serde(default)]
+    pub retirement_record: Option<crate::RetirementView>,
     #[serde(default)]
     pub outcome_record: Option<AdminCaseOutcomeView>,
 }

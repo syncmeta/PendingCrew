@@ -710,3 +710,6 @@ async fn wait_started(r: &Rig, case: &str, session: &str) {
 
 #[path = "admin_outcome.rs"]
 mod outcome;
+
+#[path = "admin_retirement.rs"]
+mod retirement;

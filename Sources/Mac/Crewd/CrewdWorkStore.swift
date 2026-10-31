@@ -310,7 +310,7 @@ final class CrewdWorkStore: ObservableObject {
     private func validateAdminCase(_ row:CrewdValue,crew:String)throws {
         guard row["crewId"] == .string(crew),row["id"].string?.isEmpty == false,row["revision"].string?.isEmpty == false,row["createdAt"].int != nil,
               row["source"]["sessionId"].string?.isEmpty == false,row["source"]["budgetEpoch"].int != nil,row["source"]["restoreEpoch"].string?.isEmpty == false,row["source"]["announcementId"].string?.isEmpty == false,
-              ["observed","prepared","dispatched","answered","unknown","unconfigured","waiting_admission","stale"].contains(row["decision"].string ?? ""),["not_started","registered","requested","running","unknown","stale"].contains(row["execution"].string ?? ""),row["retirement"] == .string("not_started"),case .array(let targets)=row["targets"] else {throw CrewdClientError(message:"行政记录身份、来源或状态不完整。")}
+              ["observed","prepared","dispatched","answered","unknown","unconfigured","waiting_admission","stale"].contains(row["decision"].string ?? ""),["not_started","registered","requested","running","unknown","stale"].contains(row["execution"].string ?? ""),["not_started","prepared","dispatched","decision_ready","exit_requested","parked","unknown","stale","suppressed"].contains(row["retirement"].string ?? ""),case .array(let targets)=row["targets"] else {throw CrewdClientError(message:"行政记录身份、来源或状态不完整。")}
         guard case .object(let fields)=row,let record=fields["decisionRecord"] else {throw CrewdClientError(message:"行政判断记录字段缺失。")}
         if record == .null {
             guard row["decision"] == .string("observed") else {throw CrewdClientError(message:"行政判断阶段缺少记录。")}
@@ -333,6 +333,21 @@ final class CrewdWorkStore: ObservableObject {
                   let count=execution["effectsCount"].int,count>=0,case .object(let executionFields)=execution,let generation=executionFields["generation"] else {throw CrewdClientError(message:"行政执行记录格式无效。")}
             if generation != .null {guard let raw=generation.string,let n=UInt64(raw),String(n)==raw else {throw CrewdClientError(message:"执行代次无效。")}}
             if row["execution"] == .string("running"),generation == .null {throw CrewdClientError(message:"实际运行确认缺少执行代次。")}
+        }
+        guard let retirement=fields["retirementRecord"] else {throw CrewdClientError(message:"行政退场记录字段缺失。")}
+        if retirement == .null {
+            guard row["retirement"] == .string("not_started") else {throw CrewdClientError(message:"退场阶段缺少实际记录。")}
+        } else {
+            guard retirement["phase"] == row["retirement"],retirement["decisionId"].string?.isEmpty == false,
+                  ["prepared","answered","low_confidence","provider_unavailable","unconfigured","restart_unknown","state_changed","stopped","exit_unknown"].contains(retirement["reason"].string ?? ""),
+                  let generation=retirement["generation"].string,let number=UInt64(generation),String(number)==generation,
+                  retirement["generation"] == execution["generation"],execution["sessionId"].string?.isEmpty == false,
+                  case .bool = retirement["adopted"],case .object(let retirementFields)=retirement,let probability=retirementFields["probability"] else {throw CrewdClientError(message:"行政退场记录格式无效。")}
+            if probability != .null {
+                let number:Double?
+                switch probability {case .number(let n):number=n;case .integer(let n):number=Double(n);case .unsigned(let n):number=Double(n);default:number=nil}
+                guard let number,number.isFinite,(0...1).contains(number) else {throw CrewdClientError(message:"退场概率无效。")}
+            }
         }
         guard let outcome=fields["outcomeRecord"] else {throw CrewdClientError(message:"行政结果记录字段缺失。")}
         if outcome != .null {

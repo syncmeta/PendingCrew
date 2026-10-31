@@ -1,7 +1,7 @@
 import Foundation
 @main struct AdminCasesFixture {
  @MainActor static func main() async throws {
-  func row(_ id:String="AC00000000000000000001",crew:String="a")->CrewdValue {.object(["id":.string(id),"crewId":.string(crew),"revision":.string("v"),"createdAt":.integer(1),"source":.object(["sessionId":.string("s"),"budgetEpoch":.integer(1),"restoreEpoch":.string("e"),"announcementId":.string("m")]),"targets":.array([.object(["id":.string("W1"),"crewId":.string("a"),"revision":.string("1"),"kind":.string("overdue"),"scope":.string("in_scope")])]),"decision":.string("observed"),"decisionRecord":.null,"execution":.string("not_started"),"executionRecord":.null,"retirement":.string("not_started"),"outcomeRecord":.null])}
+  func row(_ id:String="AC00000000000000000001",crew:String="a")->CrewdValue {.object(["id":.string(id),"crewId":.string(crew),"revision":.string("v"),"createdAt":.integer(1),"source":.object(["sessionId":.string("s"),"budgetEpoch":.integer(1),"restoreEpoch":.string("e"),"announcementId":.string("m")]),"targets":.array([.object(["id":.string("W1"),"crewId":.string("a"),"revision":.string("1"),"kind":.string("overdue"),"scope":.string("in_scope")])]),"decision":.string("observed"),"decisionRecord":.null,"execution":.string("not_started"),"executionRecord":.null,"retirement":.string("not_started"),"retirementRecord":.null,"outcomeRecord":.null])}
   var calls=0,delay=false,foreign=false
   var held:CheckedContinuation<CrewdValue,Error>?
   let store=CrewdWorkStore {method,p in
@@ -90,6 +90,29 @@ import Foundation
    let broken=CrewdWorkStore {_,_ in bad};broken.selectCrew("a")
    do {_ = try await broken.adminCase(id:"AC00000000000000000001");fatalError("malformed outcome accepted")} catch {}
   }
+  for phase in ["prepared","dispatched","decision_ready","exit_requested","parked","unknown","stale","suppressed"] {
+   guard case .object(var fields)=row() else {fatalError()};fields["retirement"] = .string(phase)
+   fields["execution"] = .string("running")
+   fields["executionRecord"] = .object(["sessionId":.string("admin"),"attemptId":.string("a"),"phase":.string("running"),"reason":.string("started"),"generation":.string("1"),"effectsCount":.integer(1)])
+   fields["retirementRecord"] = .object(["decisionId":.string("retirement"),"phase":.string(phase),"reason":.string("answered"),"probability":.number(0.9),"adopted":.bool(phase == "parked"),"generation":.string("1")])
+   let payload:CrewdValue = .object(fields)
+   let decoded=CrewdWorkStore {_,_ in payload};decoded.selectCrew("a")
+   _ = try await decoded.adminCase(id:"AC00000000000000000001")
+  }
+  for phase in ["done","exit_requested"] {
+   guard case .object(var fields)=row() else {fatalError()};fields["retirement"] = .string(phase)
+   let payload:CrewdValue = .object(fields)
+   let broken=CrewdWorkStore {_,_ in payload};broken.selectCrew("a")
+   do {_ = try await broken.adminCase(id:"AC00000000000000000001");fatalError("unconfirmed retirement accepted")} catch {}
+  }
+  guard case .object(var mismatched)=row() else {fatalError()}
+  mismatched["execution"] = .string("running")
+  mismatched["executionRecord"] = .object(["sessionId":.string("admin"),"attemptId":.string("a"),"phase":.string("running"),"reason":.string("started"),"generation":.string("1"),"effectsCount":.integer(1)])
+  mismatched["retirement"] = .string("parked")
+  mismatched["retirementRecord"] = .object(["decisionId":.string("r"),"phase":.string("parked"),"reason":.string("answered"),"probability":.number(0.9),"adopted":.bool(true),"generation":.string("2")])
+  let mismatch:CrewdValue = .object(mismatched)
+  let mismatchStore=CrewdWorkStore {_,_ in mismatch};mismatchStore.selectCrew("a")
+  do {_ = try await mismatchStore.adminCase(id:"AC00000000000000000001");fatalError("foreign generation parked accepted")} catch {}
   print("admin cases opaque pagination, detail, malformed/foreign, crew and connection stale rejection passed")
  }
 }

@@ -67,6 +67,7 @@ fn decode(raw: &str, crew: &str, id: &str) -> Result<AdminCaseView> {
         || v.decision_record.is_some()
         || v.execution_record.is_some()
         || v.outcome_record.is_some()
+        || v.retirement_record.is_some()
         || v.decision != AdminCaseDecision::Observed
         || v.id != id
         || v.crew_id != crew
@@ -264,6 +265,7 @@ pub(crate) fn record_stop_escalation(
         execution: AdminCaseExecution::NotStarted,
         execution_record: None,
         retirement: AdminCaseRetirement::NotStarted,
+        retirement_record: None,
         outcome_record: None,
     };
     view.revision = revision(&view)?;
@@ -645,6 +647,18 @@ mod tests {
                 .remove("decisionRecord")
                 .is_some()
         );
+        legacy["view"]
+            .as_object_mut()
+            .unwrap()
+            .remove("executionRecord");
+        legacy["view"]
+            .as_object_mut()
+            .unwrap()
+            .remove("outcomeRecord");
+        legacy["view"]
+            .as_object_mut()
+            .unwrap()
+            .remove("retirementRecord");
         let old = serde_json::to_string(&legacy).unwrap();
         meta_set(s.conn(), &k, &old).unwrap();
         assert_eq!(
@@ -1249,6 +1263,25 @@ fn project_at(c: &Connection, mut view: AdminCaseView, now: Option<i64>) -> Resu
         &view.id,
         now.unwrap_or_else(crewd_store::now_ms),
     )?;
+    view.retirement_record = crate::session_retirement::case_record(
+        c,
+        &view.crew_id,
+        &view.id,
+        now.unwrap_or_else(crewd_store::now_ms),
+    )?;
+    if let Some(record) = &view.retirement_record {
+        use crewd_proto::RetirementPhase as P;
+        view.retirement = match record.phase {
+            P::Prepared => AdminCaseRetirement::Prepared,
+            P::Dispatched => AdminCaseRetirement::Dispatched,
+            P::DecisionReady => AdminCaseRetirement::DecisionReady,
+            P::ExitRequested => AdminCaseRetirement::ExitRequested,
+            P::Parked => AdminCaseRetirement::Parked,
+            P::Unknown => AdminCaseRetirement::Unknown,
+            P::Stale => AdminCaseRetirement::Stale,
+            P::Suppressed => AdminCaseRetirement::Suppressed,
+        };
+    }
     Ok(view)
 }
 

@@ -2025,6 +2025,8 @@ pub struct StandInState {
     pub deaf_to_interrupt: BTreeSet<String>,
     /// 这些 session 被叫停时不退出（模拟停不下来的进程：停机到期限）。
     pub hang_on_stop: BTreeSet<String>,
+    /// Opt-in driver refusal; no exit receipt is emitted for these sessions.
+    pub fail_on_stop: BTreeSet<String>,
     pub cleared_quota: Vec<String>,
     pub events: BTreeMap<String, mpsc::UnboundedSender<SessionEvent>>,
     /// Synthetic accepted-final producer seam, distinct from a real PTY proof.
@@ -2528,6 +2530,9 @@ impl ExecHandle for StandInHandle {
     fn stop(&self) -> Result<(), Closed> {
         let mut s = self.lock();
         s.stops.push(self.session.clone());
+        if s.fail_on_stop.contains(&self.session) {
+            return Err(Closed);
+        }
         if s.hang_on_stop.contains(&self.session) {
             return Ok(());
         }
@@ -2722,6 +2727,7 @@ impl Rig {
             st.answer_hold.clear();
             st.answer_outcome.clear();
             st.hang_on_stop.clear();
+            st.fail_on_stop.clear();
         }
         let (tx, rx) = mpsc::unbounded_channel();
         let execs = Executors::new().with("claude", Arc::new(exec.clone()));

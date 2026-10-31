@@ -63,7 +63,13 @@ struct CrewdAdminCasesView:View {
                             }
                             Text("核验解决与执行器退场独立；其他操作者解决的目标不算本案行政成果。").font(.caption).foregroundStyle(.secondary)
                         }
-                        Text("退场：尚未开始；会话退出不等于业务解决")
+                        Text("退场："+retirementPhase(detail["retirement"].string ?? ""))
+                        if detail["retirementRecord"] != .null {
+                            Text("退场说明："+retirementReason(detail["retirementRecord"]["reason"].string ?? ""))
+                            Text(detail["retirementRecord"]["adopted"] == .bool(true) ? "此记录曾收到实际退出确认；结合当前阶段核对。":"此记录尚未确认实际退出。")
+                            Text("退场执行代次："+(detail["retirementRecord"]["generation"].string ?? ""))
+                        }
+                        Text("案件解决只代表业务核验通过；退出请求不等于实际退场，未知结果不会自动重启。").font(.caption).foregroundStyle(.secondary)
                         ForEach(Array(detail["targets"].array.enumerated()),id:\.offset) {_,target in
                             Text((target["id"].string ?? "")+" · "+kind(target["kind"].string ?? "")+" · "+(target["scope"] == .string("in_scope") ? "当前范围":"范围外，仅保留来源事实"))
                             Text("来源快照机组："+(target["crewId"].string ?? "")+" · 工作版本："+(target["revision"].string ?? "")).font(.caption).foregroundStyle(.secondary)
@@ -92,6 +98,12 @@ struct CrewdAdminCasesView:View {
     private func outcomeReason(_ value:String)->String {["no_execution":"尚无执行记录","no_verified_admin_effect":"尚无已核实行政效果","targets_unresolved":"仍有目标未解决","out_of_scope":"含范围外目标，不能确认全案解决","verified":"目标核验通过","authority_changed":"来源或权限依据已变化"][value] ?? "未知原因"}
     private func targetReason(_ value:String)->String {
         ["closed_with_evidence":"已凭证据关闭","reassigned_and_acknowledged":"已重派并确认接收","no_closure_evidence":"关闭缺少证据","no_matching_event":"尚无匹配真实事件","original_problem_remains":"原问题仍存在","notification_pending":"等待通知投递确认","notification_dropped":"通知未送达","owner_unavailable":"负责人不可用","target_missing":"目标缺失","no_verified_admin_receipt":"尚无已核实行政回执"][value] ?? "未知核验状态"
+    }
+    private func retirementPhase(_ value:String)->String {
+        ["not_started":"尚未开始","prepared":"已准备判断","dispatched":"退场判断请求已发出","decision_ready":"退场判断就绪，尚未请求退出","exit_requested":"已请求退出，等待实际确认","parked":"已确认实际退出并保留会话","unknown":"退出结果未知","stale":"退场依据已失效","suppressed":"本次退场已抑制"][value] ?? "未知退场阶段"
+    }
+    private func retirementReason(_ value:String)->String {
+        ["prepared":"等待判断","answered":"模型已答复","low_confidence":"置信度不足","provider_unavailable":"模型服务不可用","unconfigured":"未配置判断模型","restart_unknown":"重启前结果未知","state_changed":"依据已变化","stopped":"已停止","exit_unknown":"未能确认执行器退出"][value] ?? "未知退场原因"
     }
     private func time(_ value:CrewdValue)->String {guard let ms=value.int else{return "未知"};return Date(timeIntervalSince1970:Double(ms)/1000).formatted(date:.abbreviated,time:.standard)}
     private func kind(_ value:String)->String {["unanswered":"缺少回报","overdue":"检查逾期","ready_unscheduled":"可推进但未安排检查"][value] ?? value}

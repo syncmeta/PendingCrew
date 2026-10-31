@@ -29,6 +29,8 @@ struct Record {
     view: RetirementView,
     epoch: String,
     continuity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checksum: Option<String>,
 }
 fn key(id: &str) -> String {
     format!("session.retirement.v1:{id}")
@@ -41,27 +43,66 @@ fn record(c: &Connection, id: &str) -> Result<Option<Record>> {
         .map(|s| serde_json::from_str::<Record>(&s))
         .transpose()
         .map_err(StoreError::from)?;
-    if r.as_ref()
-        .is_some_and(|r| r.version != 1 || r.snapshot.session != id)
-    {
-        return Err(invalid());
+    if let Some(value) = &r {
+        validate_record(c, id, value)?;
     }
     Ok(r)
 }
+fn checksum(r: &Record) -> Result<String> {
+    let mut content = r.clone();
+    content.checksum = None;
+    judgments::fingerprint(&content)
+}
+fn validate_record(c: &Connection, id: &str, r: &Record) -> Result<()> {
+    if r.version != 1 || r.snapshot.session != id {
+        return Err(invalid());
+    }
+    if let Some(stored) = &r.checksum {
+        if *stored != checksum(r)? {
+            return Err(invalid());
+        }
+    } else if crate::admin_case_execution::session_binding(c, id)?.is_some() {
+        return Err(invalid());
+    }
+    Ok(())
+}
 fn save(tx: &mut Tx<'_>, r: &Record) -> Result<()> {
+    let mut record = r.clone();
+    record.checksum = Some(checksum(r)?);
     meta_set(
         tx.conn(),
         &key(&r.snapshot.session),
-        &serde_json::to_string(r).map_err(StoreError::from)?,
+        &serde_json::to_string(&record).map_err(StoreError::from)?,
     )?;
     Ok(())
 }
-fn facts(c: &Connection, id: &str) -> Result<Option<(crewd_proto::Session, serde_json::Value)>> {
-    // A bound administrative case is an outstanding obligation even when this
-    // session owns no Work. Only the explicit case outcome lifecycle may release it.
-    if crate::admin_case_execution::session_binding(c, id)?.is_some() {
-        return Ok(None);
-    }
+
+fn facts(
+    c: &Connection,
+    id: &str,
+    now: i64,
+) -> Result<Option<(crewd_proto::Session, serde_json::Value)>> {
+    // Case completion removes only this obligation. Ordinary idle/approval/work
+    // safeguards below still apply, and the actor must independently be quiescent.
+    let administrative = if let Some(binding) = crate::admin_case_execution::session_binding(c, id)?
+    {
+        let Some(outcome) =
+            crate::admin_case_outcome::status_at(c, binding.crew_id(), binding.case_id(), now)?
+        else {
+            return Ok(None);
+        };
+        if outcome.phase != crewd_proto::AdminCaseOutcomePhase::Resolved {
+            return Ok(None);
+        }
+        let Some(generation) = crate::admin_case_execution::generation(c, &binding)? else {
+            return Ok(None);
+        };
+        Some(
+            serde_json::json!({"caseId":binding.case_id(),"attemptId":binding.attempt_id(),"outcomeRevision":outcome.revision,"generation":generation,"targetCount":outcome.targets.len(),"resolvedByAdmin":outcome.resolved_by_admin.len(),"resolvedByOthers":outcome.resolved_by_others.len()}),
+        )
+    } else {
+        None
+    };
     let s = crate::sessions::get(c, id)?;
     if s.desired != crewd_proto::Desired::Running
         || s.was_working
@@ -128,11 +169,14 @@ fn facts(c: &Connection, id: &str) -> Result<Option<(crewd_proto::Session, serde
         .filter(|a| a.asked_by.session().is_some_and(|o| o.as_str() == id))
         .collect();
     let work = judgments::fingerprint(&(&owned, &asked))?;
-    let context = serde_json::json!({"session":s,"work":work,"messages":frontier,"channels":channels,"recent":sample,"truncated":recent.len()>6 || recent.iter().take(6).any(|r|r.2.chars().count()>600),"wakes":wakes,"config":judgments::configuration(c)?,"epoch":crewd_store::judgment_state::epoch(c)?,"stopFloor":wakes::human_stop_floor(c,id)?,"stopEpoch":judgments::stop_epoch(c,id)?});
+    let mut context = serde_json::json!({"session":s,"work":work,"messages":frontier,"channels":channels,"recent":sample,"truncated":recent.len()>6 || recent.iter().take(6).any(|r|r.2.chars().count()>600),"wakes":wakes,"config":judgments::configuration(c)?,"epoch":crewd_store::judgment_state::epoch(c)?,"stopFloor":wakes::human_stop_floor(c,id)?,"stopEpoch":judgments::stop_epoch(c,id)?});
+    if let Some(administrative) = administrative {
+        context["adminCase"] = administrative;
+    }
     Ok(Some((s, context)))
 }
-fn continuity(c: &Connection, id: &str) -> Result<Option<String>> {
-    let Some((_, mut f)) = facts(c, id)? else {
+fn continuity(c: &Connection, id: &str, now: i64) -> Result<Option<String>> {
+    let Some((_, mut f)) = facts(c, id, now)? else {
         return Ok(None);
     };
     if let Some(o) = f["session"].as_object_mut() {
@@ -142,12 +186,21 @@ fn continuity(c: &Connection, id: &str) -> Result<Option<String>> {
     }
     Ok(Some(judgments::fingerprint(&f)?))
 }
-fn snapshot(c: &Connection, id: &str, actor: ActorWitness) -> Result<Option<Snapshot>> {
-    let Some((s, facts)) = facts(c, id)? else {
+fn snapshot(c: &Connection, id: &str, actor: ActorWitness, now: i64) -> Result<Option<Snapshot>> {
+    let Some((s, facts)) = facts(c, id, now)? else {
         return Ok(None);
     };
+    if let Some(generation) = facts["adminCase"]["generation"].as_u64()
+        && generation != actor.generation
+    {
+        return Ok(None);
+    }
     let fingerprint = judgments::fingerprint(&(&facts, &actor))?;
-    let summary = serde_json::json!({"role":s.role,"title":s.title.as_ref().map(|v|v.chars().take(120).collect::<String>()),"brief":s.brief.as_ref().map(|v|v.chars().take(400).collect::<String>()),"recent":facts["recent"],"sample_only":true,"truncated":facts["truncated"],"text_truncated":s.title.as_ref().is_some_and(|v|v.chars().count()>120)||s.brief.as_ref().is_some_and(|v|v.chars().count()>400),"idle":true,"pendingWork":false,"pendingWake":false,"pendingAskOrApproval":false,"resumableIdentity":true,"evidenceScope":"current session facts; no claim that conversation history is exhaustive"});
+    let summary = if !facts["adminCase"].is_null() {
+        serde_json::json!({"role":s.role,"verifiedCaseOutcome":"resolved","targetCount":facts["adminCase"]["targetCount"],"resolvedByAdmin":facts["adminCase"]["resolvedByAdmin"],"resolvedByOthers":facts["adminCase"]["resolvedByOthers"],"idle":true,"pendingWork":false,"pendingWake":false,"pendingAskOrApproval":false,"resumableIdentity":true,"evidenceScope":"verified case outcome and current session obligations; physical exit has not been requested"})
+    } else {
+        serde_json::json!({"role":s.role,"title":s.title.as_ref().map(|v|v.chars().take(120).collect::<String>()),"brief":s.brief.as_ref().map(|v|v.chars().take(400).collect::<String>()),"recent":facts["recent"],"sample_only":true,"truncated":facts["truncated"],"text_truncated":s.title.as_ref().is_some_and(|v|v.chars().count()>120)||s.brief.as_ref().is_some_and(|v|v.chars().count()>400),"idle":true,"pendingWork":false,"pendingWake":false,"pendingAskOrApproval":false,"resumableIdentity":true,"evidenceScope":"current session facts; no claim that conversation history is exhaustive"})
+    };
     Ok(Some(Snapshot {
         session: id.into(),
         crew: s.crew_id,
@@ -165,11 +218,12 @@ fn snapshot(c: &Connection, id: &str, actor: ActorWitness) -> Result<Option<Snap
         decision_id: String::new(),
     }))
 }
-fn current(c: &Connection, s: &Snapshot) -> Result<bool> {
-    Ok(snapshot(c, &s.session, s.actor.clone())?.is_some_and(|v| v.fingerprint == s.fingerprint))
+fn current(c: &Connection, s: &Snapshot, now: i64) -> Result<bool> {
+    Ok(snapshot(c, &s.session, s.actor.clone(), now)?
+        .is_some_and(|v| v.fingerprint == s.fingerprint))
 }
 pub fn prepare(tx: &mut Tx<'_>, id: &str, actor: ActorWitness) -> Result<Option<Snapshot>> {
-    let Some(mut s) = snapshot(tx.conn(), id, actor)? else {
+    let Some(mut s) = snapshot(tx.conn(), id, actor, tx.now_ms())? else {
         return Ok(None);
     };
     if let Some(r) = record(tx.conn(), id)?
@@ -180,7 +234,8 @@ pub fn prepare(tx: &mut Tx<'_>, id: &str, actor: ActorWitness) -> Result<Option<
     s.decision_id = uuid::Uuid::new_v4().to_string();
     let r = Record {
         version: 1,
-        continuity: continuity(tx.conn(), id)?.ok_or_else(invalid)?,
+        checksum: None,
+        continuity: continuity(tx.conn(), id, tx.now_ms())?.ok_or_else(invalid)?,
         epoch: crewd_store::judgment_state::epoch(tx.conn())?,
         snapshot: s.clone(),
         view: RetirementView {
@@ -202,7 +257,7 @@ pub fn dispatch(tx: &mut Tx<'_>, s: &Snapshot) -> Result<bool> {
     if r.snapshot.decision_id != s.decision_id || r.view.phase != Phase::Prepared {
         return Ok(false);
     }
-    if !current(tx.conn(), s)? {
+    if !current(tx.conn(), s, tx.now_ms())? {
         r.view.phase = Phase::Stale;
         r.view.reason = Reason::StateChanged;
         save(tx, &r)?;
@@ -227,7 +282,7 @@ pub fn settle(
     }
     r.view.probability = probability;
     r.view.reason = reason;
-    if !current(tx.conn(), s)? {
+    if !current(tx.conn(), s, tx.now_ms())? {
         r.view.phase = Phase::Stale;
         r.view.reason = Reason::StateChanged;
         save(tx, &r)?;
@@ -249,7 +304,7 @@ pub fn accept(tx: &mut Tx<'_>, s: &Snapshot) -> Result<bool> {
     if r.snapshot.decision_id != s.decision_id || r.view.phase != Phase::DecisionReady {
         return Ok(false);
     }
-    if !current(tx.conn(), s)? {
+    if !current(tx.conn(), s, tx.now_ms())? {
         r.view.phase = Phase::Stale;
         r.view.reason = Reason::StateChanged;
         save(tx, &r)?;
@@ -301,10 +356,11 @@ pub fn parked(c: &Connection, id: &str) -> Result<bool> {
             && crewd_store::judgment_state::epoch(c).is_ok_and(|e| e == r.epoch)
     }))
 }
-pub fn status(
+pub fn status_at(
     c: &Connection,
     crew: &str,
     id: &str,
+    now: i64,
 ) -> Result<crewd_proto::SessionRetirementStatus> {
     let s = crate::sessions::get(c, id)?;
     if s.crew_id != crew {
@@ -314,9 +370,9 @@ pub fn status(
     if let Some(r) = &mut r
         && (crewd_store::judgment_state::epoch(c)? != r.epoch
             || (r.view.phase == Phase::Parked
-                && continuity(c, id)?.as_deref() != Some(r.continuity.as_str()))
+                && continuity(c, id, now)?.as_deref() != Some(r.continuity.as_str()))
             || (!matches!(r.view.phase, Phase::Parked | Phase::Unknown)
-                && !current(c, &r.snapshot)?))
+                && !current(c, &r.snapshot, now)?))
     {
         r.view.phase = Phase::Stale;
         r.view.reason = Reason::StateChanged;
@@ -336,7 +392,7 @@ pub fn resumed(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     let Ok(mut r) = serde_json::from_str::<Record>(&raw) else {
         return Ok(());
     };
-    if r.version != 1 || r.snapshot.session != id {
+    if validate_record(tx.conn(), id, &r).is_err() {
         return Ok(());
     }
     if matches!(r.view.phase, Phase::Parked | Phase::ExitRequested) {
@@ -373,6 +429,10 @@ pub fn recover_page(
             eprintln!("crewd: unsupported retirement record retained during recovery");
             continue;
         }
+        if validate_record(tx.conn(), &r.snapshot.session, &r).is_err() {
+            eprintln!("crewd: invalid retirement checksum retained during recovery");
+            continue;
+        }
         if matches!(r.view.phase, Phase::Dispatched | Phase::ExitRequested) {
             r.view.phase = Phase::Unknown;
             r.view.reason = Reason::RestartUnknown;
@@ -390,11 +450,202 @@ pub fn recover_page(
 mod tests {
     use super::*;
     use crate::testkit::{ok, store};
+    fn resolved_admin(
+        s: &mut crewd_store::Store,
+    ) -> (
+        crewd_proto::AdminCaseView,
+        crate::admin_case_execution::Registration,
+    ) {
+        use crate::admin_case_execution::{
+            self as execution, ActionScope,
+            tests::{close, running_case},
+        };
+        let (case, reg) = running_case(s);
+        s.conn()
+            .execute(
+                "UPDATE sessions SET agent_session_id='synthetic-resume' WHERE id=?1",
+                [reg.witness.session_id()],
+            )
+            .unwrap();
+        for target in &case.targets {
+            ok(s, |tx| {
+                let permit = execution::validate_effect(
+                    tx,
+                    &reg.witness,
+                    ActionScope::WorkClose {
+                        id: target.id.clone(),
+                        kind: crewd_proto::WorkClosureKind::Done,
+                    },
+                )?;
+                close(tx, reg.witness.session_id(), &target.id)?;
+                execution::finish_effect(tx, permit)
+            });
+        }
+        ok(s, |tx| {
+            crate::admin_case_outcome::verify(tx, "crew-a", &case.id)
+        });
+        (case, reg)
+    }
+    #[test]
+    fn resolved_bound_case_can_enter_existing_semantic_retirement() {
+        let mut s = store();
+        let (_case, reg) = resolved_admin(&mut s);
+        let actor = ActorWitness {
+            incarnation: "synthetic-case-core".into(),
+            generation: 1,
+            activity: 0,
+        };
+        assert!(ok(&mut s, |tx| prepare(tx, &reg.session.id, actor)).is_some());
+    }
     fn witness() -> ActorWitness {
         ActorWitness {
             incarnation: "test-boot".into(),
             generation: 1,
             activity: 0,
+        }
+    }
+    #[test]
+    fn legacy_ordinary_parked_without_admin_case_context_remains_parked() {
+        let mut db = store();
+        let snapshot = ready(&mut db);
+        assert!(ok(&mut db, |tx| accept(tx, &snapshot)));
+        ok(&mut db, |tx| confirm_exit(tx, &snapshot, true));
+        let (_, mut legacy) = facts(db.conn(), "w-a1", crate::testkit::NOW)
+            .unwrap()
+            .unwrap();
+        legacy.as_object_mut().unwrap().remove("adminCase");
+        for field in ["updatedAt", "lastActiveAt", "wasWorking"] {
+            legacy["session"].as_object_mut().unwrap().remove(field);
+        }
+        // This is the old persisted continuity shape, intentionally lacking the new key.
+        let mut saved = record(db.conn(), "w-a1").unwrap().unwrap();
+        saved.continuity = judgments::fingerprint(&legacy).unwrap();
+        saved.checksum = None;
+        let raw = serde_json::to_string(&saved).unwrap();
+        meta_set(db.conn(), &key("w-a1"), &raw).unwrap();
+        assert_eq!(
+            status_at(db.conn(), "crew-a", "w-a1", crate::testkit::NOW)
+                .unwrap()
+                .record
+                .unwrap()
+                .phase,
+            Phase::Parked
+        );
+        assert_eq!(meta_get(db.conn(), &key("w-a1")).unwrap().unwrap(), raw);
+    }
+    #[test]
+    fn bound_retirement_checks_true_generation_and_preserves_idle_obligations() {
+        let mut s = store();
+        let (case, reg) = resolved_admin(&mut s);
+        let mut actor = witness();
+        actor.generation = 2;
+        assert!(ok(&mut s, |tx| prepare(tx, &reg.session.id, actor)).is_none());
+        let prepared = ok(&mut s, |tx| prepare(tx, &reg.session.id, witness())).unwrap();
+        let payload = prepared.summary.to_string();
+        assert!(!payload.contains(&case.id));
+        assert!(!payload.contains(&reg.session.id));
+        assert!(!payload.contains("attemptId"));
+        assert!(!payload.contains("outcomeRevision"));
+        assert_eq!(prepared.summary["verifiedCaseOutcome"], "resolved");
+        assert_eq!(prepared.summary["targetCount"], 2);
+        ok(&mut s, |tx| {
+            crate::wakes::enqueue(
+                tx,
+                crate::wakes::WakeRequest {
+                    session: reg.session.id.clone(),
+                    kind: crate::wakes::WakeKind::System,
+                    source: "synthetic-pending-obligation".into(),
+                    priority: crate::wakes::WakePriority::System,
+                    not_before_ms: None,
+                    note: Some("pending".into()),
+                    origin: None,
+                },
+            )
+        });
+        assert!(ok(&mut s, |tx| prepare(tx, &reg.session.id, witness())).is_none());
+        assert!(!ok(&mut s, |tx| dispatch(tx, &prepared)));
+    }
+    #[test]
+    fn case_projection_distinguishes_requested_unknown_and_actual_receipt_generation() {
+        let mut s = store();
+        let (case, reg) = resolved_admin(&mut s);
+        let prepared = ok(&mut s, |tx| prepare(tx, &reg.session.id, witness())).unwrap();
+        assert!(ok(&mut s, |tx| dispatch(tx, &prepared)));
+        assert!(ok(&mut s, |tx| settle(
+            tx,
+            &prepared,
+            Some(0.99),
+            true,
+            Reason::Answered
+        )));
+        assert!(ok(&mut s, |tx| accept(tx, &prepared)));
+        let params = crewd_proto::AdminCaseGetParams {
+            crew_id: "crew-a".into(),
+            id: case.id.clone(),
+        };
+        let requested = crate::admin_cases::get_at(s.conn(), &params, crate::testkit::NOW).unwrap();
+        assert_eq!(
+            requested.retirement,
+            crewd_proto::AdminCaseRetirement::ExitRequested
+        );
+        ok(&mut s, |tx| confirm_exit(tx, &prepared, false));
+        assert_eq!(
+            crate::admin_cases::get_at(s.conn(), &params, crate::testkit::NOW)
+                .unwrap()
+                .retirement,
+            crewd_proto::AdminCaseRetirement::Unknown
+        );
+        let mut wrong = record(s.conn(), &reg.session.id).unwrap().unwrap();
+        wrong.snapshot.actor.generation = 2;
+        wrong.view.generation = "2".into();
+        ok(&mut s, |tx| save(tx, &wrong));
+        let view = crate::admin_cases::get_at(s.conn(), &params, crate::testkit::NOW).unwrap();
+        assert!(view.retirement_record.is_none());
+        assert_eq!(
+            view.retirement,
+            crewd_proto::AdminCaseRetirement::NotStarted
+        );
+    }
+    #[test]
+    fn modified_ready_or_requested_receipt_cannot_forge_parked() {
+        for request in [false, true] {
+            let mut db = store();
+            let (case, reg) = resolved_admin(&mut db);
+            let prepared = ok(&mut db, |tx| prepare(tx, &reg.session.id, witness())).unwrap();
+            assert!(ok(&mut db, |tx| dispatch(tx, &prepared)));
+            assert!(ok(&mut db, |tx| settle(
+                tx,
+                &prepared,
+                Some(0.99),
+                true,
+                Reason::Answered
+            )));
+            if request {
+                assert!(ok(&mut db, |tx| accept(tx, &prepared)));
+            }
+            let raw = meta_get(db.conn(), &key(&reg.session.id)).unwrap().unwrap();
+            let mut broken: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            broken["view"]["phase"] = "parked".into();
+            let broken = broken.to_string();
+            meta_set(db.conn(), &key(&reg.session.id), &broken).unwrap();
+            assert!(status_at(db.conn(), "crew-a", &reg.session.id, crate::testkit::NOW).is_err());
+            assert!(!parked(db.conn(), &reg.session.id).unwrap());
+            assert!(
+                crate::admin_cases::get_at(
+                    db.conn(),
+                    &crewd_proto::AdminCaseGetParams {
+                        crew_id: "crew-a".into(),
+                        id: case.id
+                    },
+                    crate::testkit::NOW
+                )
+                .is_err()
+            );
+            ok(&mut db, |tx| recover_page(tx, None));
+            assert_eq!(
+                meta_get(db.conn(), &key(&reg.session.id)).unwrap().unwrap(),
+                broken
+            );
         }
     }
     #[test]
@@ -569,7 +820,7 @@ mod tests {
                 "retirement_fixture",
             )
         });
-        assert!(current(db.conn(), &s).unwrap());
+        assert!(current(db.conn(), &s, crate::testkit::NOW).unwrap());
         ok(&mut db, |tx| {
             crate::messages::announce_to_human(
                 tx,
@@ -579,7 +830,7 @@ mod tests {
                 "retirement_fixture",
             )
         });
-        assert!(!current(db.conn(), &s).unwrap());
+        assert!(!current(db.conn(), &s, crate::testkit::NOW).unwrap());
         assert!(!ok(&mut db, |tx| accept(tx, &s)));
         let fresh = ok(&mut db, |tx| prepare(tx, "w-a1", witness())).unwrap();
         assert_eq!(fresh.summary["truncated"], true);
@@ -590,4 +841,43 @@ mod tests {
                 .contains("other crew private evidence")
         );
     }
+}
+
+pub fn status(
+    c: &Connection,
+    crew: &str,
+    id: &str,
+) -> Result<crewd_proto::SessionRetirementStatus> {
+    status_at(c, crew, id, crewd_store::now_ms())
+}
+
+/// A case may display only the retirement receipt for its exact bound physical generation.
+pub(crate) fn case_record(
+    c: &Connection,
+    crew: &str,
+    id: &str,
+    now: i64,
+) -> Result<Option<RetirementView>> {
+    let Some(binding) = crate::admin_case_execution::binding(c, crew, id)? else {
+        return Ok(None);
+    };
+    let Some(generation) = crate::admin_case_execution::generation(c, &binding)? else {
+        return Ok(None);
+    };
+    let Some(raw) = record(c, binding.session_id())? else {
+        return Ok(None);
+    };
+    if raw.snapshot.actor.generation != generation || raw.view.generation != generation.to_string()
+    {
+        return Ok(None);
+    }
+    let mut status = status_at(c, crew, binding.session_id(), now)?.record;
+    let resolved = crate::admin_case_outcome::status_at(c, crew, id, now)?
+        .is_some_and(|o| o.phase == crewd_proto::AdminCaseOutcomePhase::Resolved);
+    if !resolved && let Some(r) = &mut status {
+        r.phase = Phase::Stale;
+        r.reason = Reason::StateChanged;
+        r.adopted = false;
+    }
+    Ok(status)
 }

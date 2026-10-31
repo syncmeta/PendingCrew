@@ -39,7 +39,7 @@ pub struct SessionRetirementStatus {
     pub session_id: String,
     pub record: Option<RetirementView>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RetirementView {
     pub decision_id: String,

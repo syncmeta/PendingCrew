@@ -305,7 +305,15 @@
     },
     "AdminCaseRetirement": {
       "enum": [
-        "not_started"
+        "not_started",
+        "prepared",
+        "dispatched",
+        "decision_ready",
+        "exit_requested",
+        "parked",
+        "unknown",
+        "stale",
+        "suppressed"
       ],
       "type": "string"
     },
@@ -521,6 +529,17 @@
         },
         "retirement": {
           "$ref": "#/$defs/AdminCaseRetirement"
+        },
+        "retirementRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetirementView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "revision": {
           "type": "string"

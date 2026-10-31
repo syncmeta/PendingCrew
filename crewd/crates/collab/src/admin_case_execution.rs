@@ -1213,3 +1213,18 @@ pub(crate) fn effect_receipts(c: &Connection, w: &ExecutionWitness) -> Result<Ve
     }
     Ok(out)
 }
+
+/// The persisted Core launch receipt, not a client projection or actor supplied string.
+pub(crate) fn generation(c: &Connection, w: &ExecutionWitness) -> Result<Option<u64>> {
+    let r = matching(c, w)?;
+    r.view
+        .generation
+        .map(|value| {
+            let n = value.parse::<u64>().map_err(|_| invalid())?;
+            if n.to_string() != value {
+                return Err(invalid());
+            }
+            Ok(n)
+        })
+        .transpose()
+}
