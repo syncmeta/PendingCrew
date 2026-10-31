@@ -304,6 +304,25 @@ impl Handle {
             .await
     }
 
+    pub async fn retirement_candidates(
+        &self,
+    ) -> Result<Vec<(String, crewd_collab::session_retirement::ActorWitness)>, ControlError> {
+        self.retirement_candidates_limited(64).await
+    }
+    pub async fn retirement_candidates_limited(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, crewd_collab::session_retirement::ActorWitness)>, ControlError> {
+        self.call(|reply| Cmd::RetirementCandidates { limit, reply })
+            .await
+    }
+    pub async fn retire(
+        &self,
+        snapshot: crewd_collab::session_retirement::Snapshot,
+    ) -> Result<bool, ControlError> {
+        self.call(|reply| Cmd::Retire { snapshot, reply }).await
+    }
+
     pub async fn start(
         &self,
         req: StartSession,

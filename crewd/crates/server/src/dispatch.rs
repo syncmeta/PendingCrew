@@ -758,6 +758,10 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        methods::SESSION_RETIREMENT_STATUS => {
+            let p: SessionRetirementStatusParams = parse_params(p)?;
+            read(state,move |c|crewd_collab::session_retirement::status(c,&p.crew_id,&p.session_id)).await
+        }
         methods::WORK_REASSIGNMENT_STATUS => {
             let p: ReassignmentStatusParams = parse_params(p)?;
             read(state,move |c|crewd_collab::work_reassignment::status(c,&p.crew_id,&p.id)).await

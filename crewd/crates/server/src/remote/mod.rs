@@ -1087,6 +1087,7 @@ fn allowed_method(method: &str) -> bool {
             | "session.codex.titleSet"
             | "session.codex.fork"
             | "session.usage"
+            | "session.retirementStatus"
             | "session.inspect"
             | "session.terminal.inspect"
             | "session.terminal.watch"

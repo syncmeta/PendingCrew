@@ -520,7 +520,35 @@ pub struct AnswerReport {
     pub now: Option<PendingDecision>,
 }
 
+// Scan source rows, not just safe matches; no free provider slots means no cursor advance.
+fn retirement_source_page(
+    ids: impl Iterator<Item = String>,
+    after: &mut Option<String>,
+    limit: usize,
+) -> Vec<String> {
+    let limit = limit.min(64);
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut ids: Vec<_> = ids
+        .filter(|id| after.as_ref().is_none_or(|a| id > a))
+        .collect();
+    ids.sort();
+    let more = ids.len() > limit;
+    ids.truncate(limit);
+    *after = if more { ids.last().cloned() } else { None };
+    ids
+}
+
 pub enum Cmd {
+    RetirementCandidates {
+        limit: usize,
+        reply: Reply<Vec<(String, crewd_collab::session_retirement::ActorWitness)>>,
+    },
+    Retire {
+        snapshot: crewd_collab::session_retirement::Snapshot,
+        reply: Reply<bool>,
+    },
     NotificationClaim {
         candidate: Box<crewd_store::notifications::Claimed>,
         reply: Reply<Option<crewd_store::notifications::Claimed>>,
@@ -826,6 +854,11 @@ pub struct Core<P: Port> {
     pub(crate) preparing: usize,
     /// 正在建 worktree 的「起机长」请求所在的机组：同一机组的第二个机长此时就该被拒。
     pub(crate) captain_pending: BTreeSet<String>,
+    retirement_incarnation: String,
+    retirement_activity: HashMap<String, u64>,
+    retirement_after: Option<String>,
+    retiring: HashMap<String, crewd_collab::session_retirement::Snapshot>,
+    retirement_receipts: HashMap<String, (crewd_collab::session_retirement::Snapshot, bool)>,
     pub(crate) next_generator: u64,
     pub(crate) public_fences: HashMap<String, super::public_control::RuntimeFence>,
     pub(crate) public_physical_controls:
@@ -932,6 +965,11 @@ impl<P: Port> Core<P> {
             starting: HashMap::new(),
             preparing: 0,
             captain_pending: BTreeSet::new(),
+            retirement_incarnation: uuid::Uuid::new_v4().to_string(),
+            retirement_activity: HashMap::new(),
+            retirement_after: None,
+            retiring: HashMap::new(),
+            retirement_receipts: HashMap::new(),
             next_generator: 0,
             public_fences: HashMap::new(),
             public_physical_controls: HashMap::new(),
@@ -966,6 +1004,35 @@ impl<P: Port> Core<P> {
     }
 
     pub async fn handle(&mut self, input: Input) {
+        match &input {
+            Input::Cmd(
+                Cmd::Nudge { session, .. }
+                | Cmd::Stop { session, .. }
+                | Cmd::Resume { session, .. }
+                | Cmd::Answer { session, .. }
+                | Cmd::Interrupt { session, .. }
+                | Cmd::RespondRequest { session, .. }
+                | Cmd::SetProfile { session, .. }
+                | Cmd::SetCaptain { session, .. },
+            )
+            | Input::Collab(CollabFact::WakeEnqueued { session })
+            | Input::Progress { session } => {
+                self.retirement_activity
+                    .entry(session.clone())
+                    .and_modify(|n| *n = n.saturating_add(1))
+                    .or_insert(1);
+            }
+            Input::Cmd(Cmd::PublicExecution { .. }) => {
+                for id in self.live.keys() {
+                    self.retirement_activity
+                        .entry(id.clone())
+                        .and_modify(|n| *n = n.saturating_add(1))
+                        .or_insert(1);
+                }
+            }
+            _ => {}
+        }
+
         // 别人改了队列（M3a / M3b / M4b 入队、订阅落后）或定时拍：下一拍的缓存作废（[`DueCache`]）。
         if matches!(
             input,
@@ -1119,6 +1186,17 @@ impl<P: Port> Core<P> {
             }
             Cmd::PublicTarget { session, reply } => {
                 let result = self.public_target(&session).await;
+                let _ = reply.send(result);
+            }
+            Cmd::RetirementCandidates { limit, reply } => {
+                let candidates = self.retirement_candidates(limit);
+                let _ = reply.send(Ok(candidates));
+            }
+            Cmd::Retire { snapshot, reply } => {
+                let result = self
+                    .retire_idle(snapshot)
+                    .await
+                    .map_err(ControlError::from_port);
                 let _ = reply.send(result);
             }
             Cmd::Start { req, origin, reply } => self.start_new(req, origin, reply).await,
@@ -1658,6 +1736,111 @@ impl<P: Port> Core<P> {
         Ok(())
     }
 
+    fn retirement_witness(
+        &self,
+        session: &str,
+    ) -> Option<crewd_collab::session_retirement::ActorWitness> {
+        if self.shutting_down
+            || self.starting.contains_key(session)
+            || self.terminal_obligations.contains_key(session)
+            || self.retirement_receipts.contains_key(session)
+            || self.held.contains(session)
+            || self.decisions.contains_key(session)
+            || self
+                .public_physical_controls
+                .get(session)
+                .is_some_and(|c| !c.is_empty())
+            || self
+                .public_fences
+                .get(session)
+                .is_some_and(|f| f.manual || f.metadata.is_some())
+            || self
+                .cfg
+                .admission
+                .as_ref()
+                .is_some_and(|a| !a.contains(session))
+        {
+            return None;
+        }
+        let l = self.live.get(session)?;
+        if l.agent_session_id.is_empty()
+            || l.working
+            || l.inflight.is_some()
+            || !l.writes.is_empty()
+            || l.writing
+            || l.nudge_pending.is_some()
+            || l.input_draft.is_some()
+            || l.decision.is_some()
+            || l.health.is_some()
+            || l.stopping
+            || l.halting
+            || l.hibernate_cut
+            || l.refused
+        {
+            return None;
+        }
+        Some(crewd_collab::session_retirement::ActorWitness {
+            incarnation: self.retirement_incarnation.clone(),
+            generation: l.generator,
+            activity: self
+                .retirement_activity
+                .get(session)
+                .copied()
+                .unwrap_or(0)
+                .checked_add(
+                    self.public_fences
+                        .get(session)
+                        .map(|f| f.revision)
+                        .unwrap_or(0),
+                )?
+                .checked_add(
+                    self.public_fences
+                        .get(session)
+                        .map(|f| f.physical_epoch)
+                        .unwrap_or(0),
+                )?,
+        })
+    }
+    fn retirement_candidates(
+        &mut self,
+        limit: usize,
+    ) -> Vec<(String, crewd_collab::session_retirement::ActorWitness)> {
+        let ids =
+            retirement_source_page(self.live.keys().cloned(), &mut self.retirement_after, limit);
+        ids.into_iter()
+            .filter_map(|id| self.retirement_witness(&id).map(|w| (id, w)))
+            .collect()
+    }
+    async fn retire_idle(
+        &mut self,
+        snapshot: crewd_collab::session_retirement::Snapshot,
+    ) -> anyhow::Result<bool> {
+        if self.retirement_witness(&snapshot.session).as_ref() != Some(&snapshot.actor) {
+            self.port.retirement_stale(&snapshot).await?;
+            return Ok(false);
+        }
+        if !self.port.accept_retirement(&snapshot).await? {
+            return Ok(false);
+        }
+        // No await between the final authority transaction and fencing/stopping.
+        let session = snapshot.session.clone();
+        let l = self
+            .live
+            .get_mut(&session)
+            .expect("validated actor generation");
+        l.handle.fence_inputs();
+        l.halting = true;
+        refuse_queued_nudges(l, &session);
+        let result = l.handle.stop();
+        self.retiring.insert(session.clone(), snapshot.clone());
+        if result.is_err() {
+            self.retiring.remove(&session);
+            self.port.confirm_retirement_exit(&snapshot, false).await?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
     /// crewd 自己叫停一个在跑的 session（停机，[`Core::begin_shutdown`]）：不改 desired，也不让驱动层 abandon 发来的
     /// `Working(false)` 抹掉 `was_working`——下次启动问人时要知道它是被打断的。带着的唤醒退出时原样退回 pending。
     pub(crate) fn halt(&mut self, session: &str) {
@@ -2094,6 +2277,13 @@ impl<P: Port> Core<P> {
         } else {
             Default::default()
         };
+        if let Some((snapshot, confirmed)) = self.retirement_receipts.get(&row.id).cloned() {
+            self.port
+                .confirm_retirement_exit(&snapshot, confirmed)
+                .await?;
+            self.retirement_receipts.remove(&row.id);
+        }
+        self.port.retirement_resumed(&row.id).await?;
         let generator = self
             .next_generator
             .checked_add(1)
@@ -2715,6 +2905,10 @@ impl<P: Port> Core<P> {
         {
             return Ok(());
         }
+        self.retirement_activity
+            .entry(session.to_string())
+            .and_modify(|n| *n = n.saturating_add(1))
+            .or_insert(1);
         self.observe_public_event(session, &event);
         let notification_generation = self.current_public_target(session).generation;
         self.settle_public_physical_event(session, generator, &event)
@@ -3002,6 +3196,17 @@ impl<P: Port> Core<P> {
         let Some(mut l) = self.live.remove(session) else {
             return Ok(());
         };
+        if let Some(snapshot) = self.retiring.remove(session)
+            && snapshot.actor.generation == l.generator
+            && let Err(e) = self
+                .port
+                .confirm_retirement_exit(&snapshot, info.is_some())
+                .await
+        {
+            eprintln!("crewd: retirement exit receipt retained: {e}");
+            self.retirement_receipts
+                .insert(session.to_string(), (snapshot, info.is_some()));
+        }
         if info.is_none() {
             self.public_physical_lost(
                 session,
@@ -3382,6 +3587,23 @@ impl<P: Port> Core<P> {
     }
 
     pub(crate) async fn on_tick(&mut self) -> anyhow::Result<()> {
+        let receipts: Vec<_> = self
+            .retirement_receipts
+            .iter()
+            .take(64)
+            .map(|(id, r)| (id.clone(), r.clone()))
+            .collect();
+        for (id, (snapshot, confirmed)) in receipts {
+            if self
+                .port
+                .confirm_retirement_exit(&snapshot, confirmed)
+                .await
+                .is_ok()
+            {
+                self.retirement_receipts.remove(&id);
+            }
+        }
+
         let now = self.now();
         self.timers.retain(|t| *t > now);
         self.notify_drafts().await?;
@@ -6070,5 +6292,30 @@ mod tests {
             }
         );
         assert!(!rig.exec.lock().raws.contains_key("cap"), "回车没按");
+    }
+}
+
+#[cfg(test)]
+mod retirement_paging_tests {
+    use super::retirement_source_page;
+    #[test]
+    fn sixty_five_session_sources_are_fair_with_thirty_two_reserved_slots() {
+        let ids: Vec<_> = (0..65).map(|i| format!("session-{i:03}")).collect();
+        let mut after = None;
+        let mut seen = Vec::new();
+        for expected in [32, 32, 1] {
+            let page = retirement_source_page(ids.clone().into_iter(), &mut after, 32);
+            assert_eq!(page.len(), expected);
+            seen.extend(page);
+        }
+        assert_eq!(seen, ids);
+        assert!(after.is_none());
+        let first = retirement_source_page(ids.clone().into_iter(), &mut after, 32);
+        let saved = after.clone();
+        assert!(retirement_source_page(ids.clone().into_iter(), &mut after, 0).is_empty());
+        assert_eq!(after, saved);
+        let second = retirement_source_page(ids.into_iter(), &mut after, 32);
+        assert_eq!(first.last().unwrap(), "session-031");
+        assert_eq!(second.first().unwrap(), "session-032");
     }
 }

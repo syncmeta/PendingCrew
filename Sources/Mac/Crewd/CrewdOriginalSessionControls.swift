@@ -22,6 +22,7 @@ struct CrewdOriginalSessionControls: View {
                workspace.sessions.first(where: { $0["id"].string == backend.sessionID })?["resumeFailedAt"] != .null {
                 Text(profile?.backend == "codex" ? "此前恢复被拒绝；保留原 thread，不会改为新对话或重发首条任务。":"此前恢复未确认或被拒绝；请在原会话详情核对本Core的恢复语义与原请求。").font(.caption).foregroundStyle(.orange)
             }
+            CrewdRetirementView(workspace:workspace,sessionID:backend.sessionID)
             CrewdCodexSessionControls(workspace:workspace,sessionID:backend.sessionID)
             CrewdClaudeSessionControls(workspace:workspace,sessionID:backend.sessionID,legacyResume:(backend.status != .running && active && workspace.controlTargets[backend.sessionID] != nil) ? {backend.resume()}:nil)
             if backend.status != .running,profile?.backend != "existingClaudePty" {

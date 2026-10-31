@@ -52,6 +52,13 @@ impl<P: Port> Core<P> {
             }
             !r.crew_removed
         });
+        let mut awake = Vec::new();
+        for row in running {
+            if !self.port.retirement_parked(&row.id).await? {
+                awake.push(row);
+            }
+        }
+        let running = awake;
         let rows = policy::restart_order(running.iter().map(restart_row).collect());
         self.held = rows.iter().map(|r| r.session.clone()).collect();
         // 上次是休眠停下的（C26）：询问标成休眠，恢复时给休眠附言。读不出来只记日志、按普通重启问。

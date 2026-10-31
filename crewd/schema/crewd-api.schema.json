@@ -11989,6 +11989,67 @@
       ],
       "type": "string"
     },
+    "RetirementPhase": {
+      "enum": [
+        "prepared",
+        "dispatched",
+        "decision_ready",
+        "exit_requested",
+        "parked",
+        "stale",
+        "unknown",
+        "suppressed"
+      ],
+      "type": "string"
+    },
+    "RetirementReason": {
+      "enum": [
+        "prepared",
+        "answered",
+        "low_confidence",
+        "provider_unavailable",
+        "unconfigured",
+        "restart_unknown",
+        "state_changed",
+        "stopped",
+        "exit_unknown"
+      ],
+      "type": "string"
+    },
+    "RetirementView": {
+      "properties": {
+        "adopted": {
+          "type": "boolean"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/RetirementPhase"
+        },
+        "probability": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/RetirementReason"
+        }
+      },
+      "required": [
+        "decisionId",
+        "phase",
+        "reason",
+        "adopted",
+        "generation"
+      ],
+      "type": "object"
+    },
     "Role": {
       "enum": [
         "captain",
@@ -12663,6 +12724,47 @@
         "sessionId",
         "fingerprint",
         "response"
+      ],
+      "type": "object"
+    },
+    "SessionRetirementStatus": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "record": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetirementView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "SessionRetirementStatusParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "sessionId"
       ],
       "type": "object"
     },
@@ -16276,6 +16378,14 @@
       },
       "result": {
         "$ref": "#/$defs/Empty"
+      }
+    },
+    "session.retirementStatus": {
+      "params": {
+        "$ref": "#/$defs/SessionRetirementStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SessionRetirementStatus"
       }
     },
     "session.start": {

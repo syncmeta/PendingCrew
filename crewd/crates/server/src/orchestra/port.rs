@@ -424,6 +424,31 @@ pub struct ManagedResumeCut {
     pub message_seq: i64,
 }
 pub trait Port: Send + Sync + 'static {
+    fn accept_retirement(
+        &self,
+        _s: &crewd_collab::session_retirement::Snapshot,
+    ) -> impl Future<Output = Result<bool>> + Send {
+        async { Ok(false) }
+    }
+    fn retirement_stale(
+        &self,
+        _s: &crewd_collab::session_retirement::Snapshot,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
+    fn confirm_retirement_exit(
+        &self,
+        _s: &crewd_collab::session_retirement::Snapshot,
+        _confirmed: bool,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
+    fn retirement_resumed(&self, _session: &str) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
+    fn retirement_parked(&self, _session: &str) -> impl Future<Output = Result<bool>> + Send {
+        async { Ok(false) }
+    }
     // —— sessions 行
     fn session(&self, id: &str) -> impl Future<Output = Result<Option<SessionRow>>> + Send;
     fn sessions_desired_running(&self) -> impl Future<Output = Result<Vec<SessionRow>>> + Send;
@@ -607,7 +632,9 @@ pub trait Port: Send + Sync + 'static {
     fn restart_answer(&self, id: i64) -> impl Future<Output = Result<Option<bool>>> + Send;
     /// 各机组到点的默认方案按默认办（M3a `asks::apply_due_defaults`；控制者裁定由 M3c 的定时拍调）。
     fn apply_due_defaults(&self) -> impl Future<Output = Result<()>> + Send;
-    fn advance_patrol(&self) -> impl Future<Output = Result<()>> + Send { async { Ok(()) } }
+    fn advance_patrol(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
     fn enqueue_work_checkpoints(&self) -> impl Future<Output = Result<()>> + Send {
         async { Ok(()) }
     }

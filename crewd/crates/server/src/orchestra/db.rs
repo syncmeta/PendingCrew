@@ -222,6 +222,36 @@ fn acked_origins(b: &Batch) -> Vec<String> {
 }
 
 impl Port for DbPort {
+    async fn accept_retirement(&self, s: &collab::session_retirement::Snapshot) -> Result<bool> {
+        let s = s.clone();
+        self.write(move |tx| collab::session_retirement::accept(tx, &s))
+            .await
+    }
+    async fn retirement_stale(&self, s: &collab::session_retirement::Snapshot) -> Result<()> {
+        let s = s.clone();
+        self.write(move |tx| collab::session_retirement::stale(tx, &s))
+            .await
+    }
+    async fn confirm_retirement_exit(
+        &self,
+        s: &collab::session_retirement::Snapshot,
+        confirmed: bool,
+    ) -> Result<()> {
+        let s = s.clone();
+        self.write(move |tx| collab::session_retirement::confirm_exit(tx, &s, confirmed))
+            .await
+    }
+    async fn retirement_resumed(&self, id: &str) -> Result<()> {
+        let id = id.to_string();
+        self.write(move |tx| collab::session_retirement::resumed(tx, &id))
+            .await
+    }
+    async fn retirement_parked(&self, id: &str) -> Result<bool> {
+        let id = id.to_string();
+        self.read(move |c| collab::session_retirement::parked(c, &id))
+            .await
+    }
+
     async fn session(&self, id: &str) -> Result<Option<SessionRow>> {
         let id = id.to_string();
         self.read(move |c| {

@@ -3,6 +3,7 @@
 mod configuration;
 mod coordination;
 mod reassignment;
+mod retirement;
 pub(crate) use configuration::handle;
 use crewd_collab::judgments::InputSnapshot;
 use crewd_jev::provider::{
@@ -239,6 +240,7 @@ impl Runtime {
         state.collab(crewd_collab::work_coordination::observe_reports).await?;
         this.recover_coordination().await?;
         this.recover_reassignment().await?;
+        this.recover_retirement().await?;
         this.scan_pending(true).await?;
         let weak = Arc::downgrade(&this);
         *this.pump.lock().await = Some(tokio::spawn(async move {
@@ -254,6 +256,9 @@ impl Runtime {
                         }
                         if let Err(e) = runtime.resume_pending_reassignment().await {
                             eprintln!("crewd: reassignment pending scan failed: {e}");
+                        }
+                        if let Err(e) = runtime.scan_retirement().await {
+                            eprintln!("crewd: retirement scan failed: {e}");
                         }
                         continue;
                     }
