@@ -675,7 +675,7 @@ mod tests {
             codex_options: None,
 
             crew_id: "c1".into(),
-            captain: false,
+            role: crewd_proto::Role::Worker,
             executor: "claude".into(),
             brief: "合成任务甲".into(),
             title: Some("w9".into()),
@@ -724,7 +724,7 @@ mod tests {
             codex_options: None,
 
             crew_id: "c1".into(),
-            captain: false,
+            role: crewd_proto::Role::Worker,
             executor: "claude".into(),
             brief: "合成任务甲".into(),
             title: None,
@@ -1046,7 +1046,7 @@ mod tests {
                     codex_options: None,
 
                     crew_id: "c1".into(),
-                    captain: false,
+                    role: crewd_proto::Role::Worker,
                     executor: "claude".into(),
                     brief: "合成任务甲".into(),
                     title: None,

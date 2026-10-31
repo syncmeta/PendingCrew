@@ -290,7 +290,7 @@ mod tests {
             .insert_session(NewSession {
                 codex_options: None,
                 crew_id: "c1".into(),
-                captain: true,
+                role: crewd_proto::Role::Captain,
                 executor: "claude".into(),
                 brief: String::new(),
                 title: Some("busy".into()),

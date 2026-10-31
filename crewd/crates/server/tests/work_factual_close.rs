@@ -341,7 +341,7 @@ async fn closure_releases_real_blockers_and_delivers_one_owner_notice_only_after
         .start(
             StartSession {
                 crew_id: f.crew.clone(),
-                captain: false,
+                role: crewd_proto::Role::Worker,
                 executor: "claude".into(),
                 brief: "synthetic closure notification recipient".into(),
                 title: Some("close worker".into()),

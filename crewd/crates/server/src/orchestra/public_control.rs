@@ -666,7 +666,7 @@ impl<P: Port> Core<P> {
         };
         let req = super::core::StartSession {
             crew_id: params.crew_id.clone(),
-            captain: params.role == crewd_proto::Role::Captain,
+            role: params.role,
             executor: params.executor.clone(),
             brief: params.brief.clone(),
             title: params.title.clone(),
@@ -698,7 +698,7 @@ impl<P: Port> Core<P> {
         let receipt = call.dispatch().await?;
         if let Some(base) = base {
             self.preparing += 1;
-            if req.captain {
+            if req.role == crewd_proto::Role::Captain {
                 self.captain_pending.insert(req.crew_id.clone());
             }
             let worktrees = self.hooks.worktrees.clone();
@@ -737,7 +737,7 @@ impl<P: Port> Core<P> {
                     codex_options: req.codex_options,
 
                     crew_id: req.crew_id,
-                    captain: req.captain,
+                    role: req.role,
                     executor: req.executor,
                     brief: req.brief,
                     title: req.title,

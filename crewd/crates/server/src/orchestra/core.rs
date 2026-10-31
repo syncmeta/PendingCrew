@@ -330,7 +330,7 @@ pub enum Origin {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartSession {
     pub crew_id: String,
-    pub captain: bool,
+    pub role: crewd_proto::Role,
     pub executor: String,
     pub brief: String,
     pub title: Option<String>,
@@ -1083,7 +1083,7 @@ impl<P: Port> Core<P> {
             }
             Input::PublicWorktreeReady { req, call, result } => {
                 self.preparing = self.preparing.saturating_sub(1);
-                if req.captain {
+                if req.role == crewd_proto::Role::Captain {
                     self.captain_pending.remove(&req.crew_id);
                 }
                 let outcome = match result {
@@ -1408,7 +1408,7 @@ impl<P: Port> Core<P> {
             return;
         };
         self.preparing += 1;
-        if req.captain {
+        if req.role == crewd_proto::Role::Captain {
             self.captain_pending.insert(req.crew_id.clone());
         }
         let (worktrees, tx) = (self.hooks.worktrees.clone(), self.inbox.clone());
@@ -1425,6 +1425,11 @@ impl<P: Port> Core<P> {
         req: &StartSession,
         origin: Origin,
     ) -> Result<Option<PathBuf>, ControlError> {
+        if origin == Origin::Agent && req.role == crewd_proto::Role::Admin {
+            return Err(ControlError::Invalid(
+                Refusal::new(Code::ResourceInvalid).arg("field", "role"),
+            ));
+        }
         if origin == Origin::Agent && self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
             return Err(ControlError::ShuttingDown);
         }
@@ -1463,7 +1468,7 @@ impl<P: Port> Core<P> {
         self.check_cap(origin)?;
         // M3a 的 `sessions::register` 对「机组已有机长、又要起一个机长」回 `Conflict`：先查，给一个说得清的错
         // （不然它会在 worktree 建好之后才冒出来，还被包成 Internal）。不建 worktree、不写行、不起进程。
-        if req.captain
+        if req.role == crewd_proto::Role::Captain
             && (self.captain_pending.contains(&req.crew_id)
                 || self
                     .port
@@ -1494,7 +1499,7 @@ impl<P: Port> Core<P> {
         result: Result<PathBuf, crate::orchestra::worktree::WorktreeError>,
     ) {
         self.preparing = self.preparing.saturating_sub(1);
-        if req.captain {
+        if req.role == crewd_proto::Role::Captain {
             self.captain_pending.remove(&req.crew_id);
         }
         let r = match result {
@@ -1530,7 +1535,7 @@ impl<P: Port> Core<P> {
             .map_err(kept)?;
         // 建 worktree 期间机长指针可能变了（换机长）：再查一次。
         if worktree.is_some()
-            && req.captain
+            && req.role == crewd_proto::Role::Captain
             && self
                 .port
                 .captain(&req.crew_id)
@@ -1545,7 +1550,7 @@ impl<P: Port> Core<P> {
             .port
             .insert_session(NewSession {
                 crew_id: req.crew_id,
-                captain: req.captain,
+                role: req.role,
                 executor: req.executor,
                 brief: req.brief,
                 title: req.title,
@@ -4014,7 +4019,7 @@ mod tests {
             codex_options: None,
 
             crew_id: "c1".into(),
-            captain: false,
+            role: crewd_proto::Role::Worker,
             executor: executor.into(),
             brief: "合成任务甲".into(),
             title: Some("w-new".into()),
@@ -4419,7 +4424,7 @@ mod tests {
         let req = StartSession {
             codex_options: None,
 
-            captain: true,
+            role: crewd_proto::Role::Captain,
             isolation: true,
             ..start("claude")
         };
@@ -4444,7 +4449,7 @@ mod tests {
         let req = StartSession {
             codex_options: None,
 
-            captain: true,
+            role: crewd_proto::Role::Captain,
             ..start("claude")
         };
         let err = rig
@@ -4557,7 +4562,7 @@ mod tests {
         let req = StartSession {
             codex_options: None,
 
-            captain: true,
+            role: crewd_proto::Role::Captain,
             isolation: true,
             ..start("claude")
         };

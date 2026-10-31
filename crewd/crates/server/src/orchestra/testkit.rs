@@ -547,7 +547,9 @@ impl MemPort {
 
 impl Port for MemPort {
     async fn advance_patrol(&self) -> Result<()> {
-        self.patrol_ticks.fetch_add(1,std::sync::atomic::Ordering::SeqCst);Ok(())
+        self.patrol_ticks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 
     async fn session(&self, id: &str) -> Result<Option<SessionRow>> {
@@ -586,7 +588,7 @@ impl Port for MemPort {
         let row = SessionRow {
             id: format!("new-{}", st.next_session),
             crew_id: s.crew_id,
-            captain: s.captain,
+            captain: s.role == crewd_proto::Role::Captain,
             executor: s.executor,
             display_name: s.title,
             agent_session_id: None,
@@ -3128,7 +3130,7 @@ mod self_tests {
                 codex_options: None,
 
                 crew_id: "c1".into(),
-                captain: false,
+                role: crewd_proto::Role::Worker,
                 executor: "claude".into(),
                 brief: "合成任务甲".into(),
                 title: None,
@@ -3480,7 +3482,11 @@ mod self_tests {
             codex_options: None,
 
             crew_id: "c1".into(),
-            captain,
+            role: if captain {
+                crewd_proto::Role::Captain
+            } else {
+                crewd_proto::Role::Worker
+            },
             executor: "claude".into(),
             brief: "合成任务甲".into(),
             title: Some(title.into()),
@@ -3642,7 +3648,11 @@ mod self_tests {
             codex_options: None,
 
             crew_id: "c1".into(),
-            captain,
+            role: if captain {
+                crewd_proto::Role::Captain
+            } else {
+                crewd_proto::Role::Worker
+            },
             executor: "claude".into(),
             brief: "合成任务甲".into(),
             title: Some(title.into()),
@@ -3712,11 +3722,22 @@ mod self_tests {
 
 #[tokio::test]
 async fn patrol_tick_runs_without_executor_admission() {
-    let admission=Arc::new(crate::lifecycle::Admission::default());
-    let cfg=super::OrchestraConfig{admission:Some(admission.clone()),..super::OrchestraConfig::for_tests()};
-    let mut rig=Rig::with_cfg(Hooks::default(),cfg).await;
-    let before=rig.port.patrol_ticks.load(std::sync::atomic::Ordering::SeqCst);
+    let admission = Arc::new(crate::lifecycle::Admission::default());
+    let cfg = super::OrchestraConfig {
+        admission: Some(admission.clone()),
+        ..super::OrchestraConfig::for_tests()
+    };
+    let mut rig = Rig::with_cfg(Hooks::default(), cfg).await;
+    let before = rig
+        .port
+        .patrol_ticks
+        .load(std::sync::atomic::Ordering::SeqCst);
     rig.core.on_tick().await.unwrap();
-    assert_eq!(rig.port.patrol_ticks.load(std::sync::atomic::Ordering::SeqCst),before+1);
+    assert_eq!(
+        rig.port
+            .patrol_ticks
+            .load(std::sync::atomic::Ordering::SeqCst),
+        before + 1
+    );
     assert!(!admission.any());
 }

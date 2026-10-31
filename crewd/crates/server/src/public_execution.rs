@@ -164,7 +164,7 @@ impl PublicExecution {
         if !expected
             || self.request.runtime_binding_id != owner.runtime_binding_id
             || original.crew_id != session.crew_id
-            || (original.role == crewd_proto::Role::Captain) != session.captain
+            || original.role != session.role
             || original.executor != session.executor
             || original.brief != session.brief
             || original.title != session.title

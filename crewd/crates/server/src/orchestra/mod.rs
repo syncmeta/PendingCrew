@@ -682,7 +682,7 @@ mod tests {
                 codex_options: None,
 
                 crew_id: "c1".into(),
-                captain: true,
+                role: crewd_proto::Role::Captain,
                 executor: "claude".into(),
                 brief: String::new(),
                 title: Some("cap".into()),
@@ -736,7 +736,7 @@ mod tests {
                 codex_options: None,
 
                 crew_id: "c1".into(),
-                captain: false,
+                role: crewd_proto::Role::Worker,
                 executor: "claude".into(),
                 brief: String::new(),
                 title: Some("w1".into()),
@@ -789,7 +789,11 @@ mod tests {
                     codex_options: None,
 
                     crew_id: "c1".into(),
-                    captain,
+                    role: if captain {
+                        crewd_proto::Role::Captain
+                    } else {
+                        crewd_proto::Role::Worker
+                    },
                     executor: "claude".into(),
                     brief: String::new(),
                     title: Some(title.into()),
@@ -864,7 +868,7 @@ mod tests {
                 codex_options: None,
 
                 crew_id: "c1".into(),
-                captain: true,
+                role: crewd_proto::Role::Captain,
                 executor: "claude".into(),
                 brief: String::new(),
                 title: Some("cap".into()),
@@ -912,7 +916,7 @@ mod tests {
                 codex_options: None,
 
                 crew_id: "c1".into(),
-                captain: true,
+                role: crewd_proto::Role::Captain,
                 executor: "claude".into(),
                 brief: String::new(),
                 title: Some("cap".into()),
@@ -970,7 +974,7 @@ mod tests {
                 codex_options: None,
 
                 crew_id: "c1".into(),
-                captain: false,
+                role: crewd_proto::Role::Worker,
                 executor: "claude".into(),
                 brief: String::new(),
                 title: Some("w1".into()),

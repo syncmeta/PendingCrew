@@ -84,7 +84,7 @@ impl Rig {
                     codex_options: None,
 
                     crew_id: f.crew.clone(),
-                    captain: false,
+                    role: crewd_proto::Role::Worker,
                     executor: "claude".into(),
                     brief: "synthetic actor acceptance".into(),
                     title: Some("actor owner".into()),

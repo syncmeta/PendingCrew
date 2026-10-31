@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock};
 
 use crewd_exec::health::HealthKind;
 use crewd_exec::session::HeldDraft;
-use crewd_proto::{DecisionView, HealthKindView, HealthView, Role, Session, SessionLive};
+use crewd_proto::{DecisionView, HealthKindView, HealthView, Session, SessionLive};
 use crewd_term::PendingDecision;
 
 use super::Handle;
@@ -120,7 +120,7 @@ impl SessionControl for OrchestraControl {
                 codex_options: None,
 
                 crew_id: req.crew_id,
-                captain: req.role == Role::Captain,
+                role: req.role,
                 executor: req.executor,
                 brief: req.brief,
                 title: req.title,
@@ -261,6 +261,7 @@ pub fn decision_view(d: &PendingDecision) -> DecisionView {
 
 #[cfg(test)]
 mod tests {
+    use crewd_proto::Role;
 
     #[tokio::test]
     async fn s4_control_locale_real_sql_history() {

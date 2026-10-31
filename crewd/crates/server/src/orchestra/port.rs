@@ -65,7 +65,7 @@ impl SessionRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewSession {
     pub crew_id: String,
-    pub captain: bool,
+    pub role: crewd_proto::Role,
     pub executor: String,
     pub brief: String,
     pub title: Option<String>,

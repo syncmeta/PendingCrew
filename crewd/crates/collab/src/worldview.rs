@@ -180,8 +180,8 @@ fn blocks(ctx: &WorldCtx) -> Blocks {
     let role = match ctx.role {
         Role::Captain if ctx.management_crew => f.get("role.captain.management"),
         Role::Captain => f.get("role.captain"),
-        // Admin has no tools of its own in M3 and reads as a worker.
-        Role::Worker | Role::Admin => f.get("role.worker"),
+        Role::Worker => f.get("role.worker"),
+        Role::Admin => f.get("role.admin"),
     }
     .to_string();
     let captain = match (ctx.role, &ctx.captain_name) {
@@ -337,6 +337,19 @@ mod tests {
     use super::*;
     use crate::prompts::placeholders;
     use crate::testkit::store;
+
+    #[test]
+    fn admin_identity_is_distinct_in_launch_and_live_worldviews() {
+        let db = store();
+        db.conn().execute("UPDATE sessions SET role='admin' WHERE id='w-a1'", []).unwrap();
+        for locale in [Locale::Zh, Locale::En] {
+            let ctx = context_for(db.conn(), "w-a1", locale).unwrap();
+            assert_eq!(ctx.role, Role::Admin);
+            let worker = file(locale).get("role.worker");
+            assert!(!render(&ctx).contains(worker));
+            assert!(!render_live(&ctx).contains(worker));
+        }
+    }
 
     #[test]
     fn context_collects_crew_lineage_channels_and_where_to_find_the_human() {

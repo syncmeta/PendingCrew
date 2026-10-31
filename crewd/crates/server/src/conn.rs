@@ -748,7 +748,8 @@ async fn request_step(
             if agent.is_attached()
                 && matches!(
                     req.method.as_str(),
-                    methods::TODO_ATTRIBUTES_GET
+                    crewd_proto::orchestra::methods::SESSION_START
+                        | methods::TODO_ATTRIBUTES_GET
                         | methods::TODO_ASSIGN
                         | methods::TODO_SET_STATE
                         | methods::HUMAN_TASK_CREATE

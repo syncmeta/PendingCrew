@@ -1410,7 +1410,7 @@ impl Walk {
                         codex_options: None,
 
                         crew_id: "c".into(),
-                        captain: false,
+                        role: crewd_proto::Role::Worker,
                         executor: "claude".into(),
                         brief: "sim start".into(),
                         title: None,

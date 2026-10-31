@@ -423,7 +423,7 @@ impl TransferActorRig {
                     codex_options: None,
 
                     crew_id: f.crew.clone(),
-                    captain: true,
+                    role: crewd_proto::Role::Captain,
                     executor: "claude".into(),
                     brief: "synthetic actor acceptance".into(),
                     title: Some("actor owner".into()),

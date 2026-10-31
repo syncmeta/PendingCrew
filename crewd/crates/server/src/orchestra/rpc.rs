@@ -14,7 +14,7 @@ use crewd_proto::orchestra::{
     SettingsPatch, TargetView, WakeBlocker, WakeKindView, WakeListParams, WakeListResult,
     WakePriorityView, WakeStateView, WakeView, methods,
 };
-use crewd_proto::{Empty, Role, RpcError, parse_no_params, parse_params, parse_params_or_default};
+use crewd_proto::{Empty, RpcError, parse_no_params, parse_params, parse_params_or_default};
 use crewd_wake::breaker::{edge_id, edge_parts};
 use crewd_wake::explain::Blocker;
 use crewd_wake::text::Lang;
@@ -443,7 +443,7 @@ pub async fn call(
             }
             let req = StartSession {
                 crew_id: p.crew_id,
-                captain: p.role == Role::Captain,
+                role: p.role,
                 executor: p.executor,
                 brief: p.brief,
                 title: p.title,
@@ -595,6 +595,55 @@ pub async fn call(
 
 #[cfg(test)]
 mod tests {
+    use crewd_proto::Role;
+    #[tokio::test]
+    async fn admin_start_preserves_role_through_real_core_and_dbport() {
+        let (st, port, _dir) = crate::orchestra::db::fixture::seeded().await;
+        let exec = StandIn::default();
+        let (h, actor) = spawn(
+            Arc::new(port),
+            Executors::new().with("claude", Arc::new(exec)),
+            Hooks::default(),
+            Arc::new(ManualClock::new(T0)),
+            OrchestraConfig::for_tests(),
+        )
+        .await
+        .unwrap();
+        let result=rpc(&h,&st,methods::SESSION_START,json!({"crewId":"c-1","role":"admin","executor":"claude","title":"Factual audit","brief":"Check facts","isolation":false})).await;
+        let refused = h
+            .start(
+                StartSession {
+                    crew_id: "c-1".into(),
+                    role: Role::Admin,
+                    executor: "claude".into(),
+                    brief: "not self authorized".into(),
+                    title: Some("Agent audit".into()),
+                    model: None,
+                    effort: None,
+                    isolation: false,
+                    codex_options: None,
+                },
+                Origin::Agent,
+            )
+            .await;
+        assert!(
+            refused.is_err(),
+            "agent cannot self-grant administrative role"
+        );
+        assert!(h.shutdown(Duration::from_secs(3)).await);
+        actor.finished().await.unwrap();
+        let started: crewd_proto::Session = serde_json::from_value(result.unwrap()).unwrap();
+        let id = started.id.clone();
+        let saved = st
+            .db
+            .call_result(move |s| crewd_collab::sessions::get(s.conn(), &id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(started.role, Role::Admin);
+        assert_eq!(saved.role, Role::Admin);
+        assert_eq!(saved.ext, None);
+    }
 
     #[tokio::test]
     async fn s4_rpc_started_session_real_sql_history() {
@@ -966,7 +1015,7 @@ mod tests {
             codex_options: None,
 
             crew_id: "c-1".into(),
-            captain: false,
+            role: crewd_proto::Role::Worker,
             executor: "claude".into(),
             brief: "合成任务".into(),
             title: Some("合成".repeat(15)),
@@ -1089,7 +1138,7 @@ mod tests {
                 codex_options: None,
 
                 crew_id: "c1".into(),
-                captain: false,
+                role: crewd_proto::Role::Worker,
                 executor: "claude".into(),
                 brief: "synthetic".into(),
                 title: Some("Worker".into()),
@@ -1229,7 +1278,7 @@ mod tests {
                 codex_options: None,
 
                 crew_id: "c1".into(),
-                captain: false,
+                role: crewd_proto::Role::Worker,
                 executor: "claude".into(),
                 brief: "synthetic".into(),
                 title: Some("Runner".into()),
@@ -1832,7 +1881,7 @@ mod tests {
             codex_options: None,
 
             crew_id: "没有这个".into(),
-            captain: false,
+            role: crewd_proto::Role::Worker,
             executor: "claude".into(),
             brief: "合成任务".into(),
             title: None,

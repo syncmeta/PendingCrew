@@ -361,7 +361,7 @@ impl Rig {
                     codex_options: None,
 
                     crew_id: crew.into(),
-                    captain,
+                    role: if captain { crewd_proto::Role::Captain } else { crewd_proto::Role::Worker },
                     executor: executor.into(),
                     brief: "synthetic brief".into(),
                     title: Some(title.into()),

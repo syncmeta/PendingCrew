@@ -292,11 +292,7 @@ impl Port for DbPort {
                     tx,
                     collab::sessions::NewSession {
                         crew_id: s.crew_id,
-                        role: if s.captain {
-                            crewd_proto::Role::Captain
-                        } else {
-                            crewd_proto::Role::Worker
-                        },
+                        role: s.role,
                         executor: s.executor,
                         brief: Some(s.brief),
                         title: s.title,
@@ -327,11 +323,7 @@ impl Port for DbPort {
                 tx,
                 collab::sessions::NewSession {
                     crew_id: s.crew_id,
-                    role: if s.captain {
-                        crewd_proto::Role::Captain
-                    } else {
-                        crewd_proto::Role::Worker
-                    },
+                    role: s.role,
                     executor: s.executor,
                     brief: Some(s.brief),
                     title: s.title,
