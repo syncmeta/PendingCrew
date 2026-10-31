@@ -1,7 +1,7 @@
 import Foundation
 @main struct AdminCasesFixture {
  @MainActor static func main() async throws {
-  func row(_ id:String="AC00000000000000000001",crew:String="a")->CrewdValue {.object(["id":.string(id),"crewId":.string(crew),"revision":.string("v"),"createdAt":.integer(1),"source":.object(["sessionId":.string("s"),"budgetEpoch":.integer(1),"restoreEpoch":.string("e"),"announcementId":.string("m")]),"targets":.array([.object(["id":.string("W1"),"crewId":.string("a"),"revision":.string("1"),"kind":.string("overdue"),"scope":.string("in_scope")])]),"decision":.string("observed"),"decisionRecord":.null,"execution":.string("not_started"),"executionRecord":.null,"retirement":.string("not_started"),"retirementRecord":.null,"outcomeRecord":.null])}
+  func row(_ id:String="AC00000000000000000001",crew:String="a")->CrewdValue {.object(["id":.string(id),"crewId":.string(crew),"revision":.string("v"),"createdAt":.integer(1),"source":.object(["sessionId":.string("s"),"budgetEpoch":.integer(1),"restoreEpoch":.string("e"),"announcementId":.string("m")]),"targets":.array([.object(["id":.string("W1"),"crewId":.string("a"),"revision":.string("1"),"kind":.string("overdue"),"scope":.string("in_scope")])]),"decision":.string("observed"),"decisionRecord":.null,"execution":.string("not_started"),"executionRecord":.null,"retirement":.string("not_started"),"retirementRecord":.null,"outcomeRecord":.null,"handoffRecord":.null])}
   var calls=0,delay=false,foreign=false
   var held:CheckedContinuation<CrewdValue,Error>?
   let store=CrewdWorkStore {method,p in
@@ -28,7 +28,7 @@ import Foundation
   while held == nil {await Task.yield()}
   store.invalidateConnection();held!.resume(returning:row())
   do {_ = try await task2.value;fatalError("old connection accepted")} catch is CancellationError {}
-  for key in ["decision","execution","retirement","source","targets"] {
+  for key in ["decision","execution","retirement","source","targets","handoffRecord"] {
    guard case .object(var fields)=row() else {fatalError()};fields.removeValue(forKey:key)
    let bad:CrewdValue = .object(fields)
    let broken=CrewdWorkStore {_,_ in bad};broken.selectCrew("a")
@@ -113,6 +113,39 @@ import Foundation
   let mismatch:CrewdValue = .object(mismatched)
   let mismatchStore=CrewdWorkStore {_,_ in mismatch};mismatchStore.selectCrew("a")
   do {_ = try await mismatchStore.adminCase(id:"AC00000000000000000001");fatalError("foreign generation parked accepted")} catch {}
+  func handoff(_ phase:String="waiting")->CrewdValue {
+   .object(["requestId":.string("req"),"caseId":.string("AC00000000000000000001"),"crewId":.string("a"),"revision":.string("h1"),"phase":.string(phase),"reason":.string(phase == "accepted" ? "captain_accepted":"requested"),"adminSessionId":.string("admin"),"sourceSessionId":.string("s"),"captainSessionId":.string("captain"),"requestReason":.string("需要机长持续跟进"),"targets":row()["targets"],"wakeId":.integer(2),"createdAt":.integer(1),"deliveredAt":phase == "delivered" ? .string("2026-10-31T01:00:00Z"):.null,"acceptedAt":phase == "accepted" ? .integer(2):.null,"acceptanceNote":phase == "accepted" ? .string("我来负责后续跟进"):.null])
+  }
+  func handoffRow(_ handoff:CrewdValue)->CrewdValue {
+   guard case .object(var fields)=row() else {fatalError()}
+   fields["handoffRecord"] = handoff
+   fields["execution"] = .string("running")
+   fields["executionRecord"] = .object(["sessionId":.string("admin"),"attemptId":.string("a"),"phase":.string("running"),"reason":.string("started"),"generation":.string("1"),"effectsCount":.integer(0)])
+   return .object(fields)
+  }
+  for phase in ["waiting","delivered","accepted","stale"] {
+   let payload=handoffRow(handoff(phase)),decoded=CrewdWorkStore {_,_ in handoffRow(handoff(phase))};decoded.selectCrew("a")
+   let result=try await decoded.adminCase(id:"AC00000000000000000001")
+   precondition(result == payload && result["outcomeRecord"] == .null && result["retirement"] == .string("not_started"),"handoff fabricated resolution or retirement")
+  }
+  for (key,badValue):(String,CrewdValue) in [("caseId",.string("other")),("sourceSessionId",.string("other")),("adminSessionId",.string("other")),("phase",.string("resolved")),("reason",.string("future")),("acceptedAt",.null),("acceptanceNote",.null),("deliveredAt",.integer(1)),("wakeId",.string("2"))] {
+   guard case .object(var fields)=handoff("accepted") else {fatalError()};fields[key]=badValue
+   let bad=handoffRow(.object(fields)),broken=CrewdWorkStore {_,_ in handoffRow(.object(fields))};broken.selectCrew("a")
+   precondition(bad["handoffRecord"][key] == badValue)
+   do {_ = try await broken.adminCase(id:"AC00000000000000000001");fatalError("malformed handoff accepted: \(key)")} catch {}
+  }
+  for reason in ["requested","notification_delivered","captain_accepted","state_changed","stopped","recipient_changed","notification_dropped"] {
+   guard case .object(var fields)=handoff("stale") else {fatalError()};fields["reason"] = .string(reason)
+   let payload=handoffRow(.object(fields)),decoded=CrewdWorkStore {_,_ in handoffRow(.object(fields))};decoded.selectCrew("a")
+   let result=try await decoded.adminCase(id:"AC00000000000000000001");precondition(result == payload)
+  }
+  guard case .object(var transferred)=handoffRow(handoff("accepted")) else {fatalError()}
+  transferred["outcomeRecord"] = .object(["caseId":transferred["id"]!,"crewId":.string("a"),"revision":.string("v"),"verifiedAt":.integer(3),"phase":.string("unresolved"),"reason":.string("targets_unresolved"),"targets":.array([]),"outOfScope":.array([]),"missing":.array([]),"pending":.array([.string("W1")]),"blocked":.array([]),"resolvedByAdmin":.array([]),"resolvedByOthers":.array([])])
+  transferred["retirement"] = .string("parked")
+  transferred["retirementRecord"] = .object(["decisionId":.string("r"),"phase":.string("parked"),"reason":.string("answered"),"probability":.number(0.9),"adopted":.bool(true),"generation":.string("1")])
+  let transferPayload:CrewdValue = .object(transferred),transferStore=CrewdWorkStore {_,_ in .object(transferred)};transferStore.selectCrew("a")
+  let transferResult=try await transferStore.adminCase(id:"AC00000000000000000001")
+  precondition(transferResult == transferPayload && transferResult["outcomeRecord"]["phase"] == .string("unresolved") && transferResult["retirement"] == .string("parked"))
   print("admin cases opaque pagination, detail, malformed/foreign, crew and connection stale rejection passed")
  }
 }

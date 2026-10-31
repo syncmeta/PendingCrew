@@ -713,3 +713,6 @@ mod outcome;
 
 #[path = "admin_retirement.rs"]
 mod retirement;
+
+#[path = "admin_handoff.rs"]
+mod handoff;

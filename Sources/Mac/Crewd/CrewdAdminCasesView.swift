@@ -63,13 +63,15 @@ struct CrewdAdminCasesView:View {
                             }
                             Text("核验解决与执行器退场独立；其他操作者解决的目标不算本案行政成果。").font(.caption).foregroundStyle(.secondary)
                         }
+                        if detail["handoffRecord"] == .null {Text("责任交接：暂无请求记录")}
+                        else { handoffDetails(detail["handoffRecord"]) }
                         Text("退场："+retirementPhase(detail["retirement"].string ?? ""))
                         if detail["retirementRecord"] != .null {
                             Text("退场说明："+retirementReason(detail["retirementRecord"]["reason"].string ?? ""))
                             Text(detail["retirementRecord"]["adopted"] == .bool(true) ? "此记录曾收到实际退出确认；结合当前阶段核对。":"此记录尚未确认实际退出。")
                             Text("退场执行代次："+(detail["retirementRecord"]["generation"].string ?? ""))
                         }
-                        Text("案件解决只代表业务核验通过；退出请求不等于实际退场，未知结果不会自动重启。").font(.caption).foregroundStyle(.secondary)
+                        Text("业务核验解决或有效责任交接可以释放退场条件；业务仍未解决时也可交接后退场。退出请求不等于实际退场，未知结果不会自动重启。").font(.caption).foregroundStyle(.secondary)
                         ForEach(Array(detail["targets"].array.enumerated()),id:\.offset) {_,target in
                             Text((target["id"].string ?? "")+" · "+kind(target["kind"].string ?? "")+" · "+(target["scope"] == .string("in_scope") ? "当前范围":"范围外，仅保留来源事实"))
                             Text("来源快照机组："+(target["crewId"].string ?? "")+" · 工作版本："+(target["revision"].string ?? "")).font(.caption).foregroundStyle(.secondary)
@@ -98,6 +100,27 @@ struct CrewdAdminCasesView:View {
     private func outcomeReason(_ value:String)->String {["no_execution":"尚无执行记录","no_verified_admin_effect":"尚无已核实行政效果","targets_unresolved":"仍有目标未解决","out_of_scope":"含范围外目标，不能确认全案解决","verified":"目标核验通过","authority_changed":"来源或权限依据已变化"][value] ?? "未知原因"}
     private func targetReason(_ value:String)->String {
         ["closed_with_evidence":"已凭证据关闭","reassigned_and_acknowledged":"已重派并确认接收","no_closure_evidence":"关闭缺少证据","no_matching_event":"尚无匹配真实事件","original_problem_remains":"原问题仍存在","notification_pending":"等待通知投递确认","notification_dropped":"通知未送达","owner_unavailable":"负责人不可用","target_missing":"目标缺失","no_verified_admin_receipt":"尚无已核实行政回执"][value] ?? "未知核验状态"
+    }
+    @ViewBuilder private func handoffDetails(_ handoff:CrewdValue)->some View {
+        Text("责任交接："+handoffPhase(handoff["phase"].string ?? ""))
+        Text("交接状态说明："+handoffReason(handoff["reason"].string ?? ""))
+        Text((handoff["phase"] == .string("accepted") ? "已确认接手机长：":"指定接收机长（历史记录）：")+(handoff["captainSessionId"].string ?? "")).textSelection(.enabled)
+        Text("请求行政成员："+(handoff["adminSessionId"].string ?? "")).textSelection(.enabled)
+        Text("请求原因："+(handoff["requestReason"].string ?? ""))
+        Text("请求时间："+time(handoff["createdAt"]))
+        if let delivered=handoff["deliveredAt"].string {Text("通知送达时间："+delivered)}
+        if handoff["acceptedAt"] != .null {Text("接受时间："+time(handoff["acceptedAt"]))}
+        if let note=handoff["acceptanceNote"].string {Text("机长接受说明："+note)}
+        ForEach(Array(handoff["targets"].array.enumerated()),id:\.offset) {_,target in
+            Text("交接快照："+(target["id"].string ?? "")+" · "+(target["crewId"].string ?? "")+" · 版本 "+(target["revision"].string ?? "")).font(.caption)
+        }
+        Text("通知送达不代表机长接手；接受交接只确认后续责任，不代表业务已解决。失效记录保留历史，不再授予当前责任。").font(.caption).foregroundStyle(.secondary)
+    }
+    private func handoffPhase(_ value:String)->String {
+        ["waiting":"等待通知送达与机长接受","delivered":"通知已送达，等待机长接受","accepted":"机长已明确接受后续责任","stale":"交接依据已失效"][value] ?? "未知交接状态"
+    }
+    private func handoffReason(_ value:String)->String {
+        ["requested":"已提交交接请求","notification_delivered":"通知投递已确认","captain_accepted":"真实机长已确认接手","state_changed":"来源或工作依据已变化","stopped":"关联成员已停止","recipient_changed":"原指定接收机长已变化","notification_dropped":"通知未能送达"][value] ?? "未知交接原因"
     }
     private func retirementPhase(_ value:String)->String {
         ["not_started":"尚未开始","prepared":"已准备判断","dispatched":"退场判断请求已发出","decision_ready":"退场判断就绪，尚未请求退出","exit_requested":"已请求退出，等待实际确认","parked":"已确认实际退出并保留会话","unknown":"退出结果未知","stale":"退场依据已失效","suppressed":"本次退场已抑制"][value] ?? "未知退场阶段"

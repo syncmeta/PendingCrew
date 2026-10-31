@@ -151,7 +151,7 @@ impl AppState {
                     let permit = case_authority.as_ref().map(|a| a.effect(tx)).transpose()?;
                     let value = f(tx)?;
                     if let Some(permit) = permit {
-                        crewd_collab::admin_case_execution::finish_effect(tx, permit)?;
+                        permit.finish(tx)?;
                     }
                     Ok(value)
                 })?;

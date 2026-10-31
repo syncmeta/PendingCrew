@@ -1,6 +1,7 @@
 //! Tool dispatch: look up -> role gate (re-read on every call) -> parse args -> hand to the group
 //! implementations. Receipt text always comes from the `r.*` sections of tools.*.md.
 pub mod asks;
+mod admin_cases;
 pub mod captain;
 pub mod channels;
 pub mod crews;
@@ -173,6 +174,10 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
+        "admin_case_handoff_request" => admin_cases::request(&cx,args).await,
+        "admin_case_handoff_get" => admin_cases::get(&cx,args).await,
+        "admin_case_handoff_list" => admin_cases::list(&cx,args).await,
+        "admin_case_handoff_accept" => admin_cases::accept(&cx,args).await,
         "my_work_items" => work::mine(&cx, args).await,
         "todo_get" => work::todo_get(&cx, args).await,
         "work_item_get" => work::get(&cx, args).await,

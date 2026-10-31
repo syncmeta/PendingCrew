@@ -334,7 +334,7 @@ impl Handle {
         not(test),
         expect(
             dead_code,
-            reason = "Internal executor entry is tested before automatic case dispatch; outcome and retirement integration must precede enabling its background caller"
+            reason = "Automatic case dispatch remains gated on native execution-profile acceptance"
         )
     )]
     pub(crate) async fn start_admin_case(

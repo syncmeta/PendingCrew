@@ -1388,3 +1388,39 @@ The complete revision returned by channel_archive_check before restoration.
 
 ## channel_restore_verified.note
 Your explicit reason for this restore action; nonblank.
+
+## admin_case_handoff_request
+Request the actual captain of your bound administrative case's crew to take responsibility for unresolved coordination. The recipient is fixed by the system. Delivery is not acceptance or work completion. Retain the original request UUID; after an unknown outcome, query it instead of resending or substituting a new UUID.
+
+## admin_case_handoff_request.request_id
+A unique UUID identifying this exact request and its unchanged contents.
+
+## admin_case_handoff_request.reason
+The unresolved problem, facts checked and reason captain coordination is required; nonblank.
+
+## admin_case_handoff_get
+Read a handoff request you are authorized to inspect and its current revision. Waiting, delivered, explicitly accepted and stale are distinct. Reading does not accept responsibility or complete work.
+
+## admin_case_handoff_get.request_id
+The original UUID from the request receipt.
+
+## admin_case_handoff_list
+Page through administrative handoff responsibilities and history you are authorized to inspect. A stale record requires review and does not silently release responsibility.
+
+## admin_case_handoff_list.after
+The previous response's unchanged nextAfter cursor; never construct one yourself.
+
+## admin_case_handoff_list.limit
+Page size from 1 to 100; default 50.
+
+## admin_case_handoff_accept
+As the actual current captain and fixed recipient, explicitly accept responsibility for coordinating this administrative case. First inspect the delivered request and current revision. Acceptance does not transfer original Work ownership or mark unresolved work complete.
+
+## admin_case_handoff_accept.request_id
+The original UUID of the delivered request you inspected.
+
+## admin_case_handoff_accept.expected_revision
+The complete current revision from the request lookup.
+
+## admin_case_handoff_accept.note
+Your explicit acceptance statement; nonblank.

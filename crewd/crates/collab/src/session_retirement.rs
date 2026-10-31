@@ -82,24 +82,36 @@ fn facts(
     id: &str,
     now: i64,
 ) -> Result<Option<(crewd_proto::Session, serde_json::Value)>> {
-    // Case completion removes only this obligation. Ordinary idle/approval/work
-    // safeguards below still apply, and the actor must independently be quiescent.
+    // An accepted custody obligation survives stale authority; it is discharged
+    // only by verified business resolution, not by notification or process exit.
+    if crate::admin_case_handoff::has_unresolved_custody(c, id, now)? {
+        return Ok(None);
+    }
     let administrative = if let Some(binding) = crate::admin_case_execution::session_binding(c, id)?
     {
-        let Some(outcome) =
-            crate::admin_case_outcome::status_at(c, binding.crew_id(), binding.case_id(), now)?
-        else {
-            return Ok(None);
-        };
-        if outcome.phase != crewd_proto::AdminCaseOutcomePhase::Resolved {
-            return Ok(None);
-        }
+        let outcome =
+            crate::admin_case_outcome::status_at(c, binding.crew_id(), binding.case_id(), now)?;
         let Some(generation) = crate::admin_case_execution::generation(c, &binding)? else {
             return Ok(None);
         };
-        Some(
-            serde_json::json!({"caseId":binding.case_id(),"attemptId":binding.attempt_id(),"outcomeRevision":outcome.revision,"generation":generation,"targetCount":outcome.targets.len(),"resolvedByAdmin":outcome.resolved_by_admin.len(),"resolvedByOthers":outcome.resolved_by_others.len()}),
-        )
+        if let Some(outcome) =
+            outcome.filter(|o| o.phase == crewd_proto::AdminCaseOutcomePhase::Resolved)
+        {
+            Some(
+                serde_json::json!({"caseId":binding.case_id(),"attemptId":binding.attempt_id(),"outcomeRevision":outcome.revision,"generation":generation,"targetCount":outcome.targets.len(),"resolvedByAdmin":outcome.resolved_by_admin.len(),"resolvedByOthers":outcome.resolved_by_others.len()}),
+            )
+        } else if let Some(handoff) = crate::admin_case_handoff::current_accepted(
+            c,
+            binding.crew_id(),
+            binding.case_id(),
+            now,
+        )? {
+            Some(
+                serde_json::json!({"caseId":binding.case_id(),"attemptId":binding.attempt_id(),"generation":generation,"releaseReason":"handed_over","handoffRevision":handoff.revision,"requestId":handoff.request_id,"captainSessionId":handoff.captain_session_id,"targetCount":handoff.targets.len()}),
+            )
+        } else {
+            return Ok(None);
+        }
     } else {
         None
     };
@@ -197,7 +209,7 @@ fn snapshot(c: &Connection, id: &str, actor: ActorWitness, now: i64) -> Result<O
     }
     let fingerprint = judgments::fingerprint(&(&facts, &actor))?;
     let summary = if !facts["adminCase"].is_null() {
-        serde_json::json!({"role":s.role,"verifiedCaseOutcome":"resolved","targetCount":facts["adminCase"]["targetCount"],"resolvedByAdmin":facts["adminCase"]["resolvedByAdmin"],"resolvedByOthers":facts["adminCase"]["resolvedByOthers"],"idle":true,"pendingWork":false,"pendingWake":false,"pendingAskOrApproval":false,"resumableIdentity":true,"evidenceScope":"verified case outcome and current session obligations; physical exit has not been requested"})
+        serde_json::json!({"role":s.role,"verifiedCaseOutcome":if facts["adminCase"]["releaseReason"]=="handed_over" {"handed_over_unresolved"} else {"resolved"},"targetCount":facts["adminCase"]["targetCount"],"resolvedByAdmin":facts["adminCase"]["resolvedByAdmin"],"resolvedByOthers":facts["adminCase"]["resolvedByOthers"],"idle":true,"pendingWork":false,"pendingWake":false,"pendingAskOrApproval":false,"resumableIdentity":true,"evidenceScope":if facts["adminCase"]["releaseReason"]=="handed_over" {"verified captain custody and current session obligations; work remains unresolved; physical exit has not been requested"} else {"verified case outcome and current session obligations; physical exit has not been requested"}})
     } else {
         serde_json::json!({"role":s.role,"title":s.title.as_ref().map(|v|v.chars().take(120).collect::<String>()),"brief":s.brief.as_ref().map(|v|v.chars().take(400).collect::<String>()),"recent":facts["recent"],"sample_only":true,"truncated":facts["truncated"],"text_truncated":s.title.as_ref().is_some_and(|v|v.chars().count()>120)||s.brief.as_ref().is_some_and(|v|v.chars().count()>400),"idle":true,"pendingWork":false,"pendingWake":false,"pendingAskOrApproval":false,"resumableIdentity":true,"evidenceScope":"current session facts; no claim that conversation history is exhaustive"})
     };
@@ -874,7 +886,11 @@ pub(crate) fn case_record(
     let mut status = status_at(c, crew, binding.session_id(), now)?.record;
     let resolved = crate::admin_case_outcome::status_at(c, crew, id, now)?
         .is_some_and(|o| o.phase == crewd_proto::AdminCaseOutcomePhase::Resolved);
-    if !resolved && let Some(r) = &mut status {
+    let handed_over = crate::admin_case_handoff::current_accepted(c, crew, id, now)?.is_some();
+    if !resolved
+        && !handed_over
+        && let Some(r) = &mut status
+    {
         r.phase = Phase::Stale;
         r.reason = Reason::StateChanged;
         r.adopted = false;

@@ -137,6 +137,111 @@
       ],
       "type": "object"
     },
+    "AdminCaseHandoffPhase": {
+      "enum": [
+        "waiting",
+        "delivered",
+        "accepted",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "AdminCaseHandoffReason": {
+      "enum": [
+        "requested",
+        "notification_delivered",
+        "captain_accepted",
+        "state_changed",
+        "stopped",
+        "recipient_changed",
+        "notification_dropped"
+      ],
+      "type": "string"
+    },
+    "AdminCaseHandoffView": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptanceNote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acceptedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "adminSessionId": {
+          "type": "string"
+        },
+        "captainSessionId": {
+          "type": "string"
+        },
+        "caseId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "deliveredAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/AdminCaseHandoffPhase"
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseHandoffReason"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "requestReason": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "sourceSessionId": {
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTarget"
+          },
+          "type": "array"
+        },
+        "wakeId": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestId",
+        "caseId",
+        "crewId",
+        "revision",
+        "phase",
+        "reason",
+        "adminSessionId",
+        "sourceSessionId",
+        "captainSessionId",
+        "requestReason",
+        "targets",
+        "wakeId",
+        "createdAt"
+      ],
+      "type": "object"
+    },
     "AdminCaseList": {
       "additionalProperties": false,
       "properties": {
@@ -506,6 +611,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/AdminCaseExecutionView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "handoffRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseHandoffView"
             },
             {
               "type": "null"

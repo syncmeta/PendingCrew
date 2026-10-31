@@ -68,6 +68,7 @@ fn decode(raw: &str, crew: &str, id: &str) -> Result<AdminCaseView> {
         || v.execution_record.is_some()
         || v.outcome_record.is_some()
         || v.retirement_record.is_some()
+        || v.handoff_record.is_some()
         || v.decision != AdminCaseDecision::Observed
         || v.id != id
         || v.crew_id != crew
@@ -266,6 +267,7 @@ pub(crate) fn record_stop_escalation(
         execution_record: None,
         retirement: AdminCaseRetirement::NotStarted,
         retirement_record: None,
+        handoff_record: None,
         outcome_record: None,
     };
     view.revision = revision(&view)?;
@@ -659,6 +661,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("retirementRecord");
+        legacy["view"]
+            .as_object_mut()
+            .unwrap()
+            .remove("handoffRecord");
         let old = serde_json::to_string(&legacy).unwrap();
         meta_set(s.conn(), &k, &old).unwrap();
         assert_eq!(
@@ -1257,6 +1263,12 @@ fn project_at(c: &Connection, mut view: AdminCaseView, now: Option<i64>) -> Resu
         view.execution = execution.phase.clone();
         view.execution_record = Some(execution);
     }
+    view.handoff_record = crate::admin_case_handoff::status_for_case(
+        c,
+        &view.crew_id,
+        &view.id,
+        now.unwrap_or_else(crewd_store::now_ms),
+    )?;
     view.outcome_record = crate::admin_case_outcome::status_at(
         c,
         &view.crew_id,

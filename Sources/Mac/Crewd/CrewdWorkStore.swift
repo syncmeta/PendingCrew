@@ -349,6 +349,25 @@ final class CrewdWorkStore: ObservableObject {
                 guard let number,number.isFinite,(0...1).contains(number) else {throw CrewdClientError(message:"退场概率无效。")}
             }
         }
+        guard let handoff=fields["handoffRecord"] else {throw CrewdClientError(message:"行政交接记录字段缺失。")}
+        if handoff != .null {
+            guard handoff["caseId"] == row["id"],handoff["crewId"] == row["crewId"],
+                  handoff["sourceSessionId"] == row["source"]["sessionId"],handoff["adminSessionId"].string?.isEmpty == false,
+                  handoff["adminSessionId"] == execution["sessionId"],handoff["captainSessionId"].string?.isEmpty == false,
+                  handoff["requestId"].string?.isEmpty == false,handoff["revision"].string?.isEmpty == false,handoff["requestReason"].string?.isEmpty == false,
+                  ["waiting","delivered","accepted","stale"].contains(handoff["phase"].string ?? ""),
+                  ["requested","notification_delivered","captain_accepted","state_changed","stopped","recipient_changed","notification_dropped"].contains(handoff["reason"].string ?? ""),
+                  handoff["createdAt"].int != nil,handoff["wakeId"].int != nil,case .array(let handoffTargets)=handoff["targets"],case .object(let handoffFields)=handoff,
+                  let delivered=handoffFields["deliveredAt"],delivered == .null || delivered.string?.isEmpty == false,
+                  let accepted=handoffFields["acceptedAt"],accepted == .null || accepted.int != nil,
+                  let note=handoffFields["acceptanceNote"],note == .null || note.string?.isEmpty == false else {throw CrewdClientError(message:"行政交接身份或记录格式无效。")}
+            if handoff["phase"] == .string("accepted"),accepted == .null || note == .null {throw CrewdClientError(message:"机长接手缺少实际接受记录。")}
+            if handoff["phase"] == .string("delivered"),delivered == .null {throw CrewdClientError(message:"通知送达缺少回执时间。")}
+            for target in handoffTargets {
+                guard CrewdWorkID(target["id"].string ?? "",kind:.plan) != nil,target["crewId"].string?.isEmpty == false,target["revision"].string?.isEmpty == false,
+                      ["unanswered","overdue","ready_unscheduled"].contains(target["kind"].string ?? ""),["in_scope","out_of_scope"].contains(target["scope"].string ?? "") else {throw CrewdClientError(message:"交接目标快照格式无效。")}
+            }
+        }
         guard let outcome=fields["outcomeRecord"] else {throw CrewdClientError(message:"行政结果记录字段缺失。")}
         if outcome != .null {
             guard outcome["caseId"] == row["id"],outcome["crewId"] == row["crewId"],outcome["revision"].string?.isEmpty == false,outcome["verifiedAt"].int != nil,

@@ -2,7 +2,9 @@
 //! This is not a sandbox for an executor's native filesystem or shell tools.
 use super::Identity;
 use crate::{AppState, connection_scope::ConnectionScope};
-use crewd_collab::{CollabError, Result, Tx, admin_case_execution as cases};
+use crewd_collab::{
+    CollabError, Result, Tx, admin_case_execution as cases, admin_case_handoff as handoff,
+};
 use rusqlite::Connection;
 use serde_json::Value;
 use std::sync::Arc;
@@ -13,10 +15,79 @@ pub(crate) struct Authority {
     identity: Identity,
     connection: ConnectionScope,
     token: String,
-    witness: cases::ExecutionWitness,
+    scope: Scope,
     tool: String,
     args: Value,
-    work: String,
+}
+#[derive(Clone)]
+enum Scope {
+    Work {
+        witness: cases::ExecutionWitness,
+        id: String,
+    },
+    Handoff(handoff::Operation),
+}
+
+pub(crate) enum MutationPermit {
+    Work(cases::EffectPermit),
+    HandoffRequest(handoff::RequestPermit),
+    HandoffAccept(handoff::AcceptPermit),
+}
+impl MutationPermit {
+    pub(crate) fn finish(self, tx: &mut Tx<'_>) -> Result<()> {
+        match self {
+            Self::Work(p) => cases::finish_effect(tx, p),
+            Self::HandoffRequest(p) => handoff::finish_request(tx, p),
+            Self::HandoffAccept(p) => handoff::finish_accept(tx, p),
+        }
+    }
+}
+fn handoff_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "admin_case_handoff_request"
+            | "admin_case_handoff_get"
+            | "admin_case_handoff_accept"
+            | "admin_case_handoff_list"
+    )
+}
+fn argument(args: &Value, key: &str) -> Result<String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(denied)
+}
+fn handoff_operation(tool: &str, args: &Value) -> Result<handoff::Operation> {
+    if tool == "admin_case_handoff_list" {
+        let after = match args.get("after") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(v)) => Some(v.clone()),
+            _ => return Err(denied()),
+        };
+        let limit = match args.get("limit") {
+            None | Some(Value::Null) => 50,
+            Some(v) => v
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or_else(denied)?,
+        };
+        return Ok(handoff::Operation::List { after, limit });
+    }
+    let request_id = argument(args, "request_id")?;
+    match tool {
+        "admin_case_handoff_request" => Ok(handoff::Operation::Request {
+            request_id,
+            reason: argument(args, "reason")?,
+        }),
+        "admin_case_handoff_get" => Ok(handoff::Operation::Get { request_id }),
+        "admin_case_handoff_accept" => Ok(handoff::Operation::Accept {
+            request_id,
+            expected_revision: argument(args, "expected_revision")?,
+            note: argument(args, "note")?,
+        }),
+        _ => Err(denied()),
+    }
 }
 tokio::task_local! {static AUTHORITY: Authority;}
 pub(crate) fn capture() -> Option<Authority> {
@@ -35,6 +106,8 @@ pub(crate) fn allowed_tool(tool: &str) -> bool {
             | "work_closure_history"
             | "work_item_close"
             | "work_item_reassign_lost"
+            | "admin_case_handoff_request"
+            | "admin_case_handoff_get"
     )
 }
 fn work(tool: &str, args: &Value) -> Result<String> {
@@ -55,54 +128,117 @@ impl Authority {
                 .tokens
                 .verify(&self.identity.session_id, &self.token)
             || !self.state.admission.contains(&self.identity.session_id)
-            || !self
-                .state
-                .admission
-                .contains(self.witness.source_session_id())
         {
             return Err(denied());
         }
         let actual = crewd_collab::sessions::get(c, &self.identity.session_id)?;
         if actual.crew_id != self.identity.crew_id
             || crewd_collab::sessions::role_of(c, &actual.id)? != self.identity.role
-            || self.witness.session_id() != actual.id
-            || self.witness.crew_id() != actual.crew_id
+        {
+            return Err(denied());
+        }
+        if let Scope::Work { witness, .. } = &self.scope
+            && (!self.state.admission.contains(witness.source_session_id())
+                || witness.session_id() != actual.id
+                || witness.crew_id() != actual.crew_id)
         {
             return Err(denied());
         }
         Ok(())
     }
+    fn participant_admission(&self, source: &str, admin: &str, captain: &str) -> Result<()> {
+        if [source, admin, captain]
+            .into_iter()
+            .all(|id| self.state.admission.contains(id))
+        {
+            Ok(())
+        } else {
+            Err(denied())
+        }
+    }
     pub(crate) fn validate_read(&self, c: &Connection) -> Result<()> {
         self.validate_actor(c)?;
-        cases::validate_read(
-            c,
-            &self.witness,
-            cases::ReadScope::Work {
-                id: self.work.clone(),
-            },
-            crewd_store::now_ms(),
-        )
+        match &self.scope {
+            Scope::Work { witness, id } => cases::validate_read(
+                c,
+                witness,
+                cases::ReadScope::Work { id: id.clone() },
+                crewd_store::now_ms(),
+            ),
+            Scope::Handoff(operation) => {
+                let p = handoff::validate_operation(
+                    c,
+                    &crewd_collab::Sender::Session(self.identity.session_id.clone()),
+                    operation,
+                    crewd_store::now_ms(),
+                )?;
+                // Historical reads remain available after the executor has parked.
+                if !matches!(
+                    operation,
+                    handoff::Operation::Get { .. } | handoff::Operation::List { .. }
+                ) {
+                    self.participant_admission(
+                        p.source_session_id(),
+                        p.admin_session_id(),
+                        p.captain_session_id(),
+                    )?;
+                }
+                Ok(())
+            }
+        }
     }
-    pub(crate) fn effect(&self, tx: &mut Tx<'_>) -> Result<cases::EffectPermit> {
+    pub(crate) fn effect(&self, tx: &mut Tx<'_>) -> Result<MutationPermit> {
         self.validate_actor(tx.conn())?;
-        let action = match self.tool.as_str() {
-            "work_item_close" => cases::ActionScope::WorkClose {
-                id: self.work.clone(),
-                kind: serde_json::from_value(self.args.get("kind").cloned().ok_or_else(denied)?)
-                    .map_err(|_| denied())?,
-            },
-            "work_item_reassign_lost" => cases::ActionScope::WorkReassignLost {
-                id: self.work.clone(),
-                new_owner: self
-                    .args
-                    .get("owner")
-                    .and_then(Value::as_str)
-                    .ok_or_else(denied)?
-                    .into(),
-            },
-            _ => return Err(denied()),
-        };
-        cases::validate_effect(tx, &self.witness, action)
+        match &self.scope {
+            Scope::Handoff(operation) => {
+                let by = crewd_collab::Sender::Session(self.identity.session_id.clone());
+                match operation {
+                    handoff::Operation::Request { request_id, reason } => {
+                        let p = handoff::begin_request(tx, &by, request_id, reason)?;
+                        self.participant_admission(
+                            p.source_session_id(),
+                            p.admin_session_id(),
+                            p.captain_session_id(),
+                        )?;
+                        Ok(MutationPermit::HandoffRequest(p))
+                    }
+                    handoff::Operation::Accept {
+                        request_id,
+                        expected_revision,
+                        note,
+                    } => {
+                        let p =
+                            handoff::begin_accept(tx, &by, request_id, expected_revision, note)?;
+                        self.participant_admission(
+                            p.source_session_id(),
+                            p.admin_session_id(),
+                            p.captain_session_id(),
+                        )?;
+                        Ok(MutationPermit::HandoffAccept(p))
+                    }
+                    handoff::Operation::Get { .. } | handoff::Operation::List { .. } => {
+                        Err(denied())
+                    }
+                }
+            }
+            Scope::Work { witness, id } => {
+                let action = match self.tool.as_str() {
+                    "work_item_close" => cases::ActionScope::WorkClose {
+                        id: id.clone(),
+                        kind: serde_json::from_value(
+                            self.args.get("kind").cloned().ok_or_else(denied)?,
+                        )
+                        .map_err(|_| denied())?,
+                    },
+                    "work_item_reassign_lost" => cases::ActionScope::WorkReassignLost {
+                        id: id.clone(),
+                        new_owner: argument(&self.args, "owner")?,
+                    },
+                    _ => return Err(denied()),
+                };
+                cases::validate_effect(tx, witness, action).map(MutationPermit::Work)
+            }
+        }
     }
 }
 pub(crate) async fn bound(st: &AppState, session: &str) -> Result<bool> {
@@ -124,7 +260,15 @@ pub(crate) async fn prepare(
         .db
         .call_result(move |s| cases::session_binding(s.conn(), &id))
         .await??;
-    let Some(witness) = witness else {
+    let scope = if handoff_tool(tool) {
+        // Even an ordinary Captain needs an authenticated RPC envelope for handoff.
+        Scope::Handoff(handoff_operation(tool, args)?)
+    } else if let Some(witness) = witness {
+        Scope::Work {
+            witness,
+            id: work(tool, args)?,
+        }
+    } else {
         return Ok(None);
     };
     let a = Authority {
@@ -132,10 +276,9 @@ pub(crate) async fn prepare(
         identity: me.clone(),
         connection,
         token,
-        witness,
+        scope,
         tool: tool.into(),
         args: args.clone(),
-        work: work(tool, args)?,
     };
     let checked = a.clone();
     st.db
@@ -164,7 +307,7 @@ pub(crate) async fn check_call(
         st.db
             .call_result(move |s| a.validate_read(s.conn()))
             .await??;
-    } else if bound(st, &me.session_id).await? {
+    } else if handoff_tool(tool) || bound(st, &me.session_id).await? {
         return Err(denied());
     }
     Ok(())

@@ -443,7 +443,15 @@ pub fn validate_read(
     scope: ReadScope,
     now: i64,
 ) -> Result<()> {
-    let r = running(c, w, now)?;
+    let r = if crate::admin_case_handoff::writes_relinquished(c, w.case_id())? {
+        let r = matching(c, w)?;
+        if environment_for(c, &r, false)? != r.context {
+            return Err(invalid());
+        }
+        r
+    } else {
+        running(c, w, now)?
+    };
     match scope {
         ReadScope::Work { id } => scope_work(c, &r, &id),
         ReadScope::SourceSession { id } => {
@@ -460,6 +468,9 @@ pub fn validate_effect(
     w: &ExecutionWitness,
     scope: ActionScope,
 ) -> Result<EffectPermit> {
+    if crate::admin_case_handoff::writes_relinquished(tx.conn(), w.case_id())? {
+        return Err(invalid());
+    }
     let r = running(tx.conn(), w, tx.now_ms())?;
     scope_work(tx.conn(), &r, scope.id())?;
     if let ActionScope::WorkReassignLost { new_owner, .. } = &scope {
@@ -1227,4 +1238,14 @@ pub(crate) fn generation(c: &Connection, w: &ExecutionWitness) -> Result<Option<
             Ok(n)
         })
         .transpose()
+}
+
+/// Internal bounded communication authority, using the same current checkpoint as effects.
+pub(crate) fn handoff_fingerprint(
+    c: &Connection,
+    w: &ExecutionWitness,
+    now: i64,
+) -> Result<String> {
+    let r = running(c, w, now)?;
+    judgments::fingerprint(&(&r.checkpoint, &r.context, &r.view.attempt_id))
 }

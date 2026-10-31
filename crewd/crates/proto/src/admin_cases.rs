@@ -84,6 +84,8 @@ pub struct AdminCaseSource {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminCaseView {
+    #[serde(default)]
+    pub handoff_record: Option<AdminCaseHandoffView>,
     pub id: String,
     pub crew_id: String,
     pub revision: String,
@@ -236,4 +238,50 @@ pub struct AdminCaseOutcomeView {
     pub blocked: Vec<String>,
     pub resolved_by_admin: Vec<String>,
     pub resolved_by_others: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseHandoffPhase {
+    Waiting,
+    Delivered,
+    Accepted,
+    Stale,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseHandoffReason {
+    Requested,
+    NotificationDelivered,
+    CaptainAccepted,
+    StateChanged,
+    Stopped,
+    RecipientChanged,
+    NotificationDropped,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseHandoffView {
+    pub request_id: String,
+    pub case_id: String,
+    pub crew_id: String,
+    pub revision: String,
+    pub phase: AdminCaseHandoffPhase,
+    pub reason: AdminCaseHandoffReason,
+    pub admin_session_id: String,
+    pub source_session_id: String,
+    pub captain_session_id: String,
+    pub request_reason: String,
+    pub targets: Vec<AdminCaseTarget>,
+    pub wake_id: i64,
+    pub created_at: i64,
+    pub delivered_at: Option<String>,
+    pub accepted_at: Option<i64>,
+    pub acceptance_note: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseHandoffList {
+    pub items: Vec<AdminCaseHandoffView>,
+    pub next_after: Option<String>,
 }

@@ -230,6 +230,9 @@ pub(crate) fn followup_note(
     row: &crate::wakes::WakeRow,
     now: i64,
 ) -> Result<FollowupNote> {
+    if row.source.starts_with("admin-case-handoff:") {
+        return crate::admin_case_handoff::render(conn, row, now);
+    }
     if row.source.starts_with("work-reassignment:") {
         return crate::work_reassignment::render(conn, row);
     }

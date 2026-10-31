@@ -1388,3 +1388,39 @@ messages、todo、documents、progress，与工作图父级独立。
 
 ## channel_restore_verified.note
 本次明确解档的理由，不能为空。
+
+## admin_case_handoff_request
+为当前绑定的行政事项请求机长承接未解决问题。接收人由系统固定为本机组实际机长，不能指定他人。送达回执不等于机长接受，也不代表原工作完成。保留原请求编号；结果未知时用查询工具核对，不重发或更换编号。
+
+## admin_case_handoff_request.request_id
+本次请求的唯一 UUID；同一编号只对应同一请求内容。
+
+## admin_case_handoff_request.reason
+尚未解决的问题、已核查的事实及需要机长处理的原因，不能为空。
+
+## admin_case_handoff_get
+读取你有权访问的行政承接请求及其当前版本。区分待送达、已送达、机长明确接受和事实失效；读取不会接受请求或完成工作。
+
+## admin_case_handoff_get.request_id
+原请求回执中的 UUID。
+
+## admin_case_handoff_list
+分页查看你有权查看的行政承接责任及历史。失效记录仍需复核，不能据此认为责任已经消失。
+
+## admin_case_handoff_list.after
+上次回执的 nextAfter；原样传递，不自行拼接。
+
+## admin_case_handoff_list.limit
+每页数量，1–100，默认 50。
+
+## admin_case_handoff_accept
+以当前实际机长身份明确承接发给你的行政事项协调责任。必须先收到并核对请求及当前版本。承接不改变原工作的所有权，不把未解决工作标记完成。
+
+## admin_case_handoff_accept.request_id
+已送达并核对的原请求 UUID。
+
+## admin_case_handoff_accept.expected_revision
+查询回执中待接受请求的完整当前版本。
+
+## admin_case_handoff_accept.note
+你的明确承接说明，不能为空。

@@ -462,7 +462,8 @@ fn note_error(tx: &mut Tx<'_>, ids: &[i64], error: &str) -> Result<()> {
 /// recovery; it must not itself launch another recovery attempt.
 pub fn delivery_held(conn: &Connection, row: &WakeRow) -> Result<bool> {
     Ok(row.kind == WakeKind::System
-        && row.source.starts_with("work-reassignment:")
+        && (row.source.starts_with("work-reassignment:")
+            || row.source.starts_with("admin-case-handoff:"))
         && crate::sessions::get(conn, &row.session)?
             .resume_failed_at
             .is_some())
