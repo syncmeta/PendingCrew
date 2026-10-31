@@ -65,6 +65,7 @@ fn decode(raw: &str, crew: &str, id: &str) -> Result<AdminCaseView> {
     let v = s.view;
     if s.version != 1
         || v.decision_record.is_some()
+        || v.execution_record.is_some()
         || v.decision != AdminCaseDecision::Observed
         || v.id != id
         || v.crew_id != crew
@@ -260,6 +261,7 @@ pub(crate) fn record_stop_escalation(
         decision: AdminCaseDecision::Observed,
         decision_record: None,
         execution: AdminCaseExecution::NotStarted,
+        execution_record: None,
         retirement: AdminCaseRetirement::NotStarted,
     };
     view.revision = revision(&view)?;
@@ -992,6 +994,9 @@ fn summary(s: &Snapshot) -> serde_json::Value {
 }
 pub fn prepare(tx: &mut Tx<'_>, crew: &str, id: &str) -> Result<Option<DecisionSnapshot>> {
     use AdminCaseDecision as P;
+    if crate::admin_case_execution::binding(tx.conn(), crew, id)?.is_some() {
+        return Ok(None);
+    }
     let now = tx.now_ms();
     let s = snapshot(tx.conn(), crew, id, now)?;
     let old = read_decision(tx.conn(), id)?;
@@ -1225,6 +1230,15 @@ fn project_at(c: &Connection, mut view: AdminCaseView, now: Option<i64>) -> Resu
         view.decision = r.view.phase.clone();
         view.decision_record = Some(r.view);
     }
+    if let Some(execution) = crate::admin_case_execution::view(
+        c,
+        &view.crew_id,
+        &view.id,
+        now.unwrap_or_else(crewd_store::now_ms),
+    )? {
+        view.execution = execution.phase.clone();
+        view.execution_record = Some(execution);
+    }
     Ok(view)
 }
 
@@ -1296,4 +1310,29 @@ pub fn list_at(c: &Connection, p: &AdminCaseListParams, now: i64) -> Result<Admi
 
 pub fn list(c: &Connection, p: &AdminCaseListParams) -> Result<AdminCaseList> {
     list_at(c, p, crewd_store::now_ms())
+}
+
+pub(crate) fn execution_eligibility(
+    c: &Connection,
+    crew: &str,
+    id: &str,
+    now: i64,
+) -> Result<Option<(Snapshot, String)>> {
+    let Some(record) = read_decision(c, id)? else {
+        return Ok(None);
+    };
+    if record.view.phase != AdminCaseDecision::Answered
+        || !record.view.adopted
+        || record.snapshot.crew != crew
+    {
+        return Ok(None);
+    }
+    let current = snapshot(c, crew, id, now)?;
+    if record.snapshot.fingerprint != current.fingerprint
+        || record.accepted_epoch != crewd_store::judgment_state::epoch(c)?
+        || blocked(c, &current)?.is_some()
+    {
+        return Ok(None);
+    }
+    Ok(Some((current, record.view.decision_id)))
 }

@@ -309,6 +309,82 @@ impl Port for DbPort {
         self.read(move |c| row_of(c, session)).await
     }
 
+    async fn insert_admin_case_session(
+        &self,
+        permit: collab::admin_case_execution::AdminLaunchPermit,
+    ) -> Result<SessionRow> {
+        let admission = self.state.admission.clone();
+        self.write(move |tx| {
+            if !admission.contains(permit.source_session()) {
+                return Err(collab::resource_invalid("administrative sponsor admission"));
+            }
+            let registered = collab::admin_case_execution::register_and_bind(tx, &permit)?;
+            crewd_store::codex_controls::initial(tx.conn(), &registered.session.id, None, true)?;
+            row_of(tx.conn(), registered.session)
+        })
+        .await
+    }
+    async fn claim_admin_launch(&self, session: &str) -> Result<()> {
+        let session = session.to_owned();
+        let admission = self.state.admission.clone();
+        self.write(move |tx| {
+            let Some(w) = collab::admin_case_execution::session_binding(tx.conn(), &session)?
+            else {
+                return Ok(());
+            };
+            if !admission.contains(&session) || !admission.contains(w.source_session_id()) {
+                return Err(collab::resource_invalid("administrative launch admission"));
+            }
+            if !collab::admin_case_execution::claim_launch(tx, &w)? {
+                return Err(collab::resource_invalid(
+                    "administrative launch already claimed",
+                ));
+            }
+            Ok(())
+        })
+        .await
+    }
+    async fn confirm_admin_started(&self, session: &str, generation: u64) -> Result<bool> {
+        let session = session.to_owned();
+        let admission = self.state.admission.clone();
+        self.write(move |tx| {
+            let Some(w) = collab::admin_case_execution::session_binding(tx.conn(), &session)?
+            else {
+                return Ok(true);
+            };
+            if !admission.contains(&session) || !admission.contains(w.source_session_id()) {
+                collab::admin_case_execution::mark_unknown(tx, &w)?;
+                return Ok(false);
+            }
+            let confirmed = collab::admin_case_execution::confirm_started(tx, &w, generation.to_string())?;
+            if confirmed {
+                collab::sessions::set_desired(tx, &session, crewd_proto::Desired::Running)?;
+            }
+            Ok(confirmed)
+        })
+        .await
+    }
+    async fn admin_launch_unknown(&self, session: &str) -> Result<()> {
+        let session = session.to_owned();
+        let tokens = self.state.clone();
+        self.write(move |tx| {
+            if let Some(w) = collab::admin_case_execution::session_binding(tx.conn(), &session)? {
+                collab::admin_case_execution::mark_unknown(tx, &w)?;
+                tokens.tokens.revoke(&session);
+                tokens.admission.revoke(&session);
+            }
+            Ok(())
+        })
+        .await
+    }
+    async fn admin_case_bound(&self, session: &str) -> Result<bool> {
+        let session = session.to_owned();
+        self.read(
+            move |c| Ok(collab::admin_case_execution::session_binding(c, &session)?.is_some()),
+        )
+        .await
+    }
+
     async fn insert_public_session(
         &self,
         s: NewSession,
@@ -492,6 +568,16 @@ impl Port for DbPort {
     }
 
     async fn worldview(&self, session: &str) -> Result<String> {
+        let id = session.to_owned();
+        let scoped = self.read(move |c| {
+            let Some(w) = collab::admin_case_execution::session_binding(c, &id)? else { return Ok(None) };
+            let case = collab::admin_cases::get(c, &crewd_proto::AdminCaseGetParams { crew_id:w.crew_id().into(), id:w.case_id().into() })?;
+            let targets:Vec<_> = case.targets.iter().filter(|t| t.scope == crewd_proto::AdminCaseScope::InScope).map(|t| t.id.clone()).collect();
+            Ok(Some(format!("You are the temporary administrative executor for case {}. Work scope: {}. Inspect those work items using work_item_get and their history. Only evidence-based work_item_close and verified work_item_reassign_lost are available as mutations, under your actual Admin permissions. Never invent completion evidence. A successful tool call is not a verified case outcome. Do not perform unrelated tasks or start sessions.", w.case_id(), targets.join(", "))))
+        }).await?;
+        if let Some(scoped) = scoped {
+            return Ok(scoped);
+        }
         // Shared launch/SessionStart source: DB read is released before the bounded quota read.
         // OrchestraControl's source is outside the actor mailbox; provider feeding is unavailable.
         let ctx = crate::agent::port::world_context(&self.state, session).await?;

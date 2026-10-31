@@ -54,6 +54,14 @@ impl<P: Port> Core<P> {
         });
         let mut awake = Vec::new();
         for row in running {
+            match self.port.admin_case_bound(&row.id).await {
+                Ok(true) => continue,
+                Err(error) => {
+                    eprintln!("crewd: administrative binding unavailable for {}: {error}; withheld from ordinary recovery", row.id);
+                    continue;
+                }
+                Ok(false) => {}
+            }
             if !self.port.retirement_parked(&row.id).await? {
                 awake.push(row);
             }

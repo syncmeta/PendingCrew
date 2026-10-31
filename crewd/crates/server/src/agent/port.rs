@@ -157,7 +157,16 @@ where
     T: Send + 'static,
     F: FnOnce(&Connection) -> crewd_collab::Result<T> + Send + 'static,
 {
-    Ok(st.db.call_result(move |s| f(s.conn())).await??)
+    let authority = super::admin_case_scope::capture();
+    Ok(st
+        .db
+        .call_result(move |s| {
+            if let Some(a) = &authority {
+                a.validate_read(s.conn())?;
+            }
+            f(s.conn())
+        })
+        .await??)
 }
 
 /// 写：一个事务，提交后事件进 Hub（`AppState::collab`）。

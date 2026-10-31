@@ -133,6 +133,7 @@ impl AppState {
         f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
     ) -> crewd_collab::Result<T> {
         let hub = self.hub.clone();
+        let case_authority = crate::agent::admin_case_scope::capture();
         let local_policy = self.peer_policy.get().cloned();
         let context = crewd_collab::TxContext::new(self.causal_fence.clone());
         #[cfg(test)]
@@ -146,7 +147,14 @@ impl AppState {
                 }
                 // 在库线程上取时间：库线程串行执行，时间戳顺序 = 提交顺序（排队期间不会被后来者超过）。
                 let now = crewd_store::now_ms();
-                let (v, changes) = crewd_collab::run_with_context(s, now, context, f)?;
+                let (v, changes) = crewd_collab::run_with_context(s, now, context, move |tx| {
+                    let permit = case_authority.as_ref().map(|a| a.effect(tx)).transpose()?;
+                    let value = f(tx)?;
+                    if let Some(permit) = permit {
+                        crewd_collab::admin_case_execution::finish_effect(tx, permit)?;
+                    }
+                    Ok(value)
+                })?;
                 if let Some(policy) = &local_policy {
                     policy
                         .replace_trusted_clients(crewd_store::local_clients::list(s.conn())?)

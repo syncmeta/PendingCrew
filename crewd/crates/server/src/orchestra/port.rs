@@ -454,6 +454,28 @@ pub trait Port: Send + Sync + 'static {
     fn sessions_desired_running(&self) -> impl Future<Output = Result<Vec<SessionRow>>> + Send;
     fn all_session_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn insert_session(&self, s: NewSession) -> impl Future<Output = Result<SessionRow>> + Send;
+    fn insert_admin_case_session(
+        &self,
+        _permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
+    ) -> impl Future<Output = Result<SessionRow>> + Send {
+        async { anyhow::bail!("administrative case registration unavailable") }
+    }
+    fn claim_admin_launch(&self, _session: &str) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
+    fn confirm_admin_started(
+        &self,
+        _session: &str,
+        _generation: u64,
+    ) -> impl Future<Output = Result<bool>> + Send {
+        async { Ok(true) }
+    }
+    fn admin_launch_unknown(&self, _session: &str) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
+    fn admin_case_bound(&self, _session: &str) -> impl Future<Output = Result<bool>> + Send {
+        async { Ok(false) }
+    }
     /// Production-only authenticated allocation. A fake Port cannot silently
     /// skip the original public actor/receipt transaction.
     fn insert_public_session(

@@ -12,7 +12,7 @@ struct CrewdAdminCasesView:View {
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
             Text("行政处理记录").font(.headline)
-            Text("记录工作跟进升级来源及介入判断；判断被采纳不代表已启动成员或已解决工作。").font(.caption).foregroundStyle(.secondary)
+            Text("记录工作跟进升级来源、判断与执行事实。自动行政启动尚未启用；内部执行验证记录不代表日用自动处理。").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("重新读取") {load(reset:true)}.disabled(busy)
                 if next != nil {Button("下一页") {load(reset:false)}.disabled(busy)}
@@ -26,7 +26,7 @@ struct CrewdAdminCasesView:View {
                         Button {readDetail(row["id"].string ?? "")} label: {
                             VStack(alignment:.leading) {
                                 Text("工作跟进升级 · " + (row["source"]["sessionId"].string ?? "成员"))
-                                Text(decisionPhase(row["decision"].string ?? "")+"，尚未执行 · \(row["targets"].array.count) 项工作 · " + time(row["createdAt"]))
+                                Text(decisionPhase(row["decision"].string ?? "")+" · "+executionPhase(row["execution"].string ?? "")+" · \(row["targets"].array.count) 项工作 · " + time(row["createdAt"]))
                             }
                         }.disabled(busy)
                     }
@@ -39,9 +39,15 @@ struct CrewdAdminCasesView:View {
                         if detail["decisionRecord"] != .null {
                             Text("原因："+decisionReason(detail["decisionRecord"]["reason"].string ?? ""))
                             if detail["decisionRecord"]["probability"] != .null {Text("介入概率："+detail["decisionRecord"]["probability"].pretty)}
-                            Text(detail["decisionRecord"]["adopted"] == .bool(true) ? "介入建议已采纳；尚未启动执行，也不代表工作解决。":"本次判断未采纳介入建议。")
+                            Text(detail["decisionRecord"]["adopted"] == .bool(true) ? "介入建议已采纳；是否启动须看独立执行记录，不代表工作解决。":"本次判断未采纳介入建议。")
                         }
-                        Text("执行：尚未启动临时行政成员")
+                        Text("执行："+executionPhase(detail["execution"].string ?? ""))
+                        if detail["executionRecord"] != .null {
+                            Text("执行成员："+(detail["executionRecord"]["sessionId"].string ?? "")).textSelection(.enabled)
+                            Text("执行原因："+executionReason(detail["executionRecord"]["reason"].string ?? ""))
+                            Text("已核实协作效果："+String(detail["executionRecord"]["effectsCount"].int ?? 0)+"；效果数不代表案件已解决。")
+                            if let generation=detail["executionRecord"]["generation"].string {Text("确认执行代次："+generation)}
+                        }
                         Text("结果：尚未核验解决")
                         Text("退场：尚未开始；会话退出不等于业务解决")
                         ForEach(Array(detail["targets"].array.enumerated()),id:\.offset) {_,target in
@@ -61,6 +67,12 @@ struct CrewdAdminCasesView:View {
     }
     private func decisionReason(_ value:String)->String {
         ["prepared":"等待模型判断","native_answered":"模型原生概率答复","generated":"生成式答复，仅作建议","provider_unavailable":"模型服务不可用","restart_unknown":"重启前结果未知，不重复请求","unconfigured":"尚未配置判断模型","no_admission":"缺少当前运行准入","state_changed":"来源或工作状态已变化","stopped":"已停止","no_in_scope_targets":"当前范围没有可处理目标"][value] ?? "未知原因"
+    }
+    private func executionPhase(_ value:String)->String {
+        ["not_started":"尚未开始","registered":"已登记唯一成员，尚未请求启动","requested":"已请求启动，尚未确认实际运行","running":"已收到实际启动确认","unknown":"启动结果未知，不自动重试","stale":"执行依据已失效"][value] ?? "未知执行状态"
+    }
+    private func executionReason(_ value:String)->String {
+        ["registered":"案件与成员已绑定","launch_requested":"启动请求已登记","started":"已收到实际 Spawned 确认","launch_unknown":"启动结果未确认","restart_unknown":"重启前执行结果未知","state_changed":"执行所依赖的状态已变化"][value] ?? "未知原因"
     }
     private func time(_ value:CrewdValue)->String {guard let ms=value.int else{return "未知"};return Date(timeIntervalSince1970:Double(ms)/1000).formatted(date:.abbreviated,time:.standard)}
     private func kind(_ value:String)->String {["unanswered":"缺少回报","overdue":"检查逾期","ready_unscheduled":"可推进但未安排检查"][value] ?? value}

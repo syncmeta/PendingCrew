@@ -3,6 +3,7 @@
 //! `now_ms`；操作把「改了什么」记成 `Change`，`run` 提交成功才交回（服务层据此发事件）。
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
 pub mod admin_cases;
+pub mod admin_case_execution;
 pub mod asks;
 pub mod causal;
 pub mod channel_archive;

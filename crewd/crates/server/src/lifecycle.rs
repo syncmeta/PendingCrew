@@ -46,6 +46,18 @@ impl Admission {
             && !self.blocked.load(Ordering::Acquire)
             && self.sessions.lock().is_ok_and(|s| s.contains(id))
     }
+    /// Derive only a bound internal child's admission from its exact live sponsor.
+    /// This does not manufacture a Human action or persist across daemon runs.
+    pub(crate) fn derive(&self, sponsor: &str, child: &str) -> bool {
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return false;
+        };
+        if !self.can_admit() || !sessions.contains(sponsor) {
+            return false;
+        }
+        sessions.insert(child.to_owned());
+        true
+    }
     pub fn any(&self) -> bool {
         !self.closed.load(Ordering::Acquire)
             && !self.blocked.load(Ordering::Acquire)

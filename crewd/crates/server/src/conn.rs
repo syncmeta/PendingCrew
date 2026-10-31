@@ -382,6 +382,32 @@ async fn request_step(
         Ok(req) => peer.authorize(state, &req.method, drain).await.err(),
         Err(_) => None,
     };
+    let denied = if denied.is_none() {
+        if let (Ok(req), Some(session)) = (parsed.as_ref(), agent.session_id()) {
+            match crate::agent::admin_case_scope::bound(state, session).await {
+                Ok(true)
+                    if !matches!(
+                        req.method.as_str(),
+                        "agent.attach" | "agent.tools" | "agent.call" | "agent.hook"
+                    ) =>
+                {
+                    Some(RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "Administrative case connection is restricted to authenticated agent methods",
+                    ))
+                }
+                Err(_) => Some(RpcError::new(
+                    RpcError::FORBIDDEN,
+                    "Administrative case authority unavailable",
+                )),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        denied
+    };
     let frame = match parsed {
         Err(e) => parse_error(&format!("无法解析请求: {e}")),
         Ok(req) if denied.is_some() => {

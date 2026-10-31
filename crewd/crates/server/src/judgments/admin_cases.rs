@@ -57,6 +57,19 @@ impl super::Runtime {
             }
             let cursor = after.take();
             let (_, next) = state
+                .collab(move |tx| crewd_collab::admin_case_execution::recover_page(tx, cursor))
+                .await?;
+            let Some(next) = next else { break };
+            after = Some(next);
+            tokio::task::yield_now().await;
+        }
+        let mut after = None;
+        loop {
+            if self.closed.load(Ordering::Acquire) {
+                break;
+            }
+            let cursor = after.take();
+            let (_, next) = state
                 .collab(move |tx| facts::recover_page(tx, cursor))
                 .await?;
             let Some(next) = next else { break };

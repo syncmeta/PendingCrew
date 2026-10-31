@@ -1171,6 +1171,7 @@ mod reassignment;
 
 mod retirement;
 mod admin_cases;
+mod admin_execution;
 
 #[tokio::test]
 async fn stale_settings_revision_returns_conflict_without_panicking_or_changing_configuration() {

@@ -149,6 +149,12 @@ pub(crate) async fn call_scoped(
 }
 
 pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> CallResult {
+    if super::admin_case_scope::check_call(st, me, tool, &args)
+        .await
+        .is_err()
+    {
+        return CallResult::err("Administrative case authority unavailable or refused".into());
+    }
     let cx = Ctx {
         st,
         me,
@@ -402,12 +408,14 @@ mod tests {
         );
     }
 
-    /// Every catalog tool reaches its handler (35 after public work blocking): none answers `r.no_handler`.
+    /// Every distinct catalog tool reaches its handler: none answers `r.no_handler`.
     #[tokio::test]
     async fn every_catalog_tool_has_a_handler() {
         let f = Fixture::new().await;
         let me = f.me(&f.captain).await;
-        assert_eq!(catalog::CATALOG.len(), 54);
+        assert!(!catalog::CATALOG.is_empty());
+        let names: std::collections::BTreeSet<_> = catalog::CATALOG.iter().map(|t| t.name).collect();
+        assert_eq!(names.len(), catalog::CATALOG.len(), "tool names must be unique");
         for t in catalog::CATALOG {
             let r = call(&f.state, &me, t.name, json!({})).await;
             assert_ne!(

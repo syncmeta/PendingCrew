@@ -65,9 +65,61 @@
     },
     "AdminCaseExecution": {
       "enum": [
-        "not_started"
+        "not_started",
+        "registered",
+        "requested",
+        "running",
+        "unknown",
+        "stale"
       ],
       "type": "string"
+    },
+    "AdminCaseExecutionReason": {
+      "enum": [
+        "registered",
+        "launch_requested",
+        "started",
+        "launch_unknown",
+        "restart_unknown",
+        "state_changed"
+      ],
+      "type": "string"
+    },
+    "AdminCaseExecutionView": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "type": "string"
+        },
+        "effectsCount": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "generation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/AdminCaseExecution"
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseExecutionReason"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "attemptId",
+        "phase",
+        "reason",
+        "effectsCount"
+      ],
+      "type": "object"
     },
     "AdminCaseGetParams": {
       "additionalProperties": false,
@@ -236,6 +288,17 @@
         },
         "execution": {
           "$ref": "#/$defs/AdminCaseExecution"
+        },
+        "executionRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseExecutionView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "id": {
           "type": "string"

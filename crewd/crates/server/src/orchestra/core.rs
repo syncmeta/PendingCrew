@@ -541,6 +541,10 @@ fn retirement_source_page(
 }
 
 pub enum Cmd {
+    StartAdminCase {
+        permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
+        reply: Reply<SessionRow>,
+    },
     RetirementCandidates {
         limit: usize,
         reply: Reply<Vec<(String, crewd_collab::session_retirement::ActorWitness)>>,
@@ -1200,6 +1204,10 @@ impl<P: Port> Core<P> {
                 let _ = reply.send(result);
             }
             Cmd::Start { req, origin, reply } => self.start_new(req, origin, reply).await,
+            Cmd::StartAdminCase { permit, reply } => {
+                let result = self.start_admin_case(permit).await;
+                let _ = reply.send(result);
+            }
             Cmd::Resume {
                 session,
                 origin,
@@ -1425,7 +1433,15 @@ impl<P: Port> Core<P> {
         req: &StartSession,
         origin: Origin,
     ) -> Result<Option<PathBuf>, ControlError> {
-        if origin == Origin::Agent && req.role == crewd_proto::Role::Admin {
+        self.check_start_internal(req, origin, false).await
+    }
+    async fn check_start_internal(
+        &self,
+        req: &StartSession,
+        origin: Origin,
+        administrative_case: bool,
+    ) -> Result<Option<PathBuf>, ControlError> {
+        if origin == Origin::Agent && req.role == crewd_proto::Role::Admin && !administrative_case {
             return Err(ControlError::Invalid(
                 Refusal::new(Code::ResourceInvalid).arg("field", "role"),
             ));
@@ -1490,6 +1506,77 @@ impl<P: Port> Core<P> {
             .map_err(ControlError::from_port)?
             .ok_or_else(|| ControlError::CrewNoWorkdir(req.crew_id.clone()))?;
         Ok(Some(base))
+    }
+
+    async fn start_admin_case(
+        &mut self,
+        permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
+    ) -> Result<SessionRow, ControlError> {
+        let admission = self
+            .cfg
+            .admission
+            .clone()
+            .ok_or(ControlError::ShuttingDown)?;
+        if self.shutting_down || !admission.contains(permit.source_session()) {
+            return Err(ControlError::ShuttingDown);
+        }
+        let sponsor = self
+            .port
+            .session(permit.source_session())
+            .await
+            .map_err(ControlError::from_port)?
+            .ok_or_else(|| ControlError::NotFound(permit.source_session().into()))?;
+        if sponsor.crew_id != permit.crew_id() {
+            return Err(ControlError::ShuttingDown);
+        }
+        let req = StartSession {
+            crew_id: sponsor.crew_id.clone(),
+            role: crewd_proto::Role::Admin,
+            executor: sponsor.executor.clone(),
+            brief: String::new(),
+            title: Some("行政事项".into()),
+            isolation: false,
+            model: sponsor.model.clone(),
+            effort: sponsor.effort.clone(),
+            codex_options: None,
+        };
+        self.check_start_internal(&req, Origin::Agent, true).await?;
+        let exec = self
+            .execs
+            .get(&req.executor)
+            .map_err(|_| ControlError::Unsupported(req.executor.clone()))?;
+        // Refuse missing workspace before committing a session allocation.
+        if self
+            .port
+            .crew_workdir(permit.crew_id())
+            .await
+            .map_err(ControlError::from_port)?
+            .is_none()
+        {
+            return Err(ControlError::CrewNoWorkdir(permit.crew_id().into()));
+        }
+        let source = permit.source_session().to_owned();
+        let row = self
+            .port
+            .insert_admin_case_session(permit)
+            .await
+            .map_err(ControlError::from_port)?;
+        if !admission.derive(&source, &row.id) {
+            self.port
+                .admin_launch_unknown(&row.id)
+                .await
+                .map_err(ControlError::from_port)?;
+            return Err(ControlError::ShuttingDown);
+        }
+        if let Err(error) = self
+            .launch(row.clone(), exec, row.brief.clone(), vec![], vec![])
+            .await
+        {
+            admission.revoke(&row.id);
+            let _ = self.port.admin_launch_unknown(&row.id).await;
+            return Err(ControlError::from_port(error));
+        }
+        Ok(row)
     }
 
     async fn on_worktree_ready(
@@ -2271,7 +2358,10 @@ impl<P: Port> Core<P> {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("session {} 没有工作目录", row.id))?;
         let system_prompt = Some(self.port.worldview(&row.id).await?);
-        let initial_context = if text.is_some() && exec.accepts_initial_context() {
+        let initial_context = if text.is_some()
+            && exec.accepts_initial_context()
+            && !self.port.admin_case_bound(&row.id).await?
+        {
             within(
                 self.cfg.hook_timeout,
                 "ContextExtras",
@@ -2364,7 +2454,16 @@ impl<P: Port> Core<P> {
         );
         let tx = self.inbox.clone();
         let task_session = session.clone();
+        let launch_port = self.port.clone();
         tokio::spawn(async move {
+            if let Err(error) = launch_port.claim_admin_launch(&task_session).await {
+                let _ = tx.send(Input::Launched {
+                    session: task_session,
+                    generator,
+                    result: Err(error.to_string()),
+                });
+                return;
+            }
             match exec.launch(req).await {
                 Ok((handle, mut events)) => {
                     // 先报 Launched、再转事件：同一个发送端按序到达，actor 先建好 Live 再收 Spawned。
@@ -2426,6 +2525,7 @@ impl<P: Port> Core<P> {
             .is_some_and(|s| s.generator == generator)
         {
             let st = self.starting.remove(session).expect("checked");
+            log_err(self.port.admin_launch_unknown(session).await);
             self.binary_replaced = true;
             self.port.revoke_token(session);
             let ids = st.batch.ids();
@@ -2470,6 +2570,7 @@ impl<P: Port> Core<P> {
         }
         let st = self.starting.remove(session).expect("上面查过");
         if result.is_err() {
+            log_err(self.port.admin_launch_unknown(session).await);
             if st.managed_resume_wake_cut.is_some() {
                 if let Some(a) = &self.cfg.admission {
                     a.revoke(session);
@@ -2935,6 +3036,17 @@ impl<P: Port> Core<P> {
             SessionEvent::Spawned {
                 agent_session_id, ..
             } => {
+                match self.port.confirm_admin_started(session, generator).await {
+                    Ok(true) => {}
+                    outcome => {
+                        if let Err(error) = outcome {
+                            eprintln!("crewd: administrative start confirmation failed: {error}");
+                        }
+                        let _ = l.handle.stop();
+                        log_err(self.port.admin_launch_unknown(session).await);
+                        return Ok(());
+                    }
+                }
                 // 续跑被拒后驱动层换新号再起，会再来一条 Spawned：以最后一条为准（裁定 12 / M2c）。
                 l.agent_session_id = agent_session_id;
                 // 控制者裁定 C18：进程真的起来了才算「要它在跑」；人已经叫停的不写。
@@ -3201,6 +3313,7 @@ impl<P: Port> Core<P> {
         let Some(mut l) = self.live.remove(session) else {
             return Ok(());
         };
+        log_err(self.port.admin_launch_unknown(session).await);
         if let Some(snapshot) = self.retiring.remove(session)
             && snapshot.actor.generation == l.generator
             && let Err(e) = self

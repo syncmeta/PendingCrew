@@ -330,6 +330,20 @@ impl Handle {
     ) -> Result<SessionRow, ControlError> {
         self.call(|reply| Cmd::Start { req, origin, reply }).await
     }
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Internal executor entry is tested before automatic case dispatch; outcome and retirement integration must precede enabling its background caller"
+        )
+    )]
+    pub(crate) async fn start_admin_case(
+        &self,
+        permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
+    ) -> Result<SessionRow, ControlError> {
+        self.call(|reply| Cmd::StartAdminCase { permit, reply })
+            .await
+    }
 
     pub async fn resume(&self, session: &str, origin: Origin) -> Result<(), ControlError> {
         let session = session.to_string();

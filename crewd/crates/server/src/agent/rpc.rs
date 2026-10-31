@@ -30,6 +30,10 @@ impl AgentConn {
         self.attached_flag.clone()
     }
 
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
     pub(crate) fn is_attached(&self) -> bool {
         self.session.is_some()
     }
@@ -168,6 +172,13 @@ async fn route(
             let me = current(state, &session).await?;
             let loc = port::locale(state).await.unwrap_or_default();
             let mut list = catalog::tools_for(&me, loc);
+            if super::admin_case_scope::bound(state, &session)
+                .await
+                .map_err(|_| invalid())?
+            {
+                list.retain(|tool| super::admin_case_scope::allowed_tool(&tool.name));
+                return to_value(list);
+            }
             if state.data_runtime.get().is_some() {
                 list.retain(|tool| !tool.name.starts_with("document_"));
             }
@@ -188,6 +199,25 @@ async fn route(
         methods::CALL => {
             let p: CallParams = parse_params(req.params)?;
             let me = current(state, &session).await?;
+            let authority = super::admin_case_scope::prepare(
+                state,
+                &me,
+                scope.clone(),
+                conn.data_token.clone().unwrap_or_default(),
+                &p.tool,
+                &p.args,
+            )
+            .await
+            .map_err(|_| invalid())?;
+            if let Some(authority) = authority {
+                return to_value(
+                    super::admin_case_scope::within(
+                        authority,
+                        tools::call(state, &me, &p.tool, p.args),
+                    )
+                    .await,
+                );
+            }
             if let Some(method) = crewd_proto::team_data_api::agent_method(&p.tool) {
                 let token = conn.data_token.clone().ok_or_else(invalid)?;
                 if !scope.is_live() || !state.tokens.verify(&session, &token) {
@@ -237,6 +267,26 @@ async fn route(
         methods::HOOK => {
             let p: HookParams = parse_params(req.params)?;
             let me = current(state, &session).await?;
+            if super::admin_case_scope::bound(state, &session)
+                .await
+                .map_err(|_| invalid())?
+            {
+                if !scope.is_live()
+                    || !conn
+                        .data_token
+                        .as_ref()
+                        .is_some_and(|token| state.tokens.verify(&session, token))
+                {
+                    return Err(invalid());
+                }
+                if let Some(factory) = state.native_helpers.get() {
+                    let _ = crate::orchestra::exec_claude_managed::route(
+                        factory, &session, p.event, p.payload,
+                    )
+                    .await;
+                }
+                return to_value(HookResult { stdout: None });
+            }
             let result = hook(state, &me, p.event, p.payload.clone()).await;
             #[cfg(any(test, feature = "testkit"))]
             crate::agent::testkit::record_hook(state, &me.session_id, p.event, &p.payload, &result);

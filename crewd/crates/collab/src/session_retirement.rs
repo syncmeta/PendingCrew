@@ -57,6 +57,11 @@ fn save(tx: &mut Tx<'_>, r: &Record) -> Result<()> {
     Ok(())
 }
 fn facts(c: &Connection, id: &str) -> Result<Option<(crewd_proto::Session, serde_json::Value)>> {
+    // A bound administrative case is an outstanding obligation even when this
+    // session owns no Work. Only the explicit case outcome lifecycle may release it.
+    if crate::admin_case_execution::session_binding(c, id)?.is_some() {
+        return Ok(None);
+    }
     let s = crate::sessions::get(c, id)?;
     if s.desired != crewd_proto::Desired::Running
         || s.was_working

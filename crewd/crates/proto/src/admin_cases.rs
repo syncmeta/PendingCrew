@@ -32,6 +32,11 @@ pub enum AdminCaseDecision {
 #[serde(rename_all = "snake_case")]
 pub enum AdminCaseExecution {
     NotStarted,
+    Registered,
+    Requested,
+    Running,
+    Unknown,
+    Stale,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +86,8 @@ pub struct AdminCaseView {
     #[serde(default)]
     pub decision_record: Option<AdminCaseDecisionView>,
     pub execution: AdminCaseExecution,
+    #[serde(default)]
+    pub execution_record: Option<AdminCaseExecutionView>,
     pub retirement: AdminCaseRetirement,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -114,4 +121,25 @@ pub struct AdminCaseDecisionView {
     pub adopted: bool,
     pub reason: AdminCaseDecisionReason,
     pub snapshot_witness: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseExecutionReason {
+    Registered,
+    LaunchRequested,
+    Started,
+    LaunchUnknown,
+    RestartUnknown,
+    StateChanged,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseExecutionView {
+    pub session_id: String,
+    pub attempt_id: String,
+    pub phase: AdminCaseExecution,
+    pub reason: AdminCaseExecutionReason,
+    pub generation: Option<String>,
+    pub effects_count: u64,
 }
