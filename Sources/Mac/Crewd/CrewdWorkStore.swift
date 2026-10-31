@@ -119,6 +119,73 @@ final class CrewdWorkStore: ObservableObject {
         ensureTask = task
         await task.value
     }
+    func patrolStatus() async throws -> CrewdValue {
+        let token = generation, crew = selectedCrew
+        guard !crew.isEmpty else { throw CrewdClientError(message: "请先选择机组。") }
+        let value = try await call("work.patrolStatus", .object(["crewId":.string(crew)]))
+        try check(token)
+        guard case .object(let fields) = value, fields["crewId"]?.string == crew,
+              let run = fields["run"], let error = fields["error"],
+              error == .null || error.string != nil else { throw CrewdClientError(message:"后台巡检状态不完整或范围不符。") }
+        if run != .null {
+            guard case .object(let record) = run,
+                  record["startedAtMs"]?.int != nil,
+                  let end = record["completedAtMs"], end == .null || end.int != nil,
+                  case .bool? = record["truncated"],
+                  case .object(let scanned)? = record["scannedCounts"],
+                  case .object(let counts)? = record["counts"],
+                  scanned.values.allSatisfy({ ($0.int ?? -1) >= 0 }),
+                  counts.values.allSatisfy({ ($0.int ?? -1) >= 0 }) else { throw CrewdClientError(message:"后台巡检记录不完整。") }
+        }
+        return value
+    }
+    func patrolPage(scan: String, after: String?) async throws -> CrewdValue {
+        let token = generation, crew = selectedCrew
+        guard !crew.isEmpty, ["work", "entries", "channels"].contains(scan) else { throw CrewdClientError(message: "请先选择机组。") }
+        var params: [String:CrewdValue] = ["crewId": .string(crew), "scan": .string(scan), "limit": .number(50)]
+        if let after { params["after"] = .string(after) }
+        let page = try await call("work.patrol", .object(params))
+        try check(token)
+        let field = scan == "work" ? "items" : scan
+        func validRow(_ row: CrewdValue) -> Bool {
+            guard case .object(let fields) = row,
+                  let id = fields["id"]?.string, !id.isEmpty,
+                  fields["crewId"]?.string == crew else { return false }
+            func boolean(_ key: String) -> Bool { if case .bool? = fields[key] { return true }; return false }
+            switch scan {
+            case "entries": return boolean("unclaimed") && boolean("needsRuling")
+            case "channels":
+                guard boolean("archiveCandidate"), case .array(let reasons)? = fields["blockedBy"],
+                      reasons.allSatisfy({ $0.string?.isEmpty == false }) else { return false }
+                return fields["archiveCandidate"] != .bool(true) || reasons.isEmpty
+            default:
+                guard boolean("unowned"), boolean("stopEscalated"), boolean("longWaitsTruncated"),
+                      fields["revision"]?.string?.isEmpty == false,
+                      case .array(let waits)? = fields["longWaits"],
+                      waits.allSatisfy({ $0["id"].string?.isEmpty == false && $0["crewId"].string?.isEmpty == false && $0["askId"].string?.isEmpty == false }) else { return false }
+                if let lost = fields["lost"], lost != .null {
+                    guard case .object = lost, lost["cause"].string?.isEmpty == false else { return false }
+                }
+                return true
+            }
+        }
+        guard case .object(let fields) = page, let next = fields["nextAfter"],
+              next == .null || (next.string?.isEmpty == false && next.string != after),
+              case .array(let rows) = page[field], page["scan"].string == scan,
+              rows.allSatisfy(validRow) else {
+            throw CrewdClientError(message: "巡检结果不完整或与当前范围不一致，请重新读取。")
+        }
+        return page
+    }
+    /// Read only; changing the organization invalidates an outstanding inspection.
+    func inspectJudgment(crew: String, kind: String, id: String) async throws -> CrewdValue {
+        let token = generation
+        let source: CrewdValue = .object(["crewId": .string(crew), "kind": .string(kind), "id": .string(id)])
+        let value = try await call("judgment.inspect", source)
+        try check(token)
+        guard case .object(let fields) = value, fields["record"] != nil, value["source"] == source else { throw CrewdClientError(message: "判断记录与当前对象不一致，请刷新。") }
+        return value["record"]
+    }
     private func check(_ token: UUID, _ refresh: UUID? = nil) throws {
         guard token == generation, !Task.isCancelled, refresh == nil || refresh == refreshID else { throw CancellationError() }
     }

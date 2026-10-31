@@ -26,6 +26,7 @@ struct CrewdMessageFolderPresentation {
     var filter:CrewTimelineFilter.MessageFolder = .all
     var clear:(()->Void)? = nil
     var classify:((String)->Void)? = nil
+    var inspectJudgment:((String)->Void)? = nil
     #if os(macOS)
     var control:AnyView? = nil
     #endif
@@ -197,6 +198,7 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
     let content:()->Content
     private struct Target:Identifiable {let id:String;let crew:String;let channel:String}
     @State private var target:Target?
+    @State private var judgmentTarget:Target?
     init(workspace:CrewdWorkspace,@ViewBuilder content:@escaping ()->Content){self.workspace=workspace;self.resources=workspace.channelResources;self.content=content}
     private var selection:Binding<String>{Binding(get:{workspace.resourceDrafts.selection(resources.crew,.messages,channel:resources.channel)},set:{workspace.resourceDrafts.select(resources.crew,.messages,$0,channel:resources.channel)})}
     private var classification:CrewdMessageFolderPresentation {
@@ -209,6 +211,7 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
             else{filter = .include(Set(assignments.filter{$0["folderId"] == .string(value)}.compactMap{$0["object"]["id"].string}))}
         }else{filter = .include([])}
         var presentation = CrewdMessageFolderPresentation(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)})
+        presentation.inspectJudgment = { id in judgmentTarget = .init(id:id,crew:resources.crew,channel:resources.channel) }
         #if os(macOS)
         presentation.control = AnyView(CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,
             selection:selection,view:.messages,compact:true).fixedSize(horizontal:true,vertical:false))
@@ -224,7 +227,16 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
                 CrewdFolderEditor(store:resources,drafts:$workspace.resourceDrafts,view:.messages,object:CrewdFolderFilter.object("message",target.id))
             }
         }
-        .onChange(of:resources.crew+resources.channel){_,_ in target=nil}
+        .sheet(item:$judgmentTarget) { target in
+            if resources.crew == target.crew, resources.channel == target.channel {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("这条消息的判断记录").font(.headline)
+                    CrewdJudgmentInspectionView(store: workspace.workStore, crew: target.crew, kind: "message", sourceID: target.id, members: Array(workspace.knownSessions.values), automaticallyLoad: true)
+                    Button("关闭") { judgmentTarget = nil }
+                }.padding().frame(minWidth: 360)
+            }
+        }
+        .onChange(of:resources.crew+resources.channel){_,_ in target=nil; judgmentTarget=nil}
     }
 }
 

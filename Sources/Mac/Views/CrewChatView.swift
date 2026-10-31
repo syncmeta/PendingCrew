@@ -1379,7 +1379,8 @@ struct CrewChatView: View {
             menu: { CrewMessageContextMenuContent(
                 text: msg.content,
                 onReply: { beginReply(to: entry) },
-                onClassify: messageFolders.classify.map { action in { action(entry.id) } }
+                onClassify: messageFolders.classify.map { action in { action(entry.id) } },
+                onInspectJudgment: messageFolders.inspectJudgment.map { action in { action(entry.id) } }
             ) }
         )
         // #443 病根 3：文本选中只给指针底下那一条 —— 常开会让窗口内每段文字都挂
@@ -2333,8 +2334,10 @@ private struct CrewMessageContextMenuContent: View {
     let text: String
     let onReply: () -> Void
     var onClassify:(()->Void)? = nil
+    var onInspectJudgment:(()->Void)? = nil
 
     var body: some View {
+        if let onInspectJudgment { Button("查看判断记录", action: onInspectJudgment) }
         if let onClassify {Button("归入本群分类",systemImage:"folder",action:onClassify)}
         Button {
             CrewMessageClipboard.copy(text)

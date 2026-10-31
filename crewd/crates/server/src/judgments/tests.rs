@@ -1117,3 +1117,50 @@ async fn fresh_human_message_admits_only_jev_chosen_new_target() {
     assert!(!f.state.admission.any());
     f.close().await;
 }
+
+#[test]
+fn maximum_chinese_context_preserves_questions_within_provider_budget() {
+    let recipients = (0..30).map(|i| crewd_collab::judgments::Recipient {
+        id:format!("member-{i}"),name:"成员".repeat(60),captain:i==0,
+        title:Some("标题".repeat(60)),brief:Some("职责".repeat(200)),
+        context_revision:"x".repeat(64),stop_floor:0,stop_epoch:"e".into(),
+        work_context:json!({"scope":"source_channel","sample":(0..6).map(|_|json!({"title":"工作".repeat(60),"status":"active","blocked":false})).collect::<Vec<_>>(),"truncated":false,"sample_only":true})
+    }).collect();
+    let mut input = InputSnapshot {
+        kind: "message".into(),
+        id: "m".into(),
+        crew: "c".into(),
+        channel: Some("ch".into()),
+        text: "消息".repeat(1000),
+        context_version: "v".into(),
+        captain: Some("member-0".into()),
+        recipients,
+        links: (0..20)
+            .map(|i| crewd_collab::judgments::LinkCandidate {
+                kind: "message".into(),
+                id: format!("m{i}"),
+                summary: "内容".repeat(100),
+                revision: "1".into(),
+            })
+            .collect(),
+        version: "v".repeat(64),
+    };
+    let wake = batch(&input, true);
+    assert_eq!(wake.questions.len(), 31);
+    assert_eq!(wake.state["text"], input.text);
+    for q in wake.questions.values() {
+        if let Judgment::Predicate { instructions, .. } = q {
+            let member = &instructions["member"];
+            assert_eq!(member["context_truncated"], true);
+            assert_eq!(member["current_work"]["truncated"], true);
+            assert_eq!(
+                member["current_work"]["sample"].as_array().unwrap().len(),
+                1
+            );
+        }
+    }
+    assert!(serde_json::to_vec(&wake).unwrap().len() < 60_000);
+    input.kind = "route".into();
+    let route = batch(&input, false);
+    assert!(serde_json::to_vec(&route).unwrap().len() < 60_000);
+}

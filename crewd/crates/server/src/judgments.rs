@@ -9,16 +9,57 @@ use crewd_jev::provider::{
 use serde_json::json;
 use std::collections::BTreeMap;
 
+// Reserve at most 16 KiB for additional member context across the 30 wake
+// candidates. Internal snapshots retain full revisions; only provider text is cut.
+fn member_input(m: &crewd_collab::judgments::Recipient, count: usize) -> serde_json::Value {
+    let budget = 16_384 / count.max(1);
+    let mut limit = 120;
+    let context = loop {
+        let sample = m.work_context["sample"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let text_cut = m
+            .title
+            .iter()
+            .chain(m.brief.iter())
+            .any(|v| v.chars().count() > limit);
+        let work_cut = m.work_context["truncated"].as_bool().unwrap_or(false)
+            || sample.len() > 1
+            || sample
+                .iter()
+                .take(1)
+                .any(|w| w["title"].as_str().unwrap_or_default().chars().count() > limit);
+        let v = json!({
+            "title":m.title.as_ref().map(|v|v.chars().take(limit).collect::<String>()),
+            "brief":m.brief.as_ref().map(|v|v.chars().take(limit).collect::<String>()),
+            "context_truncated":text_cut || work_cut,
+            "current_work":{"scope":m.work_context["scope"],"sample_only":true,
+                "truncated":work_cut,"sample":sample.iter().take(1).map(|w|json!({
+                    "title":w["title"].as_str().unwrap_or_default().chars().take(limit).collect::<String>(),
+                    "status":w["status"],"blocked":w["blocked"]})).collect::<Vec<_>>()}
+        });
+        if serde_json::to_vec(&v).is_ok_and(|bytes| bytes.len() <= budget) || limit == 0 {
+            break v;
+        }
+        limit /= 2;
+    };
+    let mut member = context;
+    member["name"] = json!(m.name);
+    member["captain"] = json!(m.captain);
+    member
+}
+
 pub(crate) fn batch(s: &InputSnapshot, wake: bool) -> Batch {
     let mut questions = BTreeMap::new();
     if s.kind == "route" && !s.recipients.is_empty() {
-        questions.insert("route".into(),Judgment::Choice {instructions:json!("Choose the member to receive this human requirement. This does not assign a Work owner or authorize tools."),
-            candidates:s.recipients.iter().take(crewd_jev::decisions::MAX_MEMBERS).enumerate().map(|(i,m)|(format!("s{i}"),json!({"name":m.name,"captain":m.captain}))).collect()});
+        questions.insert("route".into(),Judgment::Choice {instructions:json!("Choose the member to receive this human requirement. This does not assign a Work owner or authorize tools. current_work is only a bounded sample in the stated source scope, not a workload inventory; an empty sample does not mean idle."),
+            candidates:s.recipients.iter().take(crewd_jev::decisions::MAX_MEMBERS).enumerate().map(|(i,m)|(format!("s{i}"),member_input(m,s.recipients.len()))).collect()});
     }
     if s.kind == "message" {
         if wake {
             for (i, m) in s.recipients.iter().enumerate() {
-                questions.insert(format!("wake_s{i}"),Judgment::Predicate{instructions:json!({"question":"Should this member wake now for the human message?","member":{"name":m.name,"captain":m.captain}}),yes:json!("needs to act now"),no:json!("does not need to act now")});
+                questions.insert(format!("wake_s{i}"),Judgment::Predicate{instructions:json!({"question":"Should this member wake now for the human message? current_work is only a bounded sample in the stated source scope, not a workload inventory; an empty sample does not mean idle.","member":member_input(m,s.recipients.len())}),yes:json!("needs to act now"),no:json!("does not need to act now")});
             }
         }
         if !s.links.is_empty() {

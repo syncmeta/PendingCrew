@@ -318,6 +318,7 @@ fn note_error(st: &mut MemState, id: i64, error: &str) {
 #[path = "testkit/mem_causal.rs"]
 mod mem_causal;
 pub struct MemPort {
+    pub patrol_ticks: std::sync::atomic::AtomicUsize,
     pub st: Mutex<MemState>,
     causal: Mutex<mem_causal::MemCausal>,
 }
@@ -325,6 +326,7 @@ pub struct MemPort {
 impl MemPort {
     pub fn new() -> Self {
         Self {
+            patrol_ticks: std::sync::atomic::AtomicUsize::new(0),
             st: Mutex::new(MemState::default()),
             causal: Mutex::new(mem_causal::MemCausal::new().expect("isolated real collab Store")),
         }
@@ -544,6 +546,10 @@ impl MemPort {
 }
 
 impl Port for MemPort {
+    async fn advance_patrol(&self) -> Result<()> {
+        self.patrol_ticks.fetch_add(1,std::sync::atomic::Ordering::SeqCst);Ok(())
+    }
+
     async fn session(&self, id: &str) -> Result<Option<SessionRow>> {
         let st = self.lock();
         if let Some(kind) = st.storage_error {
@@ -3702,4 +3708,15 @@ mod self_tests {
             "dm 的 session 各方"
         );
     }
+}
+
+#[tokio::test]
+async fn patrol_tick_runs_without_executor_admission() {
+    let admission=Arc::new(crate::lifecycle::Admission::default());
+    let cfg=super::OrchestraConfig{admission:Some(admission.clone()),..super::OrchestraConfig::for_tests()};
+    let mut rig=Rig::with_cfg(Hooks::default(),cfg).await;
+    let before=rig.port.patrol_ticks.load(std::sync::atomic::Ordering::SeqCst);
+    rig.core.on_tick().await.unwrap();
+    assert_eq!(rig.port.patrol_ticks.load(std::sync::atomic::Ordering::SeqCst),before+1);
+    assert!(!admission.any());
 }

@@ -299,6 +299,7 @@ struct CrewdChannelTodoView:View {
             if let answer=detail["answer"].string { MarkdownText(text: "答复：" + answer, variant: .todoNote).textSelection(.enabled) }
             if let reason=detail["withdrawReason"].string { MarkdownText(text: "撤回理由：" + reason, variant: .todoNote).textSelection(.enabled) }
             if id.kind == .requirement {
+                CrewdJudgmentInspectionView(store: work, crew: row["crewId"].string ?? crew, kind: "requirement", sourceID: id.raw, members: members)
                 Button("新建计划"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:"",source:id.raw,channel:channel))}.font(.caption).disabled(busy || detail["status"] == .string("closed"))
             }else if id.kind == .plan,row["crewId"] == .string(crew) {
                 Button("计划操作"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:id.raw,source:""))}.font(.caption).disabled(detail["frozen"] == .bool(true) || ["done","dropped"].contains(detail["status"].string ?? ""))

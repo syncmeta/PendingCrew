@@ -1,8 +1,8 @@
 //! Bounded explicit patrol projection. No scheduling, decisions, or mutations.
 use crate::{Result, asks, sessions, work};
 use crewd_proto::{
-    WorkListParams, WorkPatrolItem, WorkPatrolLost, WorkPatrolPage, WorkPatrolParams,
-    WorkPatrolWait,
+    WorkListParams, WorkPatrolChannel, WorkPatrolChannelBlocker, WorkPatrolEntry, WorkPatrolItem,
+    WorkPatrolLost, WorkPatrolPage, WorkPatrolParams, WorkPatrolScan, WorkPatrolWait,
 };
 use crewd_store::{StoreError, object_refs::ObjectKind, work_stop_checks};
 use crewd_work::{LostCause, SessionId, Ts};
@@ -10,6 +10,9 @@ use rusqlite::Connection;
 use std::collections::BTreeMap;
 
 pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkPatrolPage> {
+    if p.scan != WorkPatrolScan::Work {
+        return read_other(conn, p, now_ms);
+    }
     // Reuse the issued-ID, limit, scope, and authority checks; do not add a second ledger.
     let page = work::list(
         conn,
@@ -101,6 +104,9 @@ pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkP
         });
     }
     Ok(WorkPatrolPage {
+        scan: WorkPatrolScan::Work,
+        entries: vec![],
+        channels: vec![],
         observed_at: crewd_store::ts_from_ms(now_ms),
         live_only: true,
         include_removed: false,
@@ -113,6 +119,181 @@ pub fn read(conn: &Connection, p: WorkPatrolParams, now_ms: i64) -> Result<WorkP
     })
 }
 
+fn read_other(conn: &Connection, p: WorkPatrolParams, now: i64) -> Result<WorkPatrolPage> {
+    use rusqlite::params;
+    let bad = || StoreError::Invalid("invalid patrol cursor or limit".into());
+    let limit = p.limit.unwrap_or(50);
+    if limit == 0 || limit > 200 {
+        return Err(bad().into());
+    }
+    if let Some(crew) = &p.crew_id {
+        crate::crews::get(conn, crew)?;
+    }
+    let mut out = WorkPatrolPage {
+        scan: p.scan,
+        entries: vec![],
+        channels: vec![],
+        observed_at: crewd_store::ts_from_ms(now),
+        live_only: false,
+        include_removed: false,
+        unavailable_categories: vec![],
+        items: vec![],
+        next_after: None,
+    };
+    let book = asks::load_org(conn)?;
+    match p.scan {
+        WorkPatrolScan::Entries => {
+            let after = match p.after.as_deref() {
+                None => 0,
+                Some(id) => id
+                    .strip_prefix('#')
+                    .and_then(|n| n.parse::<i64>().ok())
+                    .filter(|n| *n > 0 && id == format!("#{n}"))
+                    .ok_or_else(bad)?,
+            };
+            let mut query = conn.prepare("SELECT r.number,r.crew_id FROM object_refs r JOIN crews c ON c.id=r.crew_id WHERE r.kind='requirement' AND r.number>?1 AND (?2 IS NULL OR r.crew_id=?2) AND c.archived_at IS NULL ORDER BY r.number LIMIT ?3")?;
+            let mut rows = query
+                .query_map(params![after, p.crew_id, i64::from(limit) + 1], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if rows.len() > usize::from(limit) {
+                rows.truncate(usize::from(limit));
+                out.next_after = rows.last().map(|r| format!("#{}", r.0));
+            }
+            for (number, crew_id) in rows {
+                let id = format!("#{number}");
+                let core = crewd_store::work_organization::core_for_reference(
+                    conn,
+                    ObjectKind::Requirement,
+                    number,
+                )?
+                .ok_or_else(bad)?
+                .parse()
+                .map_err(|_| bad())?;
+                let view = book.entry_view(core).ok_or_else(bad)?;
+                out.entries.push(WorkPatrolEntry {
+                    id,
+                    crew_id,
+                    unclaimed: view.status == crewd_work::EntryStatus::Unclaimed,
+                    needs_ruling: view.status == crewd_work::EntryStatus::NeedsRuling,
+                });
+            }
+            out.unavailable_categories = vec!["work_items".into(), "archivable_channels".into()];
+        }
+        WorkPatrolScan::Channels => {
+            if let Some(id) = &p.after
+                && (id.is_empty() || id.len() > 256 || id.chars().any(char::is_control))
+            {
+                return Err(bad().into());
+            }
+            let mut query=conn.prepare("SELECT ch.id,ch.crew_id FROM channels ch JOIN crews c ON c.id=ch.crew_id WHERE ch.kind='topic' AND ch.archived_at IS NULL AND c.archived_at IS NULL AND (?1 IS NULL OR ch.id>?1) AND (?2 IS NULL OR ch.crew_id=?2) ORDER BY ch.id LIMIT ?3")?;
+            let mut rows = query
+                .query_map(params![p.after, p.crew_id, i64::from(limit) + 1], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if rows.len() > usize::from(limit) {
+                rows.truncate(usize::from(limit));
+                out.next_after = rows.last().map(|r| r.0.clone());
+            }
+            let page_ids: std::collections::BTreeSet<_> =
+                rows.iter().map(|r| r.0.as_str()).collect();
+            let mut removed_sources = BTreeMap::<String, bool>::new();
+            let mut legacy = BTreeMap::<String, (bool, bool, bool)>::new();
+            for (work_id, item) in &book.state().items {
+                if let Some(channel) = &item.channel {
+                    if !page_ids.contains(channel.as_str()) {
+                        continue;
+                    }
+                    let fact = legacy.entry(channel.to_string()).or_default();
+                    fact.0 = true;
+                    fact.1 |= item.status.is_live();
+                    let source = book.state().item_crew(*work_id).ok_or_else(bad)?;
+                    let removed = match removed_sources.get(source.as_str()) {
+                        Some(v) => *v,
+                        None => {
+                            let v = crate::crews::get(conn, source.as_str())?
+                                .removed_at
+                                .is_some();
+                            removed_sources.insert(source.to_string(), v);
+                            v
+                        }
+                    };
+                    fact.2 |= removed;
+                }
+            }
+            for (id, crew_id) in rows {
+                let (mut any, mut live, mut removed) = legacy.get(&id).copied().unwrap_or_default();
+                let mut links=conn.prepare("SELECT object_kind,object_id,source_crew_id FROM channel_work_links WHERE channel_id=?1 ORDER BY object_kind,object_id LIMIT 201")?;
+                let linked = links
+                    .query_map([&id], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let truncated = linked.len() > 200;
+                let mut non_work = false;
+                for (kind, object, source) in linked.into_iter().take(200) {
+                    if kind != "work" {
+                        non_work = true;
+                        continue;
+                    }
+                    let reference = crewd_store::object_refs::get(
+                        conn,
+                        ObjectKind::Plan,
+                        work::number(&object)?,
+                    )?
+                    .ok_or_else(bad)?;
+                    if reference.crew_id != source {
+                        return Err(bad().into());
+                    }
+                    removed |= match removed_sources.get(&source) {
+                        Some(v) => *v,
+                        None => {
+                            let v = crate::crews::get(conn, &source)?.removed_at.is_some();
+                            removed_sources.insert(source, v);
+                            v
+                        }
+                    };
+                    let core = work::core_plan(conn, &reference)?;
+                    let item = book.state().items.get(&core).ok_or_else(bad)?;
+                    any = true;
+                    live |= item.status.is_live();
+                }
+                let mut blocked_by = vec![];
+                for (yes, reason) in [
+                    (!any, WorkPatrolChannelBlocker::NoLinkedWork),
+                    (live, WorkPatrolChannelBlocker::LiveWork),
+                    (removed, WorkPatrolChannelBlocker::SourceRemoved),
+                    (non_work, WorkPatrolChannelBlocker::NonWorkLinks),
+                    (truncated, WorkPatrolChannelBlocker::LinksTruncated),
+                ] {
+                    if yes {
+                        blocked_by.push(reason);
+                    }
+                }
+                out.channels.push(WorkPatrolChannel {
+                    id,
+                    crew_id,
+                    archive_candidate: blocked_by.is_empty(),
+                    blocked_by,
+                });
+            }
+            out.unavailable_categories = vec![
+                "work_items".into(),
+                "unclaimed_entries".into(),
+                "needs_ruling".into(),
+            ];
+        }
+        WorkPatrolScan::Work => unreachable!(),
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +303,282 @@ mod tests {
     };
     use crewd_proto::{WorkCreateParams, WorkUpdateParams, WorkUpdateStatus};
     use crewd_work::{Actor, BlockOn, Continuation, StopStreak, WorkId};
+    #[test]
+    fn entries_scan_accepts_independent_cursor_without_work() {
+        let s = store();
+        let params: WorkPatrolParams =
+            serde_json::from_value(serde_json::json!({"scan":"entries","limit":1})).unwrap();
+        let page = read(s.conn(), params, NOW).unwrap();
+        let wire = serde_json::to_value(page).unwrap();
+        assert_eq!(wire["scan"], "entries");
+        assert_eq!(wire["entries"], serde_json::json!([]));
+    }
+    #[test]
+    fn independent_sources_are_bounded_scoped_and_read_only() {
+        use crewd_proto::{TodoCloseParams, TodoCreateParams};
+        let mut s = store();
+        let a = ok(&mut s, |tx| {
+            crate::requirements::create(
+                tx,
+                &Sender::Human,
+                TodoCreateParams {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    crew_id: "crew-a".into(),
+                    text: "closed source".into(),
+                    channel_id: None,
+                },
+            )
+        })
+        .todo
+        .requirement_id
+        .unwrap();
+        ok(&mut s, |tx| {
+            crate::requirements::close(
+                tx,
+                &Sender::Human,
+                TodoCloseParams {
+                    id: a.clone(),
+                    expected_status: "unclaimed".into(),
+                    note: "resolved".into(),
+                },
+            )
+        });
+        let b = ok(&mut s, |tx| {
+            crate::requirements::create(
+                tx,
+                &Sender::Human,
+                TodoCreateParams {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    crew_id: "crew-b".into(),
+                    text: "unclaimed source".into(),
+                    channel_id: None,
+                },
+            )
+        })
+        .todo
+        .requirement_id
+        .unwrap();
+        let changes = s.conn().total_changes();
+        let first = read(
+            s.conn(),
+            WorkPatrolParams {
+                scan: WorkPatrolScan::Entries,
+                limit: Some(1),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(first.entries[0].id, a);
+        assert!(!first.entries[0].unclaimed);
+        assert_eq!(first.next_after, Some(a));
+        let second = read(
+            s.conn(),
+            WorkPatrolParams {
+                scan: WorkPatrolScan::Entries,
+                after: first.next_after,
+                limit: Some(1),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(second.entries[0].id, b);
+        assert!(second.entries[0].unclaimed);
+        assert!(second.next_after.is_none());
+        assert!(
+            read(
+                s.conn(),
+                WorkPatrolParams {
+                    scan: WorkPatrolScan::Entries,
+                    after: Some("W1".into()),
+                    ..Default::default()
+                },
+                NOW
+            )
+            .is_err()
+        );
+        assert_eq!(s.conn().total_changes(), changes);
+        let scoped = read(
+            s.conn(),
+            WorkPatrolParams {
+                scan: WorkPatrolScan::Entries,
+                crew_id: Some("crew-a".into()),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+        assert_eq!(scoped.entries.len(), 1);
+        let plan = ok(&mut s, |tx| {
+            work::create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    crew_id: "crew-b".into(),
+                    title: "dropped plan".into(),
+                    sources: vec![b.clone()],
+                    ..Default::default()
+                },
+            )
+        });
+        ok(&mut s, |tx| {
+            work::update(
+                tx,
+                &Sender::Human,
+                WorkUpdateParams {
+                    id: plan.id,
+                    expected_revision: plan.revision,
+                    status: Some(WorkUpdateStatus::Dropped),
+                    note: Some("obsolete approach".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        let ruling = read(
+            s.conn(),
+            WorkPatrolParams {
+                scan: WorkPatrolScan::Entries,
+                crew_id: Some("crew-b".into()),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+        assert!(ruling.entries[0].needs_ruling);
+        assert!(!ruling.entries[0].unclaimed);
+    }
+
+    #[test]
+    fn channel_scan_covers_terminal_links_without_live_work() {
+        let mut s = store();
+        let work = create(&mut s, "crew-a", None);
+        ok(&mut s, |tx| {
+            work::update(
+                tx,
+                &Sender::Human,
+                WorkUpdateParams {
+                    id: work.id.clone(),
+                    expected_revision: work.revision,
+                    status: Some(WorkUpdateStatus::Done),
+                    ..Default::default()
+                },
+            )
+        });
+        for id in ["patrol-a", "patrol-b"] {
+            s.conn().execute("INSERT INTO channels(id,crew_id,kind,name,created_by,created_at) VALUES(?1,'crew-a','topic','test','human','2026-10-01T00:00:00Z')",[id]).unwrap();
+        }
+        s.conn()
+            .execute(
+                "INSERT INTO channel_work_scopes(channel_id,revision) VALUES('patrol-b',1)",
+                [],
+            )
+            .unwrap();
+        s.conn().execute("INSERT INTO channel_work_links(channel_id,object_kind,object_id,source_crew_id) VALUES('patrol-b','work',?1,'crew-a')",[&work.id]).unwrap();
+        s.conn()
+            .execute("DELETE FROM channels WHERE id='patrol-a'", [])
+            .unwrap();
+        let changes = s.conn().total_changes();
+        let p = WorkPatrolParams {
+            scan: WorkPatrolScan::Channels,
+            after: Some("patrol-a".into()),
+            limit: Some(1),
+            ..Default::default()
+        };
+        let page = read(s.conn(), p.clone(), NOW).unwrap();
+        assert_eq!(page.channels[0].id, "patrol-b");
+        assert!(page.channels[0].archive_candidate);
+        assert_eq!(read(s.conn(), p, NOW).unwrap(), page);
+        assert_eq!(s.conn().total_changes(), changes);
+        let active = create(&mut s, "crew-a", None);
+        s.conn().execute("INSERT INTO channel_work_links(channel_id,object_kind,object_id,source_crew_id) VALUES('patrol-b','work',?1,'crew-a')",[&active.id]).unwrap();
+        let inspect = |s: &crewd_store::Store| {
+            read(
+                s.conn(),
+                WorkPatrolParams {
+                    scan: WorkPatrolScan::Channels,
+                    after: Some("patrol-a".into()),
+                    limit: Some(1),
+                    ..Default::default()
+                },
+                NOW,
+            )
+            .unwrap()
+            .channels
+            .remove(0)
+        };
+        assert!(
+            inspect(&s)
+                .blocked_by
+                .contains(&WorkPatrolChannelBlocker::LiveWork)
+        );
+        for n in 0..201 {
+            s.conn().execute("INSERT INTO channel_work_links(channel_id,object_kind,object_id,source_crew_id) VALUES('patrol-b','requirement',?1,'crew-a')",[format!("#{n}")]).unwrap();
+        }
+        let fact = inspect(&s);
+        assert!(!fact.archive_candidate);
+        assert!(
+            fact.blocked_by
+                .contains(&WorkPatrolChannelBlocker::NonWorkLinks)
+        );
+        assert!(
+            fact.blocked_by
+                .contains(&WorkPatrolChannelBlocker::LinksTruncated)
+        );
+        s.conn()
+            .execute(
+                "UPDATE channels SET archived_at='2026-10-01' WHERE id='patrol-b'",
+                [],
+            )
+            .unwrap();
+        let page = read(
+            s.conn(),
+            WorkPatrolParams {
+                scan: WorkPatrolScan::Channels,
+                after: Some("patrol-a".into()),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+        assert!(page.channels.iter().all(|x| x.id != "patrol-b"));
+    }
+    #[test]
+    fn all_scans_reject_missing_or_corrupt_authority() {
+        let s = store();
+        s.conn()
+            .execute("UPDATE organization_work_book SET state='{}'", [])
+            .unwrap();
+        for scan in [WorkPatrolScan::Entries, WorkPatrolScan::Channels] {
+            assert!(
+                read(
+                    s.conn(),
+                    WorkPatrolParams {
+                        scan,
+                        ..Default::default()
+                    },
+                    NOW
+                )
+                .is_err()
+            );
+        }
+        s.conn()
+            .execute("DELETE FROM organization_work_book", [])
+            .unwrap();
+        for scan in [WorkPatrolScan::Entries, WorkPatrolScan::Channels] {
+            assert!(
+                read(
+                    s.conn(),
+                    WorkPatrolParams {
+                        scan,
+                        ..Default::default()
+                    },
+                    NOW
+                )
+                .is_err()
+            );
+        }
+    }
     fn create(
         s: &mut crewd_store::Store,
         crew: &str,

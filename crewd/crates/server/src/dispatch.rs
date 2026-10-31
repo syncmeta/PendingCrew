@@ -758,6 +758,10 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        methods::WORK_PATROL_STATUS => {
+            let p: PatrolStatusParams = parse_params(p)?;
+            read(state, move |c| crewd_collab::patrol_runtime::status(c, &p.crew_id)).await
+        }
         methods::WORK_PATROL => {
             let p: WorkPatrolParams = parse_params_or_default(p)?;
             let now = crewd_store::now_ms();

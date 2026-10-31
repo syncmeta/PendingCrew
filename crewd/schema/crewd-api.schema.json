@@ -9447,6 +9447,115 @@
       ],
       "type": "object"
     },
+    "PatrolRun": {
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capturedSeq": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "completedAtMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "counts": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "findings": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "scan": {
+          "$ref": "#/$defs/WorkPatrolScan"
+        },
+        "scannedCounts": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "startedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "runId",
+        "startedAtMs",
+        "scan",
+        "capturedSeq",
+        "scannedCounts",
+        "findings",
+        "counts",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "PatrolStatus": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PatrolRun"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "PatrolStatusParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
     "PendingDecisionView": {
       "properties": {
         "crewId": {
@@ -14099,6 +14208,66 @@
       ],
       "type": "object"
     },
+    "WorkPatrolChannel": {
+      "properties": {
+        "archiveCandidate": {
+          "description": "Historical work exists and all observed work is terminal. NOT permission\nto archive: message activity, authority and links must be rechecked.",
+          "type": "boolean"
+        },
+        "blockedBy": {
+          "items": {
+            "$ref": "#/$defs/WorkPatrolChannelBlocker"
+          },
+          "type": "array"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "archiveCandidate",
+        "blockedBy"
+      ],
+      "type": "object"
+    },
+    "WorkPatrolChannelBlocker": {
+      "enum": [
+        "no_linked_work",
+        "live_work",
+        "non_work_links",
+        "source_removed",
+        "links_truncated"
+      ],
+      "type": "string"
+    },
+    "WorkPatrolEntry": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "needsRuling": {
+          "type": "boolean"
+        },
+        "unclaimed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "unclaimed",
+        "needsRuling"
+      ],
+      "type": "object"
+    },
     "WorkPatrolItem": {
       "properties": {
         "crewId": {
@@ -14189,6 +14358,20 @@
     },
     "WorkPatrolPage": {
       "properties": {
+        "channels": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkPatrolChannel"
+          },
+          "type": "array"
+        },
+        "entries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/WorkPatrolEntry"
+          },
+          "type": "array"
+        },
         "includeRemoved": {
           "type": "boolean"
         },
@@ -14213,8 +14396,12 @@
           "description": "One observation time for the whole page. Pagination is not a frozen snapshot.",
           "type": "string"
         },
+        "scan": {
+          "$ref": "#/$defs/WorkPatrolScan",
+          "default": "work"
+        },
         "unavailableCategories": {
-          "description": "These pure-patrol categories are not evaluated by this projection.",
+          "description": "Categories not evaluated by this page's selected scan.",
           "items": {
             "type": "string"
           },
@@ -14235,7 +14422,7 @@
       "properties": {
         "after": {
           "default": null,
-          "description": "Global W cursor. The limit bounds scanned live items, not findings.",
+          "description": "Cursor for the selected source: W identity, # identity, or channel ID.\nThe limit bounds scanned sources, not findings.",
           "type": [
             "string",
             "null"
@@ -14257,12 +14444,24 @@
             "integer",
             "null"
           ]
+        },
+        "scan": {
+          "$ref": "#/$defs/WorkPatrolScan",
+          "default": "work"
         }
       },
       "type": [
         "object",
         "null"
       ]
+    },
+    "WorkPatrolScan": {
+      "enum": [
+        "work",
+        "entries",
+        "channels"
+      ],
+      "type": "string"
     },
     "WorkPatrolWait": {
       "description": "Issued global identity plus the existing ask.get readback handle.",
@@ -16029,6 +16228,14 @@
       },
       "result": {
         "$ref": "#/$defs/WorkPatrolPage"
+      }
+    },
+    "work.patrolStatus": {
+      "params": {
+        "$ref": "#/$defs/PatrolStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/PatrolStatus"
       }
     },
     "work.reassignLost": {

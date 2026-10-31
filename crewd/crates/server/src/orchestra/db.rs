@@ -1094,6 +1094,9 @@ impl Port for DbPort {
         .await
     }
 
+    async fn advance_patrol(&self) -> Result<()> {
+        self.write(collab::patrol_runtime::tick).await
+    }
     async fn enqueue_work_checkpoints(&self) -> Result<()> {
         self.write(|tx| {
             collab::checkpoints::enqueue_due(tx)?;

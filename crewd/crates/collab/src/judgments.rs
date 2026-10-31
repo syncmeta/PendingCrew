@@ -11,6 +11,10 @@ pub struct Recipient {
     pub id: String,
     pub name: String,
     pub captain: bool,
+    pub title: Option<String>,
+    pub brief: Option<String>,
+    pub context_revision: String,
+    pub work_context: Value,
     pub stop_floor: i64,
     pub stop_epoch: String,
 }
@@ -42,6 +46,65 @@ pub fn fingerprint(v: &impl Serialize) -> Result<String> {
         .map(|b| format!("{b:02x}"))
         .collect())
 }
+// Only bounded summaries in the source scope enter provider input. No work goals,
+// evidence, human answers, or sibling-channel content are included.
+fn work_context(c: &Connection, crew: &str, channel: Option<&str>) -> Result<Value> {
+    let (items, truncated, revision) = if let Some(ch) = channel {
+        let page = crate::channel_work::list(
+            c,
+            &crate::Sender::Human,
+            crewd_proto::ChannelWorkListParams {
+                kinds: Some(vec![crewd_proto::ChannelWorkKind::Work]),
+                tag: None,
+                channel_id: ch.into(),
+                after: None,
+                limit: Some(30),
+            },
+        )?;
+        let book = crate::asks::load_org(c)?;
+        let mut items = Vec::new();
+        for item in &page.items {
+            if item.crew_id != crew || matches!(item.status.as_str(), "done" | "dropped") {
+                continue;
+            }
+            let reference = crewd_store::object_refs::get(
+                c,
+                crewd_store::object_refs::ObjectKind::Plan,
+                crate::work::number(&item.object.id)?,
+            )?
+            .ok_or_else(|| {
+                crewd_store::StoreError::Invalid("missing linked work reference".into())
+            })?;
+            let core = crate::work::core_plan(c, &reference)?;
+            let work = book
+                .item(core)
+                .ok_or_else(|| crewd_store::StoreError::Invalid("missing linked work".into()))?;
+            items.push(serde_json::json!({"title":work.title.chars().take(120).collect::<String>(),"status":item.status,"blocked":!work.blocked_on.is_empty(),"owner":work.owner,"revision":item.revision}));
+        }
+        (
+            items,
+            page.next.is_some(),
+            fingerprint(&(&page.link_revision, &page.items))?,
+        )
+    } else {
+        let page = crate::work::list(
+            c,
+            crewd_proto::WorkListParams {
+                crew_id: Some(crew.into()),
+                owner: None,
+                live_only: true,
+                limit: Some(30),
+                ..Default::default()
+            },
+        )?;
+        let revision = fingerprint(&page)?;
+        let items = page.items.iter().map(|w| serde_json::json!({"title":w.title.chars().take(120).collect::<String>(),"status":w.status,"blocked":!w.blocked_on.is_empty(),"owner":w.owner})).collect();
+        (items, page.next_after.is_some(), revision)
+    };
+    Ok(
+        serde_json::json!({"scope":if channel.is_some(){"source_channel"}else{"source_crew"},"sample":items,"truncated":truncated,"revision":revision}),
+    )
+}
 fn recipients(c: &Connection, crew: &str, channel: Option<&str>) -> Result<Vec<Recipient>> {
     let captain = crews::captain_of(c, crew)?;
     let mut all = sessions::list(c, Some(crew))?;
@@ -51,8 +114,12 @@ fn recipients(c: &Connection, crew: &str, channel: Option<&str>) -> Result<Vec<R
             .then(b.last_active_at.cmp(&a.last_active_at))
             .then(a.id.cmp(&b.id))
     });
+    let context = work_context(c, crew, channel)?;
     let mut out = Vec::new();
     for s in all {
+        if out.len() == 30 {
+            break;
+        }
         if s.resume_failed_at.is_some() || !matches!(s.role, Role::Captain | Role::Worker) {
             continue;
         }
@@ -62,7 +129,18 @@ fn recipients(c: &Connection, crew: &str, channel: Option<&str>) -> Result<Vec<R
             continue;
         }
         let stop_floor = wakes::human_stop_floor(c, &s.id)?;
+        let sample: Vec<_> = context["sample"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|w| w["owner"].as_str() == Some(s.id.as_str()))
+            .collect();
+        let work_context = serde_json::json!({"scope":context["scope"],"sample":sample.iter().take(6).map(|w| serde_json::json!({"title":w["title"],"status":w["status"],"blocked":w["blocked"]})).collect::<Vec<_>>(),"truncated":context["truncated"].as_bool().unwrap_or(true) || sample.len()>6,"sample_only":true});
         out.push(Recipient {
+            context_revision: fingerprint(&(&s.title, &s.brief, &context))?,
+            work_context,
+            title: s.title.map(|v| v.chars().take(120).collect()),
+            brief: s.brief.map(|v| v.chars().take(400).collect()),
             id: s.id.clone(),
             name: s.display_name.unwrap_or_else(|| "member".into()),
             captain: captain.as_ref() == Some(&s.id),
@@ -713,6 +791,65 @@ mod tests {
         .todo
         .requirement_id
         .unwrap()
+    }
+    #[test]
+    fn current_work_is_scoped_bounded_and_invalidates_inflight_route() {
+        let mut s = store();
+        configured(&mut s);
+        let id = requirement(&mut s);
+        let (record, _, _) = ok(&mut s, |tx| {
+            dispatch(tx, &JudgmentSourceKind::Requirement, &id)
+        })
+        .unwrap();
+        for n in 0..7 {
+            ok(&mut s, |tx| {
+                crate::work::create(
+                    tx,
+                    &Sender::Human,
+                    crewd_proto::WorkCreateParams {
+                        crew_id: "crew-a".into(),
+                        title: format!("database task {n}"),
+                        owner: Some("w-a1".into()),
+                        ..Default::default()
+                    },
+                )
+            });
+        }
+        let input = requirement_input(s.conn(), &id).unwrap().unwrap();
+        let worker = input.recipients.iter().find(|r| r.id == "w-a1").unwrap();
+        assert_eq!(worker.work_context["sample"].as_array().unwrap().len(), 6);
+        assert_eq!(worker.work_context["truncated"], true);
+        assert!(!worker.work_context.to_string().contains("revision"));
+        let scoped = recipients(s.conn(), "crew-a", Some("crew-a/lobby")).unwrap();
+        assert!(
+            scoped
+                .iter()
+                .all(|r| r.work_context["sample"].as_array().unwrap().is_empty())
+        );
+        assert!(!ok(&mut s, |tx| settle(
+            tx,
+            &JudgmentSourceKind::Requirement,
+            &id,
+            &record.decision_id,
+            vec!["w-a1".into()],
+            None,
+            Value::Null
+        )));
+    }
+    #[test]
+    fn member_brief_change_invalidates_decision_snapshot() {
+        let mut s = store();
+        configured(&mut s);
+        let id = requirement(&mut s);
+        let before = requirement_input(s.conn(), &id).unwrap().unwrap();
+        s.conn()
+            .execute(
+                "UPDATE sessions SET brief=?1 WHERE id='w-a1'",
+                ["负责数据库迁移"],
+            )
+            .unwrap();
+        let after = requirement_input(s.conn(), &id).unwrap().unwrap();
+        assert_ne!(before.version, after.version);
     }
     #[test]
     fn stopped_member_new_human_route_settles_once_without_creating_work_or_mutating_source() {

@@ -7,6 +7,14 @@ echo "Evidence: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-work-store.swift" -o "$fixture/test"
+xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
+ "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-judgment-inspection.swift" -o "$fixture/inspection"
+"$fixture/inspection"
+xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
+ "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-patrol.swift" -o "$fixture/patrol"
+"$fixture/patrol"
 python3 - "$fixture" <<'PYCODE'
 import pathlib, socket, json, subprocess, threading, sys
 p=pathlib.Path(sys.argv[1]); listener=socket.socket(socket.AF_UNIX); listener.bind(str(p/'wire.sock')); listener.listen(1)

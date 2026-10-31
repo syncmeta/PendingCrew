@@ -3387,6 +3387,7 @@ impl<P: Port> Core<P> {
         self.notify_drafts().await?;
         self.notifier.flush(now, self.lang()).await?;
         // 默认方案到点（控制者裁定 C7）与清旧唤醒（C6 / S28）出错只记日志：不能挡住下面的重扫。
+        log_err(self.port.advance_patrol().await);
         if self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
             return Ok(());
         }

@@ -36,7 +36,26 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
         })
         .unwrap();
     }
+    crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+        crewd_collab::patrol_runtime::tick(tx)
+    })
+    .unwrap();
+    let run_id = crewd_collab::patrol_runtime::status(store.conn(), "a")
+        .unwrap()
+        .run
+        .unwrap()
+        .run_id;
     drop(store);
+    let reopened = crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap();
+    assert_eq!(
+        crewd_collab::patrol_runtime::status(reopened.conn(), "a")
+            .unwrap()
+            .run
+            .unwrap()
+            .run_id,
+        run_id
+    );
+    drop(reopened);
     let (stop, stopping) = tokio::sync::oneshot::channel();
     let path = dir.path().to_owned();
     let server = tokio::spawn(crewd_server::serve(path.clone(), async {
@@ -75,6 +94,16 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
         assert_eq!(response.id, id);
         response.into_result().unwrap()
     }
+    let status = call(
+        &mut wr,
+        &mut lines,
+        99,
+        "work.patrolStatus",
+        json!({"crewId":"a"}),
+    )
+    .await;
+    assert_eq!(status["run"]["runId"], run_id);
+    assert_eq!(status["crewId"], "a");
     let first = call(&mut wr, &mut lines, 1, "work.patrol", json!({"limit":1})).await;
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
     assert_eq!(first["items"][0]["unowned"], true);
@@ -104,10 +133,52 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
     )
     .await;
     assert_eq!(empty["items"], json!([]));
+    for (id, scan, field) in [(5, "entries", "entries"), (6, "channels", "channels")] {
+        let page = call(
+            &mut wr,
+            &mut lines,
+            id,
+            "work.patrol",
+            json!({"scan":scan,"limit":1}),
+        )
+        .await;
+        assert_eq!(page["scan"], scan);
+        assert_eq!(page[field], json!([]));
+        assert_eq!(page["items"], json!([]));
+    }
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), server)
         .await
         .unwrap()
         .unwrap()
         .unwrap();
+    // Reopening uses the same persisted source identities and performs no writes.
+    let reopened = crewd_store::Store::open(&path.join("crewd.db")).unwrap();
+    let changes = reopened.conn().total_changes();
+    let page = crewd_collab::work_patrol::read(
+        reopened.conn(),
+        crewd_proto::WorkPatrolParams {
+            limit: Some(1),
+            ..Default::default()
+        },
+        crewd_store::now_ms(),
+    )
+    .unwrap();
+    assert_eq!(page.items[0].id, first["items"][0]["id"].as_str().unwrap());
+    for scan in [
+        crewd_proto::WorkPatrolScan::Entries,
+        crewd_proto::WorkPatrolScan::Channels,
+    ] {
+        let page = crewd_collab::work_patrol::read(
+            reopened.conn(),
+            crewd_proto::WorkPatrolParams {
+                scan,
+                ..Default::default()
+            },
+            crewd_store::now_ms(),
+        )
+        .unwrap();
+        assert!(page.entries.is_empty() && page.channels.is_empty());
+    }
+    assert_eq!(reopened.conn().total_changes(), changes);
 }

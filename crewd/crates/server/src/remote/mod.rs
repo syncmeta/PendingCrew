@@ -1113,6 +1113,7 @@ fn allowed_method(method: &str) -> bool {
             | "work.reassignLost"
             | "work.history"
             | "work.patrol"
+            | "work.patrolStatus"
             | "work.transferWithdraw"
             | "ask.list"
             | "ask.get"

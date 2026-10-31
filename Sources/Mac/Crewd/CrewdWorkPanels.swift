@@ -25,6 +25,7 @@ struct CrewdWorkPanels: View {
             return store.plans[id]
         }
     }
+    @State private var patrolPresented = false
     @State private var collapsed:Set<String>=[]
     @State private var selected:String?
     @State private var failure:String?
@@ -41,6 +42,7 @@ struct CrewdWorkPanels: View {
             if !compact {
                 HStack(spacing:10) {
                     CrewdFolderControls(store:resources,drafts:$resourceDrafts,selection:folderSelection,view:folderView,compact:true).fixedSize(horizontal:true,vertical:false)
+                    Button("巡检") { patrolPresented = true }.disabled(store.selectedCrew.isEmpty)
                     Spacer(minLength:8)
                     Button {Task {do {try await store.refresh()} catch {failure=error.localizedDescription}}} label: {Image(systemName:"arrow.clockwise")}
                         .buttonStyle(CrewdToolButtonStyle()).help("刷新").accessibilityLabel("刷新")
@@ -104,6 +106,7 @@ struct CrewdWorkPanels: View {
             }
         }.padding(compact ? 8:16).foregroundStyle(CrewdChatStyle.ink(colorScheme)).background(pageBackground)
         .task(id:store.readScope.uuidString+store.capabilities.sorted().joined(separator:",")) { await store.ensureLoaded() }
+        .sheet(isPresented: $patrolPresented) { CrewdPatrolView(store: store) }
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
     }
@@ -288,6 +291,7 @@ struct CrewdWorkPanels: View {
         }.padding(8).background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:6))
     }
     @ViewBuilder private func requirementDetail(_ id:CrewdWorkID)->some View {
+        CrewdJudgmentInspectionView(store: store, crew: store.requirements[id]?["crewId"].string ?? store.selectedCrew, kind: "requirement", sourceID: id.raw, members: members)
         let raw=store.requirements[id] ?? .null
         let status=raw["status"].string ?? "", note=closeNotes[id] ?? ""
         if raw["closure"] != .null {

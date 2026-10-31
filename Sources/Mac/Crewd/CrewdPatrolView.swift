@@ -1,0 +1,134 @@
+import SwiftUI
+
+struct CrewdPatrolView: View {
+    @ObservedObject var store: CrewdWorkStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var backgroundStatus: CrewdValue?
+    @State private var statusError: String?
+    @State private var statusTask: Task<Void,Never>?
+    @State private var statusRequest = UUID()
+    @State private var scan = "work"
+    @State private var rows: [CrewdValue] = []
+    @State private var cursor: String?
+    @State private var loaded = false
+    @State private var error: String?
+    @State private var task: Task<Void, Never>?
+    @State private var request = UUID()
+    private var field: String { scan == "work" ? "items" : scan }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("当前机组巡检").font(.headline)
+            Text("只检查事实，不调用模型，也不会自动派活、关闭事项或归档群。分页期间状态可能变化。")
+                .font(.caption).foregroundStyle(.secondary)
+            backgroundSection
+            Picker("检查范围", selection: $scan) {
+                Text("工作").tag("work")
+                Text("需求").tag("entries")
+                Text("群归档候选").tag("channels")
+            }.pickerStyle(.segmented)
+            HStack {
+                Button(loaded ? "重新检查" : "开始检查") { reset(); load() }.disabled(task != nil)
+                if task != nil { Button("取消读取") { cancel() } }
+                if loaded && cursor != nil { Button("继续下一页") { load() }.disabled(task != nil) }
+                Spacer()
+                Button("关闭") { dismiss() }
+            }
+            if let error { Text(error).foregroundStyle(.orange) }
+            if loaded { Text(cursor == nil ? "本类检查已读完，共 \(rows.count) 个对象。" : "已检查 \(rows.count) 个对象，尚有后续页。") }
+            else { Text("本类尚未完成首轮读取。").foregroundStyle(.secondary) }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        VStack(alignment: .leading) {
+                            Text(row["id"].string ?? "未知对象").font(.headline).textSelection(.enabled)
+                            Text(summary(row))
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }.padding().frame(minWidth: 540, minHeight: 400)
+        .onChange(of: scan) { _, _ in reset() }
+        .onChange(of: store.readScope) { _, _ in reset(); clearStatus() }
+        .onDisappear { cancel(); clearStatus() }
+    }
+    private func cancel() { request = UUID(); task?.cancel(); task = nil }
+    private func reset() { cancel(); rows = []; cursor = nil; loaded = false; error = nil }
+    private func load() {
+        readStatus()
+        let token = UUID(); request = token; error = nil
+        let current = scan, after = cursor
+        task = Task { @MainActor in
+            defer { if request == token { task = nil } }
+            do {
+                let page = try await store.patrolPage(scan: current, after: after)
+                guard request == token, current == scan else { return }
+                rows += page[field].array; cursor = page["nextAfter"].string; loaded = true
+            } catch {
+                guard request == token else { return }
+                self.error = "读取未完成：" + error.localizedDescription
+            }
+        }
+    }
+    @ViewBuilder private var backgroundSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(statusTask == nil ? "读取后台巡检状态" : "正在读取后台状态…") { readStatus() }.disabled(statusTask != nil)
+            if let statusError { Text(statusError).foregroundStyle(.orange) }
+            if let status = backgroundStatus {
+                if let failure = status["error"].string { Text("后台错误：" + failure).foregroundStyle(.orange) }
+                if status["run"] == .null { Text("后台尚无巡检记录。") }
+                else {
+                    let run = status["run"]
+                    Text(run["completedAtMs"] == .null ? "后台巡检进行中" : "后台本轮扫描结束；不代表所有事项没有问题。")
+                    Text("开始观察：" + time(run["startedAtMs"]))
+                    if run["completedAtMs"] != .null { Text("结束观察：" + time(run["completedAtMs"])) }
+                    Text("已扫描：" + counts(run["scannedCounts"]))
+                    Text("发现计数：" + counts(run["counts"]))
+                    if run["truncated"] == .bool(true) { Text("发现明细仅保留部分；此标记不代表扫描未完成。") }
+                    Text("以上是后台保存的观察结果，操作前仍须核实最新事实。").foregroundStyle(.secondary)
+                }
+            }
+        }.font(.caption)
+    }
+    private func time(_ value: CrewdValue) -> String {
+        guard let ms = value.int else { return "未知" }
+        return Date(timeIntervalSince1970: Double(ms) / 1000).formatted(date: .abbreviated, time: .standard)
+    }
+    private func counts(_ value: CrewdValue) -> String {
+        guard case .object(let entries) = value else { return "未知" }
+        let names = ["work":"工作", "entries":"需求", "channels":"群", "unowned":"无人负责", "lost":"失联", "stop_escalated":"停止升级", "long_waits":"长期等待", "unclaimed":"待认领需求", "unclaimed_entries":"待认领需求", "needs_ruling":"待裁定需求", "archivable_channels":"归档候选", "archive_candidates":"归档候选", "incomplete_channels":"尚未完整检查的群"]
+        return entries.isEmpty ? "0" : entries.keys.sorted().map { (names[$0] ?? $0) + " " + String(entries[$0]?.int ?? 0) }.joined(separator:"；")
+    }
+    private func clearStatus() { statusRequest = UUID(); statusTask?.cancel(); statusTask = nil; backgroundStatus = nil; statusError = nil }
+    private func readStatus() {
+        guard statusTask == nil else { return }
+        let token = UUID(); statusRequest = token; statusError = nil; backgroundStatus = nil
+        statusTask = Task { @MainActor in
+            defer { if statusRequest == token { statusTask = nil } }
+            do {
+                let value = try await store.patrolStatus()
+                guard statusRequest == token else { return }
+                backgroundStatus = value
+            } catch {
+                guard statusRequest == token else { return }
+                statusError = "后台状态读取失败：" + error.localizedDescription
+            }
+        }
+    }
+    private func summary(_ row: CrewdValue) -> String {
+        if scan == "entries" {
+            return row["unclaimed"] == .bool(true) ? "尚未认领" : row["needsRuling"] == .bool(true) ? "需要机长或人裁定" : "未发现待认领或待裁定情况"
+        }
+        if scan == "channels" {
+            if row["archiveCandidate"] == .bool(true) { return "可能归档；仍需核实消息活动、权限和最新状态。" }
+            let labels = ["no_linked_work":"没有关联工作", "live_work":"仍有未完成工作", "non_work_links":"还有其他类型关联", "source_removed":"来源机组已移除", "links_truncated":"关联过多，尚未完整检查"]
+            return row["blockedBy"].array.compactMap { $0.string }.map { labels[$0] ?? "存在尚未识别的阻止原因" }.joined(separator: "；")
+        }
+        var facts: [String] = []
+        if row["unowned"] == .bool(true) { facts.append("无人负责") }
+        if row["lost"] != .null { facts.append("负责人失联，需要核实协调") }
+        if row["stopEscalated"] == .bool(true) { facts.append("停止检查已升级") }
+        if !row["longWaits"].array.isEmpty { facts.append("有人类决定等待较久") }
+        if row["longWaitsTruncated"] == .bool(true) { facts.append("等待项仅显示部分") }
+        return facts.isEmpty ? "本次未发现上述运转问题" : facts.joined(separator: "；")
+    }
+}
