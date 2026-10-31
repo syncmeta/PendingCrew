@@ -484,7 +484,7 @@ pub fn ensure_dm(
 }
 
 /// 能管这个群的：人、归属机组的机长（含总机组的机长，`crews::acts_as_captain_of`）、群主。
-fn may_manage(conn: &Connection, by: &Sender, ch: &Channel) -> Result<bool> {
+pub(crate) fn may_manage(conn: &Connection, by: &Sender, ch: &Channel) -> Result<bool> {
     Ok(match by {
         Sender::Human => true,
         Sender::System => false,
@@ -530,6 +530,7 @@ pub fn update(tx: &mut Tx<'_>, by: &Sender, id: &str, p: ChannelPatch) -> Result
                 Code::ChannelFixedNoArchive,
             )));
         }
+        crate::channel_archive::note_lifecycle(tx, id)?;
         let at = a.then(|| tx.now_ts());
         tx.conn().execute(
             "UPDATE channels SET archived_at=?2 WHERE id=?1",

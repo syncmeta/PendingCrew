@@ -6,6 +6,7 @@ pub mod patrol_runtime;
 pub mod asks;
 pub mod causal;
 pub mod channel_work;
+pub mod channel_archive;
 pub mod channels;
 pub mod checkpoints;
 pub mod crews;

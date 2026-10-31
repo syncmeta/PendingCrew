@@ -39,6 +39,7 @@ pub use resources::*;
 pub mod knowledge_channels;
 pub use knowledge_channels::*;
 pub mod channel_work;
+pub mod channel_archive;
 pub use channel_work::*;
 pub mod todo_attributes;
 pub use todo_attributes::*;
@@ -166,6 +167,9 @@ pub mod methods {
         crate::judgments::SETTINGS_GET,
         crate::judgments::SETTINGS_SET,
         crate::judgments::INSPECT,
+        crate::channel_archive::CHECK,
+        crate::channel_archive::ARCHIVE,
+        crate::channel_archive::RESTORE,
         crate::message_attribution::GET,
         crate::message_attribution::SET,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
@@ -783,6 +787,27 @@ pub fn api_schema() -> Value {
             m(
                 sub::<judgments::JudgmentSettingsSet>(g),
                 sub::<judgments::JudgmentSettingsResult>(g),
+            ),
+        ),
+        (
+            channel_archive::CHECK,
+            m(
+                sub::<channel_archive::ChannelArchiveCheckParams>(g),
+                sub::<channel_archive::ChannelArchiveCheck>(g),
+            ),
+        ),
+        (
+            channel_archive::ARCHIVE,
+            m(
+                sub::<channel_archive::ChannelArchiveVerifiedParams>(g),
+                sub::<channel_archive::ChannelArchiveCheck>(g),
+            ),
+        ),
+        (
+            channel_archive::RESTORE,
+            m(
+                sub::<channel_archive::ChannelRestoreVerifiedParams>(g),
+                sub::<channel_archive::ChannelArchiveCheck>(g),
             ),
         ),
         (

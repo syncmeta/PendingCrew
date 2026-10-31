@@ -610,6 +610,28 @@ async fn request_step(
                 )
             }
         }
+        Ok(req)
+            if matches!(
+                req.method.as_str(),
+                crewd_proto::channel_archive::CHECK
+                    | crewd_proto::channel_archive::ARCHIVE
+                    | crewd_proto::channel_archive::RESTORE
+            ) =>
+        {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "Attached agents cannot use the Human channel archive surface",
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::channel_archive::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
         Ok(req) if crewd_proto::judgments::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(
@@ -769,6 +791,12 @@ async fn request_step(
                 && matches!(
                     req.method.as_str(),
                     crewd_proto::orchestra::methods::SESSION_START
+                        | methods::CHANNEL_UPDATE
+                        | methods::CHANNEL_CREATE
+                        | methods::CHANNEL_ADD_MEMBERS
+                        | methods::CHANNEL_REMOVE_MEMBER
+                        | methods::CHANNEL_WATCH
+                        | methods::CHANNEL_SET_OWNER
                         | methods::TODO_ATTRIBUTES_GET
                         | methods::TODO_ASSIGN
                         | methods::TODO_SET_STATE

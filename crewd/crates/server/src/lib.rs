@@ -15,6 +15,7 @@ pub mod host_admin;
 pub mod hub;
 mod judgments;
 mod message_attribution;
+mod channel_archive;
 pub mod ledger;
 mod legacy_terminal;
 pub mod native_helpers;

@@ -8,6 +8,9 @@ struct CrewdPatrolView: View {
     @State private var statusTask: Task<Void,Never>?
     @State private var statusRequest = UUID()
     @State private var scan = "work"
+    @State private var archiveTarget:String?
+    @State private var archived:[CrewdValue]=[]
+    @State private var archivedLoaded=false
     @State private var rows: [CrewdValue] = []
     @State private var cursor: String?
     @State private var loaded = false
@@ -21,6 +24,17 @@ struct CrewdPatrolView: View {
             Text("只检查事实，不调用模型，也不会自动派活、关闭事项或归档群。分页期间状态可能变化。")
                 .font(.caption).foregroundStyle(.secondary)
             backgroundSection
+            Button("读取当前机组已归档群") {readArchived()}
+            if archivedLoaded && archived.isEmpty {Text("当前机组没有已归档群。")}
+            if !archived.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment:.leading) {
+                        ForEach(Array(archived.enumerated()),id:\.offset) {_,channel in
+                            Button("核实并解档：" + (channel["name"].string ?? channel["id"].string ?? "群")) {archiveTarget=channel["id"].string}
+                        }
+                    }
+                }.frame(maxHeight:120)
+            }
             Picker("检查范围", selection: $scan) {
                 Text("工作").tag("work")
                 Text("需求").tag("entries")
@@ -42,14 +56,25 @@ struct CrewdPatrolView: View {
                         VStack(alignment: .leading) {
                             Text(row["id"].string ?? "未知对象").font(.headline).textSelection(.enabled)
                             Text(summary(row))
+                            if scan == "channels" {Button("核实归档条件") {archiveTarget=row["id"].string}}
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
         }.padding().frame(minWidth: 540, minHeight: 400)
+        .sheet(isPresented:Binding(get:{archiveTarget != nil},set:{if !$0 {archiveTarget=nil}})) {
+            if let channel=archiveTarget {CrewdChannelArchiveView(store:store,channel:channel,crew:store.selectedCrew)}
+        }
         .onChange(of: scan) { _, _ in reset() }
-        .onChange(of: store.readScope) { _, _ in reset(); clearStatus() }
+        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; archived=[]; archivedLoaded=false }
         .onDisappear { cancel(); clearStatus() }
+    }
+    private func readArchived() {
+        let scope=store.readScope
+        Task { @MainActor in
+            do {let channels=try await store.archivedChannels();guard scope == store.readScope else{return};archived=channels;archivedLoaded=true}
+            catch {if scope == store.readScope {self.error=error.localizedDescription}}
+        }
     }
     private func cancel() { request = UUID(); task?.cancel(); task = nil }
     private func reset() { cancel(); rows = []; cursor = nil; loaded = false; error = nil }

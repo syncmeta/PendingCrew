@@ -1097,6 +1097,41 @@ pub fn commit_hook_output(
     }
 }
 
+/// Bounded channel-specific active reservation witness. Unknown/corrupt metadata
+/// is retained and fails closed; unrelated healthy reservations do not occupy the cap.
+pub(crate) fn archive_witness(conn: &Connection, channel: &str) -> Result<(Vec<String>, bool)> {
+    let mut q=conn.prepare("SELECT m.key FROM meta m WHERE m.key LIKE 'cursor.reservation.v1.%' AND CASE
+      WHEN NOT json_valid(m.value) THEN 1
+      WHEN json_extract(m.value,'$.version') IS NOT 1 THEN 1
+      WHEN EXISTS(SELECT 1 FROM json_tree(m.value) WHERE key IS NOT NULL GROUP BY parent,key HAVING count(*)>1) THEN 1
+      WHEN json_type(m.value,'$.sessionId') IS NOT 'text' OR json_type(m.value,'$.incarnation') IS NOT 'text' OR json_type(m.value,'$.revision') IS NOT 'integer' OR json_extract(m.value,'$.revision')<1 THEN 1
+      WHEN json_type(m.value,'$.active') IS NULL OR json_type(m.value,'$.active')='null' THEN 0
+      WHEN json_type(m.value,'$.active') IS NOT 'object' THEN 1
+      WHEN json_type(m.value,'$.active.windows') IS NOT 'array' OR json_type(m.value,'$.active.wakeIds') IS NOT 'array' OR json_type(m.value,'$.active.riderIds') IS NOT 'array' OR json_type(m.value,'$.active.token') IS NOT 'text' OR json_type(m.value,'$.active.executorGeneration') IS NOT 'integer' OR json_extract(m.value,'$.active.executorGeneration')<=0 OR json_extract(m.value,'$.active.phase') NOT IN ('held','cancelling') OR json_type(m.value,'$.active.phase') IS NOT 'text' THEN 1
+      WHEN EXISTS(SELECT 1 FROM json_each(m.value,'$.active.windows') w WHERE w.type!='object') THEN 1
+      WHEN EXISTS(SELECT 1 FROM json_each(m.value,'$.active.windows') w WHERE json_type(w.value,'$.channel') IS NOT 'text' OR json_type(w.value,'$.fromExclusive') IS NOT 'integer' OR json_type(w.value,'$.toInclusive') IS NOT 'integer') THEN 1
+      ELSE EXISTS(SELECT 1 FROM json_each(m.value,'$.active.windows') w WHERE json_extract(w.value,'$.channel')=?1)
+      END ORDER BY m.key LIMIT 257")?;
+    let keys = q
+        .query_map([channel], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let incomplete = keys.len() > 256;
+    let mut witnessed = Vec::new();
+    for key in keys.into_iter().take(256) {
+        let session = key
+            .strip_prefix(PREFIX)
+            .ok_or_else(|| invalid("invalid reservation key"))?;
+        if let Some(state) = load(conn, session)?
+            && state
+                .active
+                .as_ref()
+                .is_some_and(|a| a.windows.iter().any(|w| w.channel == channel))
+        {
+            witnessed.push(crate::judgments::fingerprint(&state)?);
+        }
+    }
+    Ok((witnessed, incomplete))
+}
 #[cfg(test)]
 mod tests {
     use super::*;

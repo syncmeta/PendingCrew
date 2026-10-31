@@ -1007,6 +1007,7 @@ fn allowed_method(method: &str) -> bool {
             | "notification.deliveryGet"
             | "judgment.inspect"
             | "message.attribution.get"
+            | "channel.archiveCheck"
             | "executor.list"
             | "data.workspace.get"
             | "data.submit"

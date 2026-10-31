@@ -218,7 +218,7 @@ fn bad(idx: usize, what: &str, v: String) -> rusqlite::Error {
     )
 }
 
-fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WakeRow> {
+pub(crate) fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WakeRow> {
     let kind: String = r.get(2)?;
     let priority: String = r.get(5)?;
     let state: String = r.get(8)?;

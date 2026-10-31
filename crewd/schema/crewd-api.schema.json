@@ -750,6 +750,224 @@
       ],
       "type": "object"
     },
+    "ChannelArchiveAction": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ChannelArchiveActionKind"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "at": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "actor",
+        "at",
+        "note"
+      ],
+      "type": "object"
+    },
+    "ChannelArchiveActionKind": {
+      "enum": [
+        "archive",
+        "restore"
+      ],
+      "type": "string"
+    },
+    "ChannelArchiveBlocker": {
+      "enum": [
+        "no_linked_work",
+        "not_topic",
+        "crew_archived",
+        "not_authorized",
+        "already_archived",
+        "live_work",
+        "open_requirement",
+        "open_ask",
+        "pending_wake",
+        "inflight_wake",
+        "active_delivery",
+        "pending_judgment",
+        "pending_owner_transfer",
+        "incomplete"
+      ],
+      "type": "string"
+    },
+    "ChannelArchiveCheck": {
+      "properties": {
+        "blockers": {
+          "items": {
+            "$ref": "#/$defs/ChannelArchiveBlocker"
+          },
+          "type": "array"
+        },
+        "canArchive": {
+          "type": "boolean"
+        },
+        "canRestore": {
+          "type": "boolean"
+        },
+        "channel": {
+          "$ref": "#/$defs/Channel"
+        },
+        "facts": {
+          "$ref": "#/$defs/ChannelArchiveFacts"
+        },
+        "lastAction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelArchiveAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel",
+        "revision",
+        "canArchive",
+        "canRestore",
+        "blockers",
+        "facts"
+      ],
+      "type": "object"
+    },
+    "ChannelArchiveCheckParams": {
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channelId"
+      ],
+      "type": "object"
+    },
+    "ChannelArchiveFacts": {
+      "properties": {
+        "activeDeliveries": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "incomplete": {
+          "type": "boolean"
+        },
+        "inflightWakes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lastMessageAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastMessageSeq": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "linkedRequirements": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "linkedWork": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "liveWork": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "openAsks": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "openRequirements": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pendingJudgments": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pendingWakes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "staleWakes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "linkedWork",
+        "liveWork",
+        "linkedRequirements",
+        "openRequirements",
+        "openAsks",
+        "staleWakes",
+        "pendingWakes",
+        "inflightWakes",
+        "activeDeliveries",
+        "pendingJudgments",
+        "incomplete"
+      ],
+      "type": "object"
+    },
+    "ChannelArchiveVerifiedParams": {
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channelId",
+        "expectedRevision",
+        "evidence",
+        "note"
+      ],
+      "type": "object"
+    },
     "ChannelCreateParams": {
       "additionalProperties": false,
       "properties": {
@@ -999,6 +1217,26 @@
       },
       "required": [
         "channelId"
+      ],
+      "type": "object"
+    },
+    "ChannelRestoreVerifiedParams": {
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "channelId",
+        "expectedRevision",
+        "note"
       ],
       "type": "object"
     },
@@ -15753,6 +15991,22 @@
         "$ref": "#/$defs/Channel"
       }
     },
+    "channel.archiveCheck": {
+      "params": {
+        "$ref": "#/$defs/ChannelArchiveCheckParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelArchiveCheck"
+      }
+    },
+    "channel.archiveVerified": {
+      "params": {
+        "$ref": "#/$defs/ChannelArchiveVerifiedParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelArchiveCheck"
+      }
+    },
     "channel.create": {
       "params": {
         "$ref": "#/$defs/ChannelCreateParams"
@@ -15802,6 +16056,14 @@
       },
       "result": {
         "$ref": "#/$defs/Channel"
+      }
+    },
+    "channel.restoreVerified": {
+      "params": {
+        "$ref": "#/$defs/ChannelRestoreVerifiedParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelArchiveCheck"
       }
     },
     "channel.setOwner": {

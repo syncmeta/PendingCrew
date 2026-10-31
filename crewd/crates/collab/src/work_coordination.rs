@@ -414,6 +414,13 @@ pub(crate) fn render(c: &Connection, row: &wakes::WakeRow) -> Result<work::Follo
         id
     )))
 }
+/// Existing durable notification identities for guarded channel lifecycle checks.
+pub(crate) fn archive_wake_ids(c: &Connection, id: &str) -> Result<Vec<i64>> {
+    Ok(record(c, id)?
+        .and_then(|r| r.view.wake_id)
+        .into_iter()
+        .collect())
+}
 #[cfg(test)]
 mod tests {
     use super::*;

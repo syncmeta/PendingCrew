@@ -201,6 +201,7 @@
 		381AC8C5FBF55D883BF7EB0B /* CrewCommandDrainLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7BE16634AF111892F402B6 /* CrewCommandDrainLogTests.swift */; };
 		387554DC91957EF7F3EDF810 /* CrewOrderingSignals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FCD1D2D65A4A61849B5CE2 /* CrewOrderingSignals.swift */; };
 		388232B2B87C13E8F313154E /* RemotePendingCrewBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992C2EA0581568760DC0DB61 /* RemotePendingCrewBackendTests.swift */; };
+		38A341AD95E2A9C03F904223 /* CrewdChannelArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77FB86DC0DB6C4FC21DE6EA /* CrewdChannelArchiveView.swift */; };
 		391597900B4700C40F468394 /* CrewTimelineListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF4746BDF24E4DDA8FCCE894 /* CrewTimelineListView.swift */; };
 		391BFD370A11E502EF5A25F6 /* SessionTurnTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F957E0F4F780C56364650EF /* SessionTurnTrace.swift */; };
 		3986D83C00FD239A7ED7A208 /* CrewViewedStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 154A70A6CF58F04EB4D7CECF /* CrewViewedStore.swift */; };
@@ -686,6 +687,7 @@
 		B4A500C63F56A660FBC9D415 /* session-world-model.en.md in Resources */ = {isa = PBXBuildFile; fileRef = 38F5E570088DE41977747A62 /* session-world-model.en.md */; };
 		B4AF51630C1FA3F7A0829F8C /* PairingExchange.swift in Sources */ = {isa = PBXBuildFile; fileRef = E942A766AAEA0B9A6823EC89 /* PairingExchange.swift */; };
 		B4FBE94B9E0DB131BE3327C0 /* PendingCrewEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219AD4E22DF4542909B2067A /* PendingCrewEntry.swift */; };
+		B50C3F25842AD0D74805C796 /* CrewdChannelArchiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77FB86DC0DB6C4FC21DE6EA /* CrewdChannelArchiveView.swift */; };
 		B5588EFE93ACB994195E47BF /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13CB4287864AEB5C5A8FECC /* Platform.swift */; };
 		B5694F4E70336A24BDE0656D /* HelperProcessForensics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 010245B08B5B2E030F657FA1 /* HelperProcessForensics.swift */; };
 		B6354746E8966251161A34F4 /* MacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A9FCA930C6487C96B9A211 /* MacRootView.swift */; };
@@ -1407,6 +1409,7 @@
 		A6A56B215C1A906E69116190 /* LocalPromptLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPromptLoaderTests.swift; sourceTree = "<group>"; };
 		A6B5975B6F5C7C8282012965 /* RemoteSessionBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionBackend.swift; sourceTree = "<group>"; };
 		A6C14EF1704CE7384C5CCCDE /* InProcessTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InProcessTransport.swift; sourceTree = "<group>"; };
+		A77FB86DC0DB6C4FC21DE6EA /* CrewdChannelArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdChannelArchiveView.swift; sourceTree = "<group>"; };
 		A7E641CF1ECE14DE31F17CA7 /* SessionHealthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHealthTests.swift; sourceTree = "<group>"; };
 		A8D36E110707731F04B85E30 /* CrewdCodexWire.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdCodexWire.swift; sourceTree = "<group>"; };
 		A9158DAB3E93656A8F6C6A28 /* CrewdCodexControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrewdCodexControlsView.swift; sourceTree = "<group>"; };
@@ -2076,6 +2079,7 @@
 		8FC3532010EE239E14C88A7F /* Crewd */ = {
 			isa = PBXGroup;
 			children = (
+				A77FB86DC0DB6C4FC21DE6EA /* CrewdChannelArchiveView.swift */,
 				CD53E6A3D3844D6D0593FE82 /* CrewdChannelTodoView.swift */,
 				924F931ECA25D5A85942C9D2 /* CrewdChannelWorkStore.swift */,
 				CD2E3A3C5E50781FAD8E8CD0 /* CrewdClaudeHistoryStore.swift */,
@@ -2993,6 +2997,7 @@
 				E91207CF79A46BAFF8F2A752 /* CrewViewedStore.swift in Sources */,
 				3F0891F97BA1B1E63F65D97B /* CrewWakeDispatch.swift in Sources */,
 				2824EE1F2326A49770BE6558 /* CrewWhiteboardVisibility.swift in Sources */,
+				38A341AD95E2A9C03F904223 /* CrewdChannelArchiveView.swift in Sources */,
 				50CA5BBD290AD80DAB151F83 /* CrewdChannelTodoView.swift in Sources */,
 				BA734DC3655CE77291F02094 /* CrewdChannelWorkStore.swift in Sources */,
 				BD169683DBDC059A21A9B780 /* CrewdClaudeHistoryStore.swift in Sources */,
@@ -3465,6 +3470,7 @@
 				D44248D3B099337EC06D0B67 /* CrewWakeDispatchTests.swift in Sources */,
 				C31F49BD86C66CCF1008DAD5 /* CrewWhiteboardVisibility.swift in Sources */,
 				4BBD947643CE1EEDFA953B4A /* CrewWhiteboardVisibilityTests.swift in Sources */,
+				B50C3F25842AD0D74805C796 /* CrewdChannelArchiveView.swift in Sources */,
 				D94F2F2C46E4B75E74828E20 /* CrewdChannelTodoView.swift in Sources */,
 				99F7D517A46FF7AEFD05822C /* CrewdChannelWorkStore.swift in Sources */,
 				CE3319AF8E2CB05D4FA2F7D6 /* CrewdClaudeHistoryStore.swift in Sources */,

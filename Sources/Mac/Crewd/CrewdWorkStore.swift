@@ -276,6 +276,37 @@ final class CrewdWorkStore: ObservableObject {
         guard action == "reset" ? checked["override"] == .null : (checked["override"]["action"] == .string(action) && checked["override"]["link"] == (link ?? .null)) else {throw CrewdClientError(message:"归属回执与请求不符，请刷新核对，不会自动重发。")}
         return checked
     }
+    private func validateArchiveCheck(_ value:CrewdValue,channel:String,crew:String)throws -> CrewdValue {
+        guard value["channel"]["id"] == .string(channel),value["channel"]["crewId"] == .string(crew),value["revision"].string?.isEmpty == false,
+              case .bool = value["canArchive"],case .bool = value["canRestore"],case .array(let blockers)=value["blockers"],blockers.allSatisfy({$0.string != nil}),case .bool = value["facts"]["incomplete"] else {throw CrewdClientError(message:"归档核查结果身份或格式不符。")}
+        for key in ["linkedWork","liveWork","linkedRequirements","openRequirements","openAsks","pendingWakes","staleWakes","inflightWakes","activeDeliveries","pendingJudgments"] {guard let count=value["facts"][key].int,count>=0 else {throw CrewdClientError(message:"归档事实计数无效。")}}
+        return value
+    }
+    func archiveCheck(channel:String,crew:String) async throws -> CrewdValue {
+        let token=generation
+        let value=try await call("channel.archiveCheck",.object(["channelId":.string(channel)]));try check(token)
+        return try validateArchiveCheck(value,channel:channel,crew:crew)
+    }
+    func archivedChannels() async throws -> [CrewdValue] {
+        let token=generation,crew=selectedCrew
+        let value=try await call("channel.list",.object(["crewId":.string(crew)]));try check(token)
+        guard case .array(let channels)=value,channels.allSatisfy({row in
+            guard case .object(let fields)=row,fields["id"]?.string?.isEmpty == false,fields["crewId"]?.string != nil,let archived=fields["archivedAt"] else{return false}
+            return archived == .null || archived.string != nil
+        }) else {throw CrewdClientError(message:"群列表格式无效。")}
+        return channels.filter {$0["crewId"] == .string(crew) && $0["archivedAt"] != .null}
+    }
+    func verifyArchive(channel:String,crew:String,revision:String,restore:Bool,evidence:String,note:String) async throws -> CrewdValue {
+        guard activeMutations == 0,!revision.isEmpty,!note.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,restore || !evidence.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {throw CrewdClientError(message:"请填写核查说明及归档凭据。",kind:.notSubmitted)}
+        let token=generation;activeMutations += 1
+        defer {if token == generation {activeMutations=0}}
+        var params:[String:CrewdValue]=["channelId":.string(channel),"expectedRevision":.string(revision),"note":.string(note)]
+        if !restore {params["evidence"] = .string(evidence)}
+        let value=try await call(restore ? "channel.restoreVerified":"channel.archiveVerified",.object(params));try check(token)
+        let result=try validateArchiveCheck(value,channel:channel,crew:crew)
+        guard (result["channel"]["archivedAt"] == .null) == restore else {throw CrewdClientError(message:"群归档回执状态不符，请重新核对，不会重发。")}
+        return result
+    }
     func inspectJudgment(crew: String, kind: String, id: String) async throws -> CrewdValue {
         let token = generation
         let source: CrewdValue = .object(["crewId": .string(crew), "kind": .string(kind), "id": .string(id)])
