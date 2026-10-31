@@ -380,6 +380,16 @@ fn apply_inner(
                 "wake {id} has an unreadable state {state:?}"
             )))
         })?;
+        if matches!(event, WakeEvent::Claim) {
+            let rows = by_ids(tx.conn(), &[*id])?;
+            if rows
+                .first()
+                .is_some_and(|r| r.source.starts_with("work-reassignment:"))
+                && delivery_held(tx.conn(), &rows[0])?
+            {
+                return Err(CollabError::Conflict(Refusal::new(Code::WakeBadTransition)));
+            }
+        }
         let cancelled = *id <= human_stop_floor(tx.conn(), &session)?;
         let event = lifecycle::event_after_cancel(from, event, cancelled)
             .map_err(|e| bad_transition(*id, e))?;
@@ -446,6 +456,16 @@ fn note_error(tx: &mut Tx<'_>, ids: &[i64], error: &str) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// A failed captain's informational reassignment notice is retained for explicit
+/// recovery; it must not itself launch another recovery attempt.
+pub fn delivery_held(conn: &Connection, row: &WakeRow) -> Result<bool> {
+    Ok(row.kind == WakeKind::System
+        && row.source.starts_with("work-reassignment:")
+        && crate::sessions::get(conn, &row.session)?
+            .resume_failed_at
+            .is_some())
 }
 
 /// 一批拿走这些行（含随批的窗口外行，C24）：pending → inflight，次数在这里 +1（这是第几次尝试；Oban / River 同）。

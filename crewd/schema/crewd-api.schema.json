@@ -11163,6 +11163,146 @@
       ],
       "type": "object"
     },
+    "ReassignmentPhase": {
+      "enum": [
+        "prepared",
+        "dispatched",
+        "settled",
+        "stale",
+        "unknown",
+        "suppressed"
+      ],
+      "type": "string"
+    },
+    "ReassignmentReason": {
+      "enum": [
+        "no_candidates",
+        "unconfigured",
+        "prepared",
+        "answered",
+        "low_confidence",
+        "provider_unavailable",
+        "restart_unknown",
+        "state_changed",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "ReassignmentStatus": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "record": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReassignmentView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "ReassignmentStatusParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "ReassignmentView": {
+      "properties": {
+        "adopted": {
+          "type": "boolean"
+        },
+        "captainWakeId": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "captainWakeState": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WakeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "newOwner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oldOwner": {
+          "type": "string"
+        },
+        "ownerWakeId": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ownerWakeState": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WakeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/ReassignmentPhase"
+        },
+        "reason": {
+          "$ref": "#/$defs/ReassignmentReason"
+        }
+      },
+      "required": [
+        "decisionId",
+        "phase",
+        "reason",
+        "oldOwner",
+        "adopted"
+      ],
+      "type": "object"
+    },
     "Receipt": {
       "description": "`message.receipts` 的一行：一条消息叫醒的一个 session（S54；N2 再加「开始了 / 回复了」）。",
       "properties": {
@@ -16387,6 +16527,14 @@
       },
       "result": {
         "$ref": "#/$defs/WorkPlan"
+      }
+    },
+    "work.reassignmentStatus": {
+      "params": {
+        "$ref": "#/$defs/ReassignmentStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ReassignmentStatus"
       }
     },
     "work.transferAccept": {

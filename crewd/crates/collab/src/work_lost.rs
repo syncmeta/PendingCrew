@@ -13,12 +13,40 @@ fn invalid(s: &str) -> CollabError {
     StoreError::Invalid(s.into()).into()
 }
 pub fn reassign(tx: &mut Tx<'_>, by: &Sender, p: WorkAssignParams) -> Result<WorkPlan> {
+    reassign_as(tx, by, p, None)
+}
+// This entry is crate-private; its caller must settle a validated durable decision.
+pub(crate) fn reassign_trusted(
+    tx: &mut Tx<'_>,
+    p: WorkAssignParams,
+    decision: &str,
+) -> Result<WorkPlan> {
+    reassign_as(tx, &Sender::System, p, Some(decision))
+}
+fn reassign_as(
+    tx: &mut Tx<'_>,
+    by: &Sender,
+    p: WorkAssignParams,
+    decision: Option<&str>,
+) -> Result<WorkPlan> {
+    let trusted = decision.is_some();
     let r = object_refs::get(tx.conn(), ObjectKind::Plan, work::number(&p.id)?)?
         .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", &p.id)))?;
     crews::refuse_archived(tx.conn(), &r.crew_id)?;
-    let actor = work::actor(tx.conn(), by, &r.crew_id)?;
+    let actor = if trusted {
+        crewd_work::Actor::System
+    } else {
+        work::actor(tx.conn(), by, &r.crew_id)?
+    };
     let target = sessions::get(tx.conn(), &p.owner)?;
     crews::refuse_archived(tx.conn(), &target.crew_id)?;
+    if trusted
+        && (target.crew_id != r.crew_id
+            || target.resume_failed_at.is_some()
+            || wakes::automatic_work_paused(tx.conn(), &target.id)?)
+    {
+        return Err(invalid("unsafe automatic reassignment target"));
+    }
     let id = work::core_plan(tx.conn(), &r)?;
     let rev = p
         .expected_revision
@@ -34,6 +62,18 @@ pub fn reassign(tx: &mut Tx<'_>, by: &Sender, p: WorkAssignParams) -> Result<Wor
         .item(id)
         .ok_or_else(|| invalid("lost reassignment lacks authority"))?;
     work::check_revision(item, &p.id, rev)?;
+    if trusted {
+        if let Some(ch) = &item.channel
+            && !crate::channels::readable_by(tx.conn(), ch.as_str(), &target.id)?
+        {
+            return Err(invalid("automatic reassignment target cannot read channel"));
+        }
+        if let Some(owner) = &item.owner
+            && wakes::automatic_work_paused(tx.conn(), owner.as_str())?
+        {
+            return Err(invalid("automatic reassignment owner stopped"));
+        }
+    }
     let mut unrecoverable = BTreeSet::new();
     if let Some(owner) = &item.owner {
         let actual = sessions::get(tx.conn(), owner.as_str())?;
@@ -60,6 +100,7 @@ pub fn reassign(tx: &mut Tx<'_>, by: &Sender, p: WorkAssignParams) -> Result<Wor
     })?;
     let plan = work::get(tx.conn(), &p.id)?;
     let note = Assigned {
+        decision: decision.map(str::to_string),
         work: p.id.clone(),
         revision: plan.revision.clone(),
         owner: p.owner.clone(),
@@ -89,6 +130,8 @@ pub fn reassign(tx: &mut Tx<'_>, by: &Sender, p: WorkAssignParams) -> Result<Wor
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Assigned {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decision: Option<String>,
     work: String,
     revision: String,
     owner: String,
@@ -104,6 +147,11 @@ pub(crate) fn followup_note(conn: &Connection, row: &wakes::WakeRow) -> Result<w
     {
         return Err(invalid("lost notification identity invalid"));
     }
+    if let Some(decision) = &n.decision
+        && !crate::work_reassignment::owner_notification_current(conn, row, &n.work, decision)?
+    {
+        return Ok(work::FollowupNote::Stale);
+    }
     let Some(r) = object_refs::get(conn, ObjectKind::Plan, work::number(&n.work)?)? else {
         return Ok(work::FollowupNote::Stale);
     };
@@ -116,7 +164,9 @@ pub(crate) fn followup_note(conn: &Connection, row: &wakes::WakeRow) -> Result<w
     let Some(target) = crewd_store::sessions::get(conn, &row.session)? else {
         return Ok(work::FollowupNote::Stale);
     };
-    if crews::is_archived(conn, &target.crew_id)? || wakes::automatic_work_paused(conn, &target.id)?
+    if target.resume_failed_at.is_some()
+        || crews::is_archived(conn, &target.crew_id)?
+        || wakes::automatic_work_paused(conn, &target.id)?
     {
         return Ok(work::FollowupNote::Stale);
     }

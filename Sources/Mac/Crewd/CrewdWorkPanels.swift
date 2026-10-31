@@ -213,6 +213,7 @@ struct CrewdWorkPanels: View {
                         if !detail["blockedOn"].array.isEmpty {planDetail("待答复",detail["blockedOn"].array.compactMap(\.string).joined(separator:" · "))}
                         if let evidence=detail["evidence"]["value"].string {planDetail("凭据",evidence)}
                         CrewdCoordinationView(store:store,crew:plan.value["crewId"].string ?? store.selectedCrew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
+                        CrewdReassignmentView(store:store,crew:plan.value["crewId"].string ?? store.selectedCrew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
                         CrewdHandoffView(store:store,id:id,members:members).id(store.selectedCrew+":"+id.raw)
                         HStack {
                             Button("更新计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:id.raw,source:""))}.disabled(plan.frozen || ["done","dropped"].contains(plan.status))

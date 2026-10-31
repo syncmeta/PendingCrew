@@ -590,10 +590,13 @@ impl Port for DbPort {
         let session = session.to_string();
         // `due_for(…, i64::MAX)` = 全部 pending（不论到没到点），按优先级、入队先后。
         self.read(move |c| {
-            cw::due_for(c, &session, i64::MAX)?
-                .iter()
-                .map(|r| queued(c, r))
-                .collect()
+            let mut pending = Vec::new();
+            for row in cw::due_for(c, &session, i64::MAX)? {
+                if !cw::delivery_held(c, &row)? {
+                    pending.push(queued(c, &row)?);
+                }
+            }
+            Ok(pending)
         })
         .await
     }

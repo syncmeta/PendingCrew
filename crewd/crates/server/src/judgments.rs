@@ -2,6 +2,7 @@
 //! request-local aliases; only a current authority snapshot can resolve them.
 mod configuration;
 mod coordination;
+mod reassignment;
 pub(crate) use configuration::handle;
 use crewd_collab::judgments::InputSnapshot;
 use crewd_jev::provider::{
@@ -237,6 +238,7 @@ impl Runtime {
         let mut rx = state.hub.subscribe_collab();
         state.collab(crewd_collab::work_coordination::observe_reports).await?;
         this.recover_coordination().await?;
+        this.recover_reassignment().await?;
         this.scan_pending(true).await?;
         let weak = Arc::downgrade(&this);
         *this.pump.lock().await = Some(tokio::spawn(async move {
@@ -249,6 +251,9 @@ impl Runtime {
                         let Some(runtime) = weak.upgrade() else { break };
                         if let Err(e) = runtime.resume_pending_coordination().await {
                             eprintln!("crewd: coordination pending scan failed: {e}");
+                        }
+                        if let Err(e) = runtime.resume_pending_reassignment().await {
+                            eprintln!("crewd: reassignment pending scan failed: {e}");
                         }
                         continue;
                     }
@@ -267,11 +272,15 @@ impl Runtime {
                         runtime.schedule(JudgmentSourceKind::Requirement, id).await
                     }
                     Ok(Change::WorkChanged { id, .. }) if id.starts_with('W') => {
-                        runtime.schedule_coordination(id).await
+                        runtime.schedule_coordination(id.clone()).await;
+                        runtime.schedule_reassignment(id).await
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         if let Err(e) = runtime.resume_pending_coordination().await {
                             eprintln!("crewd: coordination catch-up failed: {e}");
+                        }
+                        if let Err(e) = runtime.resume_pending_reassignment().await {
+                            eprintln!("crewd: reassignment catch-up failed: {e}");
                         }
                         // A backlog scan is recovery, not a new Human action.
                         if let Err(e) = runtime.scan_pending(true).await {

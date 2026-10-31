@@ -11,6 +11,8 @@
 //!   （握手是以后加字段、协商能力的地方）。
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
+pub mod work_reassignment;
+pub use work_reassignment::*;
 pub mod work_coordination;
 pub use work_coordination::*;
 pub mod patrol_runtime;
@@ -133,6 +135,7 @@ pub mod methods {
     pub const WORK_ASSIGN: &str = "work.assign";
     pub const WORK_REASSIGN_LOST: &str = "work.reassignLost";
     pub const WORK_HISTORY: &str = "work.history";
+    pub const WORK_REASSIGNMENT_STATUS: &str = "work.reassignmentStatus";
     pub const WORK_COORDINATION_STATUS: &str = "work.coordinationStatus";
     pub const WORK_PATROL_STATUS: &str = "work.patrolStatus";
     pub const WORK_PATROL: &str = "work.patrol";
@@ -247,6 +250,7 @@ pub mod methods {
         WORK_ASSIGN,
         WORK_REASSIGN_LOST,
         WORK_HISTORY,
+        WORK_REASSIGNMENT_STATUS,
         WORK_COORDINATION_STATUS,
         WORK_PATROL_STATUS,
         WORK_PATROL,
@@ -1200,6 +1204,7 @@ pub fn api_schema() -> Value {
             methods::WORK_PATROL,
             m(sub::<WorkPatrolParams>(g), sub::<WorkPatrolPage>(g)),
         ),
+        (methods::WORK_REASSIGNMENT_STATUS,m(sub::<ReassignmentStatusParams>(g),sub::<ReassignmentStatus>(g))),
         (methods::WORK_COORDINATION_STATUS,m(sub::<CoordinationStatusParams>(g),sub::<CoordinationStatus>(g))),
         (methods::WORK_PATROL_STATUS, m(sub::<PatrolStatusParams>(g), sub::<PatrolStatus>(g))),
         (
