@@ -1164,3 +1164,5 @@ fn maximum_chinese_context_preserves_questions_within_provider_budget() {
     let route = batch(&input, false);
     assert!(serde_json::to_vec(&route).unwrap().len() < 60_000);
 }
+
+mod coordination;

@@ -119,6 +119,33 @@ final class CrewdWorkStore: ObservableObject {
         ensureTask = task
         await task.value
     }
+    func coordinationStatus(crew: String, id: String) async throws -> CrewdValue {
+        let token = generation
+        guard !crew.isEmpty, CrewdWorkID(id,kind:.plan) != nil else { throw CrewdClientError(message:"计划身份无效。") }
+        let result = try await call("work.coordinationStatus",.object(["crewId":.string(crew),"id":.string(id)]))
+        try check(token)
+        guard case .object(let fields) = result, fields["crewId"]?.string == crew, fields["id"]?.string == id,
+              let record = fields["record"] else { throw CrewdClientError(message:"协调记录不完整或不属于当前计划。") }
+        if record != .null {
+            guard case .object(let row) = record,
+                  row["decisionId"]?.string?.isEmpty == false,
+                  row["phase"]?.string != nil, row["reason"]?.string != nil,
+                  case .bool? = row["adopted"] else { throw CrewdClientError(message:"协调记录格式不完整。") }
+            for key in ["meaningfulProgress","needsCoordination"] {
+                guard let value = row[key] else { throw CrewdClientError(message:"协调判断数值缺失。") }
+                if value != .null {
+                    let number: Double?
+                    switch value {case .number(let n):number=n;case .integer(let n):number=Double(n);case .unsigned(let n):number=Double(n);default:number=nil}
+                    guard let number, number.isFinite, (0...1).contains(number) else {throw CrewdClientError(message:"协调判断数值无效。")}
+                }
+            }
+            for key in ["recipient","wakeState"] {
+                guard let value=row[key], value == .null || value.string != nil else {throw CrewdClientError(message:"协调通知记录不完整。")}
+            }
+            guard let wake=row["wakeId"], wake == .null || wake.int != nil else {throw CrewdClientError(message:"协调通知身份无效。")}
+        }
+        return record
+    }
     func patrolStatus() async throws -> CrewdValue {
         let token = generation, crew = selectedCrew
         guard !crew.isEmpty else { throw CrewdClientError(message: "请先选择机组。") }

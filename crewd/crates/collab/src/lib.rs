@@ -36,6 +36,7 @@ pub mod todos;
 pub mod turn_trace;
 pub mod view_folders;
 pub mod wakes;
+pub mod work_coordination;
 pub mod work;
 pub mod work_block;
 pub mod work_followups;

@@ -1,0 +1,396 @@
+use super::*;
+use crewd_collab::{work, work_coordination};
+use crewd_proto::{CoordinationPhase, CoordinationReason, WorkCreateParams, WorkUpdateParams};
+
+async fn reports(f: &Fixture) -> String {
+    let crew = f.crew.clone();
+    let owner = f.worker.clone();
+    f.state
+        .collab(move |tx| {
+            let mut item = work::create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    crew_id: crew,
+                    title: "迁移检查".into(),
+                    owner: Some(owner.clone()),
+                    ..Default::default()
+                },
+            )?;
+            for note in ["仍在检查，尚无结果", "仍在检查，尚无新增结果"] {
+                item = work::update(
+                    tx,
+                    &Sender::Session(owner.clone()),
+                    WorkUpdateParams {
+                        id: item.id,
+                        expected_revision: item.revision,
+                        note: Some(note.into()),
+                        next_check_at: Some(crewd_store::ts_from_ms(tx.now_ms() + 60_000)),
+                        ..Default::default()
+                    },
+                )?;
+            }
+            Ok(item.id)
+        })
+        .await
+        .unwrap()
+}
+async fn result(f: &Fixture, id: &str) -> crewd_proto::CoordinationView {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let id = id.to_owned();
+            let crew = f.crew.clone();
+            let view = f
+                .state
+                .db
+                .call_result(move |s| work_coordination::status(s.conn(), &crew, &id))
+                .await
+                .unwrap()
+                .unwrap()
+                .record;
+            if let Some(v) = view
+                && !matches!(
+                    v.phase,
+                    CoordinationPhase::Prepared | CoordinationPhase::Dispatched
+                )
+            {
+                return v;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap()
+}
+#[tokio::test]
+async fn real_runtime_native_coordination_is_unique_and_work_change_invalidates_note() {
+    let fake=FakeJev::start(vec![Reply::ok(json!({"model":"fake-native","answers":{"meaningful_progress":{"type":"noul","noul":0.1},"needs_coordination":{"type":"noul","noul":0.9}}}).to_string())]).await;
+    let f = Fixture::new().await;
+    f.configure(&fake.base_url).await;
+    let id = reports(&f).await;
+    f.runtime.run_coordination(id.clone(), true).await.unwrap();
+    let view = result(&f, &id).await;
+    assert!(view.adopted);
+    assert!(view.wake_id.is_some());
+    f.runtime.run_coordination(id.clone(), true).await.unwrap();
+    assert_eq!(fake.requests().len(), 1);
+    let wake = view.wake_id.unwrap();
+    let work_id = id.clone();
+    f.state
+        .collab(move |tx| {
+            let row = crewd_collab::wakes::by_ids(tx.conn(), &[wake])?.remove(0);
+            let batch = crewd_collab::render::build_batch(
+                tx.conn(),
+                &row.session,
+                crewd_collab::Locale::En,
+                std::slice::from_ref(&row),
+                tx.now_ms(),
+            )?;
+            assert_eq!(batch.items.len(), 1);
+            assert!(batch.items[0].note.as_ref().unwrap().contains(&work_id));
+            let item = work::get(tx.conn(), &work_id)?;
+            work::update(
+                tx,
+                &Sender::Session(row.session.clone()),
+                WorkUpdateParams {
+                    id: work_id,
+                    expected_revision: item.revision,
+                    note: Some("机长复核并给出下一步".into()),
+                    ..Default::default()
+                },
+            )?;
+            let batch = crewd_collab::render::build_batch(
+                tx.conn(),
+                &row.session,
+                crewd_collab::Locale::En,
+                std::slice::from_ref(&row),
+                tx.now_ms(),
+            )?;
+            assert!(batch.items.is_empty());
+            assert_eq!(batch.unusable[0].0, wake);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    f.close().await;
+}
+#[tokio::test]
+async fn unconfigured_runtime_does_not_create_coordination_wake() {
+    let f = Fixture::new().await;
+    let id = reports(&f).await;
+    f.runtime.run_coordination(id.clone(), true).await.unwrap();
+    let view = result(&f, &id).await;
+    assert!(matches!(view.reason, CoordinationReason::Unconfigured));
+    assert!(!view.adopted && view.wake_id.is_none());
+    f.close().await;
+}
+#[tokio::test]
+async fn stopped_owner_never_calls_configured_provider() {
+    let fake = FakeJev::start(vec![]).await;
+    let f = Fixture::new().await;
+    f.configure(&fake.base_url).await;
+    let owner = f.worker.clone();
+    f.state
+        .collab(move |tx| {
+            crewd_collab::wakes::human_stop(tx, &owner)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let id = reports(&f).await;
+    f.runtime.run_coordination(id.clone(), true).await.unwrap();
+    let view = result(&f, &id).await;
+    assert!(!view.adopted && view.wake_id.is_none());
+    assert!(matches!(view.reason, CoordinationReason::Stopped));
+    assert!(fake.requests().is_empty());
+    f.close().await;
+}
+#[tokio::test]
+async fn dispatched_coordination_reopens_unknown_without_provider_replay() {
+    let fake = FakeJev::start(vec![]).await;
+    let mut f = Fixture::new().await;
+    f.configure(&fake.base_url).await;
+    f.runtime.shutdown().await;
+    let id = reports(&f).await;
+    let source = id.clone();
+    f.state
+        .collab(move |tx| {
+            let snapshot = work_coordination::prepare(tx, &source)?.unwrap();
+            assert!(work_coordination::dispatch(tx, &snapshot)?);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    f.reopen().await;
+    let view = result(&f, &id).await;
+    assert!(matches!(view.phase, CoordinationPhase::Unknown));
+    assert!(matches!(view.reason, CoordinationReason::RestartUnknown));
+    assert!(fake.requests().is_empty());
+    f.close().await;
+}
+
+#[tokio::test]
+async fn coordination_reaches_captain_actor_only_typed_ack_delivers_and_work_stays_open() {
+    use crate::orchestra::{
+        self,
+        clock::SystemClock,
+        db::DbPort,
+        exec::Executors,
+        hooks::Hooks,
+        testkit::{StandIn, StandInWorktrees},
+    };
+    use crewd_exec::{
+        delivery::Subject,
+        session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+    };
+    let fake=FakeJev::start(vec![Reply::ok(json!({"model":"fake-native","answers":{"meaningful_progress":{"type":"noul","noul":0.1},"needs_coordination":{"type":"noul","noul":0.9}}}).to_string())]).await;
+    let f = Fixture::new().await;
+    f.configure(&fake.base_url).await;
+    let rx = f.state.hub.subscribe_collab();
+    let exec = StandIn::default();
+    let hooks = Hooks {
+        worktrees: Arc::new(StandInWorktrees::default()),
+        ..Default::default()
+    };
+    let (handle, actor) = orchestra::spawn(
+        Arc::new(DbPort::new(
+            f.state.clone(),
+            f.dir.path().join("unused-in-memory-db"),
+        )),
+        Executors::new().with("claude", Arc::new(exec.clone())),
+        hooks,
+        Arc::new(SystemClock),
+        orchestra::OrchestraConfig::for_tests(),
+    )
+    .await
+    .unwrap();
+    let bridge = orchestra::db::forward_collab(rx, handle.clone());
+    let id = reports(&f).await;
+    f.runtime.run_coordination(id.clone(), true).await.unwrap();
+    let view = result(&f, &id).await;
+    let captain = view.recipient.clone().unwrap();
+    let wake = view.wake_id.unwrap();
+    let marker = f
+        .state
+        .db
+        .call_result(move |s| crewd_collab::wakes::by_ids(s.conn(), &[wake]))
+        .await
+        .unwrap()
+        .unwrap()
+        .remove(0)
+        .source;
+    let mut brief_ack = false;
+    let (delivery, subject) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            handle.latches().await.unwrap();
+            if let Some(initial) = exec
+                .launches(&captain)
+                .first()
+                .and_then(|l| l.initial.clone())
+            {
+                if initial.contains("请核实并协调") {
+                    break (BRIEF_DELIVERY_ID, Subject::Brief);
+                }
+                if !brief_ack {
+                    exec.emit(
+                        &captain,
+                        SessionEvent::Delivery {
+                            id: BRIEF_DELIVERY_ID,
+                            subject: Subject::Brief,
+                            outcome: DeliveryOutcome::Delivered,
+                        },
+                    );
+                    brief_ack = true;
+                }
+            }
+            if exec
+                .sent(&captain)
+                .iter()
+                .any(|text| text.contains("请核实并协调"))
+            {
+                break (exec.last_send_id(&captain), Subject::Steer);
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let source = marker.clone();
+    let before = f
+        .state
+        .db
+        .call_result(move |s| {
+            crewd_collab::wakes::list(s.conn(), None, 100)
+                .map(|rows| rows.into_iter().find(|r| r.source == source).unwrap())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.state, crewd_collab::wakes::WakeState::Inflight);
+    exec.emit(
+        &captain,
+        SessionEvent::Delivery {
+            id: delivery,
+            subject,
+            outcome: DeliveryOutcome::Delivered,
+        },
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            handle.latches().await.unwrap();
+            let source = marker.clone();
+            let delivered = f
+                .state
+                .db
+                .call_result(move |s| {
+                    crewd_collab::wakes::list(s.conn(), None, 100).map(|rows| {
+                        rows.into_iter().any(|r| {
+                            r.source == source
+                                && r.state == crewd_collab::wakes::WakeState::Delivered
+                        })
+                    })
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            if delivered {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    f.runtime.run_coordination(id.clone(), true).await.unwrap();
+    let work_id = id.clone();
+    let state = f
+        .state
+        .db
+        .call_result(move |s| work::get(s.conn(), &work_id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(state.status, "done");
+    assert_eq!(state.owner.as_deref(), Some(f.worker.as_str()));
+    handle.latches().await.unwrap();
+    assert_eq!(fake.requests().len(), 1);
+    let inputs = exec
+        .sent(&captain)
+        .iter()
+        .filter(|text| text.contains("请核实并协调"))
+        .count()
+        + exec
+            .launches(&captain)
+            .iter()
+            .filter(|l| {
+                l.initial
+                    .as_ref()
+                    .is_some_and(|s| s.contains("请核实并协调"))
+            })
+            .count();
+    assert_eq!(inputs, 1);
+    f.runtime.shutdown().await;
+    assert!(handle.shutdown(std::time::Duration::from_secs(2)).await);
+    actor.finished().await.unwrap();
+    bridge.abort();
+    let _ = bridge.await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn durable_report_observer_recovers_missed_hub_change_without_duplicate_dispatch() {
+    let fake=FakeJev::start(vec![Reply::ok(json!({"model":"fake-native","answers":{"meaningful_progress":{"type":"noul","noul":0.1},"needs_coordination":{"type":"noul","noul":0.9}}}).to_string())]).await;
+    let f = Fixture::new().await;
+    f.configure(&fake.base_url).await;
+    f.runtime.resume_pending_coordination().await.unwrap();
+    let crew = f.crew.clone();
+    let owner = f.worker.clone();
+    // Commit real work events but deliberately discard the hub publication batch.
+    let (id, changes) = f
+        .state
+        .db
+        .call_result(move |store| {
+            crewd_collab::run(store, crewd_store::now_ms(), move |tx| {
+                let mut item = work::create(
+                    tx,
+                    &Sender::Human,
+                    WorkCreateParams {
+                        crew_id: crew,
+                        title: "迁移检查".into(),
+                        owner: Some(owner.clone()),
+                        ..Default::default()
+                    },
+                )?;
+                for note in ["仍在检查，尚无结果", "仍在检查，尚无新增结果"] {
+                    item = work::update(
+                        tx,
+                        &Sender::Session(owner.clone()),
+                        WorkUpdateParams {
+                            id: item.id,
+                            expected_revision: item.revision,
+                            note: Some(note.into()),
+                            next_check_at: Some(crewd_store::ts_from_ms(tx.now_ms() + 60_000)),
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                Ok(item.id)
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!changes.is_empty());
+    drop(changes);
+    f.runtime.resume_pending_coordination().await.unwrap();
+    let first = result(&f, &id).await;
+    assert!(first.adopted && first.wake_id.is_some());
+    for _ in 0..3 {
+        f.runtime.resume_pending_coordination().await.unwrap();
+    }
+    let second = result(&f, &id).await;
+    assert_eq!(first.decision_id, second.decision_id);
+    assert_eq!(first.wake_id, second.wake_id);
+    assert_eq!(fake.requests().len(), 1);
+    f.close().await;
+}

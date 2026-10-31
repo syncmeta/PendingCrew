@@ -75,3 +75,19 @@ Mac原生日用消息菜单及两处需求详情已接只读判断记录，支�
 后台状态界面整合：新增后台巡检状态只读展示，实际WorkStore整合测试通过 `/private/tmp/pcw-patrol-status-client-final.log`，Mac完整编译通过 `/private/tmp/pcw-patrol-status-ui-build.log`。公共schema重新生成并包含work.patrolStatus。后台错误元数据损坏导致轮转回滚的独审发现仍在修复，未将运行模块标为完成。
 
 巡检运行本批收口：10条非系统消息/30分钟触发、每拍一机组一页、持久游标、运行中新消息留后轮、恢复epoch失效、50条发现明细上限及独立incomplete_channels均已接线。坏run/error记录保留并显示错误，不阻塞其它机组；错误退避绑定恢复epoch。五项collab、真实数据库关闭重开/socket以及无执行器准入Core tick回归通过。独审发现的坏error游标回滚已红绿修复并复审。生产lib/bins严格clippy通过 `/private/tmp/pcw-patrol-final-clippy.log`。仍未进行日用安装/真实GUI验收；尚未实现行政模型判断与协调执行，扫描完成只代表本轮源页结束。
+
+## 下一完整模块：进展判断与协调请求（实施合同）
+
+按当前有效用户授权继续实现。事实读取 organization_work_events 的 typed Reported 事件，并核当前 issued W、crew、core identity、报告作者与当前owner；work.history只含owner_history，明确不用于进展比较。比较最近两条真实同owner报告，缺少依据时记录insufficient_reports，不宣称卡死。当前工作事实仍来自唯一WorkBook。
+
+复用现有判断模型配置、凭据绑定、恢复epoch、撤销和绝对期限。meaningful_progress与needs_coordination独立判断；仅合格原生结果达到阈值时生成唯一协调请求。过程记录、请求与唤醒入队同事务；负责人、工作revision/终态、captain、Stop/config/restore版本在模型前后及实际投递前重验。使用已有System wake及经过校验的来源，不新建重复Todo、不扩行政跨机组权限。未知派发重启后不重发。
+
+只读状态接口与原计划详情接线，分别显示判断、协调请求、投递状态；通知不等于协调完成，实际换人/拆项仍用原Actor/CAS工具及工作证据。后台作者负责生产链，客户端等proto合同确定后接两处实际详情入口，独审核事实、权限、竞争、恢复和消费。此节为实施合同，未标代码或验收完成。
+
+## Coordination integration evidence
+
+Implemented: typed two-report evidence -> existing provider -> durable decision -> unique captain wake -> production Core/DbPort delivery -> typed ACK. Durable report cursor scans at most 64 source events per page; first/restore baseline avoids historical dispatch. Lost hub events recover, Prepared retries, Dispatched restart becomes Unknown without replay. Capacity pressure retains Prepared. Work revision, Stop, restore and configuration are rechecked. Client plan details expose decision and delivery separately; delivery does not complete work.
+
+Final checks: server judgments 17 passed (`/private/tmp/pcw-coordination-final-runtime2.log`), collab coordination 5 passed (`/private/tmp/pcw-coordination-final-collab.log`), strict production lib/bins clippy passed (`/private/tmp/pcw-coordination-final-clippy3.log`). Initial sandbox run failed on local socket/process-birth permissions; retained failure log, then authorized isolated rerun passed. Independent socket, production actor StandIn ACK and missed-hub recovery tests passed. API schema regenerated.
+
+Swift integrated fixtures passed and full Mac Debug build succeeded (`/private/tmp/pcw-coordination-swift-integrated.log`, `/private/tmp/pcw-coordination-ui-build.log`). Final review corrected display mapping to protocol pending/inflight. Build embeds existing installed Core only for compilation; no same-source installed package, real provider, GUI acceptance or publication claimed. Lost-owner coordination/reassignment, administrative sessions, semantic archive and secretary organization remain outstanding.

@@ -3336,6 +3336,132 @@
       ],
       "type": "object"
     },
+    "CoordinationPhase": {
+      "enum": [
+        "prepared",
+        "dispatched",
+        "settled",
+        "stale",
+        "unknown",
+        "suppressed"
+      ],
+      "type": "string"
+    },
+    "CoordinationReason": {
+      "enum": [
+        "insufficient_reports",
+        "unconfigured",
+        "prepared",
+        "answered",
+        "low_confidence",
+        "provider_unavailable",
+        "restart_unknown",
+        "state_changed",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "CoordinationStatus": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "record": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordinationView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "CoordinationStatusParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "CoordinationView": {
+      "properties": {
+        "adopted": {
+          "type": "boolean"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "meaningfulProgress": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "needsCoordination": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/CoordinationPhase"
+        },
+        "reason": {
+          "$ref": "#/$defs/CoordinationReason"
+        },
+        "recipient": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wakeId": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "wakeState": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WakeState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "decisionId",
+        "phase",
+        "reason",
+        "adopted"
+      ],
+      "type": "object"
+    },
     "CredentialState": {
       "enum": [
         "missing",
@@ -13515,6 +13641,15 @@
         }
       ]
     },
+    "WakeState": {
+      "enum": [
+        "pending",
+        "inflight",
+        "delivered",
+        "dropped"
+      ],
+      "type": "string"
+    },
     "WakeStateView": {
       "oneOf": [
         {
@@ -16188,6 +16323,14 @@
       },
       "result": {
         "$ref": "#/$defs/WorkBlockReply"
+      }
+    },
+    "work.coordinationStatus": {
+      "params": {
+        "$ref": "#/$defs/CoordinationStatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/CoordinationStatus"
       }
     },
     "work.create": {

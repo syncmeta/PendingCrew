@@ -229,6 +229,7 @@ pub(crate) fn followup_note(
     row: &crate::wakes::WakeRow,
     now: i64,
 ) -> Result<FollowupNote> {
+    if row.source.starts_with("work-coordination:") {return crate::work_coordination::render(conn,row);}
     if row.source.starts_with("work-followup:") {
         return crate::work_followups::render(conn, row, now);
     }

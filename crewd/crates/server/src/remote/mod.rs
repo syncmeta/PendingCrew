@@ -1114,6 +1114,7 @@ fn allowed_method(method: &str) -> bool {
             | "work.history"
             | "work.patrol"
             | "work.patrolStatus"
+            | "work.coordinationStatus"
             | "work.transferWithdraw"
             | "ask.list"
             | "ask.get"

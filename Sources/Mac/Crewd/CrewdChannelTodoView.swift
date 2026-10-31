@@ -302,6 +302,7 @@ struct CrewdChannelTodoView:View {
                 CrewdJudgmentInspectionView(store: work, crew: row["crewId"].string ?? crew, kind: "requirement", sourceID: id.raw, members: members)
                 Button("新建计划"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:"",source:id.raw,channel:channel))}.font(.caption).disabled(busy || detail["status"] == .string("closed"))
             }else if id.kind == .plan,row["crewId"] == .string(crew) {
+                CrewdCoordinationView(store:work,crew:crew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
                 Button("计划操作"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:id.raw,source:""))}.font(.caption).disabled(detail["frozen"] == .bool(true) || ["done","dropped"].contains(detail["status"].string ?? ""))
                 ForEach(detail["blockedOn"].array.compactMap{$0.string.flatMap{CrewdWorkID($0,kind:.human)}},id:\.self){wait in
                     Button("答复卡点 "+wait.raw){openBlocker(wait)}.font(.caption).disabled(busy)

@@ -11,7 +11,7 @@
 //!   撞额度 / 随批成功的窗口外行放回）把这次 `Claim` 记的那一次退回去。
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum WakeState {
     Pending,

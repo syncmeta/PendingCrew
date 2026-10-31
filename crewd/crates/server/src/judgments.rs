@@ -1,6 +1,7 @@
 //! Decision planning is separate from effects. All public/model names are opaque
 //! request-local aliases; only a current authority snapshot can resolve them.
 mod configuration;
+mod coordination;
 pub(crate) use configuration::handle;
 use crewd_collab::judgments::InputSnapshot;
 use crewd_jev::provider::{
@@ -233,12 +234,25 @@ impl Runtime {
         // Settle old pending attempts without invoking a provider. A restored DB
         // has a different dbId and is historical instead of a new dispatch.
         let _ = state.judgment_runtime.set(this.clone());
-        this.scan_pending(true).await?;
         let mut rx = state.hub.subscribe_collab();
+        state.collab(crewd_collab::work_coordination::observe_reports).await?;
+        this.recover_coordination().await?;
+        this.scan_pending(true).await?;
         let weak = Arc::downgrade(&this);
         *this.pump.lock().await = Some(tokio::spawn(async move {
+            let mut pending_tick = tokio::time::interval(std::time::Duration::from_secs(5));
+            pending_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                let event = rx.recv().await;
+                let event = tokio::select! {
+                    event = rx.recv() => event,
+                    _ = pending_tick.tick() => {
+                        let Some(runtime) = weak.upgrade() else { break };
+                        if let Err(e) = runtime.resume_pending_coordination().await {
+                            eprintln!("crewd: coordination pending scan failed: {e}");
+                        }
+                        continue;
+                    }
+                };
                 let Some(runtime) = weak.upgrade() else { break };
                 if runtime.closed.load(Ordering::Acquire) {
                     break;
@@ -252,7 +266,13 @@ impl Runtime {
                     Ok(Change::WorkChanged { id, .. }) if id.starts_with('#') => {
                         runtime.schedule(JudgmentSourceKind::Requirement, id).await
                     }
+                    Ok(Change::WorkChanged { id, .. }) if id.starts_with('W') => {
+                        runtime.schedule_coordination(id).await
+                    }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if let Err(e) = runtime.resume_pending_coordination().await {
+                            eprintln!("crewd: coordination catch-up failed: {e}");
+                        }
                         // A backlog scan is recovery, not a new Human action.
                         if let Err(e) = runtime.scan_pending(true).await {
                             eprintln!("crewd: judgment pending scan failed: {e}");
