@@ -27,7 +27,7 @@ async fn route(
                 .db
                 .call_result(move |store| {
                     by.authorize_tx(&owner, store.conn(), LIST)?;
-                    crewd_collab::admin_cases::list(store.conn(), &p)
+                    crewd_collab::admin_cases::list_at(store.conn(), &p, crewd_store::now_ms())
                 })
                 .await
                 .map_err(dispatch::internal)?
@@ -40,7 +40,7 @@ async fn route(
                 .db
                 .call_result(move |store| {
                     by.authorize_tx(&owner, store.conn(), GET)?;
-                    crewd_collab::admin_cases::get(store.conn(), &p)
+                    crewd_collab::admin_cases::get_at(store.conn(), &p, crewd_store::now_ms())
                 })
                 .await
                 .map_err(dispatch::internal)?

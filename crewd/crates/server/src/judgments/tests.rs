@@ -1170,3 +1170,22 @@ mod coordination;
 mod reassignment;
 
 mod retirement;
+mod admin_cases;
+
+#[tokio::test]
+async fn stale_settings_revision_returns_conflict_without_panicking_or_changing_configuration() {
+    let fake = FakeJev::start(vec![]).await;
+    let f = Fixture::new().await;
+    f.configure(&fake.base_url).await;
+    let before = f.rpc(SETTINGS_GET, json!({})).await.unwrap();
+    let refused = f.rpc(SETTINGS_SET, serde_json::to_value(JudgmentSettingsSet {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: None,
+        config: Some(Fixture::config(&fake.base_url)),
+        credential_update: CredentialUpdate::Keep,
+    }).unwrap()).await.unwrap_err();
+    assert_eq!(refused.code, crewd_proto::RpcError::CONFLICT);
+    assert_eq!(before, f.rpc(SETTINGS_GET, json!({})).await.unwrap());
+    assert!(fake.requests().is_empty());
+    f.close().await;
+}

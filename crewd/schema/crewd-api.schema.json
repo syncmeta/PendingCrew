@@ -2,9 +2,66 @@
   "$defs": {
     "AdminCaseDecision": {
       "enum": [
-        "observed"
+        "observed",
+        "prepared",
+        "dispatched",
+        "answered",
+        "unknown",
+        "unconfigured",
+        "waiting_admission",
+        "stale"
       ],
       "type": "string"
+    },
+    "AdminCaseDecisionReason": {
+      "enum": [
+        "prepared",
+        "native_answered",
+        "generated",
+        "provider_unavailable",
+        "restart_unknown",
+        "unconfigured",
+        "no_admission",
+        "state_changed",
+        "stopped",
+        "no_in_scope_targets"
+      ],
+      "type": "string"
+    },
+    "AdminCaseDecisionView": {
+      "additionalProperties": false,
+      "properties": {
+        "adopted": {
+          "type": "boolean"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/AdminCaseDecision"
+        },
+        "probability": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseDecisionReason"
+        },
+        "snapshotWitness": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decisionId",
+        "phase",
+        "adopted",
+        "reason",
+        "snapshotWitness"
+      ],
+      "type": "object"
     },
     "AdminCaseExecution": {
       "enum": [
@@ -165,6 +222,17 @@
         },
         "decision": {
           "$ref": "#/$defs/AdminCaseDecision"
+        },
+        "decisionRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseDecisionView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "execution": {
           "$ref": "#/$defs/AdminCaseExecution"

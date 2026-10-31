@@ -20,6 +20,13 @@ pub struct AdminCaseListParams {
 #[serde(rename_all = "snake_case")]
 pub enum AdminCaseDecision {
     Observed,
+    Prepared,
+    Dispatched,
+    Answered,
+    Unknown,
+    Unconfigured,
+    WaitingAdmission,
+    Stale,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -61,7 +68,7 @@ pub struct AdminCaseSource {
     pub restore_epoch: String,
     pub announcement_id: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminCaseView {
     pub id: String,
@@ -71,6 +78,8 @@ pub struct AdminCaseView {
     pub source: AdminCaseSource,
     pub targets: Vec<AdminCaseTarget>,
     pub decision: AdminCaseDecision,
+    #[serde(default)]
+    pub decision_record: Option<AdminCaseDecisionView>,
     pub execution: AdminCaseExecution,
     pub retirement: AdminCaseRetirement,
 }
@@ -80,4 +89,29 @@ pub struct AdminCaseList {
     pub crew_id: String,
     pub items: Vec<AdminCaseView>,
     pub next_after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseDecisionReason {
+    Prepared,
+    NativeAnswered,
+    Generated,
+    ProviderUnavailable,
+    RestartUnknown,
+    Unconfigured,
+    NoAdmission,
+    StateChanged,
+    Stopped,
+    NoInScopeTargets,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseDecisionView {
+    pub decision_id: String,
+    pub phase: AdminCaseDecision,
+    pub probability: Option<f64>,
+    pub adopted: bool,
+    pub reason: AdminCaseDecisionReason,
+    pub snapshot_witness: String,
 }

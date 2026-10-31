@@ -310,7 +310,20 @@ final class CrewdWorkStore: ObservableObject {
     private func validateAdminCase(_ row:CrewdValue,crew:String)throws {
         guard row["crewId"] == .string(crew),row["id"].string?.isEmpty == false,row["revision"].string?.isEmpty == false,row["createdAt"].int != nil,
               row["source"]["sessionId"].string?.isEmpty == false,row["source"]["budgetEpoch"].int != nil,row["source"]["restoreEpoch"].string?.isEmpty == false,row["source"]["announcementId"].string?.isEmpty == false,
-              row["decision"] == .string("observed"),row["execution"] == .string("not_started"),row["retirement"] == .string("not_started"),case .array(let targets)=row["targets"] else {throw CrewdClientError(message:"行政记录身份、来源或状态不完整。")}
+              ["observed","prepared","dispatched","answered","unknown","unconfigured","waiting_admission","stale"].contains(row["decision"].string ?? ""),row["execution"] == .string("not_started"),row["retirement"] == .string("not_started"),case .array(let targets)=row["targets"] else {throw CrewdClientError(message:"行政记录身份、来源或状态不完整。")}
+        guard case .object(let fields)=row,let record=fields["decisionRecord"] else {throw CrewdClientError(message:"行政判断记录字段缺失。")}
+        if record == .null {
+            guard row["decision"] == .string("observed") else {throw CrewdClientError(message:"行政判断阶段缺少记录。")}
+        } else {
+            guard record["decisionId"].string?.isEmpty == false,record["phase"] == row["decision"],record["snapshotWitness"].string?.isEmpty == false,
+                  ["prepared","native_answered","generated","provider_unavailable","restart_unknown","unconfigured","no_admission","state_changed","stopped","no_in_scope_targets"].contains(record["reason"].string ?? ""),
+                  case .bool = record["adopted"],case .object(let decisionFields)=record,let probability=decisionFields["probability"] else {throw CrewdClientError(message:"行政判断记录格式无效。")}
+            if probability != .null {
+                let number:Double?
+                switch probability {case .number(let n):number=n;case .integer(let n):number=Double(n);case .unsigned(let n):number=Double(n);default:number=nil}
+                guard let number,number.isFinite,(0...1).contains(number) else {throw CrewdClientError(message:"行政判断概率无效。")}
+            }
+        }
         for target in targets {
             guard CrewdWorkID(target["id"].string ?? "",kind:.plan) != nil,target["crewId"].string?.isEmpty == false,target["revision"].string?.isEmpty == false,
                   ["unanswered","overdue","ready_unscheduled"].contains(target["kind"].string ?? ""),["in_scope","out_of_scope"].contains(target["scope"].string ?? "") else {throw CrewdClientError(message:"行政记录目标格式无效。")}

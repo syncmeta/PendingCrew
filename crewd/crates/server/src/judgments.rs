@@ -1,6 +1,7 @@
 //! Decision planning is separate from effects. All public/model names are opaque
 //! request-local aliases; only a current authority snapshot can resolve them.
 mod configuration;
+mod admin_cases;
 mod coordination;
 mod reassignment;
 mod retirement;
@@ -241,6 +242,7 @@ impl Runtime {
         this.recover_coordination().await?;
         this.recover_reassignment().await?;
         this.recover_retirement().await?;
+        this.recover_admin_cases().await?;
         this.scan_pending(true).await?;
         let weak = Arc::downgrade(&this);
         *this.pump.lock().await = Some(tokio::spawn(async move {
@@ -259,6 +261,9 @@ impl Runtime {
                         }
                         if let Err(e) = runtime.scan_retirement().await {
                             eprintln!("crewd: retirement scan failed: {e}");
+                        }
+                        if let Err(e) = runtime.resume_pending_admin_cases().await {
+                            eprintln!("crewd: administrative pending scan failed: {e}");
                         }
                         continue;
                     }
@@ -281,6 +286,9 @@ impl Runtime {
                         runtime.schedule_reassignment(id).await
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if let Err(e) = runtime.resume_pending_admin_cases().await {
+                            eprintln!("crewd: administrative catch-up failed: {e}");
+                        }
                         if let Err(e) = runtime.resume_pending_coordination().await {
                             eprintln!("crewd: coordination catch-up failed: {e}");
                         }
