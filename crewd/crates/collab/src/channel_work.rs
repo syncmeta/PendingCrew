@@ -158,7 +158,7 @@ pub fn link_created(
         linked: r.linked,
     })
 }
-fn summary(c: &Connection, b: &WorkBook, o: ChannelWorkObject) -> Result<ChannelWorkSummary> {
+pub(crate) fn summary(c: &Connection, b: &WorkBook, o: ChannelWorkObject) -> Result<ChannelWorkSummary> {
     let r = identity(c, &o)?;
     let core = crewd_store::work_organization::core_for_reference(c, r.kind, r.number)?
         .ok_or_else(|| StoreError::Invalid("channel reference lacks core identity".into()))?;

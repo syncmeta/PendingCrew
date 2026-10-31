@@ -590,6 +590,26 @@ async fn request_step(
                 ))
             }
         }
+        Ok(req)
+            if matches!(
+                req.method.as_str(),
+                crewd_proto::message_attribution::GET | crewd_proto::message_attribution::SET
+            ) =>
+        {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    RpcError::new(
+                        RpcError::FORBIDDEN,
+                        "Attached agents cannot use the Human attribution surface",
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::message_attribution::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
         Ok(req) if crewd_proto::judgments::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(

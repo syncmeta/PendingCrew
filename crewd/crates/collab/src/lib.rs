@@ -19,6 +19,7 @@ pub mod hibernate;
 pub mod judgments;
 pub mod listens;
 pub mod message_provenance;
+pub mod message_attribution;
 pub mod messages;
 pub mod prompts;
 pub mod refusal;

@@ -231,9 +231,14 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
             if resources.crew == target.crew, resources.channel == target.channel {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("这条消息的判断记录").font(.headline)
-                    CrewdJudgmentInspectionView(store: workspace.workStore, crew: target.crew, kind: "message", sourceID: target.id, members: Array(workspace.knownSessions.values), automaticallyLoad: true)
+                    ScrollView {
+                        VStack(alignment:.leading,spacing:16) {
+                            CrewdJudgmentInspectionView(store: workspace.workStore, crew: target.crew, kind: "message", sourceID: target.id, members: Array(workspace.knownSessions.values), automaticallyLoad: true)
+                            CrewdMessageAttributionView(store:workspace.workStore,crew:target.crew,message:target.id)
+                        }.frame(maxWidth:.infinity,alignment:.leading)
+                    }.frame(maxHeight:460)
                     Button("关闭") { judgmentTarget = nil }
-                }.padding().frame(minWidth: 360)
+                }.padding().frame(width:520)
             }
         }
         .onChange(of:resources.crew+resources.channel){_,_ in target=nil; judgmentTarget=nil}

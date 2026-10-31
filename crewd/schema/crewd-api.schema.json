@@ -318,6 +318,54 @@
       ],
       "type": "object"
     },
+    "AttributionAction": {
+      "enum": [
+        "set",
+        "clear",
+        "reset"
+      ],
+      "type": "string"
+    },
+    "AttributionCandidate": {
+      "properties": {
+        "link": {
+          "$ref": "#/$defs/JudgmentLink"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "link",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "AttributionSource": {
+      "enum": [
+        "model",
+        "human",
+        "none",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "AttributionTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/JudgmentObjectKind"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
     "Badge": {
       "properties": {
         "channelId": {
@@ -8814,6 +8862,166 @@
       ],
       "type": "object"
     },
+    "MessageAttributionGet": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttributionTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "crewId",
+        "messageId"
+      ],
+      "type": "object"
+    },
+    "MessageAttributionOverride": {
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/AttributionAction"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "atMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentLink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "action",
+        "actor",
+        "atMs"
+      ],
+      "type": "object"
+    },
+    "MessageAttributionSet": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/AttributionAction"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentLink"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "messageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "messageId",
+        "expectedRevision",
+        "action"
+      ],
+      "type": "object"
+    },
+    "MessageAttributionView": {
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/AttributionCandidate"
+          },
+          "type": "array"
+        },
+        "candidatesTruncated": {
+          "type": "boolean"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgmentLink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageAttributionOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedCandidate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttributionCandidate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "sampleOnly": {
+          "type": "boolean"
+        },
+        "source": {
+          "$ref": "#/$defs/AttributionSource"
+        }
+      },
+      "required": [
+        "crewId",
+        "messageId",
+        "revision",
+        "source",
+        "candidates",
+        "candidatesTruncated",
+        "sampleOnly"
+      ],
+      "type": "object"
+    },
     "MessageListParams": {
       "additionalProperties": false,
       "properties": {
@@ -16087,6 +16295,22 @@
       },
       "result": {
         "$ref": "#/$defs/LoopRecovered"
+      }
+    },
+    "message.attribution.get": {
+      "params": {
+        "$ref": "#/$defs/MessageAttributionGet"
+      },
+      "result": {
+        "$ref": "#/$defs/MessageAttributionView"
+      }
+    },
+    "message.attribution.set": {
+      "params": {
+        "$ref": "#/$defs/MessageAttributionSet"
+      },
+      "result": {
+        "$ref": "#/$defs/MessageAttributionView"
       }
     },
     "message.list": {

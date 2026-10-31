@@ -22,6 +22,7 @@ pub use patrol_runtime::*;
 pub mod commands;
 pub mod host;
 pub mod judgments;
+pub mod message_attribution;
 mod model;
 pub mod notifications;
 /// M3c（编排）的方法、事件与类型。
@@ -165,6 +166,8 @@ pub mod methods {
         crate::judgments::SETTINGS_GET,
         crate::judgments::SETTINGS_SET,
         crate::judgments::INSPECT,
+        crate::message_attribution::GET,
+        crate::message_attribution::SET,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
         crate::commands::COMMAND_SUBMIT,
         crate::commands::COMMAND_LOOKUP,
@@ -780,6 +783,20 @@ pub fn api_schema() -> Value {
             m(
                 sub::<judgments::JudgmentSettingsSet>(g),
                 sub::<judgments::JudgmentSettingsResult>(g),
+            ),
+        ),
+        (
+            message_attribution::GET,
+            m(
+                sub::<message_attribution::MessageAttributionGet>(g),
+                sub::<message_attribution::MessageAttributionView>(g),
+            ),
+        ),
+        (
+            message_attribution::SET,
+            m(
+                sub::<message_attribution::MessageAttributionSet>(g),
+                sub::<message_attribution::MessageAttributionView>(g),
             ),
         ),
         (

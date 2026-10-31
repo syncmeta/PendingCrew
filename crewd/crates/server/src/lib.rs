@@ -14,6 +14,7 @@ mod group_knowledge;
 pub mod host_admin;
 pub mod hub;
 mod judgments;
+mod message_attribution;
 pub mod ledger;
 mod legacy_terminal;
 pub mod native_helpers;

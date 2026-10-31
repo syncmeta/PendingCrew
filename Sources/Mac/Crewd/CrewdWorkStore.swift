@@ -234,6 +234,48 @@ final class CrewdWorkStore: ObservableObject {
         return page
     }
     /// Read only; changing the organization invalidates an outstanding inspection.
+    private func validateAttribution(_ value:CrewdValue,crew:String,message:String)throws -> CrewdValue {
+        func validLink(_ v:CrewdValue)->Bool {
+            ["message","requirement","work"].contains(v["kind"].string ?? "") && v["id"].string?.isEmpty == false && v["revision"].string?.isEmpty == false
+        }
+        guard case .object(let row)=value,row["crewId"] == .string(crew),row["messageId"] == .string(message),row["revision"]?.string?.isEmpty == false,
+              ["model","human","none","stale"].contains(row["source"]?.string ?? ""),let link=row["link"],link == .null || validLink(link),
+              let override=row["override"],case .array(let candidates)?=row["candidates"],case .bool?=row["candidatesTruncated"],row["sampleOnly"] == .bool(true) else {throw CrewdClientError(message:"消息归属记录不完整或不属于当前消息。")}
+        if override != .null {
+            guard ["set","clear"].contains(override["action"].string ?? ""),override["actor"] == .string("human"),override["atMs"].int != nil,
+                  (override["action"] == .string("set") ? validLink(override["link"]) : override["link"] == .null) else {throw CrewdClientError(message:"人工归属记录无效。")}
+        }
+        for candidate in candidates {guard validLink(candidate["link"]),candidate["summary"].string != nil else {throw CrewdClientError(message:"归属候选无效。")}}
+        guard let resolved=row["resolvedCandidate"],resolved == .null || (validLink(resolved["link"]) && resolved["summary"].string != nil) else {throw CrewdClientError(message:"精确查找结果无效。")}
+        return value
+    }
+    func messageAttribution(crew:String,message:String,target:CrewdValue?=nil) async throws -> CrewdValue {
+        let token=generation
+        var params:[String:CrewdValue]=["crewId":.string(crew),"messageId":.string(message)]
+        if let target {params["target"]=target}
+        let value=try await call("message.attribution.get",.object(params))
+        try check(token);return try validateAttribution(value,crew:crew,message:message)
+    }
+    func messageAttributionWithSummary(crew:String,message:String) async throws -> CrewdValue {
+        let original=try await messageAttribution(crew:crew,message:message)
+        let token=generation,link=original["link"]
+        guard link != .null,!original["candidates"].array.contains(where:{$0["link"] == link}) else {return original}
+        do {
+            return try await messageAttribution(crew:crew,message:message,target:.object(["kind":link["kind"],"id":link["id"]]))
+        } catch is CancellationError {throw CancellationError()}
+        catch {try check(token);return original}
+    }
+    func setMessageAttribution(crew:String,message:String,revision:String,action:String,link:CrewdValue?=nil) async throws -> CrewdValue {
+        guard ["set","clear","reset"].contains(action),!revision.isEmpty,(action == "set") == (link != nil),activeMutations == 0 else {throw CrewdClientError(message:"归属操作无效或已有提交进行中。",kind:.notSubmitted)}
+        let token=generation;activeMutations += 1
+        defer {if token == generation {activeMutations=0}}
+        var params:[String:CrewdValue]=["crewId":.string(crew),"messageId":.string(message),"expectedRevision":.string(revision),"action":.string(action)]
+        if let link {params["link"]=link}
+        let value=try await call("message.attribution.set",.object(params));try check(token)
+        let checked=try validateAttribution(value,crew:crew,message:message)
+        guard action == "reset" ? checked["override"] == .null : (checked["override"]["action"] == .string(action) && checked["override"]["link"] == (link ?? .null)) else {throw CrewdClientError(message:"归属回执与请求不符，请刷新核对，不会自动重发。")}
+        return checked
+    }
     func inspectJudgment(crew: String, kind: String, id: String) async throws -> CrewdValue {
         let token = generation
         let source: CrewdValue = .object(["crewId": .string(crew), "kind": .string(kind), "id": .string(id)])
