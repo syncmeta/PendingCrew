@@ -160,6 +160,7 @@ enum Tag {
         servers: Value,
     },
     Initialize,
+    CaseConfig,
     Resume(String),
     Start,
     TurnStart {
@@ -512,6 +513,19 @@ impl CodexCore {
                 }
             }
             Ok(Incoming::Request { id, method, params }) => {
+                if self.options.native_policy == super::profile::NativePolicy::AdminCaseRestricted
+                    && !(method == "mcpServer/elicitation/request"
+                        && params["serverName"] == "crew"
+                        && params["_meta"]["codex_approval_kind"] == "mcp_tool_call")
+                {
+                    self.actions.push(CodexAction::Write(error_line(
+                        &id,
+                        -32000,
+                        "restricted case cannot grant native permissions or refresh credentials",
+                    )));
+                    self.after_input(now);
+                    return;
+                }
                 if self.hold_human(&id, &method, &params) {
                     self.after_input(now);
                     return;
@@ -682,6 +696,12 @@ impl CodexCore {
             ticket,
             outcome: ControlOutcome::Rejected(why.to_string()),
         };
+        if self.options.native_policy == super::profile::NativePolicy::AdminCaseRestricted {
+            self.actions.push(reject(
+                "restricted administrative native policy cannot be changed",
+            ));
+            return;
+        }
         if self.stopped_by_user {
             self.actions
                 .push(reject("session 正在被停掉，不再接受控制"));
@@ -876,6 +896,29 @@ impl CodexCore {
     }
 
     fn opened(&mut self, thread: String, resumed: bool, result: &Value, now: Instant) {
+        if self.options.native_policy == super::profile::NativePolicy::AdminCaseRestricted
+            && (self
+                .options
+                .case_profile
+                .as_ref()
+                .is_none_or(|p| !p.validate_open(result))
+                || self
+                    .options
+                    .model
+                    .as_ref()
+                    .is_some_and(|m| result["model"].as_str() != Some(m.as_str()))
+                || self
+                    .options
+                    .effort
+                    .as_ref()
+                    .is_some_and(|e| result["reasoningEffort"].as_str() != Some(e.as_str())))
+        {
+            self.fail(StartFailure::Launch(launch_health(
+                LaunchVerdict::SpawnFailed,
+                "restricted native permission receipt was not proved; no task sent",
+            )));
+            return;
+        }
         self.opened_profile = proto::profile_of(result);
         self.native_history_mode = result
             .pointer("/thread/historyMode")
@@ -942,9 +985,41 @@ impl CodexCore {
                 Ok(_) => {
                     self.actions
                         .push(CodexAction::Write(notification_line("initialized", None)));
-                    self.open_thread(now);
+                    if self.options.native_policy
+                        == super::profile::NativePolicy::AdminCaseRestricted
+                    {
+                        self.request(
+                            Tag::CaseConfig,
+                            "config/read",
+                            &serde_json::json!({"includeLayers":true,"cwd":self.cwd}),
+                            now,
+                            self.config.request_timeout,
+                        );
+                    } else {
+                        self.open_thread(now);
+                    }
                 }
                 Err(f) => self.handshake_failed("initialize", &f),
+            },
+            Tag::CaseConfig => match result {
+                Ok(v)
+                    if self
+                        .options
+                        .case_profile
+                        .as_ref()
+                        .zip(self.options.mcp_servers.as_ref())
+                        .is_some_and(|(p, m)| p.validate_config(&v, m)) =>
+                {
+                    self.open_thread(now)
+                }
+                Ok(_) => self.fail(StartFailure::Launch(launch_health(
+                    LaunchVerdict::SpawnFailed,
+                    "restricted native configuration was not proved; no task sent",
+                ))),
+                Err(e) => self.handshake_failed(
+                    "restricted native configuration unavailable; no task sent",
+                    &e,
+                ),
             },
             Tag::Resume(id) => match result {
                 Ok(v) => {
@@ -1254,6 +1329,12 @@ impl CodexCore {
         };
         let thread = self.thread_id.clone().unwrap_or_default();
         let mut params = proto::turn_start_params(&thread, &next.text, &next.context);
+        if self.options.native_policy == super::profile::NativePolicy::AdminCaseRestricted {
+            // The selected named profile remains sticky. Do not send a legacy
+            // sandbox override, which would replace its restricted read roots.
+            params["approvalPolicy"] = serde_json::json!("never");
+            params["permissions"] = serde_json::json!(super::profile::PROFILE_ID);
+        }
         if let Some(inputs) = self.native_queued_inputs.remove(&next.id) {
             inputs.append(&mut params["input"]);
             self.native_input_files.push(inputs);
@@ -1863,6 +1944,130 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn restricted_case_checks_effective_configuration_before_opening_thread() {
+        let mut t = T::new(None, Some("must not be sent"));
+        t.core.options.native_policy = super::super::profile::NativePolicy::AdminCaseRestricted;
+        t.reply("initialize", json!({"userAgent":"codex"}));
+        assert!(t.methods().contains(&"config/read".to_owned()));
+        assert!(!t.methods().contains(&"thread/start".to_owned()));
+        assert!(!t.methods().contains(&"turn/start".to_owned()));
+    }
+
+    fn restricted_opening(recorded: Option<&str>) -> T {
+        let mut t = T::new(recorded, Some("restricted first body"));
+        let (p, c, mcp) = crate::codex::profile::tests::fixture();
+        t.core.cwd = p.cwd.clone();
+        t.core.options.native_policy = crate::codex::profile::NativePolicy::AdminCaseRestricted;
+        t.core.options.case_profile = Some(p);
+        t.core.options.mcp_servers = Some(mcp);
+        t.core.options.strict_resume = true;
+        t.reply("initialize", json!({}));
+        t.reply(
+            "config/read",
+            json!({"config":c,"layers":[{"name":{"type":"sessionFlags"},"config":{}}]}),
+        );
+        t
+    }
+    fn restricted_receipt() -> Value {
+        json!({"thread":{"id":"thr-1"},"modelProvider":"openai","cwd":"/project","approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":false},"activePermissionProfile":{"id":crate::codex::profile::PROFILE_ID}})
+    }
+    #[test]
+    fn restricted_unknown_or_refused_policy_sends_no_body_and_never_falls_back() {
+        for resumed in [false, true] {
+            let method = if resumed {
+                "thread/resume"
+            } else {
+                "thread/start"
+            };
+            let mut t = restricted_opening(if resumed { Some("thr-1") } else { None });
+            assert_eq!(t.last(method)["params"]["approvalPolicy"], "never");
+            assert_eq!(
+                t.last(method)["params"]["permissions"],
+                crate::codex::profile::PROFILE_ID
+            );
+            t.reply(
+                method,
+                json!({"thread":{"id":"thr-1"},"sandbox":{"type":"readOnly"}}),
+            );
+            assert_eq!(t.count("turn/start"), 0);
+            assert!(
+                t.take_other()
+                    .iter()
+                    .any(|a| matches!(a, CodexAction::Failed(_)))
+            );
+            let mut t = restricted_opening(if resumed { Some("thr-1") } else { None });
+            t.reply_err(method, "not supported");
+            assert_eq!(t.count("turn/start"), 0);
+            if resumed {
+                assert_eq!(t.count("thread/start"), 0)
+            }
+        }
+    }
+    #[test]
+    fn restricted_settings_mutations_and_unknown_echo_cannot_relax_later_turns() {
+        let mut t = restricted_opening(None);
+        t.reply("thread/start", restricted_receipt());
+        t.core.on_recorded(Ok(()), t.at(0.2));
+        t.pump();
+        assert_eq!(t.count("turn/start"), 1);
+        assert_eq!(
+            t.last("turn/start")["params"]["permissions"],
+            crate::codex::profile::PROFILE_ID
+        );
+        t.core.control(6, Control::Fast(true), t.at(0.3));
+        t.core.native_request(
+            Some(7),
+            crate::codex::control::CodexOperation::Configure(Default::default()),
+            None,
+            t.at(0.3),
+        );
+        t.pump();
+        assert_eq!(t.count("thread/settings/update"), 0);
+        t.notify(
+            "thread/settings/updated",
+            json!({"threadId":"thr-1","threadSettings":{"approvalPolicy":"on-request"}}),
+        );
+        assert!(
+            t.take_other()
+                .iter()
+                .any(|a| matches!(a, CodexAction::Failed(_)))
+        );
+        assert_eq!(t.count("turn/start"), 1);
+    }
+    #[test]
+    fn restricted_preflight_refusal_and_timeout_never_open_thread() {
+        for timeout in [false, true] {
+            let mut t = T::new(None, Some("no body"));
+            t.core.options.native_policy = crate::codex::profile::NativePolicy::AdminCaseRestricted;
+            t.reply("initialize", json!({}));
+            if timeout {
+                t.tick(61.0)
+            } else {
+                t.reply_err("config/read", "unsupported")
+            };
+            assert_eq!(t.count("thread/start"), 0);
+            assert_eq!(t.count("turn/start"), 0);
+        }
+    }
+    #[test]
+    fn restricted_native_model_or_effort_substitution_sends_no_first_body() {
+        for model in [true, false] {
+            let mut t = restricted_opening(None);
+            if model {
+                t.core.options.model = Some("explicit-source-model".into())
+            } else {
+                t.core.options.effort = Some("high".into())
+            };
+            t.reply("thread/start", restricted_receipt());
+            assert_eq!(t.count("turn/start"), 0);
+            assert!(
+                t.take_other()
+                    .iter()
+                    .any(|a| matches!(a, CodexAction::Failed(_)))
+            );
+        }
+    }
     #[test]
     fn fresh_start_records_the_thread_before_spawned_and_before_the_first_turn() {
         let mut t = T::new(None, Some("开场任务"));

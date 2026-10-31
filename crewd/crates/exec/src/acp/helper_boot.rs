@@ -170,6 +170,7 @@ pub async fn run<R: tokio::io::AsyncRead + Unpin>(input: R) -> io::Result<()> {
         program: boot.program,
         child_path: boot.child_path,
         spec: ClaudeSpec {
+            admin_case_restricted: false,
             workdir: boot.workdir,
             model: boot.model,
             effort: boot.effort,

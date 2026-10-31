@@ -34,6 +34,7 @@ impl AgentSessionArg {
 pub struct ClaudeArgs {
     pub session: AgentSessionArg,
     pub permission_mode: String,
+    pub admin_case_restricted: bool,
     pub system_prompt_file: Option<PathBuf>,
     pub settings_file: Option<PathBuf>,
     pub mcp_config_file: Option<PathBuf>,
@@ -46,6 +47,7 @@ impl ClaudeArgs {
         Self {
             session,
             permission_mode: "auto".to_string(),
+            admin_case_restricted: false,
             system_prompt_file: None,
             settings_file: None,
             mcp_config_file: None,
@@ -63,8 +65,25 @@ impl ClaudeArgs {
         }
         a.extend([
             "--permission-mode".to_string(),
-            self.permission_mode.clone(),
+            if self.admin_case_restricted {
+                "dontAsk".into()
+            } else {
+                self.permission_mode.clone()
+            },
         ]);
+        if self.admin_case_restricted {
+            a.extend(
+                [
+                    "--restricted",
+                    "--tools",
+                    "Read,Grep,Glob",
+                    "--strict-mcp-config",
+                    "--disable-slash-commands",
+                    "--no-chrome",
+                ]
+                .map(str::to_owned),
+            );
+        }
         let files = [
             ("--append-system-prompt-file", &self.system_prompt_file),
             ("--settings", &self.settings_file),
@@ -249,6 +268,8 @@ pub fn shell_quote(word: &str) -> String {
 /// 一次启动要的全部输入（调用方给的）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClaudeSpec {
+    /// Immutable case-local restriction, also required on an exact native resume.
+    pub admin_case_restricted: bool,
     pub workdir: PathBuf,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -296,6 +317,26 @@ impl Drop for LaunchFiles {
     }
 }
 
+/// Candidate case profile accepts provider credentials/endpoint data only.
+/// Unknown keys are rejected; never include a credential value in diagnostics.
+pub fn validate_admin_case_env(env: &BTreeMap<String, String>) -> std::io::Result<()> {
+    if env.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "ANTHROPIC_API_KEY"
+                | "ANTHROPIC_AUTH_TOKEN"
+                | "ANTHROPIC_BASE_URL"
+                | "ANTHROPIC_CUSTOM_HEADERS"
+        )
+    }) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "restricted administrative environment contains an unsupported key",
+        ));
+    }
+    Ok(())
+}
+
 /// 写临时文件、拼 argv。文件放在 `runtime_dir/<会话号>/`（目录 0700、文件 0600）。
 /// 同一会话号重复准备会先清掉旧目录。
 pub fn prepare_claude(
@@ -303,6 +344,15 @@ pub fn prepare_claude(
     session: AgentSessionArg,
     runtime_dir: &Path,
 ) -> std::io::Result<(ClaudeArgs, LaunchFiles)> {
+    if spec.admin_case_restricted {
+        validate_admin_case_env(&spec.additional_env)?;
+    }
+    if spec.admin_case_restricted && !spec.comms.as_ref().is_some_and(|c| c.managed_hooks) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "restricted administrative Claude requires managed crew communication",
+        ));
+    }
     if !valid_agent_session_id(session.id()) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -312,6 +362,7 @@ pub fn prepare_claude(
     let files = LaunchFiles::create(runtime_dir, &format!("claude-{}", session.id()))?;
 
     let mut args = ClaudeArgs::new(session);
+    args.admin_case_restricted = spec.admin_case_restricted;
     args.effort = spec.effort.clone();
     args.model = spec.model.clone();
     if spec.fast_mode == Some(true)
@@ -345,6 +396,24 @@ pub fn prepare_claude(
     .as_object()
     .unwrap()
     .clone();
+    if spec.admin_case_restricted {
+        settings.insert("permissions".into(), json!({
+            "allow": ["Read", "Grep", "Glob", "mcp__crew__*"],
+            "deny": ["Bash", "PowerShell", "Edit", "Write", "NotebookEdit", "Agent", "Task", "Skill", "WebFetch", "WebSearch", "AskUserQuestion"]
+        }));
+        settings.insert("autoMemoryEnabled".into(), json!(false));
+        settings.insert("claudeMdExcludes".into(), json!(["**"]));
+        settings.insert("disableClaudeAiMcpServers".into(), json!(true));
+        settings
+            .get_mut("env")
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .extend([
+                ("ENABLE_TOOL_SEARCH".into(), json!("false")),
+                ("ENABLE_CLAUDEAI_MCP_SERVERS".into(), json!("false")),
+                ("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), json!("1")),
+            ]);
+    }
     if let Some(comms) = &spec.comms {
         let token_file = write_token_file(files.dir(), &comms.token)?;
         let helper = HelperCommands(comms);
@@ -892,5 +961,129 @@ mod tests {
             std::fs::read_to_string(args.system_prompt_file.unwrap()).unwrap(),
             "v2"
         );
+    }
+    #[test]
+    fn restricted_case_requires_managed_comms_before_creating_files() {
+        let rt = tempfile::tempdir().unwrap();
+        let spec = ClaudeSpec {
+            admin_case_restricted: true,
+            ..Default::default()
+        };
+        assert!(prepare_claude(&spec, AgentSessionArg::New("case".into()), rt.path()).is_err());
+        assert_eq!(std::fs::read_dir(rt.path()).unwrap().count(), 0);
+    }
+    #[test]
+    fn restricted_case_argv_cannot_loosen_on_resume_or_permission_override() {
+        let rt = tempfile::tempdir().unwrap();
+        let mut communication = comms();
+        communication.managed_hooks = true;
+        let spec = ClaudeSpec {
+            admin_case_restricted: true,
+            comms: Some(communication),
+            ..Default::default()
+        };
+        for session in [
+            AgentSessionArg::New("case".into()),
+            AgentSessionArg::Resume("case".into()),
+        ] {
+            let (mut args, _files) = prepare_claude(&spec, session, rt.path()).unwrap();
+            args.permission_mode = "bypassPermissions".into();
+            let argv = args.argv();
+            assert!(
+                argv.windows(2)
+                    .any(|p| p == ["--permission-mode", "dontAsk"])
+            );
+            assert!(argv.windows(2).any(|p| p == ["--tools", "Read,Grep,Glob"]));
+            for flag in [
+                "--restricted",
+                "--strict-mcp-config",
+                "--disable-slash-commands",
+                "--no-chrome",
+            ] {
+                assert!(argv.iter().any(|v| v == flag));
+            }
+            let settings: Value =
+                serde_json::from_slice(&std::fs::read(args.settings_file.unwrap()).unwrap())
+                    .unwrap();
+            assert_eq!(
+                settings["permissions"]["allow"],
+                json!(["Read", "Grep", "Glob", "mcp__crew__*"])
+            );
+            assert_eq!(settings["autoMemoryEnabled"], false);
+            assert_eq!(settings["env"]["ENABLE_TOOL_SEARCH"], "false");
+            assert!(
+                settings["hooks"]["UserPromptSubmit"].is_array(),
+                "managed input guard must remain active"
+            );
+            let mcp: Value =
+                serde_json::from_slice(&std::fs::read(args.mcp_config_file.unwrap()).unwrap())
+                    .unwrap();
+            assert_eq!(mcp["mcpServers"].as_object().unwrap().len(), 1);
+            assert!(mcp["mcpServers"]["crew"].is_object());
+        }
+    }
+    #[test]
+    fn restricted_case_rejects_unknown_or_executable_env_before_files() {
+        for key in [
+            "CLAUDE_CODE_PLUGIN_DIRS",
+            "NODE_OPTIONS",
+            "BASH_ENV",
+            "ENV",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "HOME",
+            "PATH",
+            "CLAUDE_CONFIG_DIR",
+            "UNKNOWN_PROVIDER_KEY",
+        ] {
+            let rt = tempfile::tempdir().unwrap();
+            let mut communication = comms();
+            communication.managed_hooks = true;
+            let spec = ClaudeSpec {
+                admin_case_restricted: true,
+                comms: Some(communication),
+                additional_env: [(key.into(), "test value never logged".into())].into(),
+                ..Default::default()
+            };
+            assert!(
+                prepare_claude(&spec, AgentSessionArg::New("case".into()), rt.path()).is_err(),
+                "case accepted env key {key}"
+            );
+            assert_eq!(std::fs::read_dir(rt.path()).unwrap().count(), 0);
+            let ordinary = ClaudeSpec {
+                admin_case_restricted: false,
+                ..spec
+            };
+            assert!(
+                prepare_claude(
+                    &ordinary,
+                    AgentSessionArg::New("ordinary".into()),
+                    rt.path()
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn restricted_case_provider_environment_remains_accepted_without_logging_values() {
+        let env = [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_CUSTOM_HEADERS",
+        ]
+        .map(|key| (key.into(), "private-provider-value".into()))
+        .into();
+        assert!(validate_admin_case_env(&env).is_ok());
+    }
+    #[test]
+    #[ignore = "opt-in isolated native CLI probe environment gate"]
+    fn restricted_case_probe_environment_gate() {
+        let env: BTreeMap<String, String> = serde_json::from_str(
+            &std::env::var("PCW_TEST_CASE_ENV_JSON").expect("test fixture required"),
+        )
+        .unwrap();
+        validate_admin_case_env(&env).expect("case environment refused before native launch");
     }
 }

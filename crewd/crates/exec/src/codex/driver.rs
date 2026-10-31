@@ -46,6 +46,7 @@ use crate::session::{AnswerOutcome, BRIEF_DELIVERY_ID, ExitStatusKind, SessionEv
 /// 一次 codex 启动要的全部输入（调用方给的）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodexSpec {
+    pub native_policy: super::profile::NativePolicy,
     pub workdir: PathBuf,
     pub title: Option<String>,
     pub initial_settings: Option<crewd_proto::codex::CodexSettingsPatch>,
@@ -139,6 +140,13 @@ pub async fn start_codex(
     start: CodexStart,
     config: CodexConfig,
 ) -> Result<(SessionHandle, mpsc::UnboundedReceiver<SessionEvent>), StartError> {
+    if start.spec.native_policy == super::profile::NativePolicy::AdminCaseRestricted
+        && !super::profile::permits_additional_env(&start.spec.additional_env)
+    {
+        return Err(StartError::Files(io::Error::other(
+            "restricted native profile rejected additional environment; no native process started",
+        )));
+    }
     let ledger = start.ledger.clone();
     let recorded = tokio::task::spawn_blocking(move || ledger.recorded())
         .await
@@ -191,9 +199,102 @@ pub async fn start_codex(
     };
     let mut env = build_env_from_process(&start.child_path, &start.spec.additional_env);
     strip_billing_keys(&mut env);
+    if start.spec.native_policy == super::profile::NativePolicy::AdminCaseRestricted {
+        env.remove("CLAUDE_CONFIG_DIR");
+        env.remove("SSH_AUTH_SOCK");
+    }
+    let mut options = thread_options(
+        &start.spec,
+        start.spec.comms.as_ref().zip(token_file.as_deref()),
+    );
+    let mut args = codex_argv();
+    if start.spec.native_policy == super::profile::NativePolicy::AdminCaseRestricted {
+        if start.spec.initial_settings.is_some()
+            || start.spec.initial_inputs.is_some()
+            || options.mcp_servers.is_none()
+        {
+            return Err(StartError::Files(io::Error::other(
+                "restricted case requires original crew transport and no untrusted native overrides",
+            )));
+        }
+        let source_spec = CodexProcessSpec {
+            program: start.program.clone(),
+            args: super::profile::auth_probe_argv(&start.spec.workdir),
+            env: env.clone(),
+            cwd: start.spec.workdir.clone(),
+        };
+        let auth = super::metadata::case_auth_configuration(
+            source_spec,
+            config.registry.clone(),
+            super::metadata::MetadataRequest {
+                session_id: start.session_id.clone(),
+                thread_id: String::new(),
+                workdir: start.spec.workdir.clone(),
+                operation: super::control::CodexOperation::Tools,
+                permit: None,
+            },
+        )
+        .await;
+        if !matches!(auth,super::control::CodexOutcome::Observed(ref v) if v["providerResult"]["authStore"]=="file")
+        {
+            return Err(StartError::Files(io::Error::other(
+                "restricted case requires verified original file authentication; no task sent",
+            )));
+        }
+        let super::control::CodexOutcome::Observed(source) = auth else {
+            unreachable!("checked auth response")
+        };
+        let provider = source["providerResult"]["modelProvider"]
+            .as_str()
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                StartError::Files(io::Error::other(
+                    "source model provider unknown; no task sent",
+                ))
+            })?
+            .to_owned();
+        let provider_fingerprint = source["providerResult"]["providerFingerprint"]
+            .as_str()
+            .filter(|v| v.len() == 64)
+            .ok_or_else(|| {
+                StartError::Files(io::Error::other(
+                    "source provider configuration unproved; no task sent",
+                ))
+            })?
+            .to_owned();
+        if options.model.is_none() {
+            options.model = source["providerResult"]["model"]
+                .as_str()
+                .map(str::to_owned);
+        }
+        if options.effort.is_none() {
+            options.effort = source["providerResult"]["effort"]
+                .as_str()
+                .map(str::to_owned);
+        }
+        let runtime = config.runtime_dir.clone();
+        let sid = start.session_id.clone();
+        let cwd = start.spec.workdir.clone();
+        let (profile, isolated) = blocking(move || {
+            let mut profile = super::profile::prepare(&runtime, &sid, &cwd, &mut env)?;
+            profile.model_provider = provider;
+            profile.provider_fingerprint = provider_fingerprint;
+            Ok((profile, env))
+        })
+        .await
+        .map_err(StartError::Files)?;
+        env = isolated;
+        let mcp = options
+            .mcp_servers
+            .as_mut()
+            .expect("checked crew transport");
+        mcp["crew"]["required"] = serde_json::json!(true);
+        args = profile.argv(mcp);
+        options.case_profile = Some(profile);
+    }
     let spec = CodexProcessSpec {
         program: start.program.clone(),
-        args: codex_argv(),
+        args,
         env,
         cwd: start.spec.workdir.clone(),
     };
@@ -243,10 +344,7 @@ pub async fn start_codex(
     let opening = Opening {
         pid: proc.pid,
         cwd: start.spec.workdir.clone(),
-        options: thread_options(
-            &start.spec,
-            start.spec.comms.as_ref().zip(token_file.as_deref()),
-        ),
+        options,
         recorded,
         client_version: config.client_version.clone(),
         brief: start
@@ -300,6 +398,8 @@ pub async fn start_codex(
 /// `mcp` = 通讯配置 + 已写好的 token 文件，两样一起给（没有 token 文件就没有 MCP）。
 pub fn thread_options(spec: &CodexSpec, mcp: Option<(&CommsSpec, &Path)>) -> ThreadOptions {
     ThreadOptions {
+        native_policy: spec.native_policy,
+        case_profile: None,
         title: spec.title.clone(),
         initial_settings: spec.initial_settings.clone(),
         strict_resume: spec.strict_resume,

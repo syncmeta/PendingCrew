@@ -16,3 +16,5 @@ pub mod control;
 pub mod metadata;
 
 pub mod input;
+
+pub mod profile;

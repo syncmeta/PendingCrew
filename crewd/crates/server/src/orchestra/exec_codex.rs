@@ -167,6 +167,9 @@ impl Executor for CodexExecutor {
             unavailable_reason: reason,
         })
     }
+    fn supports_native_policy(&self, _: super::exec::NativeExecutionPolicy) -> bool {
+        true
+    }
     fn check_launch(&self) -> Result<(), LaunchError> {
         if self.config.program == CodexProgram::Disabled {
             return Err(LaunchError::NotConfigured("codex is disabled".into()));
@@ -181,8 +184,39 @@ impl Executor for CodexExecutor {
     }
     fn launch(&self, mut req: LaunchRequest) -> BoxFut<'_, Result<Launched, LaunchError>> {
         Box::pin(async move {
+            let restricted =
+                req.native_policy == super::exec::NativeExecutionPolicy::AdminCaseRestricted;
+            if restricted
+                && !crewd_exec::codex::profile::permits_additional_env(&self.config.extra_env)
+            {
+                return Err(LaunchError::Failed("restricted case refuses executable environment injection before native startup".into()));
+            }
             self.check_launch()?;
-            let (program, child_path) = self.program().await?;
+            let (program, child_path) = if restricted {
+                // Avoid discovery's login shell: project/user shell startup files
+                // are not trusted administrative execution capabilities.
+                let child_path = self.child_path.get().cloned().unwrap_or_else(|| {
+                    std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into())
+                });
+                let program = match &self.config.program {
+                    CodexProgram::Path(path) => checked_program_path(path)?,
+                    CodexProgram::Discover => AgentPaths {
+                        child_path: child_path.clone(),
+                    }
+                    .resolve("codex")
+                    .ok_or_else(|| {
+                        LaunchError::NotConfigured(
+                            "codex not found without login-shell discovery".into(),
+                        )
+                    })?,
+                    CodexProgram::Disabled => {
+                        return Err(LaunchError::NotConfigured("codex is disabled".into()));
+                    }
+                };
+                (program, child_path)
+            } else {
+                self.program().await?
+            };
             self.check_launch()?;
             req.workdir = std::fs::canonicalize(&req.workdir)
                 .map_err(|_| LaunchError::Failed("original native workspace unavailable".into()))?;
@@ -235,6 +269,14 @@ impl Executor for CodexExecutor {
                 child_path,
                 ledger: req.ledger,
                 spec: CodexSpec {
+                    native_policy: match req.native_policy {
+                        super::exec::NativeExecutionPolicy::Ordinary => {
+                            crewd_exec::codex::profile::NativePolicy::Ordinary
+                        }
+                        super::exec::NativeExecutionPolicy::AdminCaseRestricted => {
+                            crewd_exec::codex::profile::NativePolicy::AdminCaseRestricted
+                        }
+                    },
                     workdir: req.workdir,
                     title: req.title,
                     initial_settings: req.codex_options,

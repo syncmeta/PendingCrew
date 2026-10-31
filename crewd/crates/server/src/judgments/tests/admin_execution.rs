@@ -714,5 +714,7 @@ mod outcome;
 #[path = "admin_retirement.rs"]
 mod retirement;
 
+#[path = "admin_native_policy.rs"]
+mod admin_native_policy;
 #[path = "admin_handoff.rs"]
 mod handoff;

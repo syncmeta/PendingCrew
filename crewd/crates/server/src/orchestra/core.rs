@@ -1471,6 +1471,14 @@ impl<P: Port> Core<P> {
             .execs
             .get(&req.executor)
             .map_err(|_| ControlError::Unsupported(req.executor.clone()))?;
+        if administrative_case
+            && !exec.supports_native_policy(super::exec::NativeExecutionPolicy::AdminCaseRestricted)
+        {
+            return Err(ControlError::Unsupported(format!(
+                "{} administrative case policy",
+                req.executor
+            )));
+        }
         self.check_launch(&exec, &req.crew_id, &req.executor)?;
         // 已移除的机组只读（§26.7）：什么都不建、不写、不起。
         if self
@@ -2352,26 +2360,34 @@ impl<P: Port> Core<P> {
         };
         self.retry_terminal(&row.id).await?;
         self.check_launch(&exec, &row.crew_id, &row.executor)?;
+        let administrative_case = self.port.admin_case_bound(&row.id).await?;
+        let native_policy = if administrative_case {
+            super::exec::NativeExecutionPolicy::AdminCaseRestricted
+        } else {
+            super::exec::NativeExecutionPolicy::Ordinary
+        };
+        anyhow::ensure!(
+            exec.supports_native_policy(native_policy),
+            "executor does not support the session's native execution policy"
+        );
         let now = self.now();
         let workdir = row
             .workdir
             .clone()
             .ok_or_else(|| anyhow::anyhow!("session {} 没有工作目录", row.id))?;
         let system_prompt = Some(self.port.worldview(&row.id).await?);
-        let initial_context = if text.is_some()
-            && exec.accepts_initial_context()
-            && !self.port.admin_case_bound(&row.id).await?
-        {
-            within(
-                self.cfg.hook_timeout,
-                "ContextExtras",
-                self.hooks.extras.extras(&row.id),
-            )
-            .await
-            .unwrap_or_default()
-        } else {
-            Default::default()
-        };
+        let initial_context =
+            if text.is_some() && exec.accepts_initial_context() && !administrative_case {
+                within(
+                    self.cfg.hook_timeout,
+                    "ContextExtras",
+                    self.hooks.extras.extras(&row.id),
+                )
+                .await
+                .unwrap_or_default()
+            } else {
+                Default::default()
+            };
         if let Some((snapshot, confirmed)) = self.retirement_receipts.get(&row.id).cloned() {
             self.port
                 .confirm_retirement_exit(&snapshot, confirmed)
@@ -2425,6 +2441,7 @@ impl<P: Port> Core<P> {
         }
         let (title, codex_options) = self.port.codex_launch_options(&row.id).await?;
         let req = LaunchRequest {
+            native_policy,
             managed_resume_id,
             initial_inputs,
             title,
@@ -5069,6 +5086,7 @@ mod tests {
         rig.crew("c1", "cap");
         let exec = rig.core.execs.get("claude").unwrap();
         let req = LaunchRequest {
+            native_policy: crate::orchestra::exec::NativeExecutionPolicy::Ordinary,
             managed_resume_id: None,
             initial_inputs: None,
             codex_options: None,

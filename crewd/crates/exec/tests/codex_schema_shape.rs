@@ -20,6 +20,7 @@ fn outbound_methods_and_fields_match_the_native_experimental_contract() {
         fast: Some(true),
         developer_instructions: Some("synthetic worldview".into()),
         mcp_servers: Some(json!({"crew":{"command":"/synthetic/helper","args":[]}})),
+        ..Default::default()
     };
     let context = UntrustedContext::from([("crew_whiteboard".into(), "external data".into())]);
     let inputs = [

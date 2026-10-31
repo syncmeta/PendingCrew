@@ -42,6 +42,8 @@ pub fn initialize_params(version: &str) -> Value {
 /// （人的原话：「codex 本身的默认模型是什么逻辑就用什么逻辑」），实际值从回包里读。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThreadOptions {
+    pub native_policy: super::profile::NativePolicy,
+    pub case_profile: Option<super::profile::RestrictedProfile>,
     pub title: Option<String>,
     pub initial_settings: Option<crewd_proto::codex::CodexSettingsPatch>,
     /// Internal production selection; never populated from provider JSON.
@@ -88,6 +90,11 @@ pub fn thread_start_params(cwd: &Path, o: &ThreadOptions) -> Value {
     if !config.is_empty() {
         p.insert("config".into(), Value::Object(config));
     }
+    if o.native_policy == super::profile::NativePolicy::AdminCaseRestricted {
+        p.remove("sandbox");
+        p.insert("permissions".into(), json!(super::profile::PROFILE_ID));
+        p.insert("approvalPolicy".into(), json!("never"));
+    }
     Value::Object(p)
 }
 
@@ -95,7 +102,7 @@ pub fn thread_start_params(cwd: &Path, o: &ThreadOptions) -> Value {
 /// （不带历史回合：长 thread 的整段历史是一行几 MB 的 JSON，Swift 吃过超时的亏）。
 pub fn thread_resume_params(thread_id: &str, cwd: &Path, o: &ThreadOptions) -> Value {
     let mut p = thread_start_params(cwd, o);
-    if o.strict_resume {
+    if o.strict_resume && o.native_policy == super::profile::NativePolicy::Ordinary {
         // Native resume loads the stored thread. Reopening is not a request to
         // reset its permissions or retry a previously uncertain settings patch.
         let object = p.as_object_mut().expect("thread params object");
@@ -115,6 +122,7 @@ pub fn thread_resume_params(thread_id: &str, cwd: &Path, o: &ThreadOptions) -> V
     p.as_object_mut()
         .expect("thread params object")
         .remove("historyMode");
+    p.as_object_mut().unwrap().remove("environments");
     p["threadId"] = json!(thread_id);
     p["excludeTurns"] = json!(true);
     p

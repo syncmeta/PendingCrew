@@ -1,5 +1,6 @@
 //! Bounded, registered metadata-only app-server operation. This code cannot
-//! select resume/start/turn/login/config methods from either JSON or strings.
+//! select resume/start/turn/login/config mutations from either JSON or strings.
+//! A private trusted-policy auth probe adds only config/read and exposes no secrets.
 use super::{
     control::{CodexOperation as Op, CodexOutcome as Out},
     proto, rpc,
@@ -83,49 +84,70 @@ pub async fn run(
     registry: Option<Arc<ProcessRegistry>>,
     request: MetadataRequest,
 ) -> Out {
-    let (method, params) = match request.operation {
-        Op::Name(name) if !name.trim().is_empty() && name.len() <= 512 => (
-            "thread/name/set",
-            json!({"threadId":request.thread_id,"name":name}),
-        ),
-        Op::History(p)
-            if p.limit.is_none_or(|n| n > 0 && n <= 100)
-                && p.cursor.as_ref().is_none_or(|c| c.len() <= 8192) =>
-        {
-            let mut v = json!({"threadId":request.thread_id,"limit":p.limit.unwrap_or(50)});
-            if let Some(c) = p.cursor {
-                v["cursor"] = json!(c);
+    run_inner(spec, registry, request, false).await
+}
+pub(crate) async fn case_auth_configuration(
+    spec: CodexProcessSpec,
+    registry: Option<Arc<ProcessRegistry>>,
+    request: MetadataRequest,
+) -> Out {
+    run_inner(spec, registry, request, true).await
+}
+async fn run_inner(
+    spec: CodexProcessSpec,
+    registry: Option<Arc<ProcessRegistry>>,
+    request: MetadataRequest,
+    case_auth: bool,
+) -> Out {
+    let (method, params) = if case_auth {
+        (
+            "config/read",
+            json!({"includeLayers":false,"cwd":request.workdir}),
+        )
+    } else {
+        match request.operation {
+            Op::Name(name) if !name.trim().is_empty() && name.len() <= 512 => (
+                "thread/name/set",
+                json!({"threadId":request.thread_id,"name":name}),
+            ),
+            Op::History(p)
+                if p.limit.is_none_or(|n| n > 0 && n <= 100)
+                    && p.cursor.as_ref().is_none_or(|c| c.len() <= 8192) =>
+            {
+                let mut v = json!({"threadId":request.thread_id,"limit":p.limit.unwrap_or(50)});
+                if let Some(c) = p.cursor {
+                    v["cursor"] = json!(c);
+                }
+                if let Some(i) = p.items_view {
+                    v["itemsView"] = json!(i);
+                }
+                if let Some(i) = p.sort_direction {
+                    v["sortDirection"] = json!(i);
+                }
+                ("thread/turns/list", v)
             }
-            if let Some(i) = p.items_view {
-                v["itemsView"] = json!(i);
+            Op::Fork { last_turn_id } => {
+                let mut v = json!({"threadId":request.thread_id,"excludeTurns":true});
+                if let Some(t) = last_turn_id {
+                    v["lastTurnId"] = json!(t);
+                }
+                ("thread/fork", v)
             }
-            if let Some(i) = p.sort_direction {
-                v["sortDirection"] = json!(i);
+            Op::PermissionProfiles(p)
+                if p.limit.is_none_or(|n| n > 0 && n <= 100)
+                    && p.cursor.as_ref().is_none_or(|s| s.len() <= 8192) =>
+            {
+                (
+                    "permissionProfile/list",
+                    json!({"cwd":request.workdir,"cursor":p.cursor,"limit":p.limit.unwrap_or(100)}),
+                )
             }
-            ("thread/turns/list", v)
-        }
-        Op::Fork { last_turn_id } => {
-            let mut v = json!({"threadId":request.thread_id,"excludeTurns":true});
-            if let Some(t) = last_turn_id {
-                v["lastTurnId"] = json!(t);
-            }
-            ("thread/fork", v)
-        }
-        Op::PermissionProfiles(p)
-            if p.limit.is_none_or(|n| n > 0 && n <= 100)
-                && p.cursor.as_ref().is_none_or(|s| s.len() <= 8192) =>
-        {
-            (
-                "permissionProfile/list",
-                json!({"cwd":request.workdir,"cursor":p.cursor,"limit":p.limit.unwrap_or(100)}),
-            )
-        }
-        Op::HistoryMutation {
-            action,
-            before_turn_id: None,
-        } => {
-            use crewd_proto::codex::CodexHistoryAction;
-            let method = match action {
+            Op::HistoryMutation {
+                action,
+                before_turn_id: None,
+            } => {
+                use crewd_proto::codex::CodexHistoryAction;
+                let method = match action {
                 CodexHistoryAction::Archive => "thread/archive",
                 CodexHistoryAction::Unarchive => "thread/unarchive",
                 CodexHistoryAction::Delete => "thread/delete",
@@ -134,12 +156,13 @@ pub async fn run(
                         .into(),
                 ),
             };
-            (method, json!({"threadId":request.thread_id}))
+                (method, json!({"threadId":request.thread_id}))
+            }
+            Op::RateLimits => ("account/rateLimits/read", json!({})),
+            Op::Models => ("model/list", json!({"limit":100})),
+            Op::Tools => ("mcpServerStatus/list", json!({"limit":100})),
+            _ => return Out::Rejected("operation is not permitted in metadata-only child".into()),
         }
-        Op::RateLimits => ("account/rateLimits/read", json!({})),
-        Op::Models => ("model/list", json!({"limit":100})),
-        Op::Tools => ("mcpServerStatus/list", json!({"limit":100})),
-        _ => return Out::Rejected("operation is not permitted in metadata-only child".into()),
     };
     let proc = match transport::spawn_codex(&spec) {
         Ok(p) => p,
@@ -231,7 +254,13 @@ pub async fn run(
                 detail: "metadata request write failed".into(),
             })?;
         let value = response(&mut guard, 2).await?;
-        if method == "mcpServerStatus/list" {
+        if case_auth {
+            // Return only the original auth storage method. Never surface the
+            // effective config's credentials, environment or provider headers.
+            Ok(
+                json!({"authStore":value["config"]["cli_auth_credentials_store"],"providerFingerprint":super::profile::provider_fingerprint(&value["config"]),"modelProvider":value["config"]["model_provider"],"model":value["config"]["model"],"effort":value["config"]["model_reasoning_effort"]}),
+            )
+        } else if method == "mcpServerStatus/list" {
             guard
                 .proc
                 .writer

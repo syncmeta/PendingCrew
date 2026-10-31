@@ -427,6 +427,7 @@ dependencies = [
  "crewd-proto",
  "crewd-term",
  "libc",
+ "ring",
  "rustix",
  "rustix-openpty",
  "serde",

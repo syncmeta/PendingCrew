@@ -1,6 +1,6 @@
 # Administration operating model proposal
 
-Status: proposal for user review, not a grant of cross-crew authority. The user asked how real enterprises organize administration rather than choosing the earlier binary scope question. Existing same-crew Admin permissions remain the implemented baseline.
+Status: researched operating-model recommendation, not a grant of cross-crew authority. The user asked how real enterprises organize administration rather than choosing the earlier binary scope question. Existing same-crew Admin permissions remain the implemented baseline; implementation of bounded lifecycle modules continues without waiting for another scope questionnaire.
 
 ## Evidence and interpretation
 
@@ -28,6 +28,10 @@ Examples:
 
 Start with one logical administrative service and bounded per-case sessions. Do not instantiate a permanent administrative department for every top-level crew merely because the hierarchy exists. Regional/subtree ownership can be added when independent workloads or policies justify it; case scope and responsibility remain explicit in either arrangement.
 
-## Decision still required
+## Implementation boundary and sequence
 
-This proposal recommends central governance and case-scoped execution. The earlier top-level-subtree versus entire-organisation dichotomy was too coarse: organisational remit, data visibility and action authority are separate decisions. No global scope, tool privilege or background administrative activation is granted by this document. Continue independent role-preservation and truthful-worldview fixes while the user reviews the model.
+This proposal recommends central governance and case-scoped execution. The earlier top-level-subtree versus entire-organisation dichotomy was too coarse: organisational remit, data visibility and action authority are separate decisions. No global scope, tool privilege or background administrative activation is granted by this document.
+
+Build the lifecycle against the existing same-crew boundary first: persist the source and judgment, bind one executor, enforce case-local tools and native execution policy, verify business effects, explicitly hand unresolved responsibility to its accountable captain, and retire only after a real exit receipt. Several of these modules now exist; their current evidence and remaining gaps belong to the decision implementation ledger. Native authentication continuity, authority invalidation fencing, exceptional custody recovery and older escalation import remain implementation work rather than reasons to reopen the organisational scope questionnaire.
+
+Once this lifecycle is sound, extend the common administrative service with explicit multi-crew case grants and consolidated reporting. That extension must define both visibility and permitted actions. It cannot obtain authority merely from the service's organisational remit or from a model assigning itself an administrative title.

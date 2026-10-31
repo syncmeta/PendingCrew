@@ -19,7 +19,16 @@ pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// codex 的 `additionalContext`（按 key 组装、去重；§4.3、§22.6 的 `ContextExtras` 口）。
 pub type Context = BTreeMap<String, String>;
 
+/// Trusted launch policy, derived from the persisted case binding, never RPC input.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NativeExecutionPolicy {
+    #[default]
+    Ordinary,
+    AdminCaseRestricted,
+}
+
 pub struct LaunchRequest {
+    pub native_policy: NativeExecutionPolicy,
     pub managed_resume_id: Option<String>,
     pub initial_inputs: Option<crewd_exec::codex::input::Submission>,
     pub session_id: String,
@@ -67,6 +76,9 @@ impl std::error::Error for LaunchError {}
 pub type Launched = (Arc<dyn ExecHandle>, mpsc::UnboundedReceiver<SessionEvent>);
 
 pub trait Executor: Send + Sync {
+    fn supports_native_policy(&self, policy: NativeExecutionPolicy) -> bool {
+        policy == NativeExecutionPolicy::Ordinary
+    }
     fn codex_metadata(
         &self,
         _req: crewd_exec::codex::metadata::MetadataRequest,

@@ -1985,6 +1985,7 @@ fn memory_eligible(st: &MemState, session: &str, channel: &str) -> bool {
 
 #[derive(Clone, Debug)]
 pub struct LaunchRecord {
+    pub native_policy: super::exec::NativeExecutionPolicy,
     pub session: String,
     pub workdir: PathBuf,
     pub initial: Option<String>,
@@ -2000,6 +2001,7 @@ pub type HeldLaunch = (
 
 #[derive(Default)]
 pub struct StandInState {
+    pub reject_admin_case_policy: bool,
     pub accepts_initial_context: bool,
     pub launches: Vec<LaunchRecord>,
     pub launch_outcomes: Vec<(String, bool)>,
@@ -2291,6 +2293,10 @@ impl crate::orchestra::worktree::Worktrees for StandInWorktrees {
 }
 
 impl Executor for StandIn {
+    fn supports_native_policy(&self, policy: super::exec::NativeExecutionPolicy) -> bool {
+        policy == super::exec::NativeExecutionPolicy::Ordinary
+            || !self.lock().reject_admin_case_policy
+    }
     fn accepts_initial_context(&self) -> bool {
         self.0.lock().unwrap().accepts_initial_context
     }
@@ -2324,6 +2330,7 @@ impl Executor for StandIn {
             }
             s.launch_outcomes.push((req.session_id.clone(), true));
             s.launches.push(LaunchRecord {
+                native_policy: req.native_policy,
                 session: req.session_id.clone(),
                 workdir: req.workdir.clone(),
                 initial: req.initial_prompt.clone(),
@@ -3517,6 +3524,7 @@ mod self_tests {
 
     fn launch_req(session: &str, initial: Option<&str>) -> LaunchRequest {
         LaunchRequest {
+            native_policy: crate::orchestra::exec::NativeExecutionPolicy::Ordinary,
             managed_resume_id: None,
             initial_inputs: None,
             codex_options: None,
@@ -3617,6 +3625,7 @@ mod self_tests {
         let exec = StandIn::default();
         let (h, _rx) = exec
             .launch(LaunchRequest {
+                native_policy: crate::orchestra::exec::NativeExecutionPolicy::Ordinary,
                 managed_resume_id: None,
                 initial_inputs: None,
                 codex_options: None,

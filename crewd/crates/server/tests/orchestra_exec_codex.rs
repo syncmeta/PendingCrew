@@ -34,6 +34,7 @@ fn executor(root: &std::path::Path, program: CodexProgram) -> CodexExecutor {
 }
 fn request(root: &std::path::Path, ledger: Arc<MemoryLedger>) -> LaunchRequest {
     LaunchRequest {
+        native_policy: crewd_server::orchestra::exec::NativeExecutionPolicy::Ordinary,
         managed_resume_id: None,
         initial_inputs: None,
         codex_options: None,

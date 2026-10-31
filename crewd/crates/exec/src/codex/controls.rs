@@ -38,6 +38,15 @@ impl CodexCore {
         permit: Option<crate::driver::ManualWritePermit>,
         now: Instant,
     ) {
+        if self.options.native_policy == super::super::profile::NativePolicy::AdminCaseRestricted
+            && (ticket.is_some() || !matches!(op, Op::Name(_)))
+        {
+            self.native_done(
+                ticket,
+                Out::Rejected("restricted case does not accept manual native operations".into()),
+            );
+            return;
+        }
         // Normalize only inside the owned runtime queue. Prepared guards survive
         // native ACKs until this physical runtime ends; ACK is not file consumption.
         let mut steering_inputs = None;
@@ -628,6 +637,19 @@ impl CodexCore {
         let Some(s) = params.get("threadSettings").filter(|v| v.is_object()) else {
             return;
         };
+        if self.options.native_policy == super::super::profile::NativePolicy::AdminCaseRestricted
+            && self
+                .options
+                .case_profile
+                .as_ref()
+                .is_none_or(|p| !p.validate_open(s))
+        {
+            self.fail(super::StartFailure::Launch(super::launch_health(
+                crate::health::LaunchVerdict::SpawnFailed,
+                "restricted native settings changed or became unknown; further tasks refused",
+            )));
+            return;
+        }
         self.native_settings = s.clone();
         self.native_settings_epoch += 1;
         self.event(SessionEvent::CodexObservation {

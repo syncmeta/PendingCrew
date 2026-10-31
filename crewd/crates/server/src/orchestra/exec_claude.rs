@@ -11,7 +11,9 @@ use crewd_exec::launch::{ClaudeSpec, CommsSpec};
 use crewd_exec::registry::ProcessRegistry;
 use crewd_exec::resume::valid_agent_session_id;
 
-use super::exec::{BoxFut, ExecHandle, Executor, LaunchError, LaunchRequest, Launched};
+use super::exec::{
+    BoxFut, ExecHandle, Executor, LaunchError, LaunchRequest, Launched, NativeExecutionPolicy,
+};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ClaudeProgram {
@@ -99,6 +101,14 @@ impl ClaudeExecutor {
 }
 
 impl Executor for ClaudeExecutor {
+    fn supports_native_policy(&self, policy: NativeExecutionPolicy) -> bool {
+        match policy {
+            NativeExecutionPolicy::Ordinary => true,
+            // CLI restrictions do not isolate managed hooks/mods or policy changes.
+            NativeExecutionPolicy::AdminCaseRestricted => false,
+        }
+    }
+
     fn accepts_resume(&self) -> bool {
         true
     }
@@ -167,6 +177,13 @@ impl Executor for ClaudeExecutor {
         Box::pin(async move {
             self.check_launch()?;
             let managed = self.managed_factory.is_some();
+            let restricted = req.native_policy == NativeExecutionPolicy::AdminCaseRestricted;
+            if restricted {
+                crewd_exec::launch::validate_admin_case_env(&self.extra_env)
+                    .map_err(|_| LaunchError::NotConfigured("restricted administrative environment refused; no native program or task was started".into()))?;
+                return Err(LaunchError::NotConfigured("Claude administrative execution requires complete managed-policy external-execution attestation; no native program or task was started".into()));
+            }
+
             if managed {
                 let ledger = req.ledger.clone();
                 let recorded = tokio::task::spawn_blocking(move || ledger.recorded())
@@ -278,6 +295,7 @@ impl Executor for ClaudeExecutor {
             let initial = req.initial_prompt.clone();
             let managed_session = req.session_id.clone();
             let spec = ClaudeSpec {
+                admin_case_restricted: restricted,
                 workdir: req.workdir,
                 model: req.model,
                 effort: req.effort,
@@ -385,6 +403,7 @@ mod tests {
 
     fn request(session: &str, workdir: &Path) -> LaunchRequest {
         LaunchRequest {
+            native_policy: NativeExecutionPolicy::Ordinary,
             managed_resume_id: None,
             initial_inputs: None,
             codex_options: None,
@@ -401,6 +420,51 @@ mod tests {
             initial_context: Default::default(),
             token: "tok-1".into(),
             ledger: Arc::new(MemoryLedger::default()),
+        }
+    }
+
+    #[tokio::test]
+    async fn restricted_case_rejects_all_adapters_before_native_discovery_or_task_input() {
+        for managed in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut exec = executor(
+                ClaudeProgram::Path("/must-not-be-discovered".into()),
+                dir.path(),
+            );
+            if managed {
+                let db =
+                    crewd_store::Db::spawn(crewd_store::Store::open_in_memory().unwrap()).unwrap();
+                let registry =
+                    Arc::new(ProcessRegistry::load(&dir.path().join("registry.json")).unwrap());
+                exec.managed_factory = Some(Arc::new(crate::native_helpers::NativeFactory::new(
+                    db,
+                    registry,
+                    dir.path().join("no-helper"),
+                )));
+            }
+            assert!(exec.supports_native_policy(NativeExecutionPolicy::Ordinary));
+            assert!(!exec.supports_native_policy(NativeExecutionPolicy::AdminCaseRestricted));
+            let mut req = request("restricted", dir.path());
+            req.native_policy = NativeExecutionPolicy::AdminCaseRestricted;
+            req.initial_prompt = Some("must never be sent".into());
+            let error = exec
+                .launch(req)
+                .await
+                .err()
+                .expect("case policy must be refused");
+            assert!(
+                error
+                    .to_string()
+                    .contains("managed-policy external-execution attestation"),
+                "{error}"
+            );
+            assert!(!dir.path().join("run").exists());
+            exec.extra_env
+                .insert("CLAUDE_CODE_PLUGIN_DIRS".into(), "/untrusted-plugin".into());
+            let mut req = request("restricted", dir.path());
+            req.native_policy = NativeExecutionPolicy::AdminCaseRestricted;
+            let error = exec.launch(req).await.err().unwrap();
+            assert!(error.to_string().contains("environment refused"), "{error}");
         }
     }
 
