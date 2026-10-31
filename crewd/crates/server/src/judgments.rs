@@ -265,6 +265,9 @@ impl Runtime {
                         if let Err(e) = runtime.resume_pending_admin_cases().await {
                             eprintln!("crewd: administrative pending scan failed: {e}");
                         }
+                        if let Err(e) = runtime.verify_admin_outcomes().await {
+                            eprintln!("crewd: administrative outcome scan failed: {e}");
+                        }
                         continue;
                     }
                 };

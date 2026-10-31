@@ -707,3 +707,6 @@ async fn wait_started(r: &Rig, case: &str, session: &str) {
     .await
     .expect("physical Spawned must persist both Running case and Running session");
 }
+
+#[path = "admin_outcome.rs"]
+mod outcome;

@@ -188,6 +188,121 @@
       ],
       "type": "object"
     },
+    "AdminCaseOutcomePhase": {
+      "enum": [
+        "unresolved",
+        "resolved",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "AdminCaseOutcomeReason": {
+      "enum": [
+        "no_execution",
+        "no_verified_admin_effect",
+        "targets_unresolved",
+        "out_of_scope",
+        "verified",
+        "authority_changed"
+      ],
+      "type": "string"
+    },
+    "AdminCaseOutcomeView": {
+      "additionalProperties": false,
+      "properties": {
+        "blocked": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "caseId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "missing": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "outOfScope": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pending": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "phase": {
+          "$ref": "#/$defs/AdminCaseOutcomePhase"
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseOutcomeReason"
+        },
+        "resolvedByAdmin": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resolvedByOthers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTargetOutcome"
+          },
+          "type": "array"
+        },
+        "verifiedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "caseId",
+        "crewId",
+        "revision",
+        "verifiedAt",
+        "phase",
+        "reason",
+        "targets",
+        "outOfScope",
+        "missing",
+        "pending",
+        "blocked",
+        "resolvedByAdmin",
+        "resolvedByOthers"
+      ],
+      "type": "object"
+    },
+    "AdminCaseResolutionActor": {
+      "enum": [
+        "case_admin",
+        "other"
+      ],
+      "type": "string"
+    },
+    "AdminCaseResolutionKind": {
+      "enum": [
+        "closed",
+        "reassigned"
+      ],
+      "type": "string"
+    },
     "AdminCaseRetirement": {
       "enum": [
         "not_started"
@@ -262,6 +377,96 @@
       ],
       "type": "string"
     },
+    "AdminCaseTargetOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "actorSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "eventSeq": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseTargetOutcomeReason"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseResolutionKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolvedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseResolutionActor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceKinds": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTargetKind"
+          },
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/AdminCaseTargetOutcomeState"
+        },
+        "wakeId": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "sourceKinds",
+        "state",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "AdminCaseTargetOutcomeReason": {
+      "enum": [
+        "closed_with_evidence",
+        "reassigned_and_acknowledged",
+        "no_closure_evidence",
+        "no_matching_event",
+        "original_problem_remains",
+        "notification_pending",
+        "notification_dropped",
+        "owner_unavailable",
+        "target_missing",
+        "no_verified_admin_receipt"
+      ],
+      "type": "string"
+    },
+    "AdminCaseTargetOutcomeState": {
+      "enum": [
+        "resolved",
+        "pending",
+        "blocked",
+        "missing"
+      ],
+      "type": "string"
+    },
     "AdminCaseView": {
       "additionalProperties": false,
       "properties": {
@@ -302,6 +507,17 @@
         },
         "id": {
           "type": "string"
+        },
+        "outcomeRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseOutcomeView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "retirement": {
           "$ref": "#/$defs/AdminCaseRetirement"

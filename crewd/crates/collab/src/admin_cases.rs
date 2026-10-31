@@ -66,6 +66,7 @@ fn decode(raw: &str, crew: &str, id: &str) -> Result<AdminCaseView> {
     if s.version != 1
         || v.decision_record.is_some()
         || v.execution_record.is_some()
+        || v.outcome_record.is_some()
         || v.decision != AdminCaseDecision::Observed
         || v.id != id
         || v.crew_id != crew
@@ -92,7 +93,7 @@ fn decode(raw: &str, crew: &str, id: &str) -> Result<AdminCaseView> {
     }
     Ok(v)
 }
-fn source_get(c: &Connection, p: &AdminCaseGetParams) -> Result<AdminCaseView> {
+pub(crate) fn source_get(c: &Connection, p: &AdminCaseGetParams) -> Result<AdminCaseView> {
     sequence(&p.id).map_err(|_| crate::resource_acl::invalid("id"))?;
     let raw =
         meta_get(c, &key(&p.crew_id, &p.id)?)?.ok_or_else(|| crate::resource_acl::invalid("id"))?;
@@ -263,6 +264,7 @@ pub(crate) fn record_stop_escalation(
         execution: AdminCaseExecution::NotStarted,
         execution_record: None,
         retirement: AdminCaseRetirement::NotStarted,
+        outcome_record: None,
     };
     view.revision = revision(&view)?;
     let k = key(&view.crew_id, &view.id)?;
@@ -1219,10 +1221,12 @@ fn project_at(c: &Connection, mut view: AdminCaseView, now: Option<i64>) -> Resu
         if r.snapshot.crew != view.crew_id {
             return Err(invalid("admin decision crew mismatch"));
         }
-        let current = snapshot(c, &view.crew_id, &view.id, now.unwrap_or(r.observed_at))?;
-        if current.fingerprint != r.snapshot.fingerprint
-            || r.accepted_epoch != crewd_store::judgment_state::epoch(c)?
-        {
+        let changed = match snapshot(c, &view.crew_id, &view.id, now.unwrap_or(r.observed_at)) {
+            Ok(current) => current.fingerprint != r.snapshot.fingerprint,
+            Err(crate::CollabError::NotFound(_)) => true,
+            Err(error) => return Err(error),
+        };
+        if changed || r.accepted_epoch != crewd_store::judgment_state::epoch(c)? {
             r.view.phase = AdminCaseDecision::Stale;
             r.view.adopted = false;
             r.view.reason = AdminCaseDecisionReason::StateChanged;
@@ -1239,6 +1243,12 @@ fn project_at(c: &Connection, mut view: AdminCaseView, now: Option<i64>) -> Resu
         view.execution = execution.phase.clone();
         view.execution_record = Some(execution);
     }
+    view.outcome_record = crate::admin_case_outcome::status_at(
+        c,
+        &view.crew_id,
+        &view.id,
+        now.unwrap_or_else(crewd_store::now_ms),
+    )?;
     Ok(view)
 }
 

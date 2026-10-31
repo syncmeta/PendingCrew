@@ -46,6 +46,56 @@ fn selection(result: JudgmentResult) -> (Option<f64>, Reason) {
 }
 
 impl super::Runtime {
+    /// Verification is an observation of committed work, never an execution grant.
+    pub(super) async fn verify_admin_outcomes(self: &Arc<Self>) -> anyhow::Result<()> {
+        let Some(state) = self.state.upgrade() else {
+            return Ok(());
+        };
+        let mut after = None;
+        loop {
+            if self.closed.load(Ordering::Acquire) {
+                break;
+            }
+            let cursor = after.take();
+            let (cases, next) = state
+                .db
+                .call_result(move |s| facts::source_page(s.conn(), cursor))
+                .await??;
+            for case in cases {
+                let closed = self.closed.clone();
+                let result = state
+                    .collab(move |tx| {
+                        if closed.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        let observed = facts::get_at(
+                            tx.conn(),
+                            &crewd_proto::AdminCaseGetParams {
+                                crew_id: case.crew.clone(),
+                                id: case.id.clone(),
+                            },
+                            tx.now_ms(),
+                        )?;
+                        if observed
+                            .execution_record
+                            .as_ref()
+                            .is_some_and(|r| r.generation.is_some())
+                        {
+                            crewd_collab::admin_case_outcome::verify(tx, &case.crew, &case.id)?;
+                        }
+                        Ok(())
+                    })
+                    .await;
+                if let Err(error) = result {
+                    eprintln!("crewd: administrative outcome verification failed closed: {error}");
+                }
+            }
+            let Some(next) = next else { break };
+            after = Some(next);
+            tokio::task::yield_now().await;
+        }
+        Ok(())
+    }
     pub(super) async fn recover_admin_cases(self: &Arc<Self>) -> anyhow::Result<()> {
         let Some(state) = self.state.upgrade() else {
             return Ok(());

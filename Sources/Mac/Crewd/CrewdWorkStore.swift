@@ -334,6 +334,23 @@ final class CrewdWorkStore: ObservableObject {
             if generation != .null {guard let raw=generation.string,let n=UInt64(raw),String(n)==raw else {throw CrewdClientError(message:"执行代次无效。")}}
             if row["execution"] == .string("running"),generation == .null {throw CrewdClientError(message:"实际运行确认缺少执行代次。")}
         }
+        guard let outcome=fields["outcomeRecord"] else {throw CrewdClientError(message:"行政结果记录字段缺失。")}
+        if outcome != .null {
+            guard outcome["caseId"] == row["id"],outcome["crewId"] == row["crewId"],outcome["revision"].string?.isEmpty == false,outcome["verifiedAt"].int != nil,
+                  ["unresolved","resolved","stale"].contains(outcome["phase"].string ?? ""),
+                  ["no_execution","no_verified_admin_effect","targets_unresolved","out_of_scope","verified","authority_changed"].contains(outcome["reason"].string ?? ""),case .array(let outcomes)=outcome["targets"] else {throw CrewdClientError(message:"行政结果身份或状态无效。")}
+            for key in ["outOfScope","missing","pending","blocked","resolvedByAdmin","resolvedByOthers"] {
+                guard case .array(let ids)=outcome[key],ids.allSatisfy({CrewdWorkID($0.string ?? "",kind:.plan) != nil}) else {throw CrewdClientError(message:"行政结果目标分类无效。")}
+            }
+            for result in outcomes {
+                guard CrewdWorkID(result["id"].string ?? "",kind:.plan) != nil,case .array(let kinds)=result["sourceKinds"],kinds.allSatisfy({["unanswered","overdue","ready_unscheduled"].contains($0.string ?? "")}),
+                      ["resolved","pending","blocked","missing"].contains(result["state"].string ?? ""),
+                      ["closed_with_evidence","reassigned_and_acknowledged","no_closure_evidence","no_matching_event","original_problem_remains","notification_pending","notification_dropped","owner_unavailable","target_missing","no_verified_admin_receipt"].contains(result["reason"].string ?? ""),case .object(let resultFields)=result else {throw CrewdClientError(message:"逐项行政核验记录无效。")}
+                for key in ["actorSessionId","eventSeq"] {guard let v=resultFields[key],v == .null || v.string?.isEmpty == false else {throw CrewdClientError(message:"行政核验来源缺失。")}}
+                guard let resolution=resultFields["resolution"],resolution == .null || ["closed","reassigned"].contains(resolution.string ?? ""),
+                      let actor=resultFields["resolvedBy"],actor == .null || ["case_admin","other"].contains(actor.string ?? ""),let wake=resultFields["wakeId"],wake == .null || wake.int != nil else {throw CrewdClientError(message:"行政核验归因格式无效。")}
+            }
+        }
         for target in targets {
             guard CrewdWorkID(target["id"].string ?? "",kind:.plan) != nil,target["crewId"].string?.isEmpty == false,target["revision"].string?.isEmpty == false,
                   ["unanswered","overdue","ready_unscheduled"].contains(target["kind"].string ?? ""),["in_scope","out_of_scope"].contains(target["scope"].string ?? "") else {throw CrewdClientError(message:"行政记录目标格式无效。")}

@@ -215,15 +215,18 @@ pub fn launch_permit(tx: &mut Tx<'_>, crew: &str, id: &str) -> Result<Option<Adm
     }))
 }
 fn environment(c: &Connection, r: &Saved) -> Result<String> {
+    environment_for(c, r, true)
+}
+fn environment_for(c: &Connection, r: &Saved, live: bool) -> Result<String> {
     let a = crewd_store::sessions::get(c, &r.view.session_id)?.ok_or_else(invalid)?;
     let source = crewd_store::sessions::get(c, &r.source)?.ok_or_else(invalid)?;
-    if (r.view.phase == AdminCaseExecution::Running && a.desired != Desired::Running)
+    if (live && r.view.phase == AdminCaseExecution::Running && a.desired != Desired::Running)
         || a.role != Role::Admin
         || a.crew_id != r.crew
         || source.crew_id != r.crew
         || source.desired != Desired::Running
         || source.resume_failed_at.is_some()
-        || a.resume_failed_at.is_some()
+        || (live && a.resume_failed_at.is_some())
         || crate::crews::is_archived(c, &r.crew)?
         || crate::wakes::automatic_work_paused(c, &a.id)?
         || crate::wakes::automatic_work_paused(c, &source.id)?
@@ -605,7 +608,36 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
     let after = admin_cases::snapshot(tx.conn(), &r.crew, &r.case, tx.now_ms())?;
     r.checkpoint = after.fingerprint;
     r.view.effects_count = r.view.effects_count.checked_add(1).ok_or_else(invalid)?;
-    meta_set(tx.conn(),&format!("admin.case.effect.v1:{}:{:020}",r.view.attempt_id,r.view.effects_count),&serde_json::json!({"caseId":r.case,"sessionId":r.view.session_id,"workId":permit.action.id(),"firstEvent":permit.before_seq+1,"lastEvent":expected,"checkpoint":r.checkpoint}).to_string())?;
+    let wake_id = match &permit.action {
+        ActionScope::WorkReassignLost { new_owner, .. } => {
+            crate::work_lost::assignment_notification(
+                tx.conn(),
+                permit.action.id(),
+                new_owner,
+                &actual.revision,
+            )?
+            .map(|row| row.id)
+        }
+        _ => None,
+    };
+    let receipt = EffectReceipt {
+        case_id: r.case.clone(),
+        session_id: r.view.session_id.clone(),
+        work_id: permit.action.id().into(),
+        first_event: permit.before_seq + 1,
+        last_event: expected,
+        checkpoint: r.checkpoint.clone(),
+        result_revision: Some(actual.revision),
+        wake_id,
+    };
+    meta_set(
+        tx.conn(),
+        &format!(
+            "admin.case.effect.v1:{}:{:020}",
+            r.view.attempt_id, r.view.effects_count
+        ),
+        &serde_json::to_string(&receipt).map_err(StoreError::from)?,
+    )?;
     save(tx, &r)
 }
 pub(crate) fn view(
@@ -631,7 +663,7 @@ pub(crate) fn view(
     Ok(Some(r.view))
 }
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         Sender, admin_cases, stop_checks,
@@ -714,7 +746,7 @@ mod tests {
         let source = adopted(&mut s);
         assert!(ok(&mut s, |tx| launch_permit(tx, "crew-a", &source.id)).is_some());
     }
-    fn running_case(s: &mut crewd_store::Store) -> (AdminCaseView, Registration) {
+    pub(crate) fn running_case(s: &mut crewd_store::Store) -> (AdminCaseView, Registration) {
         let case = adopted(s);
         let permit = ok(s, |tx| launch_permit(tx, "crew-a", &case.id)).unwrap();
         let registered = ok(s, |tx| register_and_bind(tx, &permit));
@@ -732,7 +764,7 @@ mod tests {
         )));
         (case, registered)
     }
-    fn close(tx: &mut Tx<'_>, session: &str, id: &str) -> Result<WorkPlan> {
+    pub(crate) fn close(tx: &mut Tx<'_>, session: &str, id: &str) -> Result<WorkPlan> {
         let plan = work::get(tx.conn(), id)?;
         work::close_factual(
             tx,
@@ -1110,4 +1142,74 @@ mod tests {
             1
         );
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct EffectReceipt {
+    pub case_id: String,
+    pub session_id: String,
+    pub work_id: String,
+    pub first_event: u64,
+    pub last_event: u64,
+    pub checkpoint: String,
+    #[serde(default)]
+    pub result_revision: Option<String>,
+    #[serde(default)]
+    pub wake_id: Option<i64>,
+}
+pub(crate) struct OutcomeAuthority {
+    pub actually_started: bool,
+    pub current: bool,
+    pub fingerprint: String,
+}
+pub(crate) fn outcome_authority(c: &Connection, w: &ExecutionWitness) -> Result<OutcomeAuthority> {
+    let r = matching(c, w)?;
+    let environment = environment_for(c, &r, false).ok();
+    let current = environment.as_deref() == Some(r.context.as_str());
+    let fingerprint = judgments::fingerprint(&(
+        &r.context,
+        &environment,
+        &r.source_revision,
+        &r.decision,
+        &r.targets,
+    ))?;
+    Ok(OutcomeAuthority {
+        actually_started: r.view.generation.is_some(),
+        current,
+        fingerprint,
+    })
+}
+pub(crate) fn effect_receipts(c: &Connection, w: &ExecutionWitness) -> Result<Vec<EffectReceipt>> {
+    let r = matching(c, w)?;
+    let prefix = format!("admin.case.effect.v1:{}:", r.view.attempt_id);
+    let mut q = c.prepare("SELECT key,value FROM meta WHERE key>=?1 AND key<?2 ORDER BY key")?;
+    let rows = q
+        .query_map(params![prefix, format!("{prefix}\u{10ffff}")], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out = Vec::new();
+    for (key, raw) in rows {
+        let ordinal = key
+            .strip_prefix(&prefix)
+            .and_then(|n| n.parse::<u64>().ok())
+            .filter(|n| *n > 0 && *n <= r.view.effects_count)
+            .ok_or_else(invalid)?;
+        if key != format!("{prefix}{ordinal:020}") {
+            return Err(invalid());
+        }
+        let e: EffectReceipt = serde_json::from_str(&raw).map_err(StoreError::from)?;
+        if e.case_id != r.case
+            || e.session_id != r.view.session_id
+            || !r.targets.contains(&e.work_id)
+            || e.first_event == 0
+            || e.last_event < e.first_event
+            || e.last_event - e.first_event >= 256
+        {
+            return Err(invalid());
+        }
+        out.push(e);
+    }
+    Ok(out)
 }

@@ -89,6 +89,8 @@ pub struct AdminCaseView {
     #[serde(default)]
     pub execution_record: Option<AdminCaseExecutionView>,
     pub retirement: AdminCaseRetirement,
+    #[serde(default)]
+    pub outcome_record: Option<AdminCaseOutcomeView>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -142,4 +144,86 @@ pub struct AdminCaseExecutionView {
     pub reason: AdminCaseExecutionReason,
     pub generation: Option<String>,
     pub effects_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseOutcomePhase {
+    Unresolved,
+    Resolved,
+    Stale,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseOutcomeReason {
+    NoExecution,
+    NoVerifiedAdminEffect,
+    TargetsUnresolved,
+    OutOfScope,
+    Verified,
+    AuthorityChanged,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseTargetOutcomeState {
+    Resolved,
+    Pending,
+    Blocked,
+    Missing,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseResolutionKind {
+    Closed,
+    Reassigned,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseResolutionActor {
+    CaseAdmin,
+    Other,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseTargetOutcomeReason {
+    ClosedWithEvidence,
+    ReassignedAndAcknowledged,
+    NoClosureEvidence,
+    NoMatchingEvent,
+    OriginalProblemRemains,
+    NotificationPending,
+    NotificationDropped,
+    OwnerUnavailable,
+    TargetMissing,
+    NoVerifiedAdminReceipt,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseTargetOutcome {
+    pub id: String,
+    pub source_kinds: Vec<AdminCaseTargetKind>,
+    pub state: AdminCaseTargetOutcomeState,
+    pub resolution: Option<AdminCaseResolutionKind>,
+    pub resolved_by: Option<AdminCaseResolutionActor>,
+    pub actor_session_id: Option<String>,
+    pub event_seq: Option<String>,
+    pub wake_id: Option<i64>,
+    pub reason: AdminCaseTargetOutcomeReason,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseOutcomeView {
+    pub case_id: String,
+    pub crew_id: String,
+    pub revision: String,
+    pub verified_at: i64,
+    pub phase: AdminCaseOutcomePhase,
+    pub reason: AdminCaseOutcomeReason,
+    pub targets: Vec<AdminCaseTargetOutcome>,
+    pub out_of_scope: Vec<String>,
+    pub missing: Vec<String>,
+    pub pending: Vec<String>,
+    pub blocked: Vec<String>,
+    pub resolved_by_admin: Vec<String>,
+    pub resolved_by_others: Vec<String>,
 }

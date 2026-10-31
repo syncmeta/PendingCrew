@@ -48,7 +48,21 @@ struct CrewdAdminCasesView:View {
                             Text("已核实协作效果："+String(detail["executionRecord"]["effectsCount"].int ?? 0)+"；效果数不代表案件已解决。")
                             if let generation=detail["executionRecord"]["generation"].string {Text("确认执行代次："+generation)}
                         }
-                        Text("结果：尚未核验解决")
+                        if detail["outcomeRecord"] == .null {Text("结果：尚无核验记录")}
+                        else {
+                            let outcome=detail["outcomeRecord"]
+                            Text("结果："+outcomePhase(outcome["phase"].string ?? ""))
+                            Text("核验说明："+outcomeReason(outcome["reason"].string ?? ""))
+                            Text("核验时间："+time(outcome["verifiedAt"]))
+                            ForEach(Array(outcome["targets"].array.enumerated()),id:\.offset) {_,result in
+                                Text((result["id"].string ?? "")+" · "+targetReason(result["reason"].string ?? ""))
+                                Text("结果归因："+(result["resolvedBy"] == .string("case_admin") ? "本案行政成员":result["resolvedBy"] == .string("other") ? "其他操作者":"尚未确认解决来源"))
+                                if let actor=result["actorSessionId"].string {Text("操作者："+actor).font(.caption)}
+                                if let seq=result["eventSeq"].string {Text("核验事件序号："+seq).font(.caption)}
+                                if let wake=result["wakeId"].int {Text("通知回执编号："+String(wake)).font(.caption)}
+                            }
+                            Text("核验解决与执行器退场独立；其他操作者解决的目标不算本案行政成果。").font(.caption).foregroundStyle(.secondary)
+                        }
                         Text("退场：尚未开始；会话退出不等于业务解决")
                         ForEach(Array(detail["targets"].array.enumerated()),id:\.offset) {_,target in
                             Text((target["id"].string ?? "")+" · "+kind(target["kind"].string ?? "")+" · "+(target["scope"] == .string("in_scope") ? "当前范围":"范围外，仅保留来源事实"))
@@ -73,6 +87,11 @@ struct CrewdAdminCasesView:View {
     }
     private func executionReason(_ value:String)->String {
         ["registered":"案件与成员已绑定","launch_requested":"启动请求已登记","started":"已收到实际 Spawned 确认","launch_unknown":"启动结果未确认","restart_unknown":"重启前执行结果未知","state_changed":"执行所依赖的状态已变化"][value] ?? "未知原因"
+    }
+    private func outcomePhase(_ value:String)->String {["unresolved":"尚未解决","resolved":"目标已核验解决，尚不代表成员退场","stale":"核验依据已失效"][value] ?? "未知结果"}
+    private func outcomeReason(_ value:String)->String {["no_execution":"尚无执行记录","no_verified_admin_effect":"尚无已核实行政效果","targets_unresolved":"仍有目标未解决","out_of_scope":"含范围外目标，不能确认全案解决","verified":"目标核验通过","authority_changed":"来源或权限依据已变化"][value] ?? "未知原因"}
+    private func targetReason(_ value:String)->String {
+        ["closed_with_evidence":"已凭证据关闭","reassigned_and_acknowledged":"已重派并确认接收","no_closure_evidence":"关闭缺少证据","no_matching_event":"尚无匹配真实事件","original_problem_remains":"原问题仍存在","notification_pending":"等待通知投递确认","notification_dropped":"通知未送达","owner_unavailable":"负责人不可用","target_missing":"目标缺失","no_verified_admin_receipt":"尚无已核实行政回执"][value] ?? "未知核验状态"
     }
     private func time(_ value:CrewdValue)->String {guard let ms=value.int else{return "未知"};return Date(timeIntervalSince1970:Double(ms)/1000).formatted(date:.abbreviated,time:.standard)}
     private func kind(_ value:String)->String {["unanswered":"缺少回报","overdue":"检查逾期","ready_unscheduled":"可推进但未安排检查"][value] ?? value}
