@@ -230,6 +230,8 @@ pub struct WorkItem {
     pub next_check_at: Option<Ts>,
     pub missed_checks: u32,
     pub evidence: Option<Evidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_note: Option<String>,
     pub drop_reason: Option<DropReason>,
     pub pending_transfer: Option<PendingTransfer>,
     pub channel: Option<ChannelId>,

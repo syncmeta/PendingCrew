@@ -77,6 +77,7 @@ fn project(conn: &Connection, r: &ObjectReference, book: &WorkBook) -> Result<Wo
         }
     });
     Ok(WorkPlan {
+        closure: crate::work_close::view(item),
         channel_association: None,
         id: r.id(),
         crew_id: r.crew_id.clone(),
@@ -229,8 +230,12 @@ pub(crate) fn followup_note(
     row: &crate::wakes::WakeRow,
     now: i64,
 ) -> Result<FollowupNote> {
-    if row.source.starts_with("work-reassignment:") {return crate::work_reassignment::render(conn,row);}
-    if row.source.starts_with("work-coordination:") {return crate::work_coordination::render(conn,row);}
+    if row.source.starts_with("work-reassignment:") {
+        return crate::work_reassignment::render(conn, row);
+    }
+    if row.source.starts_with("work-coordination:") {
+        return crate::work_coordination::render(conn, row);
+    }
     if row.source.starts_with("work-followup:") {
         return crate::work_followups::render(conn, row, now);
     }
@@ -253,7 +258,9 @@ pub(crate) fn followup_note(
         return crate::checkpoints::render_note(conn, row, now);
     }
     if row.kind != crate::wakes::WakeKind::System
-        || !(row.source.starts_with("work-done:") || row.source.starts_with("work-assigned:"))
+        || !(row.source.starts_with("work-done:")
+            || row.source.starts_with("work-close:")
+            || row.source.starts_with("work-assigned:"))
     {
         return Ok(FollowupNote::Ordinary);
     }
@@ -2083,5 +2090,87 @@ mod pending_transfer_view_tests {
         let current = get(s.conn(), &p.id).unwrap();
         assert!(current.pending_transfer.is_none());
         assert_eq!(current.owner.as_deref(), Some("w-a1"));
+    }
+}
+
+pub fn close_factual(
+    tx: &mut crate::Tx<'_>,
+    by: &crate::Sender,
+    p: crewd_proto::WorkCloseParams,
+) -> Result<WorkPlan> {
+    crate::work_close::close(tx, by, p)
+}
+pub fn closure_history(
+    conn: &Connection,
+    p: crewd_proto::WorkClosureHistoryParams,
+) -> Result<crewd_proto::WorkClosureHistoryPage> {
+    crate::work_close::history(conn, p)
+}
+#[cfg(test)]
+mod factual_close_tests {
+    use super::*;
+    use crate::testkit::{ok, store};
+    #[test]
+    fn admin_closes_done_with_note_without_reporting_for_owner() {
+        let mut db = store();
+        let admin = ok(&mut db, |tx| {
+            crate::sessions::register(
+                tx,
+                crate::sessions::NewSession {
+                    crew_id: "crew-a".into(),
+                    role: crewd_proto::Role::Admin,
+                    executor: "claude".into(),
+                    title: Some("Factual audit".into()),
+                    ..Default::default()
+                },
+            )
+        });
+        let p = ok(&mut db, |tx| {
+            create(
+                tx,
+                &crate::Sender::Human,
+                crewd_proto::WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    owner: Some("w-a1".into()),
+                    title: "Evidence closure".into(),
+                    ..Default::default()
+                },
+            )
+        });
+        let done = ok(&mut db, |tx| {
+            close_factual(
+                tx,
+                &crate::Sender::Session(admin.id),
+                crewd_proto::WorkCloseParams {
+                    id: p.id,
+                    expected_revision: p.revision,
+                    kind: crewd_proto::WorkClosureKind::Done,
+                    note: "verified actual artifact".into(),
+                    evidence: crewd_proto::WorkEvidenceParam {
+                        kind: crewd_proto::WorkEvidenceKind::Commit,
+                        value: "abc123".into(),
+                    },
+                },
+            )
+        });
+        assert_eq!(done.status, "done");
+        let closure = done.closure.as_ref().unwrap();
+        assert_eq!(closure.kind, crewd_proto::WorkClosureKind::Done);
+        assert_eq!(closure.note.as_deref(), Some("verified actual artifact"));
+        assert_eq!(closure.evidence.as_ref().unwrap().value, "abc123");
+        let page = closure_history(
+            db.conn(),
+            crewd_proto::WorkClosureHistoryParams {
+                id: done.id.clone(),
+                before_seq: None,
+                limit: Some(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(&page.items[0].closure, closure);
+        assert!(page.next_before_seq.is_none());
+        let reports:i64=db.conn().query_row("SELECT count(*) FROM organization_work_events WHERE json_extract(body,'$.kind.type')='reported'",[],|r|r.get(0)).unwrap();
+        assert_eq!(reports, 0);
     }
 }

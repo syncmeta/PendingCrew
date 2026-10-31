@@ -770,15 +770,16 @@ async fn request_step(
                         | methods::FOLDER_ASSIGN
                         | methods::TODO_CREATE
                         | methods::TODO_CLOSE
+                        | methods::WORK_CLOSE
+                        | methods::WORK_CREATE
+                        | methods::WORK_UPDATE
+                        | methods::WORK_BLOCK
+                        | methods::WORK_ASSIGN
                         | methods::WORK_REASSIGN_LOST
                         | methods::WORK_TRANSFER_REQUEST
                         | methods::WORK_TRANSFER_ACCEPT
                         | methods::WORK_TRANSFER_WITHDRAW
-                )
-                || (agent.is_attached()
-                    && req.method == methods::WORK_CREATE
-                    && (req.params.get("requestId").is_some_and(|v| !v.is_null())
-                        || req.params.get("channelId").is_some_and(|v| !v.is_null()))) =>
+                ) =>
         {
             ServerFrame::Response(Response::err(
                 req.id,

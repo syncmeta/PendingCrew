@@ -80,6 +80,8 @@ pub enum EventKind {
     Done {
         id: WorkId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         evidence: Option<Evidence>,
     },
     Dropped {
@@ -137,5 +139,16 @@ mod completion_codec_tests {
         let done: EventKind = serde_json::from_value(bare.clone()).unwrap();
         assert!(matches!(&done, EventKind::Done { evidence: None, .. }));
         assert_eq!(serde_json::to_value(done).unwrap(), bare);
+    }
+
+    #[test]
+    fn done_note_and_factual_drop_round_trip_without_report() {
+        for value in [
+            json!({"type":"done","id":"W1","evidence":{"kind":"commit","value":"abc"},"note":"verified"}),
+            json!({"type":"dropped","id":"W1","reason":{"kind":"duplicate","note":"same artifact","evidence":{"kind":"url","value":"https://example.test/evidence"}}}),
+        ] {
+            let event: EventKind = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(event).unwrap(), value);
+        }
     }
 }

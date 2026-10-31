@@ -1182,6 +1182,7 @@ mod tests {
             at: crewd_work::Ts(1001),
             by: crewd_work::Actor::Human,
             kind: crewd_work::EventKind::Done {
+                note: None,
                 id: crewd_work::WorkId(999),
                 evidence: None,
             },

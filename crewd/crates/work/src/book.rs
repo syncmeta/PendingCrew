@@ -621,6 +621,7 @@ impl Draft {
                     pending_transfer: None,
                     channel: n.channel,
                     last_report: None,
+                    completion_note: None,
                     created_by: self.by.session().cloned(),
                     revision: 1,
                     created_at: self.now,

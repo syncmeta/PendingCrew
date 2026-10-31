@@ -335,6 +335,24 @@ final class CrewdWorkStore: ObservableObject {
         guard value["ask"] == .string(id.raw),value["crewId"] == .string(crew),value["question"].string != nil,value["state"].string != nil else{throw CrewdClientError(message:"人类事项详情身份或原问题不符。")}
         return value
     }
+    func closureHistory(_ id:CrewdWorkID,beforeSeq:String?=nil) async throws -> CrewdValue {
+        func sequence(_ raw:String?) -> UInt64? { guard let raw,let n=UInt64(raw),String(n)==raw,n>0 else{return nil};return n }
+        guard id.kind == .plan, beforeSeq == nil || sequence(beforeSeq) != nil else {throw CrewdClientError(message:"关闭历史查询身份或游标无效。")}
+        let token=generation
+        var params:[String:CrewdValue]=["id":.string(id.raw),"limit":.integer(20)]
+        if let beforeSeq {params["beforeSeq"] = .string(beforeSeq)}
+        let value=try await call("work.closureHistory",.object(params));try check(token)
+        guard case .object(let fields)=value,case .array(let items)?=fields["items"],let next=fields["nextBeforeSeq"],next == .null || sequence(next.string) != nil else {throw CrewdClientError(message:"关闭历史分页格式无效。")}
+        var previous=beforeSeq.flatMap {sequence($0)} ?? UInt64.max
+        for item in items {
+            guard let seq=sequence(item["seq"].string),seq<previous,item["at"].string != nil,
+                  ["human","system","session"].contains(item["actor"]["kind"].string ?? ""),
+                  ["done","duplicate","superseded"].contains(item["closure"]["kind"].string ?? "") else {throw CrewdClientError(message:"关闭历史事件或顺序无效。")}
+            previous=seq
+        }
+        if let next=next.string {guard sequence(next)==items.last.flatMap({sequence($0["seq"].string)}) else {throw CrewdClientError(message:"关闭历史游标不匹配。")}}
+        return value
+    }
     func ownerHistory(_ id:CrewdWorkID,before:String?=nil) async throws -> CrewdValue {
         guard id.kind == .plan else {throw CrewdClientError(message:"交接记录必须使用公共计划编号。",code:-32602)}
         let token=generation
@@ -435,8 +453,16 @@ final class CrewdWorkStore: ObservableObject {
     }
     /// A failed mutation retains structured facts for UI and leaves drafts to their owner.
     /// Transport loss is an uncertain commit, never a reason to repeat the command.
+    @discardableResult func closePlan(_ id: CrewdWorkID, expectedRevision: String, kind: String, evidenceKind: String, evidence: String, note: String) async throws -> CrewdValue {
+        guard id.kind == .plan, ["done","duplicate","superseded"].contains(kind), ["commit","url","text"].contains(evidenceKind),
+              !evidence.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, !note.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,
+              let revision = UInt64(expectedRevision), String(revision) == expectedRevision else {
+            throw CrewdClientError(message:"关闭计划需要当前版本、明确类型、凭据和说明。",kind:.notSubmitted)
+        }
+        return try await mutate("work.close",.object(["id":.string(id.raw),"expectedRevision":.string(expectedRevision),"kind":.string(kind),"evidence":.object(["kind":.string(evidenceKind),"value":.string(evidence.trimmingCharacters(in:.whitespacesAndNewlines))]),"note":.string(note.trimmingCharacters(in:.whitespacesAndNewlines))]))
+    }
     @discardableResult func mutate(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
-        guard ["work.create", "work.update", "work.assign", "work.block", "work.transferWithdraw", "work.reassignLost", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
+        guard ["work.close", "work.create", "work.update", "work.assign", "work.block", "work.transferWithdraw", "work.reassignLost", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
             throw CrewdClientError(message: "不支持的工作写入操作。",kind:.notSubmitted)
         }
         if method == "work.reassignLost",!capabilities.contains(method) {throw CrewdClientError(message:"配套后台尚未开放核实失联后的重派操作。",kind:.notSubmitted)}
@@ -454,6 +480,13 @@ final class CrewdWorkStore: ObservableObject {
             let value = try await call(method, params)
             try check(token)
             try validateAssociation(value,params)
+            if method == "work.close" {
+                guard value["id"] == params["id"], value["status"] == .string(params["kind"] == .string("done") ? "done":"dropped"),
+                      value["evidence"]["kind"] == params["evidence"]["kind"],
+                      value["evidence"]["value"].string == params["evidence"]["value"].string?.trimmingCharacters(in:.whitespacesAndNewlines) else {
+                    throw CrewdClientError(message:"关闭回执与原计划、终态或凭据不符，请读取当前详情核对；不会自动重发。")
+                }
+            }
             if method == "work.block" { adopt(try parsePlan(value["item"], full: true)) }
             else if method.hasPrefix("work.") { adopt(try parsePlan(value, full: true)) }
             else if method.hasPrefix("ask.") {

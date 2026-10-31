@@ -52,6 +52,8 @@ pub struct WorkPlan {
     pub next_check_at: Option<String>,
     pub revision: String,
     pub evidence: Option<WorkEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closure: Option<WorkClosure>,
     pub note: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -317,4 +319,51 @@ pub struct WorkTransferRequestParams {
 pub struct WorkTransferResolveParams {
     pub id: String,
     pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkClosureKind {
+    Done,
+    Duplicate,
+    Superseded,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkCloseParams {
+    pub id: String,
+    pub expected_revision: String,
+    pub kind: WorkClosureKind,
+    pub evidence: WorkEvidenceParam,
+    pub note: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkClosure {
+    pub kind: WorkClosureKind,
+    pub note: Option<String>,
+    pub evidence: Option<WorkEvidence>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkClosureHistoryParams {
+    pub id: String,
+    #[serde(default)]
+    pub before_seq: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u16>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkClosureEvent {
+    pub seq: String,
+    pub at: String,
+    pub actor: WorkHistoryActor,
+    pub closure: WorkClosure,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkClosureHistoryPage {
+    pub items: Vec<WorkClosureEvent>,
+    pub next_before_seq: Option<String>,
 }

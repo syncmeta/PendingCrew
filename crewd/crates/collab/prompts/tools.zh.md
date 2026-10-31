@@ -987,6 +987,36 @@ RFC3339 检查时间，晚于现在且不超过工作规则上限；done 或 dro
 ## r.work_result
 {result}
 
+## work_closure_history
+按原工作读取真实账本的事实性关闭事件，最新在前，与负责人变更历史分开。记录中的证据是当时提交的依据，不代表系统已经独立核实。
+
+## work_closure_history.id
+全局 W 工作编号。
+
+## work_closure_history.before_seq
+上一页返回的 nextBeforeSeq，原样传入；首屏省略。
+
+## work_closure_history.limit
+每页 1 至 200 条。
+
+## work_item_close
+依据核实的事实关闭原工作：完成、重复或被取代。必须提供当前修订、非空证据和说明。沿用你对该对象的实际权限，不授予新的行政管辖或业务放弃权，也不伪造进度回报。检查返回的关闭事实和依赖；修订冲突时重新读取并判断，不要盲目重试。填写证据仅记录你的依据，不代表系统已经独立核实。
+
+## work_item_close.id
+原有全局 W 工作编号；不会另建工作项。
+
+## work_item_close.expected_revision
+从 work_item_get 读取的当前修订字符串，原样传入。
+
+## work_item_close.kind
+done 表示核实完成，duplicate 表示重复，superseded 表示被取代。不得用事实性关闭表达“不值得做”。
+
+## work_item_close.evidence
+必填非空证据：{kind:"commit"|"url"|"text",value:"..."}，写明支持本次关闭的可核查来源。
+
+## work_item_close.note
+必填说明：核实了什么，以及为什么足以支持本次关闭。
+
 ## my_work_items.include_removed
 true 也查看已移除机组中的工作，默认 false。返回 frozen:true 的对象只读，别反复尝试推进它。
 

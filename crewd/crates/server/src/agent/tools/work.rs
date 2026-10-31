@@ -421,3 +421,60 @@ pub async fn transfer_withdraw(cx: &Ctx<'_>, v: Value) -> CallResult {
         .await,
     )
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Close {
+    id: String,
+    expected_revision: String,
+    kind: crewd_proto::WorkClosureKind,
+    evidence: WorkEvidenceParam,
+    note: String,
+}
+pub async fn close(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: Close = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    receipt(
+        cx,
+        port::work_close(
+            cx.st,
+            &cx.me.session_id,
+            crewd_proto::WorkCloseParams {
+                id: a.id,
+                expected_revision: a.expected_revision,
+                kind: a.kind,
+                evidence: a.evidence,
+                note: a.note,
+            },
+        )
+        .await,
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClosureHistory {
+    id: String,
+    before_seq: Option<String>,
+    limit: Option<u16>,
+}
+pub async fn closure_history(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: ClosureHistory = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    receipt(
+        cx,
+        port::work_closure_history(
+            cx.st,
+            crewd_proto::WorkClosureHistoryParams {
+                id: a.id,
+                before_seq: a.before_seq,
+                limit: a.limit,
+            },
+        )
+        .await,
+    )
+}

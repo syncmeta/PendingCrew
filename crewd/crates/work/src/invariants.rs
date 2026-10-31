@@ -437,6 +437,7 @@ mod tests {
             pending_transfer: None,
             channel: None,
             last_report: None,
+            completion_note: None,
             created_by: None,
             revision: 1,
             created_at: NOW,

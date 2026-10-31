@@ -40,6 +40,7 @@ pub mod session_retirement;
 pub mod work_reassignment;
 pub mod work_coordination;
 pub mod work;
+pub mod work_close;
 pub mod work_block;
 pub mod work_followups;
 pub mod work_lost;

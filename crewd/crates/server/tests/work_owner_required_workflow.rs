@@ -331,7 +331,7 @@ async fn full_report_block_assignment_checkpoint_contract_matrix_has_only_domain
         .unwrap_err();
     assert_eq!(
         denied.0,
-        RpcError::INVALID_PARAMS,
+        RpcError::FORBIDDEN,
         "attached agents cannot use Human-only public RPC: {denied:?}"
     );
     assert_eq!(snapshot(&f).await, before);

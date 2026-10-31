@@ -214,6 +214,7 @@ struct CrewdWorkPanels: View {
                         if let evidence=detail["evidence"]["value"].string {planDetail("凭据",evidence)}
                         CrewdCoordinationView(store:store,crew:plan.value["crewId"].string ?? store.selectedCrew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
                         CrewdReassignmentView(store:store,crew:plan.value["crewId"].string ?? store.selectedCrew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
+                        CrewdWorkCloseView(store:store,id:id,detail:detail)
                         CrewdHandoffView(store:store,id:id,members:members).id(store.selectedCrew+":"+id.raw)
                         HStack {
                             Button("更新计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:id.raw,source:""))}.disabled(plan.frozen || ["done","dropped"].contains(plan.status))

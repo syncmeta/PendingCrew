@@ -1706,6 +1706,12 @@ pub async fn work_mine(
     })
     .await
 }
+pub async fn work_closure_history(
+    st: &AppState,
+    p: crewd_proto::WorkClosureHistoryParams,
+) -> PortResult<crewd_proto::WorkClosureHistoryPage> {
+    read(st, move |c| crewd_collab::work::closure_history(c, p)).await
+}
 pub async fn work_history(
     st: &AppState,
     p: crewd_proto::WorkHistoryParams,
@@ -1871,6 +1877,14 @@ pub async fn work_assign(
 ) -> PortResult<crewd_proto::WorkPlan> {
     let by = Sender::Session(session.to_owned());
     write(st, move |tx| crewd_collab::work::assign(tx, &by, p)).await
+}
+pub async fn work_close(
+    st: &AppState,
+    session: &str,
+    p: crewd_proto::WorkCloseParams,
+) -> PortResult<crewd_proto::WorkPlan> {
+    let by = Sender::Session(session.to_owned());
+    write(st, move |tx| crewd_collab::work::close_factual(tx, &by, p)).await
 }
 pub async fn work_update(
     st: &AppState,

@@ -106,7 +106,30 @@ impl WorkBook {
         id: WorkId,
         evidence: impl Into<Option<Evidence>>,
     ) -> Result<Applied<Vec<WorkId>>, Rejected> {
-        let evidence = evidence.into();
+        self.complete(by, now, id, evidence.into(), None)
+    }
+    /// Factual completion uses Done permission, never an owner-only progress report.
+    pub fn mark_done_noted(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        id: WorkId,
+        evidence: Evidence,
+        note: String,
+    ) -> Result<Applied<Vec<WorkId>>, Rejected> {
+        if note.trim().is_empty() {
+            return Err(Rejected::Blank("note"));
+        }
+        self.complete(by, now, id, Some(evidence), Some(note))
+    }
+    fn complete(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        id: WorkId,
+        evidence: Option<Evidence>,
+        note: Option<String>,
+    ) -> Result<Applied<Vec<WorkId>>, Rejected> {
         self.transact(by, now, |d| {
             d.permit_on(Action::Done, id)?;
             // Administrative closure of another owner's work remains factual.
@@ -125,10 +148,11 @@ impl WorkBook {
             let it = d.item_mut(id)?;
             it.status = Status::Done;
             it.evidence = evidence.clone();
+            it.completion_note = note.clone();
             it.next_check_at = None;
             it.pending_transfer = None;
             it.blocked_on.clear();
-            d.emit(EventKind::Done { id, evidence });
+            d.emit(EventKind::Done { id, evidence, note });
             Ok(d.release(Blocker::Item(id)))
         })
     }
@@ -270,6 +294,7 @@ impl WorkBook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Config;
     use crate::block::{BlockOn, Continuation};
     use crate::ids::{AskId, HOUR, MINUTE};
     use crate::invariants::Violation;
@@ -865,5 +890,49 @@ mod tests {
         ));
         b.mark_done(&Actor::worker("a"), T1, child, None).unwrap();
         b.mark_done(&Actor::worker("a"), T1, parent, None).unwrap();
+    }
+
+    #[test]
+    fn noted_admin_completion_is_a_done_event_and_legacy_state_still_restores() {
+        let mut b = book();
+        let ids = claim(&mut b, "a", &["actual artifact"]);
+        let proof = Evidence::Commit("verified-commit".into());
+        let applied = b
+            .mark_done_noted(
+                &Actor::admin("audit"),
+                T1,
+                ids[0],
+                proof.clone(),
+                "verified artifact".into(),
+            )
+            .unwrap();
+        assert!(
+            matches!(&applied.events[0].kind,EventKind::Done{note:Some(note),evidence:Some(e),..}if note=="verified artifact" && e==&proof)
+        );
+        assert!(
+            !applied
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::Reported { .. }))
+        );
+        assert_eq!(b.item(ids[0]).unwrap().last_report, None);
+        let encoded = serde_json::to_value(b.state()).unwrap();
+        let restored = WorkBook::restore(
+            serde_json::from_value(encoded.clone()).unwrap(),
+            Config::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            restored.item(ids[0]).unwrap().completion_note.as_deref(),
+            Some("verified artifact")
+        );
+        let mut old = encoded;
+        for item in old["items"].as_object_mut().unwrap().values_mut() {
+            item.as_object_mut().unwrap().remove("completion_note");
+        }
+        let restored =
+            WorkBook::restore(serde_json::from_value(old).unwrap(), Config::default()).unwrap();
+        assert_eq!(restored.item(ids[0]).unwrap().completion_note, None);
+        assert_eq!(restored.item(ids[0]).unwrap().evidence, Some(proof));
     }
 }

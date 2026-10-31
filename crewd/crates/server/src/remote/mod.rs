@@ -1108,6 +1108,8 @@ fn allowed_method(method: &str) -> bool {
             | "work.list"
             | "work.get"
             | "work.create"
+            | "work.close"
+            | "work.closureHistory"
             | "work.update"
             | "work.block"
             | "work.assign"

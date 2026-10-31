@@ -671,6 +671,17 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        methods::WORK_CLOSE => {
+            let p: WorkCloseParams = parse_params(p)?;
+            write(state, move |tx| {
+                crewd_collab::work::close_factual(tx, &crewd_collab::Sender::Human, p)
+            })
+            .await
+        }
+        methods::WORK_CLOSURE_HISTORY => {
+            let p: WorkClosureHistoryParams = parse_params(p)?;
+            read(state, move |c| crewd_collab::work::closure_history(c, p)).await
+        }
         methods::WORK_UPDATE => {
             let p: WorkUpdateParams = parse_params(p)?;
             write(state, move |tx| {
@@ -760,19 +771,31 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         }
         methods::SESSION_RETIREMENT_STATUS => {
             let p: SessionRetirementStatusParams = parse_params(p)?;
-            read(state,move |c|crewd_collab::session_retirement::status(c,&p.crew_id,&p.session_id)).await
+            read(state, move |c| {
+                crewd_collab::session_retirement::status(c, &p.crew_id, &p.session_id)
+            })
+            .await
         }
         methods::WORK_REASSIGNMENT_STATUS => {
             let p: ReassignmentStatusParams = parse_params(p)?;
-            read(state,move |c|crewd_collab::work_reassignment::status(c,&p.crew_id,&p.id)).await
+            read(state, move |c| {
+                crewd_collab::work_reassignment::status(c, &p.crew_id, &p.id)
+            })
+            .await
         }
         methods::WORK_COORDINATION_STATUS => {
             let p: CoordinationStatusParams = parse_params(p)?;
-            read(state,move |c|crewd_collab::work_coordination::status(c,&p.crew_id,&p.id)).await
+            read(state, move |c| {
+                crewd_collab::work_coordination::status(c, &p.crew_id, &p.id)
+            })
+            .await
         }
         methods::WORK_PATROL_STATUS => {
             let p: PatrolStatusParams = parse_params(p)?;
-            read(state, move |c| crewd_collab::patrol_runtime::status(c, &p.crew_id)).await
+            read(state, move |c| {
+                crewd_collab::patrol_runtime::status(c, &p.crew_id)
+            })
+            .await
         }
         methods::WORK_PATROL => {
             let p: WorkPatrolParams = parse_params_or_default(p)?;

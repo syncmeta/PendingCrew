@@ -14140,6 +14140,141 @@
       ],
       "type": "object"
     },
+    "WorkCloseParams": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/WorkEvidenceParam"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkClosureKind"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision",
+        "kind",
+        "evidence",
+        "note"
+      ],
+      "type": "object"
+    },
+    "WorkClosure": {
+      "properties": {
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkClosureKind"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "WorkClosureEvent": {
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/WorkHistoryActor"
+        },
+        "at": {
+          "type": "string"
+        },
+        "closure": {
+          "$ref": "#/$defs/WorkClosure"
+        },
+        "seq": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "actor",
+        "closure"
+      ],
+      "type": "object"
+    },
+    "WorkClosureHistoryPage": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/WorkClosureEvent"
+          },
+          "type": "array"
+        },
+        "nextBeforeSeq": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "WorkClosureHistoryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "beforeSeq": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "limit": {
+          "default": null,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "WorkClosureKind": {
+      "enum": [
+        "done",
+        "duplicate",
+        "superseded"
+      ],
+      "type": "string"
+    },
     "WorkConflictFacts": {
       "description": "Bounded current facts accompanying a rejected revision; never a write result.",
       "properties": {
@@ -14918,6 +15053,16 @@
             }
           ],
           "description": "Receipt-only association; work.get does not retain a channel projection."
+        },
+        "closure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkClosure"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "createdAt": {
           "type": "string"
@@ -16573,6 +16718,22 @@
       },
       "result": {
         "$ref": "#/$defs/WorkBlockReply"
+      }
+    },
+    "work.close": {
+      "params": {
+        "$ref": "#/$defs/WorkCloseParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkPlan"
+      }
+    },
+    "work.closureHistory": {
+      "params": {
+        "$ref": "#/$defs/WorkClosureHistoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkClosureHistoryPage"
       }
     },
     "work.coordinationStatus": {

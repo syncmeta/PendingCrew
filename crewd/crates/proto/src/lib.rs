@@ -129,6 +129,8 @@ pub mod methods {
     pub const FOLDER_DELETE: &str = "viewFolder.delete";
     pub const FOLDER_ASSIGN: &str = "viewFolder.assign";
     pub const WORK_CREATE: &str = "work.create";
+    pub const WORK_CLOSE: &str = "work.close";
+    pub const WORK_CLOSURE_HISTORY: &str = "work.closureHistory";
     pub const WORK_UPDATE: &str = "work.update";
     pub const WORK_BLOCK: &str = "work.block";
     pub const WORK_TRANSFER_REQUEST: &str = "work.transferRequest";
@@ -245,6 +247,8 @@ pub mod methods {
         FOLDER_DELETE,
         FOLDER_ASSIGN,
         WORK_CREATE,
+        WORK_CLOSE,
+        WORK_CLOSURE_HISTORY,
         WORK_UPDATE,
         WORK_BLOCK,
         WORK_TRANSFER_REQUEST,
@@ -1049,6 +1053,8 @@ pub fn api_schema() -> Value {
             methods::WORK_CREATE,
             m(sub::<WorkCreateParams>(g), sub::<WorkPlan>(g)),
         ),
+        (methods::WORK_CLOSE,m(sub::<WorkCloseParams>(g),sub::<WorkPlan>(g))),
+        (methods::WORK_CLOSURE_HISTORY,m(sub::<WorkClosureHistoryParams>(g),sub::<WorkClosureHistoryPage>(g))),
         (
             methods::WORK_UPDATE,
             m(sub::<WorkUpdateParams>(g), sub::<WorkPlan>(g)),

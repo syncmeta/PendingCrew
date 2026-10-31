@@ -162,6 +162,8 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "work_item_history" => work::history(&cx, args).await,
         "work_item_create" => work::create(&cx, args).await,
         "work_item_update" => work::update(&cx, args).await,
+        "work_item_close" => work::close(&cx, args).await,
+        "work_closure_history" => work::closure_history(&cx, args).await,
         "work_item_block" => work::block(&cx, args).await,
         "work_item_transfer_request" => work::transfer_request(&cx, args).await,
         "work_item_transfer_accept" => work::transfer_accept(&cx, args).await,

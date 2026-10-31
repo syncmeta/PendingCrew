@@ -1325,3 +1325,33 @@ Optional immutable UUID creation key. Required with channel_id. Retry the origin
 
 ## work_item_create.channel_id
 Optional actual readable channel ID; creates and associates the plan in the same transaction. Requires request_id. Association is a creation receipt, not a permanent work field.
+
+## work_item_close
+Close an existing work item on verified facts: done, duplicate, or superseded. Requires the current revision, nonblank evidence and an explanation. Uses your actual permission on the object; it grants no administrative scope or business cancellation authority. It does not submit a progress report. Read the returned closure and current dependencies; on revision conflict, reread and reassess rather than retrying blindly. Evidence is your recorded claim, not automatic independent verification.
+
+## work_item_close.id
+The original global W work ID; no replacement work is created.
+
+## work_item_close.expected_revision
+The unchanged current revision from work_item_get.
+
+## work_item_close.kind
+done for verified completion; duplicate or superseded for factual closure. Never use these to mean the work is not worth doing.
+
+## work_item_close.evidence
+Required nonblank evidence: {kind:"commit"|"url"|"text",value:"..."}. State the verifiable source supporting this specific closure.
+
+## work_item_close.note
+Required explanation of what was verified and why this closure is justified.
+
+## work_closure_history
+Read authoritative factual closure events for the original work, newest first. This is separate from owner-change history. A recorded evidence claim is not independent verification.
+
+## work_closure_history.id
+The global W work ID.
+
+## work_closure_history.before_seq
+The previous page's nextBeforeSeq, passed unchanged; omitted for the first page.
+
+## work_closure_history.limit
+Page size from 1 to 200.

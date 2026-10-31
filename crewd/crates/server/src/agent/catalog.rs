@@ -321,6 +321,14 @@ pub const CATALOG: &[ToolSpec] = &[
         &[p("id", Str, true), p("expected_revision", Str, true)],
     )),
     ro(all("todo_get", &[p("id", Str, true)])),
+    ro(all(
+        "work_closure_history",
+        &[
+            p("id", Str, true),
+            p("before_seq", Str, false),
+            int("limit", 1, 200),
+        ],
+    )),
     ro(all("work_item_get", &[p("id", Str, true)])),
     ro(all(
         "work_item_history",
@@ -347,6 +355,16 @@ pub const CATALOG: &[ToolSpec] = &[
             p("next_check_at", Str, false),
         ],
     ),
+    idempotent(all(
+        "work_item_close",
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            c("kind", true, &["done", "duplicate", "superseded"]),
+            p("evidence", Evidence, true),
+            p("note", Str, true),
+        ],
+    )),
     idempotent(all(
         "work_item_update",
         &[
@@ -779,7 +797,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 54);
+        assert_eq!(CATALOG.len(), 56);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -812,8 +830,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 43);
-        assert_eq!(captain.len(), 54);
+        assert_eq!(worker.len(), 45);
+        assert_eq!(captain.len(), 56);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -849,6 +867,7 @@ mod tests {
                 "document_list",
                 "view_folder_list",
                 "todo_get",
+                "work_closure_history",
                 "work_item_get",
                 "work_item_history",
                 "read_channel",
@@ -889,6 +908,7 @@ mod tests {
                 "work_item_transfer_request",
                 "work_item_transfer_accept",
                 "work_item_transfer_withdraw",
+                "work_item_close",
                 "work_item_update",
                 "work_item_block",
                 "work_item_assign",
@@ -910,6 +930,7 @@ mod tests {
                 "document_list",
                 "view_folder_list",
                 "todo_get",
+                "work_closure_history",
                 "work_item_get",
                 "work_item_history",
                 "post",

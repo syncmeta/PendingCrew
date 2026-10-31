@@ -304,6 +304,7 @@ struct CrewdChannelTodoView:View {
             }else if id.kind == .plan,row["crewId"] == .string(crew) {
                 CrewdCoordinationView(store:work,crew:crew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
                 CrewdReassignmentView(store:work,crew:crew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
+                CrewdWorkCloseView(store:work,id:id,detail:detail)
                 Button("计划操作"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:id.raw,source:""))}.font(.caption).disabled(detail["frozen"] == .bool(true) || ["done","dropped"].contains(detail["status"].string ?? ""))
                 ForEach(detail["blockedOn"].array.compactMap{$0.string.flatMap{CrewdWorkID($0,kind:.human)}},id:\.self){wait in
                     Button("答复卡点 "+wait.raw){openBlocker(wait)}.font(.caption).disabled(busy)
