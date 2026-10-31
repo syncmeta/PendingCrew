@@ -226,6 +226,26 @@ pub struct Fixture {
 }
 
 impl Fixture {
+    /// Opt in to the same database/runtime identity published by daemon startup.
+    /// The fixture's existing IDs are reused; this grants no additional authority.
+    pub async fn enable_public_command_identity(&self) {
+        let db_id = self
+            .state
+            .db
+            .call_result(|store| crewd_store::meta_get(store.conn(), "dbId"))
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("fixture database identity");
+        let identity = crewd_proto::commands::RuntimeIdentity {
+            db_id,
+            runtime_binding_id: self.state.runtime_binding_id.clone(),
+        };
+        if let Err(identity) = self.state.runtime_identity.set(identity) {
+            assert_eq!(self.state.runtime_identity.get(), Some(&identity));
+        }
+    }
+
     /// Enable the existing production SQLite knowledge runtime in this owned fixture.
     pub fn enable_knowledge(&self) {
         let runtime = std::sync::Arc::new(

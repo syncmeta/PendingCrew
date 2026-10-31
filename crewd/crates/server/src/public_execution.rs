@@ -515,3 +515,113 @@ impl PublicExecution {
             .map_err(dispatch::collab_err)
     }
 }
+
+#[cfg(test)]
+mod admin_role_binding_tests {
+    use super::*;
+    use crate::agent::testkit::Fixture;
+    use crate::orchestra::{
+        db::DbPort,
+        port::{NewSession, Port},
+    };
+    use crewd_proto::{Role, orchestra::SessionStartParams};
+
+    #[tokio::test]
+    async fn original_dispatched_receipt_rejects_worker_admin_registration_mismatch() {
+        for (approved, attempted) in [(Role::Worker, Role::Admin), (Role::Admin, Role::Worker)] {
+            let f = Fixture::new().await;
+            let policy = Arc::new(crate::peer::PeerPolicy::new(None).unwrap());
+            let (server, _client) = tokio::net::UnixStream::pair().unwrap();
+            let actor = Actor::Local(policy.accept(&server).unwrap());
+            let db_id = f
+                .state
+                .db
+                .call_result(|s| crewd_store::meta_get(s.conn(), "dbId"))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let params = SessionStartParams {
+                crew_id: f.crew.clone(),
+                role: approved,
+                executor: "claude".into(),
+                brief: "original role binding".into(),
+                title: Some("role receipt".into()),
+                codex_options: None,
+                codex_inputs: None,
+                model: None,
+                effort: None,
+                isolation: false,
+            };
+            let request = CommandSubmitParams {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                db_id,
+                runtime_binding_id: f.state.runtime_binding_id.clone(),
+                command: PublicCommand::SessionStart(params.clone()),
+            };
+            let call = PublicExecution::capture(&f.state, &actor, request)
+                .await
+                .unwrap();
+            assert!(matches!(call.admit().await.unwrap(), Admission::New(_)));
+            let before = call.dispatch().await.unwrap();
+            assert_eq!(before.phase, CommandPhase::Dispatched);
+            assert!(before.result.is_none());
+            let port = DbPort::new(f.state.clone(), f.data_dir().join("crewd.db"));
+            let mut internal = NewSession {
+                crew_id: params.crew_id,
+                role: attempted,
+                executor: params.executor,
+                brief: params.brief,
+                title: params.title,
+                model: None,
+                effort: None,
+                worktree: None,
+                codex_options: None,
+            };
+            let denied = port
+                .insert_public_session(internal.clone(), call.clone())
+                .await;
+            let error = denied
+                .expect_err("a dispatched Worker receipt must never register Admin, or vice versa");
+            assert!(
+                format!("{error:#}").contains("public start immutable scope mismatch"),
+                "{error:#}"
+            );
+            eprintln!("verified rejected registration {approved:?}->{attempted:?}: {error:#}");
+            let principal = call.principal.clone();
+            let db = call.request.db_id.clone();
+            let request = call.request.request_id.clone();
+            let crew = f.crew.clone();
+            let (after, count) = f
+                .state
+                .db
+                .call_result(move |s| {
+                    Ok::<_, crewd_store::StoreError>((
+                        receipts::lookup(s.conn(), &principal, &db, &request)?.unwrap(),
+                        crewd_store::sessions::list_for_crew(s.conn(), &crew)?.len(),
+                    ))
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(count, 2);
+            assert_eq!(
+                after, before,
+                "rejected internal role substitution consumed or modified the original receipt"
+            );
+            internal.role = approved;
+            let created = port.insert_public_session(internal, call).await.unwrap();
+            let id = created.id;
+            let stored = f
+                .state
+                .db
+                .call_result(move |s| crewd_store::sessions::get(s.conn(), &id))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(stored.role, approved);
+            assert_eq!(stored.ext.is_none(), approved == Role::Admin);
+        }
+    }
+}
