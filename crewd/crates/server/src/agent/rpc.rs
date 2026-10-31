@@ -223,6 +223,15 @@ async fn route(
                     "Agent execution requires current-run Human admission",
                 ));
             }
+            if matches!(
+                p.tool.as_str(),
+                "channel_archive_check" | "channel_archive_verified" | "channel_restore_verified"
+            ) {
+                let token = conn.data_token.clone().ok_or_else(invalid)?;
+                return to_value(
+                    tools::call_scoped(state, &me, &p.tool, p.args, scope.clone(), token).await,
+                );
+            }
             to_value(tools::call(state, &me, &p.tool, p.args).await)
         }
         methods::HOOK => {

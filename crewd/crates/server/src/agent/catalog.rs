@@ -452,6 +452,24 @@ pub const CATALOG: &[ToolSpec] = &[
     ),
     all("channel_leave", &[p("channel", Str, true)]),
     destructive(all("channel_archive", &[p("channel", Str, true)])),
+    ro(all("channel_archive_check", &[p("channel", Str, true)])),
+    destructive(all(
+        "channel_archive_verified",
+        &[
+            p("channel", Str, true),
+            p("expected_revision", Str, true),
+            p("evidence", Str, true),
+            p("note", Str, true),
+        ],
+    )),
+    all(
+        "channel_restore_verified",
+        &[
+            p("channel", Str, true),
+            p("expected_revision", Str, true),
+            p("note", Str, true),
+        ],
+    ),
     all(
         "channel_owner",
         &[
@@ -797,7 +815,7 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 56);
+        assert_eq!(CATALOG.len(), 59);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -830,8 +848,8 @@ mod tests {
         assert!(worker.contains(&"post".to_string()));
         assert!(!worker.contains(&"start_session".to_string()));
         assert!(captain.contains(&"start_session".to_string()));
-        assert_eq!(worker.len(), 45);
-        assert_eq!(captain.len(), 56);
+        assert_eq!(worker.len(), 48);
+        assert_eq!(captain.len(), 59);
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -873,6 +891,7 @@ mod tests {
                 "read_channel",
                 "search",
                 "list_channels",
+                "channel_archive_check",
                 "directory",
                 "get_quota",
                 "inspect_session",
@@ -886,6 +905,7 @@ mod tests {
                 "document_delete",
                 "view_folder_delete",
                 "channel_archive",
+                "channel_archive_verified",
                 "change_workdir",
                 "stop_session",
                 "handoff_captain",
@@ -937,6 +957,7 @@ mod tests {
                 "read_channel",
                 "search",
                 "list_channels",
+                "channel_archive_check",
                 "channel_listen",
                 "directory",
                 "get_quota",

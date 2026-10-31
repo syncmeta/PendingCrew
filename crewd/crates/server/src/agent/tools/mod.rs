@@ -137,6 +137,17 @@ pub async fn channel_label_for(
     channel_label_raw(loc, kind, name, crew_title)
 }
 
+pub(crate) async fn call_scoped(
+    st: &std::sync::Arc<AppState>,
+    me: &Identity,
+    tool: &str,
+    args: Value,
+    scope: crate::connection_scope::ConnectionScope,
+    token: String,
+) -> CallResult {
+    port::with_archive_authority(st, me, scope, token, call(st, me, tool, args)).await
+}
+
 pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> CallResult {
     let cx = Ctx {
         st,
@@ -192,6 +203,9 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "channel_invite" => channels::invite(&cx, args).await,
         "channel_leave" => channels::leave(&cx, args).await,
         "channel_archive" => channels::archive(&cx, args).await,
+        "channel_archive_check" => channels::archive_check(&cx, args).await,
+        "channel_archive_verified" => channels::archive_verified(&cx, args).await,
+        "channel_restore_verified" => channels::restore_verified(&cx, args).await,
         "channel_owner" => channels::owner(&cx, args).await,
         "channel_listen" => channels::listen(&cx, args).await,
         "directory" => channels::directory(&cx, args).await,
@@ -269,6 +283,21 @@ pub async fn resolve_channel(cx: &Ctx<'_>, arg: &str) -> Result<ChannelView, Cal
     let all = port::readable_views(cx.st, cx.me)
         .await
         .map_err(|e| cx.fail(e))?;
+    resolve_channel_from_views(cx, arg, all).await
+}
+
+pub async fn resolve_archive_channel(cx: &Ctx<'_>, arg: &str) -> Result<ChannelView, CallResult> {
+    let all = port::archive_readable_views(cx.st, cx.me)
+        .await
+        .map_err(|e| cx.fail(e))?;
+    resolve_channel_from_views(cx, arg.trim(), all).await
+}
+
+async fn resolve_channel_from_views(
+    cx: &Ctx<'_>,
+    arg: &str,
+    all: Vec<ChannelView>,
+) -> Result<ChannelView, CallResult> {
     if let Some(c) = all.iter().find(|c| c.id == arg) {
         return Ok(c.clone());
     }

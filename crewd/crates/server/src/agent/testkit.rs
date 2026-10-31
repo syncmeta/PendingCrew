@@ -146,6 +146,7 @@ pub(crate) fn record_injection_attempt(st: &AppState, call: Option<u64>, row: In
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CallerStage {
     HookPrepared,
+    ArchivePrepared,
     WakeRendered,
 }
 #[cfg(feature = "testkit")]

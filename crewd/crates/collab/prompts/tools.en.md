@@ -1355,3 +1355,36 @@ The previous page's nextBeforeSeq, passed unchanged; omitted for the first page.
 
 ## work_closure_history.limit
 Page size from 1 to 200.
+
+## channel_archive_check
+Read current topic-channel archive facts as canonical JSON: revision, canArchive/canRestore, blockers and last action. A check is not an automatic archive instruction and uses no default inactivity threshold. Verify work, requirements, unanswered questions, pending/inflight notifications and delivery windows. Incomplete or unknown facts block verified archive. Archived channels remain queryable by exact ID.
+
+## channel_archive_check.channel
+Readable channel exact ID or unique name, including archived channels.
+
+## channel_archive_verified
+Revalidate the latest channel_archive_check revision and your verified evidence atomically before archiving a topic channel. Related work must be terminal, with no unresolved facts or inflight delivery. Only the current owner or a legitimate captain may act; Admin role alone grants no authority. Returns canonical JSON and preserves messages, members and associations. The existing channel_archive remains the manual management entry; this tool adds evidence and version checks.
+
+## channel_archive_verified.channel
+Readable topic-channel exact ID or unique name.
+
+## channel_archive_verified.expected_revision
+The complete revision from the latest check. Recheck after conflicts; never reuse an old version.
+
+## channel_archive_verified.evidence
+Concrete facts or evidence you actually verified; nonblank. Do not present model guesses as verification.
+
+## channel_archive_verified.note
+Your explicit reason for this archive action; nonblank.
+
+## channel_restore_verified
+Explicitly restore an archived topic channel using its latest checked revision. Preserve messages, members and associations and allow new posts without replaying old wakes. Only the current owner or a legitimate captain may act. Returns canonical JSON; the owning crew must remain available.
+
+## channel_restore_verified.channel
+Archived topic-channel exact ID or unique name; prefer the ID from the earlier receipt.
+
+## channel_restore_verified.expected_revision
+The complete revision returned by channel_archive_check before restoration.
+
+## channel_restore_verified.note
+Your explicit reason for this restore action; nonblank.

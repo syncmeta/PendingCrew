@@ -751,6 +751,8 @@ mod tests {
             "mcp__crew__channel_create",
             "mcp__crew__channel_invite",
             "mcp__crew__channel_archive",
+            "mcp__crew__channel_archive_verified",
+            "mcp__crew__channel_restore_verified",
             "mcp__crew__channel_owner",
             "mcp__crew__channel_leave",
             "mcp__crew__ask",

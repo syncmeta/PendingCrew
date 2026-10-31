@@ -11,7 +11,7 @@ use crewd_proto::{Mention, MentionKind};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{Ctx, channel_label, parse_args, post_as, resolve_channel};
+use super::{Ctx, channel_label, parse_args, post_as, resolve_archive_channel, resolve_channel};
 use crate::agent::port::{self, ChannelKind, MemberRef, PostSender};
 
 /// Longest accepted `channel_listen.minutes` (8 hours).
@@ -146,6 +146,92 @@ async fn leave_(cx: &Ctx<'_>, v: Value) -> Step<CallResult> {
     Ok(cx.ok("r.left", &[("channel", &channel_label(cx, &ch).await)]))
 }
 
+fn archive_receipt(
+    cx: &Ctx<'_>,
+    result: port::PortResult<crewd_proto::channel_archive::ChannelArchiveCheck>,
+) -> CallResult {
+    match result {
+        Ok(v) => match serde_json::to_string(&v) {
+            Ok(text) => CallResult::ok(text),
+            Err(e) => cx.fail(port::PortError::Internal(e.to_string())),
+        },
+        Err(e) => cx.fail(e),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerifiedArchiveArgs {
+    channel: String,
+    expected_revision: String,
+    evidence: String,
+    note: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VerifiedRestoreArgs {
+    channel: String,
+    expected_revision: String,
+    note: String,
+}
+pub async fn archive_check(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: ChannelArg = match parse_args(cx, v) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let ch = match resolve_archive_channel(cx, &a.channel).await {
+        Ok(ch) => ch,
+        Err(e) => return e,
+    };
+    archive_receipt(cx, port::channel_archive_check(cx.st, cx.me, &ch.id).await)
+}
+pub async fn archive_verified(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: VerifiedArchiveArgs = match parse_args(cx, v) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    let ch = match resolve_archive_channel(cx, &a.channel).await {
+        Ok(ch) => ch,
+        Err(e) => return e,
+    };
+    archive_receipt(
+        cx,
+        port::channel_archive_verified(
+            cx.st,
+            cx.me,
+            crewd_proto::channel_archive::ChannelArchiveVerifiedParams {
+                channel_id: ch.id,
+                expected_revision: a.expected_revision,
+                evidence: a.evidence,
+                note: a.note,
+            },
+        )
+        .await,
+    )
+}
+pub async fn restore_verified(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: VerifiedRestoreArgs = match parse_args(cx, v) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    // readable_views deliberately includes archived channels; exact IDs remain resolvable.
+    let ch = match resolve_archive_channel(cx, &a.channel).await {
+        Ok(ch) => ch,
+        Err(e) => return e,
+    };
+    archive_receipt(
+        cx,
+        port::channel_restore_verified(
+            cx.st,
+            cx.me,
+            crewd_proto::channel_archive::ChannelRestoreVerifiedParams {
+                channel_id: ch.id,
+                expected_revision: a.expected_revision,
+                note: a.note,
+            },
+        )
+        .await,
+    )
+}
 pub async fn archive(cx: &Ctx<'_>, v: Value) -> CallResult {
     done(archive_(cx, v).await)
 }
@@ -1090,5 +1176,78 @@ mod tests {
         ] {
             assert!(catalog::find(kept).is_some(), "{kept}");
         }
+    }
+    #[tokio::test]
+    async fn verified_archive_check_returns_canonical_facts_without_mutating_channel() {
+        let f = Fixture::new().await;
+        let ch = topic_by_captain(&f).await;
+        let before = channel(&f, &ch.id).await;
+        assert!(
+            run(
+                &f,
+                &f.worker,
+                "channel_archive_check",
+                json!({"channel":ch.id})
+            )
+            .await
+            .is_error
+        );
+        let me = f.me(&f.worker).await;
+        let token = f.state.tokens.mint(&f.worker);
+        let r = super::super::call_scoped(
+            &f.state,
+            &me,
+            "channel_archive_check",
+            json!({"channel":ch.id}),
+            crate::connection_scope::ConnectionScope::new(),
+            token,
+        )
+        .await;
+        assert!(!r.is_error, "{}", r.text);
+        let view: crewd_proto::channel_archive::ChannelArchiveCheck =
+            serde_json::from_str(&r.text).unwrap();
+        assert_eq!(view.channel.id, ch.id);
+        assert!(!view.can_archive);
+        assert_eq!(channel(&f, &ch.id).await.archived, before.archived);
+    }
+
+    #[tokio::test]
+    async fn revoked_archive_token_cannot_use_bad_target_to_list_private_choices() {
+        let f = Fixture::new().await;
+        let ch = topic_by_captain(&f).await;
+        let me = f.me(&f.worker).await;
+        let token = f.state.tokens.mint(&f.worker);
+        f.state.tokens.revoke(&f.worker);
+        let r = super::super::call_scoped(
+            &f.state,
+            &me,
+            "channel_archive_check",
+            json!({"channel":"does-not-exist"}),
+            crate::connection_scope::ConnectionScope::new(),
+            token,
+        )
+        .await;
+        assert!(r.is_error);
+        assert!(!r.text.contains(&ch.name), "{}", r.text);
+    }
+    #[tokio::test]
+    async fn closed_scope_refuses_archive_check_before_resolving_names() {
+        let f = Fixture::new().await;
+        let ch = topic_by_captain(&f).await;
+        let me = f.me(&f.worker).await;
+        let token = f.state.tokens.mint(&f.worker);
+        let scope = crate::connection_scope::ConnectionScope::new();
+        scope.close();
+        let result = super::super::call_scoped(
+            &f.state,
+            &me,
+            "channel_archive_check",
+            json!({"channel":"not-a-channel"}),
+            scope,
+            token,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(!result.text.contains(&ch.name));
     }
 }

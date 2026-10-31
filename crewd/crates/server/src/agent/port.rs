@@ -856,6 +856,136 @@ pub async fn remove_member(
     .await
 }
 
+#[derive(Clone)]
+struct ArchiveAuthority {
+    state: std::sync::Arc<AppState>,
+    session: String,
+    scope: crate::connection_scope::ConnectionScope,
+    token: String,
+}
+tokio::task_local! { static ARCHIVE_AUTHORITY: ArchiveAuthority; }
+pub(crate) async fn with_archive_authority<F: std::future::Future>(
+    state: &std::sync::Arc<AppState>,
+    me: &Identity,
+    scope: crate::connection_scope::ConnectionScope,
+    token: String,
+    future: F,
+) -> F::Output {
+    ARCHIVE_AUTHORITY
+        .scope(
+            ArchiveAuthority {
+                state: state.clone(),
+                session: me.session_id.clone(),
+                scope,
+                token,
+            },
+            future,
+        )
+        .await
+}
+fn archive_denied() -> CollabError {
+    CollabError::Forbidden(crewd_collab::refusal::Refusal::new(
+        crewd_collab::refusal::Code::ResourceForbidden,
+    ))
+}
+fn archive_authority(st: &AppState, me: &Identity) -> PortResult<ArchiveAuthority> {
+    let a = ARCHIVE_AUTHORITY
+        .try_with(Clone::clone)
+        .map_err(|_| PortError::from(archive_denied()))?;
+    if !std::ptr::eq(a.state.as_ref(), st) || a.session != me.session_id {
+        return Err(archive_denied().into());
+    }
+    Ok(a)
+}
+fn validate_archive_actor(
+    c: &Connection,
+    a: &ArchiveAuthority,
+    me: &Identity,
+) -> crewd_collab::Result<()> {
+    if !a.scope.is_live()
+        || !a.state.tokens.verify(&a.session, &a.token)
+        || (a.state.management.get().is_some() && !a.state.admission.contains(&a.session))
+    {
+        return Err(archive_denied());
+    }
+    let current = crewd_collab::sessions::get(c, &a.session)?;
+    if current.crew_id != me.crew_id || crewd_collab::sessions::role_of(c, &a.session)? != me.role {
+        return Err(archive_denied());
+    }
+    if crewd_collab::crews::is_archived(c, &current.crew_id)?
+        || crewd_collab::crews::get(c, &current.crew_id)?
+            .removed_at
+            .is_some()
+    {
+        return Err(archive_denied());
+    }
+    Ok(())
+}
+pub async fn channel_archive_check(
+    st: &AppState,
+    by: &Identity,
+    channel: &str,
+) -> PortResult<crewd_proto::channel_archive::ChannelArchiveCheck> {
+    let a = archive_authority(st, by)?;
+    let by = by.clone();
+    let channel = channel.to_string();
+    read(st, move |c| {
+        validate_archive_actor(c, &a, &by)?;
+        crewd_collab::channel_archive::check(
+            c,
+            &Sender::Session(by.session_id),
+            crewd_proto::channel_archive::ChannelArchiveCheckParams {
+                channel_id: channel,
+            },
+            now_ms(),
+        )
+    })
+    .await
+}
+pub async fn channel_archive_verified(
+    st: &AppState,
+    by: &Identity,
+    p: crewd_proto::channel_archive::ChannelArchiveVerifiedParams,
+) -> PortResult<crewd_proto::channel_archive::ChannelArchiveCheck> {
+    let a = archive_authority(st, by)?;
+    let by = by.clone();
+    #[cfg(feature = "testkit")]
+    super::testkit::pause_caller(
+        st,
+        super::testkit::CallerStage::ArchivePrepared,
+        &by.session_id,
+        vec![],
+        p.channel_id.clone(),
+    )
+    .await;
+    write(st, move |tx| {
+        validate_archive_actor(tx.conn(), &a, &by)?;
+        crewd_collab::channel_archive::archive(tx, &Sender::Session(by.session_id), p)
+    })
+    .await
+}
+pub async fn channel_restore_verified(
+    st: &AppState,
+    by: &Identity,
+    p: crewd_proto::channel_archive::ChannelRestoreVerifiedParams,
+) -> PortResult<crewd_proto::channel_archive::ChannelArchiveCheck> {
+    let a = archive_authority(st, by)?;
+    let by = by.clone();
+    #[cfg(feature = "testkit")]
+    super::testkit::pause_caller(
+        st,
+        super::testkit::CallerStage::ArchivePrepared,
+        &by.session_id,
+        vec![],
+        p.channel_id.clone(),
+    )
+    .await;
+    write(st, move |tx| {
+        validate_archive_actor(tx.conn(), &a, &by)?;
+        crewd_collab::channel_archive::restore(tx, &Sender::Session(by.session_id), p)
+    })
+    .await
+}
 pub async fn archive_channel(st: &AppState, by: &Identity, channel: &str) -> PortResult<()> {
     let (by_id, ch) = (by.session_id.clone(), channel.to_string());
     write(st, move |tx| {
@@ -1009,23 +1139,34 @@ pub async fn readable_channels(st: &AppState, me: &Identity) -> PortResult<Vec<S
 }
 
 /// `readable_channels` 的视图（`listening` 按此刻的收听行填上）：工具层按名字找群、列群都从这里取。
-pub async fn readable_views(st: &AppState, me: &Identity) -> PortResult<Vec<ChannelView>> {
-    let s = me.session_id.clone();
-    read(st, move |conn| {
-        let listening = crewd_collab::listens::channels_of(conn, &s, now_ms())?;
-        let mut ids = crewd_collab::channels::readable_channels(conn, &s)?;
-        for id in &listening {
-            if !ids.contains(id) {
-                ids.push(id.clone());
-            }
+fn readable_views_conn(conn: &Connection, s: &str) -> crewd_collab::Result<Vec<ChannelView>> {
+    let listening = crewd_collab::listens::channels_of(conn, s, now_ms())?;
+    let mut ids = crewd_collab::channels::readable_channels(conn, s)?;
+    for id in &listening {
+        if !ids.contains(id) {
+            ids.push(id.clone());
         }
-        ids.iter()
-            .map(|id| {
-                let mut v = channel_view(conn, id)?;
-                v.listening = listening.contains(id);
-                Ok(v)
-            })
-            .collect()
+    }
+    ids.iter()
+        .map(|id| {
+            let mut v = channel_view(conn, id)?;
+            v.listening = listening.contains(id);
+            Ok(v)
+        })
+        .collect()
+}
+pub async fn readable_views(st: &AppState, me: &Identity) -> PortResult<Vec<ChannelView>> {
+    let session = me.session_id.clone();
+    read(st, move |c| readable_views_conn(c, &session)).await
+}
+/// New archive tools also revalidate authority inside the resolver's actual DB read;
+/// an invalid target must not leak a private list of name suggestions after revocation.
+pub async fn archive_readable_views(st: &AppState, me: &Identity) -> PortResult<Vec<ChannelView>> {
+    let authority = archive_authority(st, me)?;
+    let me = me.clone();
+    read(st, move |c| {
+        validate_archive_actor(c, &authority, &me)?;
+        readable_views_conn(c, &me.session_id)
     })
     .await
 }

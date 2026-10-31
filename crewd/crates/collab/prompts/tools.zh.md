@@ -1355,3 +1355,36 @@ messages、todo、documents、progress，与工作图父级独立。
 
 ## work_item_create.channel_id
 可选实际可见群ID；同事务创建并关联计划，须有request_id。关联只是创建回执，不是永久工作字段。
+
+## channel_archive_check
+只读核查话题群的当前归档事实，返回原始 JSON、revision、canArchive/canRestore、阻碍与最近动作。结果不是自动归档指令，不采用默认闲置时长。工作、入口、未答问题、待投/在途通知与交付窗口都必须核实；超限或未知事实会阻止验证归档。群归档后仍可按精确 id 查询。
+
+## channel_archive_check.channel
+可读群的精确 id 或唯一群名；包含已归档群。
+
+## channel_archive_verified
+依据最新 channel_archive_check 的 revision 和你实际核实的证据，原子重验后归档话题群。必须有已终结的关联工作，并且没有未结事实或在途交付。只有当前群主或合法机长可执行，行政角色本身不授予权限。返回规范 JSON，消息、成员和关联保留。原 channel_archive 仍是手动管理入口；本工具增加明确证据和版本核查。
+
+## channel_archive_verified.channel
+可读话题群的精确 id 或唯一群名。
+
+## channel_archive_verified.expected_revision
+最新核查返回的完整 revision。冲突后重新核查，不复用旧版本。
+
+## channel_archive_verified.evidence
+你已核实的具体事实或证据，不能为空；不要把模型猜测写成核验结果。
+
+## channel_archive_verified.note
+本次明确归档的理由，不能为空。
+
+## channel_restore_verified
+以最新核查版本明确解档话题群，恢复正常发言能力；保留消息、成员与关联，不重投旧唤醒。仅当前群主或合法机长可执行，返回规范 JSON。原归属机组必须仍然可用。
+
+## channel_restore_verified.channel
+已归档话题群的精确 id 或唯一群名；建议用先前回执中的 id。
+
+## channel_restore_verified.expected_revision
+解档前 channel_archive_check 返回的完整 revision。
+
+## channel_restore_verified.note
+本次明确解档的理由，不能为空。
