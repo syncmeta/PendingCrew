@@ -420,8 +420,8 @@ mod tests {
             actual, expected,
             "RPC must expose the catalog for the expected role"
         );
-        // Eight All-scope additions since the old 43/54-count fixture; Captain
-        // additionally receives authenticated handoff acceptance.
+        // Verify the named landed surface in addition to catalog parity.
+        // Captain-only acceptance must never leak into the Worker table.
         for name in [
             "work_item_close",
             "work_closure_history",
@@ -431,11 +431,17 @@ mod tests {
             "admin_case_handoff_request",
             "admin_case_handoff_get",
             "admin_case_handoff_list",
+            "admin_case_custody_get",
+            "admin_case_custody_list",
         ] {
             assert!(actual.contains(name), "missing landed tool {name}");
         }
         assert_eq!(
             actual.contains("admin_case_handoff_accept"),
+            role == Role::Captain
+        );
+        assert_eq!(
+            actual.contains("admin_case_custody_accept"),
             role == Role::Captain
         );
         assert_eq!(actual.contains("start_session"), role == Role::Captain);

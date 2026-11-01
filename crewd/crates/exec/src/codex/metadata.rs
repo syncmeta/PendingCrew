@@ -255,8 +255,9 @@ async fn run_inner(
             })?;
         let value = response(&mut guard, 2).await?;
         if case_auth {
-            // Return only the original auth storage method. Never surface the
-            // effective config's credentials, environment or provider headers.
+            // The trusted routing probe forces ephemeral auth storage. Return
+            // only non-secret routing metadata, never credentials, environment
+            // values, or provider headers.
             Ok(
                 json!({"authStore":value["config"]["cli_auth_credentials_store"],"providerFingerprint":super::profile::provider_fingerprint(&value["config"]),"modelProvider":value["config"]["model_provider"],"model":value["config"]["model"],"effort":value["config"]["model_reasoning_effort"]}),
             )

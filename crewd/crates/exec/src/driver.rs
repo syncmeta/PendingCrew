@@ -476,6 +476,12 @@ impl ManualWritePermit {
 }
 /// 句柄发给会话任务的命令。两个驱动（claude / codex）各自解释同一套命令。
 pub(crate) enum Command {
+    NativeAuthExport {
+        refresh: bool,
+        reply: oneshot::Sender<
+            Result<crate::codex::profile::ExternalChatgptAuth, crate::codex::profile::AuthFailure>,
+        >,
+    },
     Codex {
         op: crate::codex::control::CodexOperation,
         permit: Option<ManualWritePermit>,
@@ -561,6 +567,7 @@ pub struct SessionHandle {
     raw_fence: Option<Arc<Mutex<u64>>>,
     provider_fence: Option<Arc<Mutex<bool>>>,
     terminal_observer: Option<Arc<dyn crate::acp::terminal::TerminalObserver>>,
+    auth_export_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SessionHandle {
@@ -572,6 +579,7 @@ impl SessionHandle {
             raw_fence: None,
             provider_fence: None,
             terminal_observer: None,
+            auth_export_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -820,6 +828,51 @@ impl SessionHandle {
         self.provider_fence = Some(fence);
         self
     }
+    /// Internal host channel. Never exposed as a collaboration or native tool.
+    pub async fn native_auth_access(
+        &self,
+        refresh: bool,
+        previous: Option<crate::codex::profile::ExternalChatgptAuth>,
+    ) -> Result<crate::codex::profile::ExternalChatgptAuth, crate::codex::profile::AuthFailure>
+    {
+        use crate::codex::profile::AuthFailure as F;
+        let _single = self.auth_export_lock.lock().await;
+        let read = |refresh| async move {
+            if self
+                .provider_fence
+                .as_ref()
+                .is_some_and(|f| f.lock().map_or(true, |v| !*v))
+            {
+                return Err(F::Unavailable);
+            }
+            let (reply, rx) = oneshot::channel();
+            self.cmd(Command::NativeAuthExport { refresh, reply })
+                .map_err(|_| F::Unavailable)?;
+            rx.await.map_err(|_| F::Unknown)?
+        };
+        let current = read(false).await?;
+        if let Some(previous) = previous {
+            if !previous.same_identity(&current) {
+                return Err(F::IdentityChanged);
+            }
+            if !refresh || previous.changed_access(&current) {
+                return Ok(current);
+            }
+            let refreshed = read(true).await?;
+            if !previous.same_identity(&refreshed) {
+                return Err(F::IdentityChanged);
+            }
+            if !previous.changed_access(&refreshed) {
+                return Err(F::Unchanged);
+            }
+            Ok(refreshed)
+        } else if refresh {
+            Err(F::Unavailable)
+        } else {
+            Ok(current)
+        }
+    }
+
     pub async fn codex_controlled(
         &self,
         op: crate::codex::control::CodexOperation,
@@ -1880,6 +1933,9 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
                     screen: t.core.snapshot(),
                 });
             let _ = reply.send(cut);
+        }
+        Command::NativeAuthExport { reply, .. } => {
+            let _ = reply.send(Err(crate::codex::profile::AuthFailure::Unsupported));
         }
         Command::Codex { reply, .. } => {
             let _ = reply.send(crate::codex::control::CodexOutcome::unsupported());

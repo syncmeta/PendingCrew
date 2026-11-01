@@ -1,4 +1,6 @@
 //! A delivered captain request is distinct from an explicit authorized acceptance.
+#[path = "admin_custody_review.rs"]
+mod custody_review;
 use super::*;
 
 async fn running() -> (Rig, Source, String, String, FakeJev) {

@@ -85,6 +85,8 @@ pub struct AdminCaseSource {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminCaseView {
     #[serde(default)]
+    pub custody_record: Option<AdminCaseCustodyView>,
+    #[serde(default)]
     pub handoff_record: Option<AdminCaseHandoffView>,
     pub id: String,
     pub crew_id: String,
@@ -283,5 +285,109 @@ pub struct AdminCaseHandoffView {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminCaseHandoffList {
     pub items: Vec<AdminCaseHandoffView>,
+    pub next_after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseCustodyPhase {
+    Active,
+    Stale,
+    Discharged,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseCustodyTransferPhase {
+    Waiting,
+    Delivered,
+    Accepted,
+    Stale,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseCustodyReason {
+    OriginalCustody,
+    Proposed,
+    NotificationDelivered,
+    CaptainAccepted,
+    StateChanged,
+    NotificationDropped,
+    Superseded,
+    TargetsUnresolved,
+    OutOfScope,
+    TargetMissing,
+    EvidenceIncomplete,
+    Verified,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseCustodyPropose {
+    pub crew_id: String,
+    pub case_id: String,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub reason: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseCustodyGetParams {
+    pub crew_id: String,
+    pub case_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseCustodyTransferGetParams {
+    pub request_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseCustodyTransfer {
+    pub request_id: String,
+    pub case_id: String,
+    pub crew_id: String,
+    pub predecessor_receipt_id: String,
+    pub from_session_id: String,
+    pub to_session_id: String,
+    pub phase: AdminCaseCustodyTransferPhase,
+    pub revision: String,
+    pub reason: AdminCaseCustodyReason,
+    pub request_reason: String,
+    pub targets: Vec<AdminCaseTarget>,
+    pub wake_id: i64,
+    pub created_at: i64,
+    pub delivered_at: Option<String>,
+    pub accepted_at: Option<i64>,
+    pub acceptance_note: Option<String>,
+    pub superseded_by: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseCustodyDischarge {
+    pub revision: String,
+    pub verified_at: i64,
+    pub targets: Vec<AdminCaseTargetOutcome>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseCustodyView {
+    pub case_id: String,
+    pub crew_id: String,
+    pub revision: String,
+    pub original_request_id: String,
+    pub current_custodian_session_id: String,
+    pub current_receipt_id: String,
+    pub phase: AdminCaseCustodyPhase,
+    pub reason: AdminCaseCustodyReason,
+    pub targets: Vec<AdminCaseTarget>,
+    pub target_results: Vec<AdminCaseTargetOutcome>,
+    pub out_of_scope: Vec<String>,
+    pub pending: Option<AdminCaseCustodyTransfer>,
+    pub current_record: Option<AdminCaseCustodyTransfer>,
+    pub discharge: Option<AdminCaseCustodyDischarge>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseCustodyList {
+    pub items: Vec<AdminCaseCustodyTransfer>,
     pub next_after: Option<String>,
 }

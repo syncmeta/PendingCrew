@@ -1,6 +1,18 @@
 import Foundation
 import Combine
 
+struct CrewdCustodyIntent:Identifiable {
+    enum Status:String {case submitting,unknown,recorded,refused,notFound}
+    let id:String
+    let crew:String
+    let caseID:String
+    let expectedRevision:String
+    let reason:String
+    var status:Status
+    var record:CrewdValue = .null
+    var message:String?
+}
+
 /// Public identity, never inferred from a legacy per-crew number or converted to Double.
 struct CrewdWorkID: Hashable, Sendable {
     enum Kind: Character, Sendable { case requirement = "#", plan = "W", human = "H" }
@@ -72,6 +84,8 @@ final class CrewdWorkStore: ObservableObject {
     @Published private(set) var hasLoaded = false
     @Published private(set) var readScope = UUID()
     @Published private(set) var capabilities:Set<String>=[]
+    @Published private(set) var custodyIntents:[CrewdCustodyIntent]=[]
+    private var custodyReads:[String:CrewdValue]=[:]
     private let call: Call
     private var generation = UUID()
     private var refreshID = UUID()
@@ -91,6 +105,7 @@ final class CrewdWorkStore: ObservableObject {
     func selectCrew(_ crew: String) {
         guard selectedCrew != crew else { return }
         ensureTask?.cancel(); ensureTask = nil
+        invalidateCustodyReads()
         generation = UUID(); refreshID = UUID(); pendingDetails.removeAll(); loading = false
         selectedCrew = crew; planIDs = []; requirementIDs = []; lastFailure = nil
         hasLoaded = false; readScope = UUID()
@@ -99,6 +114,7 @@ final class CrewdWorkStore: ObservableObject {
     func invalidateConnection() {
         ensureTask?.cancel(); ensureTask = nil
         capabilities=[]
+        invalidateCustodyReads()
         generation = UUID(); refreshID = UUID(); pendingDetails.removeAll(); loading = false
         hasLoaded = false; readScope = UUID()
     }
@@ -385,6 +401,12 @@ final class CrewdWorkStore: ObservableObject {
                       let actor=resultFields["resolvedBy"],actor == .null || ["case_admin","other"].contains(actor.string ?? ""),let wake=resultFields["wakeId"],wake == .null || wake.int != nil else {throw CrewdClientError(message:"行政核验归因格式无效。")}
             }
         }
+        if let custody=fields["custodyRecord"] {
+            if custody != .null {
+                try validateCustody(custody,crew:crew,caseID:row["id"].string ?? "")
+                guard custodyTargets(custody["targets"]) == custodyTargets(row["targets"]),custody["originalRequestId"] == handoff["requestId"],handoff["acceptedAt"] != .null else {throw CrewdClientError(message:"责任范围与原案件不一致。")}
+            }
+        } else if capabilities.contains("adminCase.custodyGet") {throw CrewdClientError(message:"后台缺少责任接管记录字段。")}
         for target in targets {
             guard CrewdWorkID(target["id"].string ?? "",kind:.plan) != nil,target["crewId"].string?.isEmpty == false,target["revision"].string?.isEmpty == false,
                   ["unanswered","overdue","ready_unscheduled"].contains(target["kind"].string ?? ""),["in_scope","out_of_scope"].contains(target["scope"].string ?? "") else {throw CrewdClientError(message:"行政记录目标格式无效。")}
@@ -407,6 +429,128 @@ final class CrewdWorkStore: ObservableObject {
         try validateAdminCase(row,crew:crew)
         guard row["id"] == .string(id) else {throw CrewdClientError(message:"行政详情返回了其他案件。")}
         return row
+    }
+    private func custodyKey(_ crew:String,_ id:String)->String {"\(crew.utf8.count):\(crew)\(id)"}
+    private func invalidateCustodyReads() {
+        custodyReads.removeAll()
+        for i in custodyIntents.indices where custodyIntents[i].status == .submitting {custodyIntents[i].status = .unknown;custodyIntents[i].message="连接或机组已切换，原请求结果待查证。"}
+    }
+    func custodyRequests(caseID:String)->[CrewdCustodyIntent] {custodyIntents.filter{$0.crew == selectedCrew && $0.caseID == caseID}}
+    private func custodyTargets(_ value:CrewdValue)->[String] {
+        value.array.map {[$0["id"].string ?? "",$0["crewId"].string ?? "",$0["kind"].string ?? "",$0["scope"].string ?? ""].joined(separator:"|")}.sorted()
+    }
+    private func custodyError()->CrewdClientError {CrewdClientError(message:"责任记录身份、范围或核验字段不完整，请重新读取。")}
+    private func custodyRequired(_ row:CrewdValue,_ keys:[String])throws {
+        guard case .object(let fields)=row,keys.allSatisfy({fields[$0] != nil}) else {throw custodyError()}
+    }
+    private func validateCustodyTargets(_ value:CrewdValue,crew:String)throws {
+        guard case .array(let rows)=value,!rows.isEmpty else {throw custodyError()}
+        for t in rows {
+            guard CrewdWorkID(t["id"].string ?? "",kind:.plan) != nil,t["crewId"].string?.isEmpty == false,t["revision"].string?.isEmpty == false,
+                  ["unanswered","overdue","ready_unscheduled"].contains(t["kind"].string ?? ""),["in_scope","out_of_scope"].contains(t["scope"].string ?? ""),
+                  t["scope"] != .string("in_scope") || t["crewId"] == .string(crew) else {throw custodyError()}
+        }
+    }
+    private func validateCustodyResults(_ value:CrewdValue,targets:CrewdValue)throws {
+        guard case .array(let rows)=value else {throw custodyError()}
+        let expected=Set(targets.array.filter{$0["scope"] == .string("in_scope")}.compactMap{$0["id"].string})
+        let actual=rows.compactMap{$0["id"].string}
+        guard Set(actual)==expected,actual.count==rows.count,Set(actual).count==actual.count else {throw custodyError()}
+        for t in rows {
+            try custodyRequired(t,["resolution","resolvedBy","actorSessionId","eventSeq","wakeId"])
+            guard ["resolved","pending","blocked","missing"].contains(t["state"].string ?? ""),
+                  ["closed_with_evidence","reassigned_and_acknowledged","no_closure_evidence","no_matching_event","original_problem_remains","notification_pending","notification_dropped","owner_unavailable","target_missing","no_verified_admin_receipt"].contains(t["reason"].string ?? ""),
+                  case .array(let kinds)=t["sourceKinds"],!kinds.isEmpty,kinds.allSatisfy({["unanswered","overdue","ready_unscheduled"].contains($0.string ?? "")}),
+                  t["resolution"] == .null || ["closed","reassigned"].contains(t["resolution"].string ?? ""),
+                  t["resolvedBy"] == .null || ["case_admin","other"].contains(t["resolvedBy"].string ?? ""),
+                  t["actorSessionId"] == .null || t["actorSessionId"].string?.isEmpty == false,
+                  t["wakeId"] == .null || (t["wakeId"].int ?? 0)>0 else {throw custodyError()}
+            if t["eventSeq"] != .null {guard let raw=t["eventSeq"].string,let n=UInt64(raw),n>0,String(n)==raw else {throw custodyError()}}
+            if t["state"] == .string("resolved") {guard t["resolution"] != .null,t["resolvedBy"] != .null,t["eventSeq"] != .null else {throw custodyError()}}
+        }
+    }
+    private let custodyReasons:Set<String>=["original_custody","proposed","notification_delivered","captain_accepted","state_changed","notification_dropped","superseded","targets_unresolved","out_of_scope","target_missing","evidence_incomplete","verified"]
+    private func validateCustodyTransfer(_ row:CrewdValue,crew:String,caseID:String,targets:CrewdValue?=nil)throws {
+        try custodyRequired(row,["deliveredAt","acceptedAt","acceptanceNote","supersededBy"])
+        guard row["crewId"] == .string(crew),row["caseId"] == .string(caseID),UUID(uuidString:row["requestId"].string ?? "") != nil,
+              row["revision"].string?.isEmpty == false,row["predecessorReceiptId"].string?.isEmpty == false,row["fromSessionId"].string?.isEmpty == false,row["toSessionId"].string?.isEmpty == false,
+              ["waiting","delivered","accepted","stale"].contains(row["phase"].string ?? ""),custodyReasons.contains(row["reason"].string ?? ""),row["requestReason"].string?.isEmpty == false,
+              row["createdAt"].int != nil,(row["wakeId"].int ?? 0)>0,row["deliveredAt"] == .null || row["deliveredAt"].string?.isEmpty == false,
+              row["acceptedAt"] == .null || row["acceptedAt"].int != nil,row["acceptanceNote"] == .null || row["acceptanceNote"].string?.isEmpty == false,
+              row["supersededBy"] == .null || UUID(uuidString:row["supersededBy"].string ?? "") != nil else {throw custodyError()}
+        try validateCustodyTargets(row["targets"],crew:crew)
+        if let targets, custodyTargets(row["targets"]) != custodyTargets(targets) {throw custodyError()}
+        if row["phase"] == .string("delivered") {guard row["deliveredAt"] != .null else {throw custodyError()}}
+        if row["phase"] == .string("accepted") || row["acceptedAt"] != .null {
+            guard row["acceptedAt"] != .null,row["acceptanceNote"] != .null,row["deliveredAt"] != .null else {throw custodyError()}
+        }
+    }
+    private func validateCustody(_ row:CrewdValue,crew:String,caseID:String)throws {
+        try custodyRequired(row,["pending","currentRecord","discharge","targetResults","outOfScope"])
+        guard row["crewId"] == .string(crew),row["caseId"] == .string(caseID),row["revision"].string?.isEmpty == false,
+              row["originalRequestId"].string?.isEmpty == false,row["currentCustodianSessionId"].string?.isEmpty == false,row["currentReceiptId"].string?.isEmpty == false,
+              ["active","stale","discharged"].contains(row["phase"].string ?? ""),custodyReasons.contains(row["reason"].string ?? "") else {throw custodyError()}
+        try validateCustodyTargets(row["targets"],crew:crew);try validateCustodyResults(row["targetResults"],targets:row["targets"])
+        guard case .array(let outside)=row["outOfScope"],outside.allSatisfy({CrewdWorkID($0.string ?? "",kind:.plan) != nil}),
+              Set(outside.compactMap{$0.string}) == Set(row["targets"].array.filter{$0["scope"] == .string("out_of_scope")}.compactMap{$0["id"].string}) else {throw custodyError()}
+        if row["currentRecord"] != .null {
+            let r=row["currentRecord"];try validateCustodyTransfer(r,crew:crew,caseID:caseID,targets:row["targets"])
+            guard r["requestId"] == row["currentReceiptId"],r["toSessionId"] == row["currentCustodianSessionId"],r["acceptedAt"] != .null else {throw custodyError()}
+        } else if row["currentReceiptId"] != row["originalRequestId"] {throw custodyError()}
+        if row["pending"] != .null {
+            let r=row["pending"];try validateCustodyTransfer(r,crew:crew,caseID:caseID,targets:row["targets"])
+            guard r["fromSessionId"] == row["currentCustodianSessionId"],r["predecessorReceiptId"] == row["currentReceiptId"],r["acceptedAt"] == .null else {throw custodyError()}
+        }
+        if row["phase"] == .string("discharged") {
+            let d=row["discharge"]
+            guard d["revision"].string?.isEmpty == false,d["verifiedAt"].int != nil,row["currentRecord"] != .null,outside.isEmpty,
+                  d["targets"] == row["targetResults"],d["targets"].array.allSatisfy({$0["state"] == .string("resolved")}) else {throw custodyError()}
+        } else if row["discharge"] != .null {throw custodyError()}
+    }
+    func custody(caseID:String) async throws -> CrewdValue {
+        let crew=selectedCrew,token=generation
+        guard capabilities.contains("adminCase.custodyGet"),!crew.isEmpty else {throw CrewdClientError(message:"当前后台未开放责任接管查询。",kind:.notSubmitted)}
+        let row=try await call("adminCase.custodyGet",.object(["crewId":.string(crew),"caseId":.string(caseID)]));try check(token)
+        try validateCustody(row,crew:crew,caseID:caseID);custodyReads[custodyKey(crew,caseID)]=row;return row
+    }
+    func custodyTransfer(requestID:String,caseID:String) async throws -> CrewdValue {
+        let crew=selectedCrew,token=generation
+        guard capabilities.contains("adminCase.custodyTransferGet"),UUID(uuidString:requestID) != nil else {throw CrewdClientError(message:"无法查询该责任提议。",kind:.notSubmitted)}
+        do {
+            let row=try await call("adminCase.custodyTransferGet",.object(["requestId":.string(requestID)]));try check(token)
+            try validateCustodyTransfer(row,crew:crew,caseID:caseID)
+            guard row["requestId"] == .string(requestID) else {throw custodyError()}
+            if let i=custodyIntents.firstIndex(where:{$0.id==requestID && $0.crew==crew && $0.caseID==caseID}) {guard row["requestReason"] == .string(custodyIntents[i].reason) else {throw custodyError()};custodyIntents[i].status = .recorded;custodyIntents[i].record=row;custodyIntents[i].message=nil}
+            return row
+        } catch {
+            try check(token)
+            if let e=error as? CrewdClientError,e.refusal == "resource.not_found",let i=custodyIntents.firstIndex(where:{$0.id==requestID && $0.crew==crew && $0.caseID==caseID}) {if custodyIntents[i].record == .null {custodyIntents[i].status = .notFound};custodyIntents[i].message="当前未查到原请求；这不代表它永远未提交。原编号和已有回执保留。";custodyReads.removeValue(forKey:custodyKey(crew,caseID))}
+            throw error
+        }
+    }
+    func proposeCustody(caseID:String,revision:String,reason:String) async throws -> CrewdValue {
+        let crew=selectedCrew,token=generation,key=custodyKey(selectedCrew,caseID),reason=reason.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard capabilities.contains("adminCase.custodyPropose"),activeMutations==0,!reason.isEmpty,reason.count<=2000,
+              custodyReads[key]?["revision"] == .string(revision),custodyReads[key]?["phase"] == .string("stale"),
+              custodyReads[key]?["pending"] == .null || custodyReads[key]?["pending"]["phase"] == .string("stale"),
+              !custodyRequests(caseID:caseID).contains(where:{$0.status == .unknown || $0.status == .submitting}) else {throw CrewdClientError(message:"请先查证未确认的原请求并重新读取失效责任；填写接管理由。",kind:.notSubmitted)}
+        let request=UUID().uuidString.lowercased()
+        custodyIntents.append(CrewdCustodyIntent(id:request,crew:crew,caseID:caseID,expectedRevision:revision,reason:reason,status:.submitting))
+        custodyReads.removeValue(forKey:key);activeMutations += 1
+        defer {activeMutations -= 1}
+        do {
+            let row=try await call("adminCase.custodyPropose",.object(["crewId":.string(crew),"caseId":.string(caseID),"requestId":.string(request),"expectedRevision":.string(revision),"reason":.string(reason)]));try check(token)
+            try validateCustody(row,crew:crew,caseID:caseID)
+            let record=row["pending"]["requestId"] == .string(request) ? row["pending"]:row["currentRecord"]
+            guard record["requestId"] == .string(request),record["requestReason"] == .string(reason) else {throw custodyError()}
+            if let i=custodyIntents.firstIndex(where:{$0.id==request}) {custodyIntents[i].status = .recorded;custodyIntents[i].record=record}
+            return row
+        } catch {
+            if token==generation,let i=custodyIntents.firstIndex(where:{$0.id==request}) {
+                custodyIntents[i].status = CrewdClientError.isUncertainSubmission(error) ? .unknown:.refused;custodyIntents[i].message=error.localizedDescription
+            }
+            throw error
+        }
     }
     func inspectJudgment(crew: String, kind: String, id: String) async throws -> CrewdValue {
         let token = generation

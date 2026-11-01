@@ -103,6 +103,17 @@ pub enum StartFailure {
 /// 交给驱动层按顺序执行的动作。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CodexAction {
+    /// Failed external auth must not let native retry with stale credentials.
+    AuthStop,
+    AuthWrite(super::profile::SecretLine),
+    AuthRefresh {
+        id: RequestId,
+        previous: super::profile::ExternalChatgptAuth,
+    },
+    AuthExportDone {
+        ticket: u64,
+        result: Result<super::profile::ExternalChatgptAuth, super::profile::AuthFailure>,
+    },
     ControlledWrite {
         line: String,
         permit: crate::driver::ManualWritePermit,
@@ -150,6 +161,7 @@ struct PermissionCheckState {
 
 #[derive(Clone, Debug)]
 enum Tag {
+    AuthExport(u64),
     Native {
         ticket: Option<u64>,
         op: super::control::CodexOperation,
@@ -161,6 +173,7 @@ enum Tag {
     },
     Initialize,
     CaseConfig,
+    CaseAuth,
     Resume(String),
     Start,
     TurnStart {
@@ -197,6 +210,9 @@ pub struct CodexCore {
         std::collections::BTreeMap<u64, (String, Option<crate::driver::ManualWritePermit>)>,
     initial_settings_gate: bool,
     initial_settings_failed: bool,
+    auth_export_inflight: bool,
+    auth_refresh_pending: Option<RequestId>,
+    auth_lost: bool,
     phase: Phase,
     pid: u32,
     cwd: PathBuf,
@@ -249,6 +265,9 @@ impl CodexCore {
             public_input_ids: Default::default(),
             initial_settings_gate: false,
             initial_settings_failed: false,
+            auth_export_inflight: false,
+            auth_refresh_pending: None,
+            auth_lost: false,
             phase: Phase::Initializing,
             pid: opening.pid,
             cwd: opening.cwd,
@@ -418,6 +437,8 @@ impl CodexCore {
         if self.phase != Phase::Ready
             || self.initial_settings_gate
             || self.initial_settings_failed
+            || self.auth_lost
+            || self.auth_refresh_pending.is_some()
             || self.stopped_by_user
             || params.get("threadId").and_then(Value::as_str) != self.thread_id.as_deref()
             || params
@@ -513,6 +534,36 @@ impl CodexCore {
                 }
             }
             Ok(Incoming::Request { id, method, params }) => {
+                if self.options.native_policy == super::profile::NativePolicy::AdminCaseRestricted
+                    && method == "account/chatgptAuthTokens/refresh"
+                {
+                    let prior = self
+                        .options
+                        .case_profile
+                        .as_ref()
+                        .and_then(|p| p.external_auth.clone());
+                    if self.phase == Phase::Ready
+                        && !self.stopped_by_user
+                        && !self.auth_lost
+                        && self.auth_refresh_pending.is_none()
+                        && params["reason"] == "unauthorized"
+                        && prior.as_ref().is_some_and(|p| {
+                            params["previousAccountId"].as_str() == Some(p.account_id())
+                        })
+                    {
+                        self.auth_refresh_pending = Some(id.clone());
+                        self.actions.push(CodexAction::AuthRefresh {
+                            id,
+                            previous: prior.unwrap(),
+                        });
+                    } else {
+                        self.auth_lost = true;
+                        self.set_health(Some(proto::auth_required_health()), now);
+                        self.actions.push(CodexAction::AuthStop);
+                    }
+                    self.after_input(now);
+                    return;
+                }
                 if self.options.native_policy == super::profile::NativePolicy::AdminCaseRestricted
                     && !(method == "mcpServer/elicitation/request"
                         && params["serverName"] == "crew"
@@ -858,6 +909,67 @@ impl CodexCore {
 
     // ---- 内部 ----
 
+    pub fn auth_refreshed(
+        &mut self,
+        id: RequestId,
+        result: Result<super::profile::ExternalChatgptAuth, super::profile::AuthFailure>,
+        now: Instant,
+    ) {
+        if self.auth_refresh_pending.as_ref() != Some(&id) {
+            return;
+        }
+        self.auth_refresh_pending = None;
+        let prior = self
+            .options
+            .case_profile
+            .as_ref()
+            .and_then(|p| p.external_auth.as_ref());
+        let unix =
+            self.unix_at_created + now.saturating_duration_since(self.created).as_secs() as i64;
+        match result {
+            Ok(next)
+                if self.phase == Phase::Ready
+                    && !self.stopped_by_user
+                    && !self.auth_lost
+                    && next.check_valid(unix).is_ok()
+                    && prior.is_some_and(|p| p.same_identity(&next) && p.changed_access(&next)) =>
+            {
+                let line = response_line(&id, &next.refresh_result());
+                self.options.case_profile.as_mut().unwrap().external_auth = Some(next);
+                self.actions
+                    .push(CodexAction::AuthWrite(super::profile::SecretLine(line)));
+            }
+            _ => {
+                self.auth_lost = true;
+                self.set_health(Some(proto::auth_required_health()), now);
+                self.actions.push(CodexAction::AuthStop);
+            }
+        }
+        self.after_input(now);
+    }
+
+    pub fn auth_export(&mut self, ticket: u64, refresh: bool, now: Instant) {
+        if self.phase != Phase::Ready
+            || self.stopped_by_user
+            || self.auth_export_inflight
+            || self.options.native_policy != super::profile::NativePolicy::Ordinary
+        {
+            self.actions.push(CodexAction::AuthExportDone {
+                ticket,
+                result: Err(super::profile::AuthFailure::Unavailable),
+            });
+            return;
+        }
+        self.auth_export_inflight = true;
+        self.request(
+            Tag::AuthExport(ticket),
+            "getAuthStatus",
+            &serde_json::json!({"includeToken":true,"refreshToken":refresh}),
+            now,
+            Duration::from_secs(6),
+        );
+    }
+
     fn request(&mut self, tag: Tag, method: &str, params: &Value, now: Instant, timeout: Duration) {
         let line = self.rpc.request(tag, method, params, now, timeout);
         self.actions.push(CodexAction::Write(line));
@@ -976,6 +1088,20 @@ impl CodexCore {
 
     fn on_result(&mut self, tag: Tag, result: Result<Value, RpcFailure>, now: Instant) {
         match tag {
+            Tag::AuthExport(ticket) => {
+                self.auth_export_inflight = false;
+                let unix = self.unix_at_created
+                    + now.saturating_duration_since(self.created).as_secs() as i64;
+                let result = if self.phase != Phase::Ready || self.stopped_by_user {
+                    Err(super::profile::AuthFailure::Unavailable)
+                } else {
+                    result
+                        .map_err(|_| super::profile::AuthFailure::Unknown)
+                        .and_then(|v| super::profile::ExternalChatgptAuth::from_native(&v, unix))
+                };
+                self.actions
+                    .push(CodexAction::AuthExportDone { ticket, result });
+            }
             Tag::Native { ticket, op } => self.native_result(ticket, op, result, now),
             Tag::PermissionCheck(state) => self.permission_checked(*state, result, now),
             Tag::NativeToolsSkills { ticket, servers } => {
@@ -1001,6 +1127,10 @@ impl CodexCore {
                 }
                 Err(f) => self.handshake_failed("initialize", &f),
             },
+            Tag::CaseAuth => match result {
+                Ok(v) if v["type"] == "chatgptAuthTokens" => self.open_thread(now),
+                _ => self.fail(StartFailure::Launch(proto::auth_required_health())),
+            },
             Tag::CaseConfig => match result {
                 Ok(v)
                     if self
@@ -1010,7 +1140,25 @@ impl CodexCore {
                         .zip(self.options.mcp_servers.as_ref())
                         .is_some_and(|(p, m)| p.validate_config(&v, m)) =>
                 {
-                    self.open_thread(now)
+                    let params = self
+                        .options
+                        .case_profile
+                        .as_ref()
+                        .and_then(|p| p.external_auth.as_ref())
+                        .map(|a| a.login_params());
+                    if let Some(params) = params {
+                        let line = self.rpc.request(
+                            Tag::CaseAuth,
+                            "account/login/start",
+                            &params,
+                            now,
+                            Duration::from_secs(8),
+                        );
+                        self.actions
+                            .push(CodexAction::AuthWrite(super::profile::SecretLine(line)));
+                    } else {
+                        self.fail(StartFailure::Launch(proto::auth_required_health()));
+                    }
                 }
                 Ok(_) => self.fail(StartFailure::Launch(launch_health(
                     LaunchVerdict::SpawnFailed,
@@ -1325,6 +1473,8 @@ impl CodexCore {
         if self.phase != Phase::Ready
             || self.initial_settings_gate
             || self.initial_settings_failed
+            || self.auth_lost
+            || self.auth_refresh_pending.is_some()
             || self.stopped_by_user
             || !self.human.is_empty()
             || self.in_flight
@@ -1837,6 +1987,9 @@ mod tests {
             for a in self.core.take_actions() {
                 match a {
                     CodexAction::Write(l) => self.sent.push(serde_json::from_str(&l).unwrap()),
+                    CodexAction::AuthWrite(l) => {
+                        self.sent.push(serde_json::from_str(&l.0).unwrap())
+                    }
                     CodexAction::Event(e) => self.events.push(e),
                     other => self.other.push(other),
                 }
@@ -1975,10 +2128,100 @@ mod tests {
             "config/read",
             json!({"config":c,"layers":[{"name":{"type":"sessionFlags"},"config":{}}]}),
         );
+        t.reply("account/login/start", json!({"type":"chatgptAuthTokens"}));
         t
     }
     fn restricted_receipt() -> Value {
         json!({"thread":{"id":"thr-1"},"modelProvider":"openai","cwd":"/project","approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":false},"activePermissionProfile":{"id":crate::codex::profile::PROFILE_ID}})
+    }
+    #[test]
+    fn restricted_external_auth_unknown_or_refused_never_sends_body() {
+        for response in [json!({"type":"apiKey"}), json!({}), Value::Null] {
+            let mut t = T::new(None, Some("never send"));
+            let (p, c, mcp) = crate::codex::profile::tests::fixture();
+            t.core.cwd = p.cwd.clone();
+            t.core.options.native_policy = crate::codex::profile::NativePolicy::AdminCaseRestricted;
+            t.core.options.case_profile = Some(p);
+            t.core.options.mcp_servers = Some(mcp);
+            t.reply("initialize", json!({}));
+            t.reply(
+                "config/read",
+                json!({"config":c,"layers":[{"name":{"type":"sessionFlags"},"config":{}}]}),
+            );
+            assert!(!t.methods().contains(&"thread/start".to_owned()));
+            t.reply("account/login/start", response);
+            assert!(!t.methods().contains(&"thread/start".to_owned()));
+            assert!(!t.methods().contains(&"turn/start".to_owned()));
+            assert!(t.other.iter().any(|a| matches!(a, CodexAction::Failed(_))));
+        }
+    }
+    #[test]
+    fn external_refresh_changes_only_original_request_reply_not_business_queue() {
+        let mut t = restricted_opening(None);
+        t.reply("thread/start", restricted_receipt());
+        t.core.on_recorded(Ok(()), t.t0);
+        t.pump();
+        let turns = t.methods().iter().filter(|m| *m == "turn/start").count();
+        t.core.on_line(&json!({"id":900,"method":"account/chatgptAuthTokens/refresh","params":{"reason":"unauthorized","previousAccountId":"a"}}).to_string(),t.t0);
+        t.pump();
+        assert!(t.other.iter().any(|a| matches!(
+            a,
+            CodexAction::AuthRefresh {
+                id: RequestId::Int(900),
+                ..
+            }
+        )));
+        let next = crate::codex::profile::ExternalChatgptAuth::from_native(
+            &crate::codex::profile::tests::auth_fixture("u", "a", 4102444800, "rotated"),
+            1,
+        )
+        .unwrap();
+        t.core.auth_refreshed(RequestId::Int(900), Ok(next), t.t0);
+        t.pump();
+        assert!(
+            t.sent
+                .iter()
+                .any(|v| v["id"] == 900 && v["result"]["chatgptAccountId"] == "a")
+        );
+        assert_eq!(
+            t.methods().iter().filter(|m| *m == "turn/start").count(),
+            turns
+        );
+        assert_eq!(
+            t.methods().iter().filter(|m| *m == "thread/start").count(),
+            1
+        );
+    }
+    #[test]
+    fn external_refresh_failure_or_changed_identity_blocks_following_turns() {
+        for next in [
+            Err(crate::codex::profile::AuthFailure::Unknown),
+            crate::codex::profile::ExternalChatgptAuth::from_native(
+                &crate::codex::profile::tests::auth_fixture("other", "a", 4102444800, "rotated"),
+                1,
+            ),
+            crate::codex::profile::ExternalChatgptAuth::from_native(
+                &crate::codex::profile::tests::auth_fixture("u", "a", 4102444800, "a"),
+                1,
+            ),
+        ] {
+            let mut t = restricted_opening(None);
+            t.reply("thread/start", restricted_receipt());
+            t.core.on_recorded(Ok(()), t.t0);
+            t.pump();
+            t.core.on_line(&json!({"id":901,"method":"account/chatgptAuthTokens/refresh","params":{"reason":"unauthorized","previousAccountId":"a"}}).to_string(),t.t0);
+            t.pump();
+            t.core.auth_refreshed(RequestId::Int(901), next, t.t0);
+            t.pump();
+            assert!(t.core.auth_lost);
+            assert_eq!(t.core.health().unwrap().kind, HealthKind::AuthRequired);
+            assert!(t.other.iter().any(|a| matches!(a, CodexAction::AuthStop)));
+            assert!(
+                !t.sent
+                    .iter()
+                    .any(|v| v["id"] == 901 && v.get("result").is_some())
+            );
+        }
     }
     #[test]
     fn restricted_resume_refusal_never_falls_back_when_ordinary_strict_flag_is_false() {

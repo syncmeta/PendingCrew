@@ -1,5 +1,300 @@
 {
   "$defs": {
+    "AdminCaseCustodyDischarge": {
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTargetOutcome"
+          },
+          "type": "array"
+        },
+        "verifiedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "verifiedAt",
+        "targets"
+      ],
+      "type": "object"
+    },
+    "AdminCaseCustodyGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "caseId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "caseId"
+      ],
+      "type": "object"
+    },
+    "AdminCaseCustodyPhase": {
+      "enum": [
+        "active",
+        "stale",
+        "discharged"
+      ],
+      "type": "string"
+    },
+    "AdminCaseCustodyPropose": {
+      "additionalProperties": false,
+      "properties": {
+        "caseId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "caseId",
+        "requestId",
+        "expectedRevision",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "AdminCaseCustodyReason": {
+      "enum": [
+        "original_custody",
+        "proposed",
+        "notification_delivered",
+        "captain_accepted",
+        "state_changed",
+        "notification_dropped",
+        "superseded",
+        "targets_unresolved",
+        "out_of_scope",
+        "target_missing",
+        "evidence_incomplete",
+        "verified"
+      ],
+      "type": "string"
+    },
+    "AdminCaseCustodyTransfer": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptanceNote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "acceptedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "caseId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "deliveredAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fromSessionId": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/AdminCaseCustodyTransferPhase"
+        },
+        "predecessorReceiptId": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseCustodyReason"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "requestReason": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "supersededBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTarget"
+          },
+          "type": "array"
+        },
+        "toSessionId": {
+          "type": "string"
+        },
+        "wakeId": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestId",
+        "caseId",
+        "crewId",
+        "predecessorReceiptId",
+        "fromSessionId",
+        "toSessionId",
+        "phase",
+        "revision",
+        "reason",
+        "requestReason",
+        "targets",
+        "wakeId",
+        "createdAt"
+      ],
+      "type": "object"
+    },
+    "AdminCaseCustodyTransferGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "AdminCaseCustodyTransferPhase": {
+      "enum": [
+        "waiting",
+        "delivered",
+        "accepted",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "AdminCaseCustodyView": {
+      "additionalProperties": false,
+      "properties": {
+        "caseId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "currentCustodianSessionId": {
+          "type": "string"
+        },
+        "currentReceiptId": {
+          "type": "string"
+        },
+        "currentRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseCustodyTransfer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "discharge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseCustodyDischarge"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "originalRequestId": {
+          "type": "string"
+        },
+        "outOfScope": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseCustodyTransfer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/AdminCaseCustodyPhase"
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseCustodyReason"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "targetResults": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTargetOutcome"
+          },
+          "type": "array"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTarget"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "caseId",
+        "crewId",
+        "revision",
+        "originalRequestId",
+        "currentCustodianSessionId",
+        "currentReceiptId",
+        "phase",
+        "reason",
+        "targets",
+        "targetResults",
+        "outOfScope"
+      ],
+      "type": "object"
+    },
     "AdminCaseDecision": {
       "enum": [
         "observed",
@@ -589,6 +884,17 @@
         },
         "crewId": {
           "type": "string"
+        },
+        "custodyRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseCustodyView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "decision": {
           "$ref": "#/$defs/AdminCaseDecision"
@@ -16631,6 +16937,30 @@
     }
   },
   "methods": {
+    "adminCase.custodyGet": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseCustodyGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseCustodyView"
+      }
+    },
+    "adminCase.custodyPropose": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseCustodyPropose"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseCustodyView"
+      }
+    },
+    "adminCase.custodyTransferGet": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseCustodyTransferGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseCustodyTransfer"
+      }
+    },
     "adminCase.get": {
       "params": {
         "$ref": "#/$defs/AdminCaseGetParams"

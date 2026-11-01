@@ -436,19 +436,6 @@ async fn codex_waiting_profile() -> (Rig, Source, String, FakeJev) {
         .await
         .unwrap()
         .unwrap();
-    let source = sources(&f, 1).await.remove(0);
-    f.runtime
-        .run_admin_case(f.crew.clone(), source.id.clone(), true)
-        .await
-        .unwrap();
-    let crew = f.crew.clone();
-    let case = source.id.clone();
-    let permit = f
-        .state
-        .collab(move |tx| execution::launch_permit(tx, &crew, &case))
-        .await
-        .unwrap()
-        .unwrap();
     let exec = StandIn::default();
     let rx = f.state.hub.subscribe_collab();
     let mut cfg = orchestra::OrchestraConfig::for_tests();
@@ -477,6 +464,34 @@ async fn codex_waiting_profile() -> (Rig, Source, String, FakeJev) {
         bridge,
         exec,
     };
+    // This fixture isolates the first-Profile gate, not native authentication.
+    // Capture an explicit live source before observing the case; do not grant
+    // capability to arbitrary StandIn sessions or weaken the production gate.
+    r.exec.lock().native_auth_owners.insert(r.f.worker.clone());
+    r.handle
+        .resume(&r.f.worker, orchestra::core::Origin::Human)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !r.handle.live(&r.f.worker).await.unwrap().running {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let source = sources(&r.f, 1).await.remove(0);
+    r.f.runtime
+        .run_admin_case(r.f.crew.clone(), source.id.clone(), true)
+        .await
+        .unwrap();
+    let crew = r.f.crew.clone();
+    let case = source.id.clone();
+    let permit =
+        r.f.state
+            .collab(move |tx| execution::launch_permit(tx, &crew, &case))
+            .await
+            .unwrap()
+            .unwrap();
     let sid = r.handle.start_admin_case(permit).await.unwrap().id;
     wait_started(&r, &source.id, &sid).await;
     (r, source, sid, fake)

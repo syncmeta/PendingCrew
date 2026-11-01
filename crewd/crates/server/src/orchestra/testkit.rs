@@ -77,6 +77,7 @@ pub struct Rescue {
 
 #[derive(Clone, Default)]
 pub struct MemState {
+    pub native_auth_sources: BTreeMap<String, String>,
     pub faults: BTreeSet<MemFault>,
     pub fault_hits: Vec<FaultHit>,
     pub rescues: Vec<Rescue>,
@@ -546,6 +547,10 @@ impl MemPort {
 }
 
 impl Port for MemPort {
+    fn admin_case_auth_source(&self, session: &str) -> BoxFut<'_, Result<Option<String>>> {
+        let value = self.lock().native_auth_sources.get(session).cloned();
+        Box::pin(async move { Ok(value) })
+    }
     async fn advance_patrol(&self) -> Result<()> {
         self.patrol_ticks
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -2001,6 +2006,8 @@ pub type HeldLaunch = (
 
 #[derive(Default)]
 pub struct StandInState {
+    /// Opt-in fixture identity; never grants an actual native credential.
+    pub native_auth_owners: BTreeSet<String>,
     pub reject_admin_case_policy: bool,
     pub accepts_initial_context: bool,
     pub launches: Vec<LaunchRecord>,
@@ -2426,6 +2433,9 @@ impl StandInHandle {
 }
 
 impl ExecHandle for StandInHandle {
+    fn supports_native_auth_export(&self) -> bool {
+        self.lock().native_auth_owners.contains(&self.session)
+    }
     fn accepts_context(&self) -> bool {
         self.lock().context_sessions.contains(&self.session)
     }
@@ -2573,7 +2583,22 @@ impl ExecHandle for StandInHandle {
     }
 
     fn status(&self) -> BoxFut<'_, Result<SessionStatus, Closed>> {
-        Box::pin(async { Err(Closed) })
+        Box::pin(async {
+            let state = self.lock();
+            if !state.native_auth_owners.contains(&self.session)
+                || !state.running.contains(&self.session)
+            {
+                return Err(Closed);
+            }
+            Ok(SessionStatus {
+                state: crewd_exec::session::DerivedState::Idle,
+                working: false,
+                health: None,
+                pending_decision: None,
+                pid: 4242,
+                agent_session_id: format!("agent-{}", self.session),
+            })
+        })
     }
 }
 
@@ -3526,6 +3551,7 @@ mod self_tests {
 
     fn launch_req(session: &str, initial: Option<&str>) -> LaunchRequest {
         LaunchRequest {
+            native_auth_source: None,
             native_policy: crate::orchestra::exec::NativeExecutionPolicy::Ordinary,
             managed_resume_id: None,
             initial_inputs: None,
@@ -3627,6 +3653,7 @@ mod self_tests {
         let exec = StandIn::default();
         let (h, _rx) = exec
             .launch(LaunchRequest {
+                native_auth_source: None,
                 native_policy: crate::orchestra::exec::NativeExecutionPolicy::Ordinary,
                 managed_resume_id: None,
                 initial_inputs: None,

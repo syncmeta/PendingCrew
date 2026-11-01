@@ -403,6 +403,7 @@ mod tests {
 
     fn request(session: &str, workdir: &Path) -> LaunchRequest {
         LaunchRequest {
+            native_auth_source: None,
             native_policy: NativeExecutionPolicy::Ordinary,
             managed_resume_id: None,
             initial_inputs: None,

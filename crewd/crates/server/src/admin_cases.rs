@@ -1,5 +1,5 @@
-//! Passive Human inspection of durable administrative source records.
-//! This surface does not admit sessions or infer execution from observation.
+//! Human inspection and explicit proposals for durable administrative custody.
+//! Reads are passive; a proposal does not accept responsibility or admit sessions.
 use crate::{AppState, dispatch, public_commands::Actor};
 use crewd_proto::{Request, Response, RpcError, admin_cases::*};
 use std::sync::Arc;
@@ -21,6 +21,75 @@ async fn route(
     let owner = state.clone();
     let by = actor.clone();
     match req.method.as_str() {
+        crewd_proto::methods::ADMIN_CASE_CUSTODY_TRANSFER_GET => {
+            let p: AdminCaseCustodyTransferGetParams = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(
+                        &owner,
+                        store.conn(),
+                        crewd_proto::methods::ADMIN_CASE_CUSTODY_TRANSFER_GET,
+                    )?;
+                    crewd_collab::admin_case_custody::get_transfer(
+                        store.conn(),
+                        &crewd_collab::Sender::Human,
+                        &p.request_id,
+                        crewd_store::now_ms(),
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
+        crewd_proto::methods::ADMIN_CASE_CUSTODY_GET => {
+            let p: AdminCaseCustodyGetParams = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(
+                        &owner,
+                        store.conn(),
+                        crewd_proto::methods::ADMIN_CASE_CUSTODY_GET,
+                    )?;
+                    crewd_collab::admin_case_custody::get(
+                        store.conn(),
+                        &crewd_collab::Sender::Human,
+                        &p.crew_id,
+                        &p.case_id,
+                        crewd_store::now_ms(),
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
+        crewd_proto::methods::ADMIN_CASE_CUSTODY_PROPOSE => {
+            let p: AdminCaseCustodyPropose = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .collab(move |tx| {
+                    by.authorize_tx(
+                        &owner,
+                        tx.conn(),
+                        crewd_proto::methods::ADMIN_CASE_CUSTODY_PROPOSE,
+                    )?;
+                    let captain = crewd_collab::crews::captain_of(tx.conn(), &p.crew_id)?
+                        .ok_or_else(|| {
+                            crewd_collab::resource_invalid("custody captain unavailable")
+                        })?;
+                    if !owner.admission.contains(&captain) {
+                        return Err(crewd_collab::resource_invalid(
+                            "custody captain admission required",
+                        ));
+                    }
+                    crewd_collab::admin_case_custody::propose(tx, &crewd_collab::Sender::Human, p)
+                })
+                .await
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
         LIST => {
             let p: AdminCaseListParams = crewd_proto::parse_params(req.params)?;
             let view = state

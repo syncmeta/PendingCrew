@@ -401,6 +401,21 @@ impl Port for DbPort {
         .await
     }
 
+    fn admin_case_auth_source(&self, session: &str) -> super::exec::BoxFut<'_, Result<Option<String>>> {
+        let session = session.to_owned();
+        Box::pin(async move {
+            let state = self.state.clone();
+            self.read(move |c| {
+                let Some(witness) = collab::admin_case_execution::session_binding(c, &session)? else { return Ok(None) };
+                if !state.admission.contains(&session) || !state.admission.contains(witness.source_session_id())
+                    || matches!(collab::admin_case_execution::native_lease(c, &witness, crewd_store::now_ms())?, collab::admin_case_execution::NativeLeaseState::Revoked(_, _)) {
+                    return Err(collab::resource_invalid("administrative authentication source unavailable"));
+                }
+                Ok(Some(witness.source_session_id().to_owned()))
+            }).await
+        })
+    }
+
     async fn fence_admin_runtime(
         &self,
         session: &str,

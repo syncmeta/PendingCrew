@@ -1655,6 +1655,18 @@ impl<P: Port> Core<P> {
         if sponsor.crew_id != permit.crew_id() {
             return Err(ControlError::ShuttingDown);
         }
+        if sponsor.executor == "codex"
+            && self.live.get(permit.source_session()).is_none_or(|live| {
+                live.executor != "codex"
+                    || live.stopping
+                    || live.halting
+                    || !live.handle.supports_native_auth_export()
+            })
+        {
+            return Err(ControlError::Unsupported(
+                "original native authentication owner unavailable; case waits for owner".into(),
+            ));
+        }
         let req = StartSession {
             crew_id: sponsor.crew_id.clone(),
             role: crewd_proto::Role::Admin,
@@ -2493,6 +2505,46 @@ impl<P: Port> Core<P> {
             exec.supports_native_policy(native_policy),
             "executor does not support the session's native execution policy"
         );
+        let native_auth_source: Option<Arc<dyn crewd_exec::codex::profile::NativeAuthSource>> =
+            if administrative_case && row.executor == "codex" {
+                let source_id = self
+                    .port
+                    .admin_case_auth_source(&row.id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("case authentication source unavailable"))?;
+                let source = self
+                    .live
+                    .get(&source_id)
+                    .filter(|s| {
+                        s.executor == "codex"
+                            && !s.stopping
+                            && !s.halting
+                            && s.handle.supports_native_auth_export()
+                    })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("original authentication owner is not running")
+                    })?;
+                let status =
+                    source.handle.status().await.map_err(|_| {
+                        anyhow::anyhow!("original authentication owner unavailable")
+                    })?;
+                let admission = self
+                    .cfg
+                    .admission
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("authentication admission unavailable"))?;
+                Some(Arc::new(super::native_auth::Source {
+                    port: self.port.clone(),
+                    admission,
+                    admin: row.id.clone(),
+                    source: source_id,
+                    handle: source.handle.clone(),
+                    native_id: status.agent_session_id,
+                    pid: status.pid,
+                }))
+            } else {
+                None
+            };
         let now = self.now();
         let workdir = row
             .workdir
@@ -2576,6 +2628,7 @@ impl<P: Port> Core<P> {
             );
         }
         let req = LaunchRequest {
+            native_auth_source,
             native_policy,
             managed_resume_id,
             initial_inputs,
@@ -5310,6 +5363,7 @@ mod tests {
         rig.crew("c1", "cap");
         let exec = rig.core.execs.get("claude").unwrap();
         let req = LaunchRequest {
+            native_auth_source: None,
             native_policy: crate::orchestra::exec::NativeExecutionPolicy::Ordinary,
             managed_resume_id: None,
             initial_inputs: None,

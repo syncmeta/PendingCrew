@@ -133,6 +133,9 @@ pub mod methods {
     pub const FOLDER_DELETE: &str = "viewFolder.delete";
     pub const FOLDER_ASSIGN: &str = "viewFolder.assign";
     pub const WORK_CREATE: &str = "work.create";
+    pub const ADMIN_CASE_CUSTODY_GET: &str = "adminCase.custodyGet";
+    pub const ADMIN_CASE_CUSTODY_PROPOSE: &str = "adminCase.custodyPropose";
+    pub const ADMIN_CASE_CUSTODY_TRANSFER_GET: &str = "adminCase.custodyTransferGet";
     pub const WORK_CLOSE: &str = "work.close";
     pub const WORK_CLOSURE_HISTORY: &str = "work.closureHistory";
     pub const WORK_UPDATE: &str = "work.update";
@@ -171,6 +174,9 @@ pub mod methods {
         crate::judgments::INSPECT,
         crate::admin_cases::LIST,
         crate::admin_cases::GET,
+        ADMIN_CASE_CUSTODY_GET,
+        ADMIN_CASE_CUSTODY_PROPOSE,
+        ADMIN_CASE_CUSTODY_TRANSFER_GET,
         crate::channel_archive::CHECK,
         crate::channel_archive::ARCHIVE,
         crate::channel_archive::RESTORE,
@@ -800,6 +806,27 @@ pub fn api_schema() -> Value {
         (
             admin_cases::GET,
             m(sub::<AdminCaseGetParams>(g), sub::<AdminCaseView>(g)),
+        ),
+        (
+            methods::ADMIN_CASE_CUSTODY_GET,
+            m(
+                sub::<AdminCaseCustodyGetParams>(g),
+                sub::<AdminCaseCustodyView>(g),
+            ),
+        ),
+        (
+            methods::ADMIN_CASE_CUSTODY_PROPOSE,
+            m(
+                sub::<AdminCaseCustodyPropose>(g),
+                sub::<AdminCaseCustodyView>(g),
+            ),
+        ),
+        (
+            methods::ADMIN_CASE_CUSTODY_TRANSFER_GET,
+            m(
+                sub::<AdminCaseCustodyTransferGetParams>(g),
+                sub::<AdminCaseCustodyTransfer>(g),
+            ),
         ),
         (
             channel_archive::CHECK,

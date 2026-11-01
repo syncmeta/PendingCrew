@@ -27,6 +27,7 @@ fn executor(program: ClaudeProgram, data_dir: &Path) -> ClaudeExecutor {
 
 fn request(session: &str, workdir: &Path) -> LaunchRequest {
     LaunchRequest {
+        native_auth_source: None,
         native_policy: crewd_server::orchestra::exec::NativeExecutionPolicy::Ordinary,
         managed_resume_id: None,
         initial_inputs: None,

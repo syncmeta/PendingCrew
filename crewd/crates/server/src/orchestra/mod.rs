@@ -15,6 +15,7 @@ pub mod exec_codex;
 pub mod hibernate;
 pub mod hooks;
 mod notify;
+mod native_auth;
 pub mod port;
 #[cfg(test)]
 mod port_contract;

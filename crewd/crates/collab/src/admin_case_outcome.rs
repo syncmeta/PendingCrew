@@ -423,6 +423,16 @@ pub fn status_at(
 pub fn status(c: &Connection, crew: &str, id: &str) -> Result<Option<AdminCaseOutcomeView>> {
     status_at(c, crew, id, crewd_store::now_ms())
 }
+/// Current typed business evidence only. A fresh custody authority must independently
+/// authorize discharge; this never rewrites the original outcome or execution permit.
+pub(crate) fn custody_facts(
+    c: &Connection,
+    crew: &str,
+    id: &str,
+    now: i64,
+) -> Result<AdminCaseOutcomeView> {
+    Ok(collect(c, crew, id, now)?.view)
+}
 
 #[cfg(test)]
 mod tests {

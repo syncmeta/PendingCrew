@@ -83,6 +83,7 @@ pub struct CodexStart {
 /// 驱动层参数。
 #[derive(Clone)]
 pub struct CodexConfig {
+    pub native_auth_source: Option<Arc<dyn super::profile::NativeAuthSource>>,
     pub core: CodexCoreConfig,
     /// 定时节拍。
     pub tick: Duration,
@@ -119,6 +120,7 @@ impl std::fmt::Debug for CodexConfig {
 impl Default for CodexConfig {
     fn default() -> Self {
         Self {
+            native_auth_source: None,
             core: CodexCoreConfig::default(),
             tick: Duration::from_millis(600),
             stop_grace: Duration::from_secs(2),
@@ -235,10 +237,10 @@ pub async fn start_codex(
             },
         )
         .await;
-        if !matches!(auth,super::control::CodexOutcome::Observed(ref v) if v["providerResult"]["authStore"]=="file")
+        if !matches!(auth,super::control::CodexOutcome::Observed(ref v) if matches!(v["providerResult"]["authStore"].as_str(),Some("ephemeral")))
         {
             return Err(StartError::Files(io::Error::other(
-                "restricted case requires verified original file authentication; no task sent",
+                "restricted case requires credential-free original routing discovery; no task sent",
             )));
         }
         let super::control::CodexOutcome::Observed(source) = auth else {
@@ -272,11 +274,30 @@ pub async fn start_codex(
                 .as_str()
                 .map(str::to_owned);
         }
+        let auth_source = config.native_auth_source.as_ref().ok_or_else(|| {
+            StartError::Files(io::Error::other(
+                "original native authentication owner unavailable; no task sent",
+            ))
+        })?;
+        let external_auth =
+            tokio::time::timeout(Duration::from_secs(8), auth_source.access(false, None))
+                .await
+                .map_err(|_| {
+                    StartError::Files(io::Error::other(
+                        "original authentication owner timed out; no task sent",
+                    ))
+                })?
+                .map_err(|_| {
+                    StartError::Files(io::Error::other(
+                        "original authentication unavailable; no task sent",
+                    ))
+                })?;
         let runtime = config.runtime_dir.clone();
         let sid = start.session_id.clone();
         let cwd = start.spec.workdir.clone();
         let (profile, isolated) = blocking(move || {
-            let mut profile = super::profile::prepare(&runtime, &sid, &cwd, &mut env)?;
+            let mut profile =
+                super::profile::prepare(&runtime, &sid, &cwd, &mut env, &external_auth)?;
             profile.model_provider = provider;
             profile.provider_fingerprint = provider_fingerprint;
             Ok((profile, env))
@@ -377,6 +398,7 @@ pub async fn start_codex(
         ready: Some(ready_tx),
         controls: HashMap::new(),
         native_controls: HashMap::new(),
+        auth_exports: HashMap::new(),
         answers: HashMap::new(),
         next_ticket: 0,
         live,
@@ -424,6 +446,10 @@ struct Task {
     ready: Option<oneshot::Sender<Result<(), StartError>>>,
     controls: HashMap<u64, oneshot::Sender<ControlOutcome>>,
     native_controls: HashMap<u64, oneshot::Sender<super::control::CodexOutcome>>,
+    auth_exports: HashMap<
+        u64,
+        oneshot::Sender<Result<super::profile::ExternalChatgptAuth, super::profile::AuthFailure>>,
+    >,
     answers: HashMap<u64, oneshot::Sender<AnswerOutcome>>,
     next_ticket: u64,
     /// 占着的 thread id（本进程里同一个 thread 只能跑一个）。
@@ -433,9 +459,14 @@ struct Task {
 }
 
 type RecordMsg = Result<(), String>;
+type AuthMsg = (
+    super::rpc::RequestId,
+    Result<super::profile::ExternalChatgptAuth, super::profile::AuthFailure>,
+);
 
 async fn run(mut t: Task) {
     let (record_tx, mut record_rx) = mpsc::unbounded_channel::<RecordMsg>();
+    let (auth_tx, mut auth_rx) = mpsc::unbounded_channel::<AuthMsg>();
     let mut reading = true;
     let mut commands_open = true;
     let mut stop_deadline: Option<tokio::time::Instant> = None;
@@ -445,7 +476,7 @@ async fn run(mut t: Task) {
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let actions = t.core.take_actions();
-        if let Some(err) = execute(&mut t, actions, &record_tx) {
+        if let Some(err) = execute(&mut t, actions, &record_tx, &auth_tx) {
             // 启动失败：杀掉、收尸（有上限）、收拾——**之后**才把错误交给 `start_codex`：
             // 它返回时 thread id 已放开、登记表已清，同一个账本 / session id 立刻能重起。
             kill_group(t.proc.pid);
@@ -475,7 +506,7 @@ async fn run(mut t: Task) {
                 t.core.on_exit(status, &tail, Instant::now());
                 let actions = t.core.take_actions();
                 release(&mut t).await;
-                let failed = execute(&mut t, actions, &record_tx);
+                let failed = execute(&mut t, actions, &record_tx, &auth_tx);
                 if let Some(ready) = t.ready.take() {
                     let _ = ready.send(Err(failed.unwrap_or_else(|| StartError::Handshake {
                         health: launch_health(LaunchVerdict::DiedSilently, "会话任务提前结束"),
@@ -503,6 +534,7 @@ async fn run(mut t: Task) {
                 kill_group(t.proc.pid);
             }
             Some(result) = record_rx.recv() => t.core.on_recorded(result, Instant::now()),
+            Some((id,result)) = auth_rx.recv() => t.core.auth_refreshed(id,result,Instant::now()),
         }
     }
 }
@@ -572,6 +604,7 @@ fn execute(
     t: &mut Task,
     actions: Vec<CodexAction>,
     record_tx: &mpsc::UnboundedSender<RecordMsg>,
+    auth_tx: &mpsc::UnboundedSender<AuthMsg>,
 ) -> Option<StartError> {
     for action in actions {
         match action {
@@ -583,6 +616,31 @@ fn execute(
                         line,
                         permit: Box::new(permit),
                     });
+            }
+            CodexAction::AuthStop => {
+                if let Ok(mut live) = t.proc.write_fence.lock() {
+                    *live = false;
+                }
+                kill_group(t.proc.pid);
+            }
+            CodexAction::AuthRefresh { id, previous } => {
+                let broker = t.config.native_auth_source.clone();
+                let tx = auth_tx.clone();
+                tokio::spawn(async move {
+                    let result = match broker {
+                        Some(broker) => tokio::time::timeout(
+                            Duration::from_secs(8),
+                            broker.access(true, Some(previous)),
+                        )
+                        .await
+                        .unwrap_or(Err(super::profile::AuthFailure::Unknown)),
+                        None => Err(super::profile::AuthFailure::Unavailable),
+                    };
+                    let _ = tx.send((id, result));
+                });
+            }
+            CodexAction::AuthWrite(line) => {
+                let _ = t.proc.writer.send(line.0.into());
             }
             CodexAction::Write(line) => {
                 let _ = t.proc.writer.send(line.into());
@@ -620,6 +678,11 @@ fn execute(
                     } else {
                         let _ = reply.send(outcome);
                     }
+                }
+            }
+            CodexAction::AuthExportDone { ticket, result } => {
+                if let Some(reply) = t.auth_exports.remove(&ticket) {
+                    let _ = reply.send(result);
                 }
             }
             CodexAction::CodexDone { ticket, outcome } => {
@@ -732,6 +795,12 @@ fn handle(t: &mut Task, cmd: Command) -> bool {
                 pid: t.proc.pid,
                 agent_session_id: t.core.thread_id().unwrap_or_default().to_string(),
             });
+        }
+        Command::NativeAuthExport { refresh, reply } => {
+            let ticket = t.next_ticket;
+            t.next_ticket += 1;
+            t.auth_exports.insert(ticket, reply);
+            t.core.auth_export(ticket, refresh, now);
         }
         Command::Codex { op, permit, reply } => {
             let ticket = t.next_ticket;

@@ -257,11 +257,13 @@ impl Executor for CodexExecutor {
             };
             self.check_launch()?;
             let config = CodexConfig {
+                native_auth_source: req.native_auth_source,
                 registry: self.config.registry.clone(),
                 runtime_dir: self.config.runtime_dir.clone(),
                 delivery_observer: req.delivery_observer,
                 ..Default::default()
             };
+            let can_export_auth = req.native_policy == super::exec::NativeExecutionPolicy::Ordinary;
             let workdir = req.workdir.clone();
             let start = CodexStart {
                 session_id: req.session_id.clone(),
@@ -307,6 +309,7 @@ impl Executor for CodexExecutor {
                     handle,
                     self.config.runtime_dir.clone(),
                     workdir,
+                    can_export_auth,
                 )) as Arc<dyn ExecHandle>,
                 events,
             ))
@@ -315,8 +318,24 @@ impl Executor for CodexExecutor {
 }
 
 /// Codex 接收结构化 additionalContext；不改变 Claude 的句柄能力。
-struct CodexHandle(SessionHandle, PathBuf, PathBuf);
+struct CodexHandle(SessionHandle, PathBuf, PathBuf, bool);
 impl ExecHandle for CodexHandle {
+    fn supports_native_auth_export(&self) -> bool {
+        self.3
+    }
+    fn native_auth_access(
+        &self,
+        refresh: bool,
+        previous: Option<crewd_exec::codex::profile::ExternalChatgptAuth>,
+    ) -> BoxFut<
+        '_,
+        Result<
+            crewd_exec::codex::profile::ExternalChatgptAuth,
+            crewd_exec::codex::profile::AuthFailure,
+        >,
+    > {
+        Box::pin(self.0.native_auth_access(refresh, previous))
+    }
     fn control_controlled(
         &self,
         op: crewd_exec::driver::Control,

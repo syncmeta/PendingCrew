@@ -3,7 +3,8 @@
 use super::Identity;
 use crate::{AppState, connection_scope::ConnectionScope};
 use crewd_collab::{
-    CollabError, Result, Tx, admin_case_execution as cases, admin_case_handoff as handoff,
+    CollabError, Result, Tx, admin_case_custody as custody, admin_case_execution as cases,
+    admin_case_handoff as handoff,
 };
 use rusqlite::Connection;
 use serde_json::Value;
@@ -26,12 +27,14 @@ enum Scope {
         id: String,
     },
     Handoff(handoff::Operation),
+    Custody(custody::Operation),
 }
 
 pub(crate) enum MutationPermit {
     Work(cases::EffectPermit),
     HandoffRequest(handoff::RequestPermit),
     HandoffAccept(handoff::AcceptPermit),
+    CustodyAccept(custody::AcceptPermit),
 }
 impl MutationPermit {
     pub(crate) fn finish(self, tx: &mut Tx<'_>) -> Result<()> {
@@ -39,6 +42,7 @@ impl MutationPermit {
             Self::Work(p) => cases::finish_effect(tx, p),
             Self::HandoffRequest(p) => handoff::finish_request(tx, p),
             Self::HandoffAccept(p) => handoff::finish_accept(tx, p),
+            Self::CustodyAccept(p) => custody::finish_accept(tx, p),
         }
     }
 }
@@ -50,6 +54,32 @@ fn handoff_tool(tool: &str) -> bool {
             | "admin_case_handoff_accept"
             | "admin_case_handoff_list"
     )
+}
+fn custody_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "admin_case_custody_get" | "admin_case_custody_list" | "admin_case_custody_accept"
+    )
+}
+fn custody_operation(tool: &str, args: &Value) -> Result<custody::Operation> {
+    match tool {
+        "admin_case_custody_get" => Ok(custody::Operation::Get {
+            crew_id: argument(args, "crew_id")?,
+            case_id: argument(args, "case_id")?,
+        }),
+        "admin_case_custody_accept" => Ok(custody::Operation::Accept {
+            request_id: argument(args, "request_id")?,
+            expected_revision: argument(args, "expected_revision")?,
+            note: argument(args, "note")?,
+        }),
+        "admin_case_custody_list" => match handoff_operation("admin_case_handoff_list", args)? {
+            handoff::Operation::List { after, limit } => {
+                Ok(custody::Operation::List { after, limit })
+            }
+            _ => Err(denied()),
+        },
+        _ => Err(denied()),
+    }
 }
 fn argument(args: &Value, key: &str) -> Result<String> {
     args.get(key)
@@ -159,6 +189,20 @@ impl Authority {
     pub(crate) fn validate_read(&self, c: &Connection) -> Result<()> {
         self.validate_actor(c)?;
         match &self.scope {
+            Scope::Custody(operation) => {
+                let p = custody::validate_operation(
+                    c,
+                    &crewd_collab::Sender::Session(self.identity.session_id.clone()),
+                    operation,
+                    crewd_store::now_ms(),
+                )?;
+                if matches!(operation, custody::Operation::Accept { .. })
+                    && !self.state.admission.contains(p.captain_session_id())
+                {
+                    return Err(denied());
+                }
+                Ok(())
+            }
             Scope::Work { witness, id } => cases::validate_read(
                 c,
                 witness,
@@ -190,6 +234,26 @@ impl Authority {
     pub(crate) fn effect(&self, tx: &mut Tx<'_>) -> Result<MutationPermit> {
         self.validate_actor(tx.conn())?;
         match &self.scope {
+            Scope::Custody(operation) => match operation {
+                custody::Operation::Accept {
+                    request_id,
+                    expected_revision,
+                    note,
+                } => {
+                    let p = custody::begin_accept(
+                        tx,
+                        &crewd_collab::Sender::Session(self.identity.session_id.clone()),
+                        request_id,
+                        expected_revision,
+                        note,
+                    )?;
+                    if !self.state.admission.contains(p.captain_session_id()) {
+                        return Err(denied());
+                    }
+                    Ok(MutationPermit::CustodyAccept(p))
+                }
+                _ => Err(denied()),
+            },
             Scope::Handoff(operation) => {
                 let by = crewd_collab::Sender::Session(self.identity.session_id.clone());
                 match operation {
@@ -278,7 +342,12 @@ pub(crate) async fn prepare(
             Ok(binding)
         })
         .await??;
-    let scope = if handoff_tool(tool) {
+    let scope = if custody_tool(tool) {
+        if witness.is_some() {
+            return Err(denied());
+        }
+        Scope::Custody(custody_operation(tool, args)?)
+    } else if handoff_tool(tool) {
         // Even an ordinary Captain needs an authenticated RPC envelope for handoff.
         Scope::Handoff(handoff_operation(tool, args)?)
     } else if let Some(witness) = witness {
@@ -325,7 +394,7 @@ pub(crate) async fn check_call(
         st.db
             .call_result(move |s| a.validate_read(s.conn()))
             .await??;
-    } else if handoff_tool(tool) || bound(st, &me.session_id).await? {
+    } else if handoff_tool(tool) || custody_tool(tool) || bound(st, &me.session_id).await? {
         return Err(denied());
     }
     Ok(())

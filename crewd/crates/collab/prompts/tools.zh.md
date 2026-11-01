@@ -1424,3 +1424,33 @@ messages、todo、documents、progress，与工作图父级独立。
 
 ## admin_case_handoff_accept.note
 你的明确承接说明，不能为空。
+
+## admin_case_custody_get
+读取你有权查看的行政协调责任、当前承担者和接管提议。责任失效仍需明确处理；读取不接受接管、不解除责任，也不修改原案件结果。
+
+## admin_case_custody_get.crew_id
+原行政案件所属机组编号；只能读取你实际有权查看的案件。
+
+## admin_case_custody_get.case_id
+原行政案件编号，原样使用回执中的值。
+
+## admin_case_custody_list
+分页查看与你身份有关的行政责任接管记录。历史身份可用于审计，不能据此接受新的责任或扩大权限。
+
+## admin_case_custody_list.after
+上一页回执中的 nextAfter，原样传递，不自行构造。
+
+## admin_case_custody_list.limit
+每页数量，1–100，默认 50。
+
+## admin_case_custody_accept
+以当前真实机长身份明确接受 Human 发起并已实际送达的行政协调责任。核对请求及当前版本后接受；此前旧责任仍保留。接受不改变工作所有权、不恢复原行政成员权限，也不代表业务完成。结果未知时保留原 UUID 并先查询记录，不创建新请求或重发操作。
+
+## admin_case_custody_accept.request_id
+已实际送达、由 Human 发起的原接管请求 UUID。
+
+## admin_case_custody_accept.expected_revision
+接管请求回执中的完整当前版本；不是案件或工作的版本。
+
+## admin_case_custody_accept.note
+你的明确接管说明，不能为空。

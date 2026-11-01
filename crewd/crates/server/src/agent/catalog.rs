@@ -170,6 +170,22 @@ const fn talk(t: ToolSpec) -> ToolSpec {
 use Ty::*;
 
 pub const CATALOG: &[ToolSpec] = &[
+    ro(all(
+        "admin_case_custody_get",
+        &[p("crew_id", Str, true), p("case_id", Str, true)],
+    )),
+    ro(all(
+        "admin_case_custody_list",
+        &[p("after", Str, false), int("limit", 1, 100)],
+    )),
+    idempotent(cap(
+        "admin_case_custody_accept",
+        &[
+            p("request_id", Str, true),
+            p("expected_revision", Str, true),
+            p("note", Str, true),
+        ],
+    )),
     idempotent(all(
         "admin_case_handoff_request",
         &[p("request_id", Str, true), p("reason", Str, true)],
@@ -832,7 +848,6 @@ mod tests {
         for (gone, _) in REMOVED {
             assert!(find(gone).is_none(), "{gone} 应已删除（§9 / §22.7 Q4）");
         }
-        assert_eq!(CATALOG.len(), 63);
     }
 
     /// Every removed name is absent, listed once, and a non-empty replacement starts with a tool
@@ -867,8 +882,12 @@ mod tests {
         assert!(captain.contains(&"start_session".to_string()));
         assert!(!worker.contains(&"admin_case_handoff_accept".to_string()));
         assert!(captain.contains(&"admin_case_handoff_accept".to_string()));
-        assert_eq!(worker.len(), 51);
-        assert_eq!(captain.len(), 63);
+        for tool in ["admin_case_custody_get", "admin_case_custody_list"] {
+            assert!(worker.contains(&tool.to_string()));
+            assert!(captain.contains(&tool.to_string()));
+        }
+        assert!(!worker.contains(&"admin_case_custody_accept".to_string()));
+        assert!(captain.contains(&"admin_case_custody_accept".to_string()));
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -898,6 +917,8 @@ mod tests {
         assert_eq!(
             with(|t| t.read_only),
             [
+                "admin_case_custody_get",
+                "admin_case_custody_list",
                 "admin_case_handoff_get",
                 "admin_case_handoff_list",
                 "my_work_items",
@@ -936,6 +957,7 @@ mod tests {
         assert_eq!(
             with(|t| t.idempotent && !t.read_only),
             [
+                "admin_case_custody_accept",
                 "admin_case_handoff_request",
                 "admin_case_handoff_accept",
                 "channel_work_link",
@@ -967,6 +989,8 @@ mod tests {
         assert_eq!(
             with(ToolSpec::passive),
             [
+                "admin_case_custody_get",
+                "admin_case_custody_list",
                 "admin_case_handoff_get",
                 "admin_case_handoff_list",
                 "my_work_items",

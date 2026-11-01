@@ -1,7 +1,7 @@
 //! Tool dispatch: look up -> role gate (re-read on every call) -> parse args -> hand to the group
 //! implementations. Receipt text always comes from the `r.*` sections of tools.*.md.
-pub mod asks;
 mod admin_cases;
+pub mod asks;
 pub mod captain;
 pub mod channels;
 pub mod crews;
@@ -174,10 +174,13 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
-        "admin_case_handoff_request" => admin_cases::request(&cx,args).await,
-        "admin_case_handoff_get" => admin_cases::get(&cx,args).await,
-        "admin_case_handoff_list" => admin_cases::list(&cx,args).await,
-        "admin_case_handoff_accept" => admin_cases::accept(&cx,args).await,
+        "admin_case_custody_get" => admin_cases::custody_get(&cx, args).await,
+        "admin_case_custody_list" => admin_cases::custody_list(&cx, args).await,
+        "admin_case_custody_accept" => admin_cases::custody_accept(&cx, args).await,
+        "admin_case_handoff_request" => admin_cases::request(&cx, args).await,
+        "admin_case_handoff_get" => admin_cases::get(&cx, args).await,
+        "admin_case_handoff_list" => admin_cases::list(&cx, args).await,
+        "admin_case_handoff_accept" => admin_cases::accept(&cx, args).await,
         "my_work_items" => work::mine(&cx, args).await,
         "todo_get" => work::todo_get(&cx, args).await,
         "work_item_get" => work::get(&cx, args).await,
@@ -419,8 +422,13 @@ mod tests {
         let f = Fixture::new().await;
         let me = f.me(&f.captain).await;
         assert!(!catalog::CATALOG.is_empty());
-        let names: std::collections::BTreeSet<_> = catalog::CATALOG.iter().map(|t| t.name).collect();
-        assert_eq!(names.len(), catalog::CATALOG.len(), "tool names must be unique");
+        let names: std::collections::BTreeSet<_> =
+            catalog::CATALOG.iter().map(|t| t.name).collect();
+        assert_eq!(
+            names.len(),
+            catalog::CATALOG.len(),
+            "tool names must be unique"
+        );
         for t in catalog::CATALOG {
             let r = call(&f.state, &me, t.name, json!({})).await;
             assert_ne!(

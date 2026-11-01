@@ -83,6 +83,9 @@ impl super::Runtime {
                         {
                             crewd_collab::admin_case_outcome::verify(tx, &case.crew, &case.id)?;
                         }
+                        if observed.custody_record.is_some() {
+                            crewd_collab::admin_case_custody::verify(tx, &case.crew, &case.id)?;
+                        }
                         Ok(())
                     })
                     .await;

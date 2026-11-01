@@ -296,9 +296,16 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             capabilities.push("hostDirectoryBrowse".into());
             capabilities.push("hostQuota".into());
             capabilities.extend(
-                ["work.reassignLost", "viewFolders", "channelWork"]
-                    .into_iter()
-                    .map(str::to_owned),
+                [
+                    "work.reassignLost",
+                    "viewFolders",
+                    "channelWork",
+                    methods::ADMIN_CASE_CUSTODY_GET,
+                    methods::ADMIN_CASE_CUSTODY_TRANSFER_GET,
+                    methods::ADMIN_CASE_CUSTODY_PROPOSE,
+                ]
+                .into_iter()
+                .map(str::to_owned),
             );
             if state.data_runtime.get().is_none() {
                 capabilities.push("documents".into());

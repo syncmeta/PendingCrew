@@ -250,6 +250,7 @@ pub(crate) fn record_stop_escalation(
         return Err(invalid("admin case global sequence collision"));
     }
     let mut view = AdminCaseView {
+        custody_record: None,
         id,
         crew_id: s.crew_id,
         revision: String::new(),
@@ -1264,6 +1265,12 @@ fn project_at(c: &Connection, mut view: AdminCaseView, now: Option<i64>) -> Resu
         view.execution_record = Some(execution);
     }
     view.handoff_record = crate::admin_case_handoff::status_for_case(
+        c,
+        &view.crew_id,
+        &view.id,
+        now.unwrap_or_else(crewd_store::now_ms),
+    )?;
+    view.custody_record = crate::admin_case_custody::status_for_case(
         c,
         &view.crew_id,
         &view.id,

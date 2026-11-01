@@ -28,6 +28,49 @@ struct Accept {
     expected_revision: String,
     note: String,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CustodyGet {
+    crew_id: String,
+    case_id: String,
+}
+pub async fn custody_get(cx: &Ctx<'_>, args: Value) -> CallResult {
+    let p: CustodyGet = match parse_args(cx, args) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    receipt(
+        cx,
+        port::admin_custody_get(cx.st, &cx.me.session_id, p.crew_id, p.case_id).await,
+    )
+}
+pub async fn custody_list(cx: &Ctx<'_>, args: Value) -> CallResult {
+    let p: List = match parse_args(cx, args) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    receipt(
+        cx,
+        port::admin_custody_list(cx.st, &cx.me.session_id, p.after, p.limit.unwrap_or(50)).await,
+    )
+}
+pub async fn custody_accept(cx: &Ctx<'_>, args: Value) -> CallResult {
+    let p: Accept = match parse_args(cx, args) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    receipt(
+        cx,
+        port::admin_custody_accept(
+            cx.st,
+            &cx.me.session_id,
+            p.request_id,
+            p.expected_revision,
+            p.note,
+        )
+        .await,
+    )
+}
 fn receipt<T: serde::Serialize>(cx: &Ctx<'_>, result: port::PortResult<T>) -> CallResult {
     match result {
         Ok(view) => match serde_json::to_string(&view) {

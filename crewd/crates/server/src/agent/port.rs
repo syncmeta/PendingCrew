@@ -2036,25 +2036,90 @@ pub async fn work_close(
     let by = Sender::Session(session.to_owned());
     write(st, move |tx| crewd_collab::work::close_factual(tx, &by, p)).await
 }
-pub async fn admin_handoff_request(st:&AppState,session:&str,request_id:String,reason:String)
-    -> PortResult<crewd_proto::AdminCaseHandoffView> {
-    let by=Sender::Session(session.to_owned());
-    write(st,move |tx| crewd_collab::admin_case_handoff::request(tx,&by,&request_id,&reason)).await
+pub async fn admin_handoff_request(
+    st: &AppState,
+    session: &str,
+    request_id: String,
+    reason: String,
+) -> PortResult<crewd_proto::AdminCaseHandoffView> {
+    let by = Sender::Session(session.to_owned());
+    write(st, move |tx| {
+        crewd_collab::admin_case_handoff::request(tx, &by, &request_id, &reason)
+    })
+    .await
 }
-pub async fn admin_handoff_get(st:&AppState,session:&str,request_id:String)
-    -> PortResult<crewd_proto::AdminCaseHandoffView> {
-    let by=Sender::Session(session.to_owned());
-    read(st,move |c| crewd_collab::admin_case_handoff::get(c,&by,&request_id,crewd_store::now_ms())).await
+pub async fn admin_custody_get(
+    st: &AppState,
+    session: &str,
+    crew: String,
+    case: String,
+) -> PortResult<crewd_proto::AdminCaseCustodyView> {
+    let by = Sender::Session(session.to_owned());
+    read(st, move |c| {
+        crewd_collab::admin_case_custody::get(c, &by, &crew, &case, crewd_store::now_ms())
+    })
+    .await
 }
-pub async fn admin_handoff_list(st:&AppState,session:&str,after:Option<String>,limit:u32)
-    -> PortResult<crewd_proto::AdminCaseHandoffList> {
-    let by=Sender::Session(session.to_owned());
-    read(st,move |c| crewd_collab::admin_case_handoff::list(c,&by,after,limit,crewd_store::now_ms())).await
+pub async fn admin_custody_list(
+    st: &AppState,
+    session: &str,
+    after: Option<String>,
+    limit: u32,
+) -> PortResult<crewd_proto::AdminCaseCustodyList> {
+    let by = Sender::Session(session.to_owned());
+    read(st, move |c| {
+        crewd_collab::admin_case_custody::list(c, &by, after, limit, crewd_store::now_ms())
+    })
+    .await
 }
-pub async fn admin_handoff_accept(st:&AppState,session:&str,request_id:String,revision:String,note:String)
-    -> PortResult<crewd_proto::AdminCaseHandoffView> {
-    let by=Sender::Session(session.to_owned());
-    write(st,move |tx| crewd_collab::admin_case_handoff::accept(tx,&by,&request_id,&revision,&note)).await
+pub async fn admin_custody_accept(
+    st: &AppState,
+    session: &str,
+    id: String,
+    revision: String,
+    note: String,
+) -> PortResult<crewd_proto::AdminCaseCustodyTransfer> {
+    let by = Sender::Session(session.to_owned());
+    write(st, move |tx| {
+        crewd_collab::admin_case_custody::accept(tx, &by, &id, &revision, &note)
+    })
+    .await
+}
+pub async fn admin_handoff_get(
+    st: &AppState,
+    session: &str,
+    request_id: String,
+) -> PortResult<crewd_proto::AdminCaseHandoffView> {
+    let by = Sender::Session(session.to_owned());
+    read(st, move |c| {
+        crewd_collab::admin_case_handoff::get(c, &by, &request_id, crewd_store::now_ms())
+    })
+    .await
+}
+pub async fn admin_handoff_list(
+    st: &AppState,
+    session: &str,
+    after: Option<String>,
+    limit: u32,
+) -> PortResult<crewd_proto::AdminCaseHandoffList> {
+    let by = Sender::Session(session.to_owned());
+    read(st, move |c| {
+        crewd_collab::admin_case_handoff::list(c, &by, after, limit, crewd_store::now_ms())
+    })
+    .await
+}
+pub async fn admin_handoff_accept(
+    st: &AppState,
+    session: &str,
+    request_id: String,
+    revision: String,
+    note: String,
+) -> PortResult<crewd_proto::AdminCaseHandoffView> {
+    let by = Sender::Session(session.to_owned());
+    write(st, move |tx| {
+        crewd_collab::admin_case_handoff::accept(tx, &by, &request_id, &revision, &note)
+    })
+    .await
 }
 pub async fn work_update(
     st: &AppState,

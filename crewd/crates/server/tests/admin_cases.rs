@@ -17,7 +17,31 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
     let task = f.spawn_owned_socket(stopping).await;
     let socket = f.data_dir().join("crewd.sock");
     let mut human = RpcClient::connect(&socket).await;
+    let hello = call(&mut human, "system.hello", json!({})).await.unwrap();
+    for method in [
+        "adminCase.custodyGet",
+        "adminCase.custodyTransferGet",
+        "adminCase.custodyPropose",
+    ] {
+        assert!(
+            hello["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == method),
+            "the real client handshake must advertise {method}"
+        );
+    }
     let changes = f.state.db.call(|s| s.conn().total_changes()).await.unwrap();
+    let unknown_request = uuid::Uuid::new_v4().to_string();
+    let missing = call(
+        &mut human,
+        "adminCase.custodyTransferGet",
+        json!({"requestId":unknown_request}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(missing.0, crewd_proto::RpcError::NOT_FOUND);
     let page = call(
         &mut human,
         "adminCase.list",
@@ -48,6 +72,19 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
             (
                 "adminCase.get",
                 json!({"crewId":f.crew,"id":"AC00000000000000000001"}),
+            ),
+            (
+                "adminCase.custodyGet",
+                json!({"crewId":f.crew,"caseId":"AC00000000000000000001"}),
+            ),
+            (
+                "adminCase.custodyTransferGet",
+                json!({"requestId":unknown_request}),
+            ),
+            (
+                "adminCase.custodyPropose",
+                json!({"crewId":f.crew,"caseId":"AC00000000000000000001",
+                    "requestId":unknown_request,"expectedRevision":"untrusted","reason":"cannot self authorize"}),
             ),
         ] {
             assert_eq!(

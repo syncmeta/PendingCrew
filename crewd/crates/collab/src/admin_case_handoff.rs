@@ -869,7 +869,25 @@ pub(crate) fn current_accepted(
 ) -> Result<Option<AdminCaseHandoffView>> {
     Ok(status_for_case(c, crew, id, now)?.filter(|v| v.phase == Phase::Accepted))
 }
+/// Immutable original accepted responsibility, even when its authority is now stale.
+pub(crate) fn custody_origin(
+    c: &Connection,
+    crew: &str,
+    case: &str,
+) -> Result<Option<AdminCaseHandoffView>> {
+    let Some(id) = meta_get(c, &relinquished_key(case))? else {
+        return Ok(None);
+    };
+    let r = load(c, &id)?.ok_or_else(invalid)?;
+    if r.view.phase != Phase::Accepted || r.view.crew_id != crew || r.view.case_id != case {
+        return Err(invalid());
+    }
+    Ok(Some(r.view))
+}
 pub(crate) fn has_unresolved_custody(c: &Connection, session: &str, now: i64) -> Result<bool> {
+    if crate::admin_case_custody::has_unresolved_custody(c, session, now)? {
+        return Ok(true);
+    }
     verify_recipient(c, session)?;
     // Only this recipient's indexed history; stream 64 rows at a time. A stale
     // accepted responsibility remains an obligation until verified resolution.
@@ -894,6 +912,11 @@ pub(crate) fn has_unresolved_custody(c: &Connection, session: &str, now: i64) ->
                 return Err(invalid());
             }
             if r.view.phase == Phase::Accepted
+                && !crate::admin_case_custody::original_obligation_released(
+                    c,
+                    &r.view.crew_id,
+                    &r.view.case_id,
+                )?
                 && crate::admin_case_outcome::status_at(c, &r.view.crew_id, &r.view.case_id, now)?
                     .is_none_or(|o| o.phase != AdminCaseOutcomePhase::Resolved)
             {

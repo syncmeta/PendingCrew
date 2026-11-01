@@ -28,6 +28,7 @@ pub enum NativeExecutionPolicy {
 }
 
 pub struct LaunchRequest {
+    pub native_auth_source: Option<Arc<dyn crewd_exec::codex::profile::NativeAuthSource>>,
     pub native_policy: NativeExecutionPolicy,
     pub managed_resume_id: Option<String>,
     pub initial_inputs: Option<crewd_exec::codex::input::Submission>,
@@ -154,6 +155,22 @@ pub type AnswerSteps = Vec<(Vec<u8>, Option<usize>)>;
 
 /// §13 Q12 的窄接口（启动之外）。
 pub trait ExecHandle: Send + Sync {
+    fn supports_native_auth_export(&self) -> bool {
+        false
+    }
+    fn native_auth_access(
+        &self,
+        _refresh: bool,
+        _previous: Option<crewd_exec::codex::profile::ExternalChatgptAuth>,
+    ) -> BoxFut<
+        '_,
+        Result<
+            crewd_exec::codex::profile::ExternalChatgptAuth,
+            crewd_exec::codex::profile::AuthFailure,
+        >,
+    > {
+        Box::pin(async { Err(crewd_exec::codex::profile::AuthFailure::Unsupported) })
+    }
     fn fence_inputs(&self) {}
     fn control_controlled(
         &self,

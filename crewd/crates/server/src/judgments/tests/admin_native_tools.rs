@@ -14,6 +14,44 @@ use crewd_exec::{
 };
 use std::path::PathBuf;
 
+/// The standalone collaboration proof mocks auth only; the Core proof below
+/// uses its actual original source native authentication owner.
+struct SyntheticAuth;
+impl crewd_exec::codex::profile::NativeAuthSource for SyntheticAuth {
+    fn access(
+        &self,
+        refresh: bool,
+        _: Option<crewd_exec::codex::profile::ExternalChatgptAuth>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crewd_exec::codex::profile::ExternalChatgptAuth,
+                        crewd_exec::codex::profile::AuthFailure,
+                    >,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            use base64::Engine;
+            if refresh {
+                return Err(crewd_exec::codex::profile::AuthFailure::Unavailable);
+            }
+            let claims = json!({"exp":4102444800i64,"https://api.openai.com/auth":{"chatgpt_account_id":"synthetic-account","chatgpt_user_id":"synthetic-user"}});
+            let jwt = format!(
+                "e30.{}.synthetic",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(serde_json::to_vec(&claims).unwrap())
+            );
+            crewd_exec::codex::profile::ExternalChatgptAuth::from_native(
+                &json!({"authMethod":"chatgpt","requiresOpenaiAuth":true,"authToken":jwt}),
+                1,
+            )
+        })
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "actual local Codex and built crewd helper; scripts/dev/run-admin-native-tools.py"]
 async fn real_native_case_tools_scope_and_factual_close() {
@@ -90,6 +128,7 @@ async fn real_native_case_tools_scope_and_factual_close() {
             ledger: Arc::new(MemoryLedger::default()),
         },
         CodexConfig {
+            native_auth_source: Some(Arc::new(SyntheticAuth)),
             runtime_dir: evidence.join("runtime"),
             ..Default::default()
         },
@@ -195,7 +234,7 @@ struct NativeJournal {
     items: Vec<serde_json::Value>,
 }
 struct CaseNativeExecutor {
-    ordinary: StandIn,
+    source_journal: Arc<std::sync::Mutex<NativeJournal>>,
     native: crate::orchestra::exec_codex::CodexExecutor,
     journal: Arc<std::sync::Mutex<NativeJournal>>,
 }
@@ -218,13 +257,14 @@ impl crate::orchestra::exec::Executor for CaseNativeExecutor {
     > {
         use crate::orchestra::exec::NativeExecutionPolicy;
         Box::pin(async move {
-            if req.native_policy == NativeExecutionPolicy::Ordinary {
-                return self.ordinary.launch(req).await;
-            }
-            self.journal.lock().unwrap().requested_model = req.model.clone();
+            let journal = if req.native_policy == NativeExecutionPolicy::Ordinary {
+                self.source_journal.clone()
+            } else {
+                self.journal.clone()
+            };
+            journal.lock().unwrap().requested_model = req.model.clone();
             let (handle, mut events) = self.native.launch(req).await?;
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            let journal = self.journal.clone();
             tokio::spawn(async move {
                 while let Some(event) = events.recv().await {
                     {
@@ -285,25 +325,7 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
         })
         .await
         .unwrap();
-    let source = sources(&f, 1).await.remove(0);
-    f.runtime
-        .run_admin_case(f.crew.clone(), source.id.clone(), true)
-        .await
-        .unwrap();
-    let crew = f.crew.clone();
-    let case = source.id.clone();
-    let permit = f
-        .state
-        .collab(move |tx| execution::launch_permit(tx, &crew, &case))
-        .await
-        .unwrap()
-        .unwrap();
-    let original_work = current_work(&f, &source.work).await;
-    std::fs::write(
-        evidence.join("fixture.json"),
-        serde_json::to_vec(&json!({"mode":"core","work":source.work,"caseId":source.id,"revision":original_work.revision})).unwrap(),
-    )
-    .unwrap();
+    std::fs::write(evidence.join("fixture.json"), br#"{"mode":"source"}"#).unwrap();
     let listener = tokio::net::UnixListener::bind(f.dir.path().join("crewd.sock")).unwrap();
     let state = f.state.clone();
     let serving = tokio::spawn(async move {
@@ -321,8 +343,9 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
         crewd_exec::registry::ProcessRegistry::load(&evidence.join("native-registry.json"))
             .unwrap(),
     );
+    let source_journal = Arc::new(std::sync::Mutex::new(NativeJournal::default()));
     let routed = CaseNativeExecutor {
-        ordinary: ordinary.clone(),
+        source_journal: source_journal.clone(),
         journal: journal.clone(),
         native: CodexExecutor::new(CodexExecutorConfig {
             program: CodexProgram::Path(PathBuf::from(
@@ -363,6 +386,47 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
         bridge,
         exec: ordinary,
     };
+    rig.handle
+        .resume(&rig.f.worker, orchestra::core::Origin::Human)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let ready = {
+                let j = source_journal.lock().unwrap();
+                j.pid.is_some() && j.observed_model.is_some()
+            };
+            if ready && rig.handle.live(&rig.f.worker).await.unwrap().running {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // Core must persist the original source Profile before the case captures it.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let source = sources(&rig.f, 1).await.remove(0);
+    rig.f
+        .runtime
+        .run_admin_case(rig.f.crew.clone(), source.id.clone(), true)
+        .await
+        .unwrap();
+    let crew = rig.f.crew.clone();
+    let case = source.id.clone();
+    let permit = rig
+        .f
+        .state
+        .collab(move |tx| execution::launch_permit(tx, &crew, &case))
+        .await
+        .unwrap()
+        .unwrap();
+    let original_work = current_work(&rig.f, &source.work).await;
+    std::fs::write(
+        evidence.join("fixture.json"),
+        serde_json::to_vec(&json!({"mode":"core","work":source.work,"caseId":source.id,"revision":original_work.revision})).unwrap(),
+    )
+    .unwrap();
     let sid = rig.handle.start_admin_case(permit).await.unwrap().id;
     std::fs::write(
         evidence.join("fixture.json"),
@@ -429,8 +493,11 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
         .unwrap();
     let profile_adopted_from_unset = {
         let observed = journal.lock().unwrap();
-        observed.requested_model.is_none()
-            && observed.observed_model.is_some()
+        let original = source_journal.lock().unwrap();
+        original.requested_model.is_none()
+            && original.observed_model.is_some()
+            && observed.requested_model == original.observed_model
+            && observed.observed_model == original.observed_model
             && effective_model == observed.observed_model
     };
     let pid = journal.lock().unwrap().pid;
@@ -463,7 +530,11 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
     let revoked = !rig.f.state.admission.contains(&sid);
     let after = view(&rig.f, &source.id).await;
     let items = journal.lock().unwrap().items.clone();
-    std::fs::write(evidence.join("core-fence-receipt.json"),serde_json::to_vec_pretty(&json!({"ready":ready,"closedWork":closed_work,"closureActorVerified":closure_actor_verified,"workEvents":work_events,"profileAdoptedFromUnset":profile_adopted_from_unset,"effectiveModel":effective_model,"pid":pid,"liveBeforeRevocation":live_before,"fencedBeforeCleanup":fenced,"physicallyGoneBeforeCleanup":physically_gone,"adminAdmissionRevoked":revoked,"before":before,"after":after,"items":items,"boundary":"real Core -> routing test executor -> production Codex adapter -> real native and crew helper; ordinary sources remain StandIn"})).unwrap()).unwrap();
+    let source_profile = {
+        let source = source_journal.lock().unwrap();
+        json!({"pid":source.pid,"requestedModel":source.requested_model,"observedModel":source.observed_model})
+    };
+    std::fs::write(evidence.join("core-fence-receipt.json"),serde_json::to_vec_pretty(&json!({"ready":ready,"sourceProfile":source_profile,"sourceProfileInherited":profile_adopted_from_unset,"closedWork":closed_work,"closureActorVerified":closure_actor_verified,"workEvents":work_events,"profileAdoptedFromUnset":profile_adopted_from_unset,"effectiveModel":effective_model,"pid":pid,"liveBeforeRevocation":live_before,"fencedBeforeCleanup":fenced,"physicallyGoneBeforeCleanup":physically_gone,"adminAdmissionRevoked":revoked,"before":before,"after":after,"items":items,"boundary":"real Core -> production Codex adapter for original source and case -> real native and crew helper; synthetic source credentials only"})).unwrap()).unwrap();
     serving.abort();
     let _ = serving.await;
     rig.close().await;
@@ -495,6 +566,15 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
             .any(|i| i["type"] == "mcpToolCall" && i["server"] == "crew"),
         "first real case tool did not run"
     );
+    for tool in ["work_item_get", "work_item_close"] {
+        assert!(
+            items.iter().any(|i| i["type"] == "mcpToolCall"
+                && i["server"] == "crew"
+                && i["tool"] == tool
+                && i["status"] == "completed"),
+            "case runtime must itself complete {tool}"
+        );
+    }
     assert!(
         fenced && physically_gone && revoked,
         "real Core authority fence did not stop physical native process before cleanup"

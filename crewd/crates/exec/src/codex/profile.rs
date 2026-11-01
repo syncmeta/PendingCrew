@@ -1,4 +1,5 @@
 //! Trusted, host-selected native case policy. Never deserialized from tool input.
+use base64::Engine;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -31,6 +32,107 @@ pub fn permits_additional_env(env: &BTreeMap<String, String>) -> bool {
     })
 }
 pub const PROFILE_ID: &str = "pcw_admin_case_v1";
+/// Only access credentials cross the native-source boundary. Never serialize
+/// this value into events, persisted metadata, argv, or diagnostic output.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ExternalChatgptAuth {
+    access_token: String,
+    account_id: String,
+    user_id: String,
+    plan: Option<String>,
+    expires_at: i64,
+}
+impl std::fmt::Debug for ExternalChatgptAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ExternalChatgptAuth([REDACTED])")
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthFailure {
+    Unavailable,
+    Unsupported,
+    Unknown,
+    IdentityChanged,
+    Expired,
+    Unchanged,
+}
+/// A host-owned reference to the original native authentication owner. This
+/// interface cannot create an owner or select a different account/provider.
+pub trait NativeAuthSource: Send + Sync {
+    fn access(
+        &self,
+        refresh: bool,
+        previous: Option<ExternalChatgptAuth>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<ExternalChatgptAuth, AuthFailure>> + Send + '_>,
+    >;
+}
+#[derive(Clone, PartialEq, Eq)]
+pub struct SecretLine(pub(crate) String);
+impl std::fmt::Debug for SecretLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
+}
+impl ExternalChatgptAuth {
+    /// Native legacy getAuthStatus exports the access JWT only. JWT claims here
+    /// are consistency checks on the trusted native source, not signature proof.
+    pub fn from_native(value: &Value, now: i64) -> Result<Self, AuthFailure> {
+        if value["authMethod"] != "chatgpt" || value["requiresOpenaiAuth"] != true {
+            return Err(AuthFailure::Unsupported);
+        }
+        let token = value["authToken"]
+            .as_str()
+            .filter(|s| s.len() <= 65536)
+            .ok_or(AuthFailure::Unavailable)?;
+        let parts: Vec<_> = token.split('.').collect();
+        if parts.len() != 3 {
+            return Err(AuthFailure::Unavailable);
+        }
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .map_err(|_| AuthFailure::Unavailable)?;
+        let claims: Value = serde_json::from_slice(&bytes).map_err(|_| AuthFailure::Unavailable)?;
+        let identity = &claims["https://api.openai.com/auth"];
+        let text = |key| {
+            identity[key]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+        };
+        let auth = Self {
+            access_token: token.to_owned(),
+            account_id: text("chatgpt_account_id").ok_or(AuthFailure::Unavailable)?,
+            user_id: text("chatgpt_user_id").ok_or(AuthFailure::Unavailable)?,
+            plan: text("chatgpt_plan_type"),
+            expires_at: claims["exp"].as_i64().ok_or(AuthFailure::Unavailable)?,
+        };
+        auth.check_valid(now)?;
+        Ok(auth)
+    }
+    pub fn check_valid(&self, now: i64) -> Result<(), AuthFailure> {
+        if self.expires_at <= now.saturating_add(30) {
+            Err(AuthFailure::Expired)
+        } else {
+            Ok(())
+        }
+    }
+    pub fn account_id(&self) -> &str {
+        &self.account_id
+    }
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.account_id == other.account_id && self.user_id == other.user_id
+    }
+    pub fn changed_access(&self, other: &Self) -> bool {
+        self.access_token != other.access_token
+    }
+    pub(crate) fn login_params(&self) -> Value {
+        json!({"type":"chatgptAuthTokens","accessToken":self.access_token,"chatgptAccountId":self.account_id,"chatgptPlanType":self.plan})
+    }
+    pub(crate) fn refresh_result(&self) -> Value {
+        json!({"accessToken":self.access_token,"chatgptAccountId":self.account_id,"chatgptPlanType":self.plan})
+    }
+}
 const DISABLED: &[&str] = &[
     "apps",
     "plugins",
@@ -58,6 +160,7 @@ pub struct RestrictedProfile {
     pub(crate) home: PathBuf,
     pub(crate) cwd: PathBuf,
     pub(crate) denied: Vec<PathBuf>,
+    pub(crate) external_auth: Option<ExternalChatgptAuth>,
 }
 fn invalid() -> io::Error {
     io::Error::other("restricted Codex profile unavailable; no task input sent")
@@ -96,6 +199,7 @@ pub(crate) fn prepare(
     session: &str,
     cwd: &Path,
     env: &mut BTreeMap<String, String>,
+    auth: &ExternalChatgptAuth,
 ) -> io::Result<RestrictedProfile> {
     if !crate::resume::valid_agent_session_id(session) {
         return Err(invalid());
@@ -127,27 +231,21 @@ pub(crate) fn prepare(
         Err(e) => return Err(e),
     }
     let marker = home.join("pcw-case-home.json");
-    let expected = json!({"version":1,"session":session,"sourceHome":original,"cwd":cwd});
+    let expected = json!({"version":2,"session":session,"sourceHome":original,"cwd":cwd,"account":auth.account_id,"user":auth.user_id});
     if marker.exists() {
         let actual: Value =
             serde_json::from_slice(&private_file(&marker)?).map_err(|_| invalid())?;
         if actual != expected {
             return Err(invalid());
         }
-        private_file(&home.join("auth.json"))?;
+        if home.join("auth.json").exists() {
+            return Err(invalid());
+        }
     } else {
         // A partial prior creation is ambiguous; do not silently replace auth/state.
         if fs::read_dir(&home)?.next().is_some() {
             return Err(invalid());
         }
-        let auth = private_file(&original.join("auth.json"))?;
-        let parsed: Value = serde_json::from_slice(&auth).map_err(|_| invalid())?;
-        if parsed.get("auth_mode").and_then(Value::as_str) != Some("chatgpt")
-            || !parsed.get("tokens").is_some_and(Value::is_object)
-        {
-            return Err(invalid());
-        }
-        create_private(&home.join("auth.json"), &auth)?;
         create_private(
             &marker,
             &serde_json::to_vec(&expected).map_err(|_| invalid())?,
@@ -163,6 +261,7 @@ pub(crate) fn prepare(
         home,
         cwd,
         denied: vec![runtime, original],
+        external_auth: Some(auth.clone()),
     })
 }
 /// Compare provider routing/auth configuration without exporting credentials.
@@ -191,10 +290,15 @@ fn toml(v: &Value) -> String {
         _ => v.to_string(),
     }
 }
-/// Source-auth discovery is metadata-only and disables optional code-bearing
-/// integrations before initialize. It never starts/resumes a thread.
+/// Routing discovery has no credentials: ephemeral storage forbids native
+/// persistent fallback (including Keychain). It cannot become another refresh
+/// owner. Optional integrations are disabled before metadata-only initialize.
 pub(crate) fn auth_probe_argv(cwd: &Path) -> Vec<String> {
-    let mut args = vec!["app-server".into()];
+    let mut args = vec![
+        "app-server".into(),
+        "-c".into(),
+        "cli_auth_credentials_store=\"ephemeral\"".into(),
+    ];
     for key in DISABLED {
         args.extend(["-c".into(), format!("features.{key}=false")]);
     }
@@ -231,7 +335,7 @@ impl RestrictedProfile {
             (format!("permissions.{PROFILE_ID}"), self.profile()),
             ("web_search".into(), json!("disabled")),
             ("mcp_servers".into(), mcp.clone()),
-            ("cli_auth_credentials_store".into(), json!("file")),
+            ("cli_auth_credentials_store".into(), json!("ephemeral")),
             (
                 "projects".into(),
                 json!({self.cwd.to_string_lossy().as_ref():{"trust_level":"untrusted"}}),
@@ -258,7 +362,7 @@ impl RestrictedProfile {
             || c["approval_policy"] != "never"
             || c["default_permissions"] != PROFILE_ID
             || c["web_search"] != "disabled"
-            || c["cli_auth_credentials_store"] != "file"
+            || c["cli_auth_credentials_store"] != "ephemeral"
         {
             return false;
         }
@@ -376,6 +480,63 @@ impl RestrictedProfile {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    pub(crate) fn auth_fixture(user: &str, account: &str, exp: i64, salt: &str) -> Value {
+        let claims = json!({"exp":exp,"https://api.openai.com/auth":{"chatgpt_user_id":user,"chatgpt_account_id":account,"chatgpt_plan_type":"pro"}});
+        let token = format!(
+            "synthetic.{}.{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(serde_json::to_vec(&claims).unwrap()),
+            salt
+        );
+        json!({"authMethod":"chatgpt","requiresOpenaiAuth":true,"authToken":token})
+    }
+    #[test]
+    fn external_access_is_opaque_and_account_user_bound() {
+        let first =
+            ExternalChatgptAuth::from_native(&auth_fixture("user-a", "account-a", 1000, "a"), 1)
+                .unwrap();
+        let rotated =
+            ExternalChatgptAuth::from_native(&auth_fixture("user-a", "account-a", 1000, "b"), 1)
+                .unwrap();
+        let other_user =
+            ExternalChatgptAuth::from_native(&auth_fixture("user-b", "account-a", 1000, "a"), 1)
+                .unwrap();
+        let other_account =
+            ExternalChatgptAuth::from_native(&auth_fixture("user-a", "account-b", 1000, "a"), 1)
+                .unwrap();
+        assert!(first.same_identity(&rotated));
+        assert!(first.changed_access(&rotated));
+        assert!(!first.changed_access(&first));
+        assert!(!first.same_identity(&other_user));
+        assert!(!first.same_identity(&other_account));
+        assert_eq!(format!("{first:?}"), "ExternalChatgptAuth([REDACTED])");
+        assert!(first.login_params().get("refreshToken").is_none());
+        assert!(first.refresh_result().get("idToken").is_none());
+    }
+    #[test]
+    fn malformed_expired_or_other_auth_methods_are_not_exported() {
+        let mut v = auth_fixture("user", "account", 1000, "a");
+        assert_eq!(
+            ExternalChatgptAuth::from_native(&v, 970),
+            Err(AuthFailure::Expired)
+        );
+        v["authMethod"] = json!("apikey");
+        assert_eq!(
+            ExternalChatgptAuth::from_native(&v, 1),
+            Err(AuthFailure::Unsupported)
+        );
+        v["authMethod"] = json!("chatgpt");
+        v["authToken"] = json!("sensitive-but-malformed");
+        assert_eq!(
+            ExternalChatgptAuth::from_native(&v, 1),
+            Err(AuthFailure::Unavailable)
+        );
+        let no_user = auth_fixture("", "account", 1000, "a");
+        assert_eq!(
+            ExternalChatgptAuth::from_native(&no_user, 1),
+            Err(AuthFailure::Unavailable)
+        );
+    }
     pub(crate) fn fixture() -> (RestrictedProfile, Value, Value) {
         let p = RestrictedProfile {
             model_provider: "openai".into(),
@@ -384,9 +545,13 @@ pub(crate) mod tests {
             home: "/runtime/case".into(),
             cwd: "/project".into(),
             denied: vec!["/runtime".into(), "/auth".into()],
+            external_auth: Some(
+                ExternalChatgptAuth::from_native(&auth_fixture("u", "a", 4102444800, "a"), 1)
+                    .unwrap(),
+            ),
         };
         let mcp = json!({"crew":{"command":"/helper","args":["mcp"],"required":true}});
-        let mut config = json!({"model_provider":"openai","approval_policy":"never","default_permissions":PROFILE_ID,"web_search":"disabled","cli_auth_credentials_store":"file","features":{},"permissions":{PROFILE_ID:p.profile()},"mcp_servers":mcp,"notify":[],"hooks":{}});
+        let mut config = json!({"model_provider":"openai","approval_policy":"never","default_permissions":PROFILE_ID,"web_search":"disabled","cli_auth_credentials_store":"ephemeral","features":{},"permissions":{PROFILE_ID:p.profile()},"mcp_servers":mcp,"notify":[],"hooks":{}});
         for key in DISABLED {
             config["features"][*key] = json!(false)
         }
@@ -434,25 +599,37 @@ pub(crate) mod tests {
         fs::write(source.join("config.toml"), "synthetic secret config").unwrap();
         let mut env =
             BTreeMap::from([("CODEX_HOME".into(), source.to_string_lossy().into_owned())]);
-        let first = prepare(&runtime, "case-1", &work, &mut env).unwrap();
+        let auth =
+            ExternalChatgptAuth::from_native(&auth_fixture("u", "a", 4102444800, "a"), 1).unwrap();
+        let first = prepare(&runtime, "case-1", &work, &mut env, &auth).unwrap();
         assert!(!first.home.join("config.toml").exists());
         assert_eq!(
             fs::metadata(&first.home).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        assert_eq!(
-            fs::metadata(first.home.join("auth.json"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
+        assert!(!first.home.join("auth.json").exists());
+        // A native Keychain-backed owner need not have an auth.json at all.
+        // This is a filesystem contract test, not a claim of live Keychain use.
+        fs::remove_file(source.join("auth.json")).unwrap();
         env.insert("CODEX_HOME".into(), source.to_string_lossy().into_owned());
-        assert_eq!(prepare(&runtime, "case-1", &work, &mut env).unwrap(), first);
+        let without_file = prepare(&runtime, "case-no-file", &work, &mut env, &auth).unwrap();
+        assert!(!without_file.home.join("auth.json").exists());
+        env.insert("CODEX_HOME".into(), source.to_string_lossy().into_owned());
+        assert_eq!(
+            prepare(&runtime, "case-1", &work, &mut env, &auth).unwrap(),
+            first
+        );
         fs::write(first.home.join("config.toml"), "injected").unwrap();
         env.insert("CODEX_HOME".into(), source.to_string_lossy().into_owned());
-        assert!(prepare(&runtime, "case-1", &work, &mut env).is_err());
+        assert!(prepare(&runtime, "case-1", &work, &mut env, &auth).is_err());
+    }
+    #[test]
+    fn routing_probe_cannot_load_persistent_auth_or_create_another_refresh_owner() {
+        let argv = auth_probe_argv(Path::new("/project"));
+        assert!(
+            argv.windows(2)
+                .any(|a| a[0] == "-c" && a[1] == "cli_auth_credentials_store=\"ephemeral\"")
+        );
     }
     #[test]
     fn unexpected_open_policy_cannot_be_counted_as_enforced() {

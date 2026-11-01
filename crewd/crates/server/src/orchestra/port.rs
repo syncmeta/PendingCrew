@@ -473,6 +473,12 @@ pub trait Port: Send + Sync + 'static {
     fn admin_launch_unknown(&self, _session: &str) -> impl Future<Output = Result<()>> + Send {
         async { Ok(()) }
     }
+    fn admin_case_auth_source(
+        &self,
+        _session: &str,
+    ) -> super::exec::BoxFut<'_, Result<Option<String>>> {
+        Box::pin(async { Ok(None) })
+    }
     fn admin_case_bound(&self, _session: &str) -> impl Future<Output = Result<bool>> + Send {
         async { Ok(false) }
     }

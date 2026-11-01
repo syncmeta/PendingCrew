@@ -1424,3 +1424,33 @@ The complete current revision from the request lookup.
 
 ## admin_case_handoff_accept.note
 Your explicit acceptance statement; nonblank.
+
+## admin_case_custody_get
+Read administrative custody, its accountable holder and any succession proposal you may access. Stale custody still requires explicit handling. Reading neither accepts nor discharges responsibility and does not rewrite the original case outcome.
+
+## admin_case_custody_get.crew_id
+The original case crew identifier. Access is checked against your actual identity.
+
+## admin_case_custody_get.case_id
+The original administrative case identifier, copied from its receipt.
+
+## admin_case_custody_list
+Page through administrative custody transfers involving your actual identity. Historical participation grants audit access, not permission to accept new responsibility or broaden authority.
+
+## admin_case_custody_list.after
+The previous page's nextAfter, passed unchanged. Do not construct a cursor.
+
+## admin_case_custody_list.limit
+Page size, 1–100, default 50.
+
+## admin_case_custody_accept
+As the actual current captain, explicitly accept a Human-proposed administrative coordination responsibility after its real delivery. Check the request and current revision first. The former responsibility remains until acceptance. Acceptance changes neither Work ownership nor business completion and never restores the original Admin's authority. Preserve the original UUID after an unknown result and inspect records before any further operation.
+
+## admin_case_custody_accept.request_id
+The original, actually delivered Human proposal UUID.
+
+## admin_case_custody_accept.expected_revision
+The proposal receipt's complete current revision, not the case or Work revision.
+
+## admin_case_custody_accept.note
+Your explicit acceptance statement. Must be nonblank.

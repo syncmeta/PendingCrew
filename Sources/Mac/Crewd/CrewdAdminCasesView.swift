@@ -5,6 +5,11 @@ struct CrewdAdminCasesView:View {
     @State private var rows:[CrewdValue]=[]
     @State private var next:String?
     @State private var detail:CrewdValue?
+    @State private var custody:CrewdValue?
+    @State private var custodyHistory:[CrewdValue]=[]
+    @State private var custodyReason=""
+    @State private var lookupID=""
+    @State private var custodyFresh=false
     @State private var loaded=false
     @State private var busy=false
     @State private var failure:String?
@@ -65,6 +70,8 @@ struct CrewdAdminCasesView:View {
                         }
                         if detail["handoffRecord"] == .null {Text("责任交接：暂无请求记录")}
                         else { handoffDetails(detail["handoffRecord"]) }
+                        if let custody {custodyDetails(custody)}
+                        else if !store.capabilities.contains("adminCase.custodyGet") {Text("当前后台尚未提供异常责任接管查询。").font(.caption).foregroundStyle(.secondary)}
                         Text("退场："+retirementPhase(detail["retirement"].string ?? ""))
                         if detail["retirementRecord"] != .null {
                             Text("退场说明："+retirementReason(detail["retirementRecord"]["reason"].string ?? ""))
@@ -114,7 +121,89 @@ struct CrewdAdminCasesView:View {
         ForEach(Array(handoff["targets"].array.enumerated()),id:\.offset) {_,target in
             Text("交接快照："+(target["id"].string ?? "")+" · "+(target["crewId"].string ?? "")+" · 版本 "+(target["revision"].string ?? "")).font(.caption)
         }
-        Text("通知送达不代表机长接手；接受交接只确认后续责任，不代表业务已解决。失效记录保留历史，不再授予当前责任。").font(.caption).foregroundStyle(.secondary)
+        Text("通知送达不代表机长接手；接受交接只确认后续责任，不代表业务已解决。交接依据失效不会抹去已接受的责任；须完成明确接管或核验解除，原责任才释放。").font(.caption).foregroundStyle(.secondary)
+    }
+    private func custodyPhase(_ value:String)->String {["active":"当前责任有效，尚未解除","stale":"责任依据已失效，原责任仍保留","discharged":"当前责任已凭证据解除"][value] ?? "未知责任状态"}
+    private func custodyStatus(_ value:String)->String {["waiting":"等待通知送达","delivered":"通知已送达，等待新机长明确接受","accepted":"新机长已接受责任","stale":"提议依据已失效，保留历史"][value] ?? "未知提议状态"}
+    private func custodyExplanation(_ value:String)->String {["original_custody":"原始已接受责任","proposed":"用户已提出接管","notification_delivered":"通知投递已确认","captain_accepted":"机长已明确接受","state_changed":"授权或事实已变化","notification_dropped":"通知未送达","superseded":"已有后续提议替代","targets_unresolved":"仍有目标未解决","out_of_scope":"含范围外目标，不能整体解除","target_missing":"原目标缺失","evidence_incomplete":"证据不足，不能解除","verified":"当前目标证据核验通过"][value] ?? "未知原因"}
+    @ViewBuilder private func custodyTransferDetails(_ row:CrewdValue)->some View {
+        Text("提议："+custodyStatus(row["phase"].string ?? ""))
+        Text("原责任人："+(row["fromSessionId"].string ?? "")+" → 指定当前机长："+(row["toSessionId"].string ?? "")).textSelection(.enabled)
+        Text("请求编号："+(row["requestId"].string ?? "")).font(.caption).textSelection(.enabled)
+        Text("理由："+(row["requestReason"].string ?? ""))
+        Text("提出时间："+time(row["createdAt"]))
+        if let at=row["deliveredAt"].string {Text("送达："+at).font(.caption)}
+        if row["acceptedAt"] != .null {Text("明确接受："+time(row["acceptedAt"]))}
+        if let note=row["acceptanceNote"].string {Text("接受说明："+note)}
+        if let next=row["supersededBy"].string {Text("后继提议："+next).font(.caption).textSelection(.enabled)}
+    }
+    @ViewBuilder private func custodyDetails(_ row:CrewdValue)->some View {
+        Divider()
+        Text("当前责任与异常接管").font(.headline)
+        Text(custodyPhase(row["phase"].string ?? ""))
+        Text("当前责任人："+(row["currentCustodianSessionId"].string ?? "")).textSelection(.enabled)
+        Text("说明："+custodyExplanation(row["reason"].string ?? ""))
+        if row["currentRecord"] != .null {custodyTransferDetails(row["currentRecord"])}
+        if row["pending"] != .null {Text("待确认接管").font(.headline);custodyTransferDetails(row["pending"])}
+        ForEach(Array(row["targetResults"].array.enumerated()),id:\.offset) {_,result in
+            Text((result["id"].string ?? "")+" · "+targetReason(result["reason"].string ?? ""))
+            Text("证据来源："+(result["resolvedBy"] == .string("case_admin") ? "原案行政成员":result["resolvedBy"] == .string("other") ? "其他操作者":"尚无已核验解决来源")).font(.caption)
+        }
+        if !row["outOfScope"].array.isEmpty {Text("范围外，不能整体解除："+row["outOfScope"].array.compactMap{$0.string}.joined(separator:"、")).foregroundStyle(.orange)}
+        if row["discharge"] != .null {Text("责任解除核验时间："+time(row["discharge"]["verifiedAt"]))}
+        Text("承接不代表业务解决；责任解除、原案件结果与实际退场分别记录。原行政成员的写权限不会恢复，原工作负责人不变。").font(.caption).foregroundStyle(.secondary)
+        Button("重新读取责任") {readCustody()}.disabled(busy)
+        if row["phase"] == .string("stale"),store.capabilities.contains("adminCase.custodyPropose") {
+            Text("明确提出交由该机组当前机长接管。接收人由后台固定并核验，新机长仍须收到通知后亲自接受。").font(.caption)
+            TextField("接管理由",text:$custodyReason,axis:.vertical).lineLimit(2...4)
+            Button("向当前机长提出接管") {proposeCustody()}.disabled(busy || !custodyFresh || (row["pending"] != .null && row["pending"]["phase"] != .string("stale")) || custodyReason.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || store.custodyRequests(caseID:row["caseId"].string ?? "").contains{$0.status == .unknown || $0.status == .submitting})
+        }
+        ForEach(store.custodyRequests(caseID:row["caseId"].string ?? "")) {intent in
+            Text("本机请求："+intent.id).font(.caption).textSelection(.enabled)
+            Text("原操作理由："+intent.reason).font(.caption)
+            Text(["submitting":"提交中","unknown":"结果未知；保留原编号，只做查证","recorded":"已查到原请求记录","refused":"已明确拒绝或尚未提交；重新读取后可由你发起新操作","notFound":"当前未查到原请求；不代表它永远不会提交"][intent.status.rawValue] ?? "待查证").font(.caption)
+            if let message=intent.message {Text(message).font(.caption).foregroundStyle(.orange)}
+            Button("只读查证此请求") {lookupCustody(intent.id)}.disabled(busy || intent.status == .submitting || !store.capabilities.contains("adminCase.custodyTransferGet"))
+        }
+        if store.capabilities.contains("adminCase.custodyTransferGet") {
+            HStack {TextField("历史提议 UUID",text:$lookupID);Button("查询历史") {lookupCustody(lookupID.trimmingCharacters(in:.whitespacesAndNewlines))}.disabled(busy || UUID(uuidString:lookupID.trimmingCharacters(in:.whitespacesAndNewlines)) == nil)}
+            if let previous=row["currentRecord"]["predecessorReceiptId"].string,previous != row["originalRequestId"].string {
+                Button("查看上一代责任提议") {lookupCustody(previous)}.disabled(busy)
+            }
+        }
+        ForEach(Array(custodyHistory.enumerated()),id:\.offset) {_,record in
+            Divider();Text("历史查证记录").font(.headline);custodyTransferDetails(record)
+            if let previous=record["predecessorReceiptId"].string,previous != row["originalRequestId"].string {
+                Button("继续查看前一代") {lookupCustody(previous)}.disabled(busy)
+            }
+        }
+    }
+    private func readCustody() {
+        guard let id=detail?["id"].string else{return}
+        let request=UUID();token=request;busy=true;failure=nil;custodyFresh=false
+        Task { @MainActor in
+            defer {if token==request {busy=false}}
+            do {let row=try await store.custody(caseID:id);guard token==request else{return};custody=row;custodyFresh=true}
+            catch {if token==request {failure=error.localizedDescription}}
+        }
+    }
+    private func proposeCustody() {
+        guard let row=custody,let id=row["caseId"].string,let revision=row["revision"].string else{return}
+        let request=UUID();token=request;busy=true;failure=nil;custodyFresh=false
+        Task { @MainActor in
+            defer {if token==request {busy=false}}
+            do {let result=try await store.proposeCustody(caseID:id,revision:revision,reason:custodyReason);guard token==request else{return};custody=result;custodyReason=""}
+            catch {if token==request {failure=error.localizedDescription}}
+        }
+    }
+    private func lookupCustody(_ id:String) {
+        guard let caseID=detail?["id"].string else{return}
+        let request=UUID();token=request;busy=true;failure=nil
+        Task { @MainActor in
+            defer {if token==request {busy=false}}
+            do {let row=try await store.custodyTransfer(requestID:id,caseID:caseID);guard token==request else{return};custodyHistory.removeAll{$0["requestId"] == .string(id)};custodyHistory.append(row)}
+            catch {if token==request {failure=error.localizedDescription}}
+        }
     }
     private func handoffPhase(_ value:String)->String {
         ["waiting":"等待通知送达与机长接受","delivered":"通知已送达，等待机长接受","accepted":"机长已明确接受后续责任","stale":"交接依据已失效"][value] ?? "未知交接状态"
@@ -132,7 +221,7 @@ struct CrewdAdminCasesView:View {
     private func kind(_ value:String)->String {["unanswered":"缺少回报","overdue":"检查逾期","ready_unscheduled":"可推进但未安排检查"][value] ?? value}
     private func load(reset:Bool) {
         let request=UUID(),cursor=reset ? nil:next;token=request;busy=true;failure=nil
-        if reset {rows=[];next=nil;detail=nil;loaded=false}
+        if reset {rows=[];next=nil;detail=nil;custody=nil;custodyHistory=[];custodyFresh=false;loaded=false}
         Task { @MainActor in
             defer {if token == request {busy=false}}
             do {let page=try await store.adminCases(after:cursor);guard token == request else{return};rows += page["items"].array;next=page["nextAfter"].string;loaded=true}
@@ -140,10 +229,15 @@ struct CrewdAdminCasesView:View {
         }
     }
     private func readDetail(_ id:String) {
-        let request=UUID();token=request;busy=true;failure=nil;detail=nil
+        let request=UUID();token=request;busy=true;failure=nil;detail=nil;custody=nil;custodyHistory=[];custodyFresh=false
         Task { @MainActor in
             defer {if token == request {busy=false}}
-            do {let row=try await store.adminCase(id:id);guard token == request else{return};detail=row}
+            do {
+                let row=try await store.adminCase(id:id);guard token == request else{return};detail=row
+                if store.capabilities.contains("adminCase.custodyGet"),row["custodyRecord"] != .null {
+                    let current=try await store.custody(caseID:id);guard token == request else{return};custody=current;custodyFresh=true
+                }
+            }
             catch {if token == request {failure=error.localizedDescription}}
         }
     }

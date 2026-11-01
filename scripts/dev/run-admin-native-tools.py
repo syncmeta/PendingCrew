@@ -5,7 +5,7 @@ real Core -> production adapter case birth and physical authority fence.
 Ordinary sources remain StandIn; neither mode proves live model success.
 No daily data/settings touched.
 """
-import argparse, hashlib, http.server, json, os, pathlib, shutil, stat, subprocess, tempfile, threading
+import argparse, base64, datetime, time, hashlib, http.server, json, os, pathlib, shutil, stat, subprocess, tempfile, threading
 
 def clean_auth(base):
     runtime=base/'runtime'
@@ -21,8 +21,10 @@ def clean_auth(base):
             with os.fdopen(markerfd) as stream:
                 info=os.fstat(stream.fileno());assert info.st_size<16384 and info.st_mode&0o077==0
                 marker=json.load(stream)
-            assert marker['version']==1 and marker['session']==fixture['session'] and marker['cwd']==str(base/'project')
-            assert pathlib.Path(marker['sourceHome']).is_absolute() and not pathlib.Path(marker['sourceHome']).is_relative_to(base)
+            assert marker['version'] in [1,2] and marker['session']==fixture['session'] and marker['cwd']==str(base/'project')
+            assert pathlib.Path(marker['sourceHome']).is_absolute()
+            if marker['version']==1: assert not pathlib.Path(marker['sourceHome']).is_relative_to(base)
+            else: assert pathlib.Path(marker['sourceHome'])==base/'source'
             try: info=os.stat('auth.json',dir_fd=fd,follow_symlinks=False)
             except FileNotFoundError: continue
             assert stat.S_ISREG(info.st_mode) and info.st_nlink==1 and info.st_uid==os.getuid() and info.st_mode&0o077==0
@@ -35,16 +37,29 @@ def main():
     assert args.codex,'codex executable required'
     repo=pathlib.Path(__file__).resolve().parents[2]
     base=pathlib.Path(tempfile.mkdtemp(prefix='pcw-adm-native-',dir='/private/tmp'));(base/'project').mkdir()
-    state={'requests':[],'calls':[]}
+    state={'requests':[],'calls':[],'coreRequests':0,'refreshRequests':0}
+    source=base/'source';source.mkdir(mode=0o700)
+    def jwt(salt):
+        encode=lambda v:base64.urlsafe_b64encode(json.dumps(v).encode()).decode().rstrip('=')
+        return encode({'alg':'none'})+'.'+encode({'exp':int(time.time())+86400,'sub':'synthetic-user','email':'synthetic@example.invalid','https://api.openai.com/auth':{'chatgpt_account_id':'synthetic-account','chatgpt_user_id':'synthetic-user','chatgpt_plan_type':'pro'}})+'.'+salt
+    authfile=source/'auth.json'
+    authfile.write_text(json.dumps({'auth_mode':'chatgpt','OPENAI_API_KEY':None,'tokens':{'access_token':jwt('initial'),'id_token':jwt('identity'),'refresh_token':'synthetic-refresh','account_id':'synthetic-account'},'last_refresh':datetime.datetime.now(datetime.timezone.utc).isoformat()}));authfile.chmod(0o600)
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self,*_): pass
         def do_GET(self):
             self.send_response(200);self.end_headers();self.wfile.write(b'{"data":[]}')
         def do_POST(self):
-            body=json.loads(self.rfile.read(int(self.headers.get('content-length','0'))));state['requests'].append(body)
+            raw=self.rfile.read(int(self.headers.get('content-length','0')))
+            if self.path=='/oauth/token':
+                state['refreshRequests']+=1;self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'access_token':jwt('rotated'+str(state['refreshRequests'])),'id_token':jwt('identity'),'refresh_token':'synthetic-refresh-rotated'}).encode());return
+            if self.path!='/v1/responses':
+                self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{}');return
+            body=json.loads(raw);state['requests'].append(body)
             f=json.loads((base/'fixture.json').read_text());i=len(state['requests'])-1
-            close={'id':f['work'],'expected_revision':f.get('revision','unused'),'kind':'done','evidence':{'kind':'text','value':'isolated native integration fixture verified closure'},'note':'actual native case collaboration proof'}
-            steps=([('work_item_get',{'id':f['work']}),('work_item_close',close)] if f.get('mode')=='core' else [('work_item_get',{'id':f['work']}),('work_item_get',{'id':f['foreign']}),('work_item_close',dict(close,id=f['foreign'],expected_revision=f['foreignRevision'])),('post_to_crew',{'text':'must never be posted'}),('work_item_close',close),('work_item_close',close)])
+            if f.get('mode')=='core': i=state['coreRequests'];state['coreRequests']+=1
+            close={'id':f.get('work','source-has-no-work'),'expected_revision':f.get('revision','unused'),'kind':'done','evidence':{'kind':'text','value':'isolated native integration fixture verified closure'},'note':'actual native case collaboration proof'}
+            steps=([('work_item_get',{'id':f['work']}),('work_item_close',close)] if f.get('mode')=='core' else [] if f.get('mode')=='source' else [('work_item_get',{'id':f['work']}),('work_item_get',{'id':f['foreign']}),('work_item_close',dict(close,id=f['foreign'],expected_revision=f['foreignRevision'])),('post_to_crew',{'text':'must never be posted'}),('work_item_close',close),('work_item_close',close)])
+            if f.get('mode')=='source': steps=[]
             rid=f'resp_{i}'
             if i<len(steps):
                 name,params=steps[i]
@@ -60,24 +75,25 @@ def main():
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);threading.Thread(target=server.serve_forever,daemon=True).start()
     wrapper=base/'codex-wrapper'
     argv=[str(pathlib.Path(args.codex).resolve())]
-    for setting in ['model_provider="pcw_case"','model="gpt-5.1-codex"','model_providers.pcw_case.name="Local case tools proof"',f'model_providers.pcw_case.base_url="http://127.0.0.1:{server.server_port}/v1"','model_providers.pcw_case.wire_api="responses"','model_providers.pcw_case.requires_openai_auth=false']:
+    for setting in ['model_provider="pcw_case"','model="gpt-5.1-codex"','model_providers.pcw_case.name="Local case tools proof"',f'model_providers.pcw_case.base_url="http://127.0.0.1:{server.server_port}/v1"','model_providers.pcw_case.wire_api="responses"','model_providers.pcw_case.requires_openai_auth=true',f'chatgpt_base_url="http://127.0.0.1:{server.server_port}"']:
         argv.extend(['-c',setting])
-    wrapper.write_text('#!/usr/bin/env python3\nimport os,sys\na='+repr(argv)+'\nos.execv(a[0],a+sys.argv[1:])\n');wrapper.chmod(0o700)
+    wrapper.write_text('#!/usr/bin/env python3\nimport os,sys\nos.environ["CODEX_REFRESH_TOKEN_URL_OVERRIDE"]='+repr(f'http://127.0.0.1:{server.server_port}/oauth/token')+'\na='+repr(argv)+'\nos.execv(a[0],a+sys.argv[1:])\n');wrapper.chmod(0o700)
     try:
         build=subprocess.run(['cargo','build','-p','crewd'],cwd=repo/'crewd',capture_output=True,text=True,timeout=240)
         (base/'helper-build.log').write_text(build.stdout+build.stderr);assert build.returncode==0,build.stderr[-2500:]
         helper=repo/'crewd'/'target'/'debug'/'crewd'
         (base/'helper-sha256').write_text(hashlib.sha256(helper.read_bytes()).hexdigest()+'\n')
-        env=dict(os.environ,PCW_ADMIN_NATIVE_PROBE='loopback',PCW_ADMIN_NATIVE_PROGRAM=str(wrapper),PCW_ADMIN_NATIVE_HELPER=str(helper),PCW_ADMIN_NATIVE_EVIDENCE=str(base),TMPDIR=str(base))
+        env=dict(os.environ,CODEX_HOME=str(source),PCW_ADMIN_NATIVE_PROBE='loopback',PCW_ADMIN_NATIVE_PROGRAM=str(wrapper),PCW_ADMIN_NATIVE_HELPER=str(helper),PCW_ADMIN_NATIVE_EVIDENCE=str(base),TMPDIR=str(base))
         run=subprocess.run(['cargo','test','-p','crewd-server','--lib','real_core_native_case_source_revocation_stops_physical_process' if args.core_fence else 'real_native_case_tools_scope_and_factual_close','--','--ignored','--nocapture'],cwd=repo/'crewd',env=env,capture_output=True,text=True,timeout=240)
         (base/'test.log').write_text(run.stdout+run.stderr);assert run.returncode==0,(run.returncode,run.stdout[-3000:],run.stderr[-1500:])
         assert '1 passed' in run.stdout,'ignored test was not registered/executed'
         if args.core_fence:
-            assert len(state['requests'])==3, ('first real Core turn incomplete',len(state['requests']))
+            assert state['coreRequests']==3, ('first real Core turn incomplete',state['coreRequests'])
+            assert not list((base/'runtime').glob('codex-case-home-*/auth.json')), 'case must not persist auth'
             receipt=json.loads((base/'core-fence-receipt.json').read_text())
             assert all(receipt[key] for key in ['ready','closureActorVerified','profileAdoptedFromUnset','liveBeforeRevocation','fencedBeforeCleanup','physicallyGoneBeforeCleanup','adminAdmissionRevoked'])
             assert receipt['closedWork']['status']=='done' and receipt['before']['executionRecord']['effectsCount']==1
-            print('PASS real Core -> production Codex adapter -> actual native crew get/close with Admin event and one effect; source admission revoke -> physical native exit before cleanup. Ordinary sources use StandIn.')
+            print('PASS real Core -> production Codex adapter -> actual native crew get/close with Admin event and one effect; source admission revoke -> physical native exit before cleanup. Original source also uses production Codex with synthetic credentials.')
             return
         assert len(state['requests'])==7,('sequence incomplete',len(state['requests']))
         results={e['call_id']:e.get('output','') for r in state['requests'] for e in r.get('input',[]) if isinstance(e,dict) and e.get('type')=='function_call_output'}
@@ -89,7 +105,7 @@ def main():
         receipt=json.loads((base/'receipt.json').read_text());assert receipt['after']['status']=='done' and receipt['case']['executionRecord']['effectsCount']==1
         print('PASS actual native Codex -> actual built crew MCP -> real scoped case read/close; foreign/nonallowlisted/stale denied. StandIn Core birth only.')
     finally:
-        server.shutdown();(base/'requests.json').write_text(json.dumps(state,indent=2))
+        server.shutdown();authfile.unlink(missing_ok=True);(base/'requests.json').write_text(json.dumps(state,indent=2))
         removed=clean_auth(base);(base/'auth-cleanup.json').write_text(json.dumps({'removedPrivateAuthCopies':removed})+'\n')
         print('Evidence:',base,flush=True)
 if __name__=='__main__': main()
