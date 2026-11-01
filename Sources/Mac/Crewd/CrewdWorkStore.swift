@@ -350,6 +350,21 @@ final class CrewdWorkStore: ObservableObject {
             if generation != .null {guard let raw=generation.string,let n=UInt64(raw),String(n)==raw else {throw CrewdClientError(message:"执行代次无效。")}}
             if row["execution"] == .string("running"),generation == .null {throw CrewdClientError(message:"实际运行确认缺少执行代次。")}
         }
+        if let launch=fields["launchRecord"] {
+            if launch != .null {
+                guard case .object(let launchFields)=launch,
+                      ["waiting","dispatching","bound","unknown","stale"].contains(launch["phase"].string ?? ""),
+                      ["ready","source_not_running","source_admission_missing","capacity_unavailable","executor_unsupported","native_auth_unavailable","runtime_unavailable","settings_disabled","source_state_changed","workspace_unavailable","shutting_down","claimed","bound","restart_unknown","state_changed"].contains(launch["reason"].string ?? ""),
+                      launch["revision"].string?.isEmpty == false,launch["decisionId"].string?.isEmpty == false,launch["updatedAt"].int != nil,
+                      let session=launchFields["sessionId"],let attempt=launchFields["attemptId"] else {throw CrewdClientError(message:"行政启动调度证据不完整。")}
+                if launch["phase"] == .string("bound") {
+                    guard session.string?.isEmpty == false,attempt.string?.isEmpty == false,
+                          session == execution["sessionId"],attempt == execution["attemptId"] else {throw CrewdClientError(message:"启动调度绑定与实际执行记录不符。")}
+                } else {
+                    guard session == .null,attempt == .null else {throw CrewdClientError(message:"未绑定调度含有不明执行身份。")}
+                }
+            }
+        } else if capabilities.contains("adminCase.automaticExecution") {throw CrewdClientError(message:"行政启动调度字段缺失。")}
         guard let retirement=fields["retirementRecord"] else {throw CrewdClientError(message:"行政退场记录字段缺失。")}
         if retirement == .null {
             guard row["retirement"] == .string("not_started") else {throw CrewdClientError(message:"退场阶段缺少实际记录。")}

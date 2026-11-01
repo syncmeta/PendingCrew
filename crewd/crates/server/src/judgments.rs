@@ -1,7 +1,7 @@
 //! Decision planning is separate from effects. All public/model names are opaque
 //! request-local aliases; only a current authority snapshot can resolve them.
-mod configuration;
 mod admin_cases;
+mod configuration;
 mod coordination;
 mod reassignment;
 mod retirement;
@@ -189,6 +189,11 @@ pub(crate) struct Runtime {
     provider: Mutex<Option<(String, Arc<DecisionProvider>)>>,
     tasks: Mutex<JoinSet<()>>,
     pump: Mutex<Option<JoinHandle<()>>>,
+    automatic_admin: bool,
+    admin_launch_slots: Arc<Semaphore>,
+    admin_launch_cursor: Mutex<Option<String>>,
+    admin_launch_pending: Mutex<std::collections::VecDeque<crewd_collab::admin_cases::CaseRef>>,
+    admin_launch_inflight: Mutex<std::collections::BTreeSet<String>>,
 }
 fn provider_config(c: &JudgmentConfig) -> DecisionConfig {
     DecisionConfig {
@@ -205,6 +210,14 @@ impl Runtime {
         state: &Arc<AppState>,
         data: PathBuf,
         active: bool,
+    ) -> anyhow::Result<Option<Arc<Self>>> {
+        Self::start_with_admin_dispatch(state, data, active, true).await
+    }
+    async fn start_with_admin_dispatch(
+        state: &Arc<AppState>,
+        data: PathBuf,
+        active: bool,
+        automatic_admin: bool,
     ) -> anyhow::Result<Option<Arc<Self>>> {
         let active = active
             && state
@@ -233,12 +246,19 @@ impl Runtime {
             provider: Mutex::new(None),
             tasks: Mutex::new(JoinSet::new()),
             pump: Mutex::new(None),
+            automatic_admin,
+            admin_launch_slots: Arc::new(Semaphore::new(8)),
+            admin_launch_cursor: Mutex::new(None),
+            admin_launch_pending: Mutex::new(Default::default()),
+            admin_launch_inflight: Mutex::new(Default::default()),
         });
         // Settle old pending attempts without invoking a provider. A restored DB
         // has a different dbId and is historical instead of a new dispatch.
         let _ = state.judgment_runtime.set(this.clone());
         let mut rx = state.hub.subscribe_collab();
-        state.collab(crewd_collab::work_coordination::observe_reports).await?;
+        state
+            .collab(crewd_collab::work_coordination::observe_reports)
+            .await?;
         this.recover_coordination().await?;
         this.recover_reassignment().await?;
         this.recover_retirement().await?;
@@ -264,6 +284,9 @@ impl Runtime {
                         }
                         if let Err(e) = runtime.resume_pending_admin_cases().await {
                             eprintln!("crewd: administrative pending scan failed: {e}");
+                        }
+                        if let Err(e) = runtime.schedule_admin_launches().await {
+                            eprintln!("crewd: administrative launch scan failed closed: {e}");
                         }
                         if let Err(e) = runtime.verify_admin_outcomes().await {
                             eprintln!("crewd: administrative outcome scan failed: {e}");

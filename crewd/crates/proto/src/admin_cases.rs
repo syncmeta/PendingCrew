@@ -85,6 +85,8 @@ pub struct AdminCaseSource {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminCaseView {
     #[serde(default)]
+    pub launch_record: Option<AdminCaseLaunchView>,
+    #[serde(default)]
     pub custody_record: Option<AdminCaseCustodyView>,
     #[serde(default)]
     pub handoff_record: Option<AdminCaseHandoffView>,
@@ -390,4 +392,45 @@ pub struct AdminCaseCustodyView {
 pub struct AdminCaseCustodyList {
     pub items: Vec<AdminCaseCustodyTransfer>,
     pub next_after: Option<String>,
+}
+
+/// Scheduling intent only. Bound execution is described by executionRecord.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseLaunchPhase {
+    Waiting,
+    Dispatching,
+    Bound,
+    Unknown,
+    Stale,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseLaunchReason {
+    Ready,
+    SourceNotRunning,
+    SourceAdmissionMissing,
+    CapacityUnavailable,
+    ExecutorUnsupported,
+    NativeAuthUnavailable,
+    RuntimeUnavailable,
+    SettingsDisabled,
+    SourceStateChanged,
+    WorkspaceUnavailable,
+    ShuttingDown,
+    Claimed,
+    Bound,
+    RestartUnknown,
+    StateChanged,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLaunchView {
+    pub phase: AdminCaseLaunchPhase,
+    pub reason: AdminCaseLaunchReason,
+    pub revision: String,
+    pub decision_id: String,
+    pub updated_at: i64,
+    pub attempt_id: Option<String>,
+    pub session_id: Option<String>,
 }

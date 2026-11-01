@@ -22,6 +22,7 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
         "adminCase.custodyGet",
         "adminCase.custodyTransferGet",
         "adminCase.custodyPropose",
+        "adminCase.automaticExecution",
     ] {
         assert!(
             hello["capabilities"]
@@ -168,6 +169,11 @@ async fn committed_stop_escalation_round_trips_original_evidence_without_startin
     assert_eq!(case["targets"][0]["scope"], "in_scope");
     assert_eq!(case["decision"], "observed");
     assert_eq!(case["execution"], "not_started");
+    assert_eq!(
+        case.get("launchRecord"),
+        Some(&Value::Null),
+        "passive inspection exposes the scheduling field without preparing a launch"
+    );
     assert_eq!(case["retirement"], "not_started");
     let detail = call(
         &mut human,

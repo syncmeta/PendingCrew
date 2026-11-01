@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug)]
 pub struct AdminLaunchPermit {
+    pub(crate) schedule_revision: Option<String>,
     case: String,
     crew: String,
     source: String,
@@ -455,6 +456,7 @@ pub fn launch_permit(tx: &mut Tx<'_>, crew: &str, id: &str) -> Result<Option<Adm
         return Ok(None);
     };
     Ok(Some(AdminLaunchPermit {
+        schedule_revision: None,
         case: id.into(),
         crew: crew.into(),
         source: s.case.source.session_id,
@@ -511,6 +513,7 @@ pub fn register_and_bind(tx: &mut Tx<'_>, permit: &AdminLaunchPermit) -> Result<
     {
         return Err(invalid());
     }
+    crate::admin_case_launch::claim(tx, permit)?;
     let source = crewd_store::sessions::get(tx.conn(), &permit.source)?.ok_or_else(invalid)?;
     let crew = crewd_store::crews::get(tx.conn(), &permit.crew)?.ok_or_else(invalid)?;
     let session = crate::sessions::register(
@@ -572,6 +575,7 @@ pub fn register_and_bind(tx: &mut Tx<'_>, permit: &AdminLaunchPermit) -> Result<
     tx.conn().execute("UPDATE sessions SET extra=json_set(COALESCE(extra,'{}'),'$.adminCaseExecutionV1',json(?1)) WHERE id=?2",params![marker,session.id])?;
     meta_set(tx.conn(), &session_key(&session.id), &r.case)?;
     save(tx, &r)?;
+    crate::admin_case_launch::bound(tx, permit, &witness(&r))?;
     Ok(Registration {
         session,
         witness: witness(&r),
@@ -944,7 +948,7 @@ pub(crate) mod tests {
         testkit::{NOW, ok, store},
         work,
     };
-    fn adopted(s: &mut crewd_store::Store) -> AdminCaseView {
+    pub(crate) fn adopted(s: &mut crewd_store::Store) -> AdminCaseView {
         let settings = crewd_proto::judgments::JudgmentSettings {
             revision: Some("synthetic".into()),
             config: Some(crewd_proto::judgments::JudgmentConfig {

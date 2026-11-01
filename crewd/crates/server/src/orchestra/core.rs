@@ -545,6 +545,10 @@ pub enum Cmd {
     CheckAdminAuthority {
         reply: Reply<()>,
     },
+    ScheduleAdminCase {
+        permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
+        reply: Reply<()>,
+    },
     StartAdminCase {
         permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
         reply: Reply<SessionRow>,
@@ -1322,6 +1326,10 @@ impl<P: Port> Core<P> {
                 let _ = reply.send(result);
             }
             Cmd::Start { req, origin, reply } => self.start_new(req, origin, reply).await,
+            Cmd::ScheduleAdminCase { permit, reply } => {
+                let result = self.schedule_admin_case(permit).await;
+                let _ = reply.send(result);
+            }
             Cmd::StartAdminCase { permit, reply } => {
                 let result = self.start_admin_case(permit).await;
                 let _ = reply.send(result);
@@ -1632,6 +1640,96 @@ impl<P: Port> Core<P> {
             .map_err(ControlError::from_port)?
             .ok_or_else(|| ControlError::CrewNoWorkdir(req.crew_id.clone()))?;
         Ok(Some(base))
+    }
+
+    async fn admin_launch_preflight(
+        &self,
+        permit: &crewd_collab::admin_case_execution::AdminLaunchPermit,
+    ) -> Result<Option<crewd_proto::AdminCaseLaunchReason>, ControlError> {
+        use crewd_proto::AdminCaseLaunchReason as Wait;
+        if self.shutting_down || self.binary_replaced {
+            return Ok(Some(Wait::ShuttingDown));
+        }
+        if !self
+            .cfg
+            .admission
+            .as_ref()
+            .is_some_and(|a| a.contains(permit.source_session()))
+        {
+            return Ok(Some(Wait::SourceAdmissionMissing));
+        }
+        let Some(source) = self
+            .port
+            .session(permit.source_session())
+            .await
+            .map_err(ControlError::from_port)?
+        else {
+            return Ok(Some(Wait::SourceStateChanged));
+        };
+        if source.crew_id != permit.crew_id()
+            || self
+                .port
+                .crew_removed(permit.crew_id())
+                .await
+                .map_err(ControlError::from_port)?
+        {
+            return Ok(Some(Wait::SourceStateChanged));
+        }
+        let Ok(exec) = self.execs.get(&source.executor) else {
+            return Ok(Some(Wait::ExecutorUnsupported));
+        };
+        if !exec.supports_native_policy(super::exec::NativeExecutionPolicy::AdminCaseRestricted) {
+            return Ok(Some(Wait::ExecutorUnsupported));
+        }
+        let Some(live) = self
+            .live
+            .get(permit.source_session())
+            .filter(|s| !s.stopping && !s.halting && !s.agent_session_id.is_empty() && s.executor == source.executor)
+        else {
+            return Ok(Some(Wait::SourceNotRunning));
+        };
+        if source.executor == "codex" && !live.handle.supports_native_auth_export() {
+            return Ok(Some(Wait::NativeAuthUnavailable));
+        }
+        match self.check_launch(&exec, permit.crew_id(), &source.executor) {
+            Ok(()) => {}
+            Err(ControlError::Unsupported(_)) => return Ok(Some(Wait::ExecutorUnsupported)),
+            Err(ControlError::BinaryReplaced | ControlError::ShuttingDown) => {
+                return Ok(Some(Wait::ShuttingDown));
+            }
+            Err(error) => return Err(error),
+        }
+        match self.check_cap(Origin::Agent) {
+            Ok(()) => {}
+            Err(ControlError::AtCap { .. }) => return Ok(Some(Wait::CapacityUnavailable)),
+            Err(error) => return Err(error),
+        }
+        if self
+            .port
+            .crew_workdir(permit.crew_id())
+            .await
+            .map_err(ControlError::from_port)?
+            .is_none()
+        {
+            return Ok(Some(Wait::WorkspaceUnavailable));
+        }
+        Ok(None)
+    }
+
+    async fn schedule_admin_case(
+        &mut self,
+        permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
+    ) -> Result<(), ControlError> {
+        if let Some(reason) = self.admin_launch_preflight(&permit).await? {
+            self.port
+                .wait_admin_case_launch(permit, reason)
+                .await
+                .map_err(ControlError::from_port)?;
+            return Ok(());
+        }
+        // The original factory consumes the schedule witness in the very same
+        // transaction as registration. An already bound/unknown case cannot retry.
+        self.start_admin_case(permit).await.map(|_| ())
     }
 
     async fn start_admin_case(

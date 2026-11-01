@@ -16,9 +16,14 @@ struct Fixture {
     actor: Actor,
     crew: String,
     worker: String,
+    automatic_admin: bool,
 }
 impl Fixture {
     async fn new() -> Self {
+        // These older module tests exercise explicit launch commands.
+        Self::new_with_admin_dispatch(false).await
+    }
+    async fn new_with_admin_dispatch(automatic_admin: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path().canonicalize().unwrap();
         let state = Arc::new(AppState::new(
@@ -83,7 +88,10 @@ impl Fixture {
         // in this daemon run; reopen intentionally does not restore admission.
         state.admission.allow(&_cap);
         state.admission.allow(&worker);
-        let runtime = Runtime::start(&state, data, true).await.unwrap().unwrap();
+        let runtime = Runtime::start_with_admin_dispatch(&state, data, true, automatic_admin)
+            .await
+            .unwrap()
+            .unwrap();
         Self {
             dir,
             state,
@@ -91,6 +99,7 @@ impl Fixture {
             actor,
             crew,
             worker,
+            automatic_admin,
         }
     }
     async fn rpc(
@@ -202,10 +211,11 @@ impl Fixture {
             .unwrap(),
         ));
         self.state.judgment_test_http.store(true, Ordering::Release);
-        self.runtime = Runtime::start(&self.state, data, true)
-            .await
-            .unwrap()
-            .unwrap();
+        self.runtime =
+            Runtime::start_with_admin_dispatch(&self.state, data, true, self.automatic_admin)
+                .await
+                .unwrap()
+                .unwrap();
         let policy = Arc::new(crate::peer::PeerPolicy::new(None).unwrap());
         let (server, _client) = tokio::net::UnixStream::pair().unwrap();
         self.actor = Actor::Local(policy.accept(&server).unwrap());
@@ -1169,9 +1179,9 @@ mod coordination;
 
 mod reassignment;
 
-mod retirement;
 mod admin_cases;
 mod admin_execution;
+mod retirement;
 
 #[tokio::test]
 async fn stale_settings_revision_returns_conflict_without_panicking_or_changing_configuration() {
@@ -1179,12 +1189,19 @@ async fn stale_settings_revision_returns_conflict_without_panicking_or_changing_
     let f = Fixture::new().await;
     f.configure(&fake.base_url).await;
     let before = f.rpc(SETTINGS_GET, json!({})).await.unwrap();
-    let refused = f.rpc(SETTINGS_SET, serde_json::to_value(JudgmentSettingsSet {
-        request_id: uuid::Uuid::new_v4().to_string(),
-        expected_revision: None,
-        config: Some(Fixture::config(&fake.base_url)),
-        credential_update: CredentialUpdate::Keep,
-    }).unwrap()).await.unwrap_err();
+    let refused = f
+        .rpc(
+            SETTINGS_SET,
+            serde_json::to_value(JudgmentSettingsSet {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                expected_revision: None,
+                config: Some(Fixture::config(&fake.base_url)),
+                credential_update: CredentialUpdate::Keep,
+            })
+            .unwrap(),
+        )
+        .await
+        .unwrap_err();
     assert_eq!(refused.code, crewd_proto::RpcError::CONFLICT);
     assert_eq!(before, f.rpc(SETTINGS_GET, json!({})).await.unwrap());
     assert!(fake.requests().is_empty());

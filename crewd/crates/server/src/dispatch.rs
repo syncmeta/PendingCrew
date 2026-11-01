@@ -303,6 +303,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     methods::ADMIN_CASE_CUSTODY_GET,
                     methods::ADMIN_CASE_CUSTODY_TRANSFER_GET,
                     methods::ADMIN_CASE_CUSTODY_PROPOSE,
+                    "adminCase.automaticExecution",
                 ]
                 .into_iter()
                 .map(str::to_owned),

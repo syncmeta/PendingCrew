@@ -2,7 +2,9 @@
 """Actual Codex + built crewd MCP + real case DB; loopback provider only.
 Default: StandIn case birth, real native/helper/RPC/Tx seam. --core-fence:
 real Core -> production adapter case birth and physical authority fence.
-Ordinary sources remain StandIn; neither mode proves live model success.
+In core-fence mode the source uses the production adapter and the case is
+created by the production periodic judgment/activation pump. The default mode
+uses StandIn case birth. Neither mode proves live model success.
 No daily data/settings touched.
 """
 import argparse, base64, datetime, time, hashlib, http.server, json, os, pathlib, shutil, stat, subprocess, tempfile, threading
@@ -33,11 +35,12 @@ def clean_auth(base):
     return removed
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--codex',default=shutil.which('codex'));parser.add_argument('--core-fence',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--codex',default=shutil.which('codex'));parser.add_argument('--core-fence',action='store_true');parser.add_argument('--refresh-on-case',action='store_true');args=parser.parse_args()
+    assert not args.refresh_on_case or args.core_fence, 'refresh proof requires original native owner'
     assert args.codex,'codex executable required'
     repo=pathlib.Path(__file__).resolve().parents[2]
     base=pathlib.Path(tempfile.mkdtemp(prefix='pcw-adm-native-',dir='/private/tmp'));(base/'project').mkdir()
-    state={'requests':[],'calls':[],'coreRequests':0,'refreshRequests':0}
+    state={'requests':[],'calls':[],'coreRequests':0,'refreshRequests':0,'case401':0,'responseAuthHashes':[],'caseAuthHashes':[]}
     source=base/'source';source.mkdir(mode=0o700)
     def jwt(salt):
         encode=lambda v:base64.urlsafe_b64encode(json.dumps(v).encode()).decode().rstrip('=')
@@ -54,6 +57,12 @@ def main():
                 state['refreshRequests']+=1;self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps({'access_token':jwt('rotated'+str(state['refreshRequests'])),'id_token':jwt('identity'),'refresh_token':'synthetic-refresh-rotated'}).encode());return
             if self.path!='/v1/responses':
                 self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{}');return
+            state['responseAuthHashes'].append(hashlib.sha256(self.headers.get('Authorization','').encode()).hexdigest())
+            fixture=json.loads((base/'fixture.json').read_text())
+            if fixture.get('mode')=='core': state['caseAuthHashes'].append(state['responseAuthHashes'][-1])
+            if args.refresh_on_case and fixture.get('mode')=='core' and state['coreRequests']==1 and state['case401']==0:
+                state['case401']+=1
+                self.send_response(401);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{"error":{"message":"synthetic access rejected","type":"invalid_request_error","code":"token_expired"}}');return
             body=json.loads(raw);state['requests'].append(body)
             f=json.loads((base/'fixture.json').read_text());i=len(state['requests'])-1
             if f.get('mode')=='core': i=state['coreRequests'];state['coreRequests']+=1
@@ -88,12 +97,17 @@ def main():
         (base/'test.log').write_text(run.stdout+run.stderr);assert run.returncode==0,(run.returncode,run.stdout[-3000:],run.stderr[-1500:])
         assert '1 passed' in run.stdout,'ignored test was not registered/executed'
         if args.core_fence:
+            if args.refresh_on_case:
+                assert state['case401']==1 and state['refreshRequests']==1, ('refresh must use original manager exactly once',state['case401'],state['refreshRequests'])
+                # Case get, rejected next response, accepted retry, final response.
+                # An idle resumed source need not issue any model HTTP request.
+                hashes=state['caseAuthHashes'];assert len(hashes)==4 and hashes[1]!=hashes[2], ('401 retry must carry changed access',hashes)
             assert state['coreRequests']==3, ('first real Core turn incomplete',state['coreRequests'])
             assert not list((base/'runtime').glob('codex-case-home-*/auth.json')), 'case must not persist auth'
             receipt=json.loads((base/'core-fence-receipt.json').read_text())
             assert all(receipt[key] for key in ['ready','closureActorVerified','profileAdoptedFromUnset','liveBeforeRevocation','fencedBeforeCleanup','physicallyGoneBeforeCleanup','adminAdmissionRevoked'])
             assert receipt['closedWork']['status']=='done' and receipt['before']['executionRecord']['effectsCount']==1
-            print('PASS real Core -> production Codex adapter -> actual native crew get/close with Admin event and one effect; source admission revoke -> physical native exit before cleanup. Original source also uses production Codex with synthetic credentials.')
+            print('PASS automatic production judgment/pump -> real Core -> production Codex adapter -> actual native crew get/close with Admin event and one effect; source admission revoke -> physical native exit before cleanup. Original source also uses production Codex with synthetic credentials.')
             return
         assert len(state['requests'])==7,('sequence incomplete',len(state['requests']))
         results={e['call_id']:e.get('output','') for r in state['requests'] for e in r.get('input',[]) if isinstance(e,dict) and e.get('type')=='function_call_output'}

@@ -14,8 +14,8 @@ pub(crate) mod exec_claude_managed;
 pub mod exec_codex;
 pub mod hibernate;
 pub mod hooks;
-mod notify;
 mod native_auth;
+mod notify;
 pub mod port;
 #[cfg(test)]
 mod port_contract;
@@ -333,6 +333,13 @@ impl Handle {
         origin: Origin,
     ) -> Result<SessionRow, ControlError> {
         self.call(|reply| Cmd::Start { req, origin, reply }).await
+    }
+    pub(crate) async fn schedule_admin_case(
+        &self,
+        permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
+    ) -> Result<(), ControlError> {
+        self.call(|reply| Cmd::ScheduleAdminCase { permit, reply })
+            .await
     }
     #[cfg_attr(
         not(test),

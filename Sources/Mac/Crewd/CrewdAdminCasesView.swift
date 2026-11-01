@@ -17,7 +17,7 @@ struct CrewdAdminCasesView:View {
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
             Text("行政处理记录").font(.headline)
-            Text("记录工作跟进升级来源、判断与执行事实。自动行政启动尚未启用；内部执行验证记录不代表日用自动处理。").font(.caption).foregroundStyle(.secondary)
+            Text("记录跟进升级、介入判断与实际执行。启用判断且建议有效时，后台按权限、在线状态和容量安排受控启动；等待或未知都不代表已处理。").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("重新读取") {load(reset:true)}.disabled(busy)
                 if next != nil {Button("下一页") {load(reset:false)}.disabled(busy)}
@@ -45,6 +45,15 @@ struct CrewdAdminCasesView:View {
                             Text("原因："+decisionReason(detail["decisionRecord"]["reason"].string ?? ""))
                             if detail["decisionRecord"]["probability"] != .null {Text("介入概率："+detail["decisionRecord"]["probability"].pretty)}
                             Text(detail["decisionRecord"]["adopted"] == .bool(true) ? "介入建议已采纳；是否启动须看独立执行记录，不代表工作解决。":"本次判断未采纳介入建议。")
+                        }
+                        if detail["launchRecord"] != .null {
+                            let launch=detail["launchRecord"]
+                            Text("启动调度："+launchPhase(launch["phase"].string ?? ""))
+                            Text("调度说明："+launchReason(launch["reason"].string ?? ""))
+                            Text("调度更新时间："+time(launch["updatedAt"]))
+                            Text("等待条件变化不会重新询问模型；绑定后的运行结果以执行记录为准，未知启动不自动重放。").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text(store.capabilities.contains("adminCase.automaticExecution") ? "尚无启动调度记录；未配置、未采纳或依据已失效时不会新建执行成员。" : "当前后台尚未提供自动行政启动调度记录。").font(.caption).foregroundStyle(.secondary)
                         }
                         Text("执行："+executionPhase(detail["execution"].string ?? ""))
                         if detail["executionRecord"] != .null {
@@ -96,6 +105,12 @@ struct CrewdAdminCasesView:View {
     }
     private func decisionReason(_ value:String)->String {
         ["prepared":"等待模型判断","native_answered":"模型原生概率答复","generated":"生成式答复，仅作建议","provider_unavailable":"模型服务不可用","restart_unknown":"重启前结果未知，不重复请求","unconfigured":"尚未配置判断模型","no_admission":"缺少当前运行准入","state_changed":"来源或工作状态已变化","stopped":"已停止","no_in_scope_targets":"当前范围没有可处理目标"][value] ?? "未知原因"
+    }
+    private func launchPhase(_ value:String)->String {
+        ["waiting":"等待启动条件","dispatching":"正在原子领取与登记","bound":"已绑定唯一执行成员","unknown":"调度结果未知，不自动重放","stale":"调度依据已失效"][value] ?? "未知调度状态"
+    }
+    private func launchReason(_ value:String)->String {
+        ["ready":"有效介入判断已就绪","source_not_running":"来源成员当前不在线","source_admission_missing":"来源成员未获本轮准入","capacity_unavailable":"等待执行容量","executor_unsupported":"执行器不支持受限行政策略","native_auth_unavailable":"原生执行认证不可用","runtime_unavailable":"运行时暂不可用","settings_disabled":"判断配置已停用","source_state_changed":"来源状态变化","workspace_unavailable":"工作目录不可用","shutting_down":"后台正在退出","claimed":"启动登记事务已领取","bound":"唯一执行身份已持久绑定","restart_unknown":"恢复时发现未知领取，不重放","state_changed":"当前判断或权限依据已改变"][value] ?? "未知调度原因"
     }
     private func executionPhase(_ value:String)->String {
         ["not_started":"尚未开始","registered":"已登记唯一成员，尚未请求启动","requested":"已请求启动，尚未确认实际运行","running":"已收到实际启动确认","unknown":"启动结果未知，不自动重试","stale":"执行依据已失效"][value] ?? "未知执行状态"

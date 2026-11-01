@@ -537,6 +537,78 @@
       ],
       "type": "object"
     },
+    "AdminCaseLaunchPhase": {
+      "description": "Scheduling intent only. Bound execution is described by executionRecord.",
+      "enum": [
+        "waiting",
+        "dispatching",
+        "bound",
+        "unknown",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "AdminCaseLaunchReason": {
+      "enum": [
+        "ready",
+        "source_not_running",
+        "source_admission_missing",
+        "capacity_unavailable",
+        "executor_unsupported",
+        "native_auth_unavailable",
+        "runtime_unavailable",
+        "settings_disabled",
+        "source_state_changed",
+        "workspace_unavailable",
+        "shutting_down",
+        "claimed",
+        "bound",
+        "restart_unknown",
+        "state_changed"
+      ],
+      "type": "string"
+    },
+    "AdminCaseLaunchView": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/AdminCaseLaunchPhase"
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseLaunchReason"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "phase",
+        "reason",
+        "revision",
+        "decisionId",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
     "AdminCaseList": {
       "additionalProperties": false,
       "properties": {
@@ -937,6 +1009,17 @@
         },
         "id": {
           "type": "string"
+        },
+        "launchRecord": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseLaunchView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "outcomeRecord": {
           "anyOf": [

@@ -301,7 +301,7 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
     let evidence = PathBuf::from(std::env::var_os("PCW_ADMIN_NATIVE_EVIDENCE").unwrap());
     let project = evidence.join("project");
     let fake = FakeJev::start(vec![answer(0.99)]).await;
-    let f = Fixture::new().await;
+    let f = Fixture::new_with_admin_dispatch(true).await;
     f.configure(&fake.base_url).await;
     let crew = f.crew.clone();
     let wd = project.to_string_lossy().to_string();
@@ -407,27 +407,27 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
     // Core must persist the original source Profile before the case captures it.
     tokio::time::sleep(Duration::from_millis(100)).await;
     let source = sources(&rig.f, 1).await.remove(0);
-    rig.f
-        .runtime
-        .run_admin_case(rig.f.crew.clone(), source.id.clone(), true)
-        .await
-        .unwrap();
-    let crew = rig.f.crew.clone();
-    let case = source.id.clone();
-    let permit = rig
-        .f
-        .state
-        .collab(move |tx| execution::launch_permit(tx, &crew, &case))
-        .await
-        .unwrap()
-        .unwrap();
     let original_work = current_work(&rig.f, &source.work).await;
     std::fs::write(
         evidence.join("fixture.json"),
         serde_json::to_vec(&json!({"mode":"core","work":source.work,"caseId":source.id,"revision":original_work.revision})).unwrap(),
     )
     .unwrap();
-    let sid = rig.handle.start_admin_case(permit).await.unwrap().id;
+    // Natural production judgment tick and activation pump: no manual judge or
+    // Core start command is allowed in this end-to-end acceptance path.
+    let sid = tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            let observed = view(&rig.f, &source.id).await;
+            if let Some(id) = observed["executionRecord"]["sessionId"].as_str() {
+                assert_eq!(observed["launchRecord"]["phase"], "bound");
+                break id.to_owned();
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+
     std::fs::write(
         evidence.join("fixture.json"),
         serde_json::to_vec(

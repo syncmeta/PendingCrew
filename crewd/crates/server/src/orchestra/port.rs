@@ -454,6 +454,13 @@ pub trait Port: Send + Sync + 'static {
     fn sessions_desired_running(&self) -> impl Future<Output = Result<Vec<SessionRow>>> + Send;
     fn all_session_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn insert_session(&self, s: NewSession) -> impl Future<Output = Result<SessionRow>> + Send;
+    fn wait_admin_case_launch(
+        &self,
+        _permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
+        _reason: crewd_proto::AdminCaseLaunchReason,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async { anyhow::bail!("administrative case scheduling unavailable") }
+    }
     fn insert_admin_case_session(
         &self,
         _permit: crewd_collab::admin_case_execution::AdminLaunchPermit,

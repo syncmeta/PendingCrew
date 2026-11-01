@@ -4,6 +4,7 @@
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
 pub mod admin_cases;
 pub mod admin_case_execution;
+pub mod admin_case_launch;
 pub mod admin_case_handoff;
 pub mod admin_case_custody;
 pub mod admin_case_outcome;

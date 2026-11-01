@@ -46,6 +46,87 @@ fn selection(result: JudgmentResult) -> (Option<f64>, Reason) {
 }
 
 impl super::Runtime {
+    /// One keyset page per tick bounds DB work; a cursor prevents tail starvation.
+    pub(super) async fn schedule_admin_launches(self: &Arc<Self>) -> anyhow::Result<()> {
+        if !self.automatic_admin || self.closed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let Some(state) = self.state.upgrade() else {
+            return Ok(());
+        };
+        // Retain unconsumed rows rather than advancing past sources when all
+        // slots are occupied. The queue contains at most one 64-row DB page.
+        let mut pending = self.admin_launch_pending.lock().await;
+        if pending.is_empty() {
+            let cursor = self.admin_launch_cursor.lock().await.take();
+            let (cases, next) = state
+                .db
+                .call_result(move |s| facts::source_page(s.conn(), cursor))
+                .await??;
+            *self.admin_launch_cursor.lock().await = next;
+            pending.extend(cases);
+        }
+        while !pending.is_empty() {
+            if self.closed.load(Ordering::Acquire) {
+                break;
+            }
+            let Ok(slot) = self.admin_launch_slots.clone().try_acquire_owned() else {
+                break;
+            };
+            let case = pending.pop_front().expect("nonempty pending page");
+            let key = case.id.clone();
+            if !self.admin_launch_inflight.lock().await.insert(key.clone()) {
+                continue;
+            }
+            let runtime = self.clone();
+            let state = state.clone();
+            let mut tasks = self.tasks.lock().await;
+            while tasks.try_join_next().is_some() {}
+            tasks.spawn(async move {
+                let _slot = slot;
+                let result: anyhow::Result<()> = async {
+                    if runtime.closed.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    let permit = state
+                        .collab(move |tx| {
+                            crewd_collab::admin_case_launch::prepare(tx, &case.crew, &case.id)
+                        })
+                        .await?;
+                    let Some(permit) = permit else {
+                        return Ok(());
+                    };
+                    if runtime.closed.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    if let Some(core) = state.orchestra.get() {
+                        // The Core command is not a task dispatch. Only its atomic
+                        // registration transaction consumes the durable claim.
+                        core.schedule_admin_case(permit)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    } else {
+                        state
+                            .collab(move |tx| {
+                                crewd_collab::admin_case_launch::wait(
+                                    tx,
+                                    &permit,
+                                    crewd_proto::AdminCaseLaunchReason::RuntimeUnavailable,
+                                )
+                            })
+                            .await?;
+                    }
+                    Ok(())
+                }
+                .await;
+                runtime.admin_launch_inflight.lock().await.remove(&key);
+                if let Err(error) = result {
+                    eprintln!("crewd: administrative activation failed closed: {error}");
+                }
+            });
+        }
+        Ok(())
+    }
     /// Verification is an observation of committed work, never an execution grant.
     pub(super) async fn verify_admin_outcomes(self: &Arc<Self>) -> anyhow::Result<()> {
         let Some(state) = self.state.upgrade() else {
@@ -103,6 +184,16 @@ impl super::Runtime {
         let Some(state) = self.state.upgrade() else {
             return Ok(());
         };
+        let mut after = None;
+        loop {
+            let cursor = after.take();
+            let (_, next) = state
+                .collab(move |tx| crewd_collab::admin_case_launch::recover_page(tx, cursor))
+                .await?;
+            let Some(next) = next else { break };
+            after = Some(next);
+            tokio::task::yield_now().await;
+        }
         let mut after = None;
         loop {
             if self.closed.load(Ordering::Acquire) {
