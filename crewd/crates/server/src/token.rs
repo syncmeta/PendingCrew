@@ -1,11 +1,12 @@
 //! helper 身份令牌（spec §22.3）：M3c 起会话时 `mint`，M3b 的 `agent.attach` 用 `verify`。
 //! 只在内存里：crewd 重启时旧进程已经跟着死了。用途是防串号（配错、复用旧配置），不是挡 agent 本身。
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 #[derive(Default)]
 pub struct TokenTable {
     inner: Mutex<HashMap<String, String>>,
+    known_admin_cases: Mutex<HashSet<String>>,
 }
 
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
@@ -13,6 +14,20 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 impl TokenTable {
+    /// Monotonic process-local identity evidence, retained across token rotation/revocation.
+    pub fn mark_admin_case(&self, session: &str) {
+        self.known_admin_cases
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session.to_owned());
+    }
+
+    pub fn is_admin_case(&self, session: &str) -> bool {
+        self.known_admin_cases
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(session)
+    }
     /// Fixture cardinality only; never exposes token values or a production RPC.
     #[cfg(test)]
     pub(crate) fn test_len(&self) -> usize {
@@ -56,6 +71,20 @@ impl TokenTable {
 mod tests {
     use super::*;
 
+    #[test]
+    fn known_admin_identity_survives_revoke_and_remint() {
+        let table = TokenTable::default();
+        assert!(!table.is_admin_case("admin"));
+        table.mark_admin_case("admin");
+        let first = table.mint("admin");
+        table.revoke("admin");
+        assert!(table.is_admin_case("admin"));
+        assert!(!table.verify("admin", &first));
+        let second = table.mint("admin");
+        assert!(table.is_admin_case("admin"));
+        assert!(table.verify("admin", &second));
+        assert!(!table.is_admin_case("ordinary"));
+    }
     #[test]
     fn tokens_are_per_session_and_replaceable() {
         let t = TokenTable::default();

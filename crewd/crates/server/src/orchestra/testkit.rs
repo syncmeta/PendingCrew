@@ -2010,6 +2010,7 @@ pub struct StandInState {
     /// Opt-in one-shot actual launch future gate. Taken before await; defaults to none.
     /// The entered receipt precedes process creation; release Err creates no handle/stream.
     pub held_launches: BTreeMap<String, HeldLaunch>,
+    pub next_held_launch: Option<HeldLaunch>,
     pub sends: BTreeMap<String, Vec<(u64, String)>>,
     /// Opt-in synthetic context capability; all existing handles default to false.
     pub context_sessions: BTreeSet<String>,
@@ -2304,10 +2305,11 @@ impl Executor for StandIn {
         let st = self.0.clone();
         Box::pin(async move {
             let held = {
-                st.lock()
-                    .expect("测试器材锁中毒")
+                let mut state = st.lock().expect("测试器材锁中毒");
+                state
                     .held_launches
                     .remove(&req.session_id)
+                    .or_else(|| state.next_held_launch.take())
             };
             if let Some((entered, release)) = held {
                 let _ = entered.send(());

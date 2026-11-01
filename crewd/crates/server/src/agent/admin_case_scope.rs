@@ -242,11 +242,20 @@ impl Authority {
     }
 }
 pub(crate) async fn bound(st: &AppState, session: &str) -> Result<bool> {
-    let session = session.to_owned();
-    st.db
-        .call_result(move |s| cases::session_binding(s.conn(), &session).map(|b| b.is_some()))
-        .await?
+    if st.tokens.is_admin_case(session) {
+        return Ok(true);
+    }
+    let id = session.to_owned();
+    let bound = st
+        .db
+        .call_result(move |s| cases::session_binding(s.conn(), &id).map(|b| b.is_some()))
+        .await??;
+    if bound {
+        st.tokens.mark_admin_case(session);
+    }
+    Ok(bound || st.tokens.is_admin_case(session))
 }
+
 pub(crate) async fn prepare(
     st: &Arc<AppState>,
     me: &Identity,
@@ -256,9 +265,18 @@ pub(crate) async fn prepare(
     args: &Value,
 ) -> Result<Option<Authority>> {
     let id = me.session_id.clone();
+    let state = st.clone();
     let witness = st
         .db
-        .call_result(move |s| cases::session_binding(s.conn(), &id))
+        .call_result(move |s| {
+            let binding = cases::session_binding(s.conn(), &id)?;
+            if binding.is_some() {
+                state.tokens.mark_admin_case(&id);
+            } else if state.tokens.is_admin_case(&id) {
+                return Err(denied());
+            }
+            Ok(binding)
+        })
         .await??;
     let scope = if handoff_tool(tool) {
         // Even an ordinary Captain needs an authenticated RPC envelope for handoff.

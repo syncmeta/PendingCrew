@@ -1027,8 +1027,16 @@ impl CodexCore {
                     self.opened(thread, true, &v, now);
                 }
                 Err(RpcFailure::Disconnected) => {}
-                Err(f) if self.options.strict_resume => self
-                    .handshake_failed("thread/resume refused; no replacement thread created", &f),
+                Err(f)
+                    if self.options.strict_resume
+                        || self.options.native_policy
+                            == super::profile::NativePolicy::AdminCaseRestricted =>
+                {
+                    self.handshake_failed(
+                        "thread/resume refused; no replacement thread created",
+                        &f,
+                    )
+                }
                 Err(f) => {
                     self.fallback = Some((id, f.to_string()));
                     self.open_thread(now);
@@ -1971,6 +1979,19 @@ mod tests {
     }
     fn restricted_receipt() -> Value {
         json!({"thread":{"id":"thr-1"},"modelProvider":"openai","cwd":"/project","approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":false},"activePermissionProfile":{"id":crate::codex::profile::PROFILE_ID}})
+    }
+    #[test]
+    fn restricted_resume_refusal_never_falls_back_when_ordinary_strict_flag_is_false() {
+        let mut t = restricted_opening(Some("thr-1"));
+        t.core.options.strict_resume = false;
+        t.reply_err("thread/resume", "native source unavailable");
+        assert_eq!(t.count("thread/start"), 0);
+        assert_eq!(t.count("turn/start"), 0);
+        assert!(
+            t.take_other()
+                .iter()
+                .any(|a| matches!(a, CodexAction::Failed(_)))
+        );
     }
     #[test]
     fn restricted_unknown_or_refused_policy_sends_no_body_and_never_falls_back() {

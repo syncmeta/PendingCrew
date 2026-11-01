@@ -544,10 +544,7 @@ async fn accepted_responsibility_remains_discoverable_after_real_database_reopen
 
 #[tokio::test]
 async fn accepted_captain_progress_keeps_handoff_current_and_admin_retirement_eligible() {
-    use crewd_exec::{
-        delivery::Subject,
-        session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
-    };
+    use crewd_exec::session::SessionEvent;
     let (r, source, admin, captain, _fake) = running().await;
     let mut a = Socket::attach(r.f.state.clone(), &admin).await;
     let mut c = Socket::attach(r.f.state.clone(), &captain).await;
@@ -569,14 +566,7 @@ async fn accepted_captain_progress_keeps_handoff_current_and_admin_retirement_el
         .await
         .unwrap()
         .unwrap();
-    r.exec.emit(
-        &admin,
-        SessionEvent::Delivery {
-            id: BRIEF_DELIVERY_ID,
-            subject: Subject::Brief,
-            outcome: DeliveryOutcome::Delivered,
-        },
-    );
+    acknowledge_initial_input(&r, &admin).await;
     r.exec.emit(&admin, SessionEvent::Working(true));
     r.exec.emit(&admin, SessionEvent::Working(false));
     let witness = tokio::time::timeout(Duration::from_secs(4), async {
@@ -703,10 +693,7 @@ async fn former_captain_can_read_own_stale_responsibility_but_not_accept_and_oth
 }
 
 async fn actual_idle_witness(r: &Rig, id: &str) -> crewd_collab::session_retirement::ActorWitness {
-    use crewd_exec::{
-        delivery::Subject,
-        session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
-    };
+    use crewd_exec::session::SessionEvent;
     let sid = id.to_owned();
     r.f.state
         .db
@@ -716,14 +703,7 @@ async fn actual_idle_witness(r: &Rig, id: &str) -> crewd_collab::session_retirem
         .await
         .unwrap()
         .unwrap();
-    r.exec.emit(
-        id,
-        SessionEvent::Delivery {
-            id: BRIEF_DELIVERY_ID,
-            subject: Subject::Brief,
-            outcome: DeliveryOutcome::Delivered,
-        },
-    );
+    acknowledge_initial_input(r, id).await;
     r.exec.emit(id, SessionEvent::Working(true));
     tokio::time::timeout(Duration::from_secs(5), async {
         while !r.handle.live(id).await.unwrap().working {

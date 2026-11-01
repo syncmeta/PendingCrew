@@ -227,7 +227,9 @@ impl Port for DbPort {
         let owner = self.state.clone();
         self.write(move |tx| {
             let accepted = collab::session_retirement::accept(tx, &s)?;
-            if accepted && collab::admin_case_execution::session_binding(tx.conn(), &s.session)?.is_some() {
+            if accepted
+                && collab::admin_case_execution::session_binding(tx.conn(), &s.session)?.is_some()
+            {
                 // Fence queued collaboration calls in the same DB acceptance
                 // order, before requesting physical exit. A failed stop must
                 // not leave an authenticated case executor accepting new work.
@@ -236,7 +238,7 @@ impl Port for DbPort {
             }
             Ok(accepted)
         })
-            .await
+        .await
     }
     async fn retirement_stale(&self, s: &collab::session_retirement::Snapshot) -> Result<()> {
         let s = s.clone();
@@ -325,11 +327,13 @@ impl Port for DbPort {
         permit: collab::admin_case_execution::AdminLaunchPermit,
     ) -> Result<SessionRow> {
         let admission = self.state.admission.clone();
+        let state = self.state.clone();
         self.write(move |tx| {
             if !admission.contains(permit.source_session()) {
                 return Err(collab::resource_invalid("administrative sponsor admission"));
             }
             let registered = collab::admin_case_execution::register_and_bind(tx, &permit)?;
+            state.tokens.mark_admin_case(&registered.session.id);
             crewd_store::codex_controls::initial(tx.conn(), &registered.session.id, None, true)?;
             row_of(tx.conn(), registered.session)
         })
@@ -367,7 +371,8 @@ impl Port for DbPort {
                 collab::admin_case_execution::mark_unknown(tx, &w)?;
                 return Ok(false);
             }
-            let confirmed = collab::admin_case_execution::confirm_started(tx, &w, generation.to_string())?;
+            let confirmed =
+                collab::admin_case_execution::confirm_started(tx, &w, generation.to_string())?;
             if confirmed {
                 collab::sessions::set_desired(tx, &session, crewd_proto::Desired::Running)?;
             }
@@ -393,6 +398,83 @@ impl Port for DbPort {
         self.read(
             move |c| Ok(collab::admin_case_execution::session_binding(c, &session)?.is_some()),
         )
+        .await
+    }
+
+    async fn fence_admin_runtime(
+        &self,
+        session: &str,
+        generation: u64,
+        already_fenced: bool,
+    ) -> Result<bool> {
+        use collab::admin_case_execution::{
+            self as execution, NativeLeaseState, NativeRevocationReason as Reason,
+        };
+        let session = session.to_owned();
+        let state = self.state.clone();
+        self.write(move |tx| {
+            let witness = execution::session_binding(tx.conn(), &session)?.ok_or_else(|| {
+                collab::resource_invalid("missing administrative runtime binding")
+            })?;
+            let status = execution::native_lease(tx.conn(), &witness, tx.now_ms())?;
+            let (lease, reason) = match status {
+                NativeLeaseState::Revoked(lease, reason) => (lease, Some(reason)),
+                NativeLeaseState::Active(lease) | NativeLeaseState::Released(lease, _) => {
+                    let reason = if lease
+                        .generation()
+                        .is_some_and(|actual| actual != generation)
+                    {
+                        Some(Reason::GenerationMismatch)
+                    } else if already_fenced {
+                        Some(Reason::AuthorityUnknown)
+                    } else if !state.admission.contains(witness.source_session_id()) {
+                        Some(Reason::SourceAdmissionLost)
+                    } else if !state.admission.contains(&session) {
+                        Some(Reason::AdminAdmissionLost)
+                    } else {
+                        None
+                    };
+                    (lease, reason)
+                }
+            };
+            let Some(reason) = reason else {
+                return Ok(false);
+            };
+            execution::revoke_native(tx, &lease, reason)?;
+            state.tokens.revoke(&session);
+            state.admission.revoke(&session);
+            Ok(true)
+        })
+        .await
+    }
+
+    async fn observe_admin_profile(
+        &self,
+        session: &str,
+        generation: u64,
+        profile: crewd_exec::session::Profile,
+    ) -> Result<Option<bool>> {
+        let session = session.to_owned();
+        let state = self.state.clone();
+        self.write(move |tx| {
+            let Some(witness) = collab::admin_case_execution::session_binding(tx.conn(), &session)?
+            else {
+                return Ok(None);
+            };
+            if !state.admission.contains(&session)
+                || !state.admission.contains(witness.source_session_id())
+            {
+                return Ok(Some(false));
+            }
+            collab::admin_case_execution::observe_native_profile(
+                tx,
+                &witness,
+                generation,
+                profile.model,
+                profile.effort,
+            )
+            .map(Some)
+        })
         .await
     }
 

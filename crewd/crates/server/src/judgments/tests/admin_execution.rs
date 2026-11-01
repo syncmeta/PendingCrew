@@ -158,6 +158,45 @@ async fn view(f: &Fixture, id: &str) -> serde_json::Value {
         .unwrap()
 }
 
+async fn acknowledge_initial_input(r: &Rig, session: &str) {
+    use crewd_exec::{
+        delivery::Subject,
+        session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
+    };
+    r.handle.latches().await.unwrap();
+    let launch = r
+        .exec
+        .launches(session)
+        .first()
+        .cloned()
+        .expect("actual runner launch");
+    let delivery = if launch.initial.is_some() {
+        Some((BRIEF_DELIVERY_ID, Subject::Brief))
+    } else if launch.native_policy == orchestra::exec::NativeExecutionPolicy::AdminCaseRestricted {
+        let id = r
+            .exec
+            .lock()
+            .sends
+            .get(session)
+            .and_then(|s| s.first())
+            .map(|(id, _)| *id)
+            .expect("deferred case first input was actually queued");
+        Some((id, Subject::Steer))
+    } else {
+        None
+    };
+    if let Some((id, subject)) = delivery {
+        r.exec.emit(
+            session,
+            SessionEvent::Delivery {
+                id,
+                subject,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+    }
+}
+
 struct Rig {
     f: Fixture,
     handle: orchestra::Handle,
@@ -714,7 +753,11 @@ mod outcome;
 #[path = "admin_retirement.rs"]
 mod retirement;
 
+#[path = "admin_fence_review.rs"]
+mod admin_fence_review;
 #[path = "admin_native_policy.rs"]
 mod admin_native_policy;
+#[path = "admin_native_tools.rs"]
+mod admin_native_tools;
 #[path = "admin_handoff.rs"]
 mod handoff;

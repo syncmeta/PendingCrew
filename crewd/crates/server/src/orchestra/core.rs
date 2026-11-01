@@ -541,6 +541,10 @@ fn retirement_source_page(
 }
 
 pub enum Cmd {
+    #[cfg(test)]
+    CheckAdminAuthority {
+        reply: Reply<()>,
+    },
     StartAdminCase {
         permit: crewd_collab::admin_case_execution::AdminLaunchPermit,
         reply: Reply<SessionRow>,
@@ -845,6 +849,14 @@ enum TerminalFate {
     },
 }
 
+struct AdminRuntime {
+    generation: u64,
+    brief: Option<String>,
+    initial_delivery: Option<u64>,
+    awaiting_profile: bool,
+    fenced: bool,
+}
+
 pub struct Core<P: Port> {
     pub(crate) port: Arc<P>,
     pub(crate) execs: Executors,
@@ -854,6 +866,8 @@ pub struct Core<P: Port> {
     pub(crate) inbox: mpsc::UnboundedSender<Input>,
     pub(crate) live: HashMap<String, Live>,
     pub(crate) starting: HashMap<String, Starting>,
+    admin_runtimes: HashMap<String, AdminRuntime>,
+    admin_authority_after: Option<String>,
     /// 正在派生任务里建 worktree、还没写行的起会话请求数：照样占上限的名额。
     pub(crate) preparing: usize,
     /// 正在建 worktree 的「起机长」请求所在的机组：同一机组的第二个机长此时就该被拒。
@@ -967,6 +981,8 @@ impl<P: Port> Core<P> {
             inbox,
             live: HashMap::new(),
             starting: HashMap::new(),
+            admin_runtimes: HashMap::new(),
+            admin_authority_after: None,
             preparing: 0,
             captain_pending: BTreeSet::new(),
             retirement_incarnation: uuid::Uuid::new_v4().to_string(),
@@ -1008,6 +1024,7 @@ impl<P: Port> Core<P> {
     }
 
     pub async fn handle(&mut self, input: Input) {
+        self.check_admin_runtimes(32).await;
         match &input {
             Input::Cmd(
                 Cmd::Nudge { session, .. }
@@ -1161,6 +1178,101 @@ impl<P: Port> Core<P> {
         self.clock.now()
     }
 
+    /// Case-only authority checks; corrupt/missing state never becomes Ordinary.
+    pub(crate) async fn check_admin_runtimes(&mut self, limit: usize) {
+        let ids = retirement_source_page(
+            self.admin_runtimes.keys().cloned(),
+            &mut self.admin_authority_after,
+            limit,
+        );
+        for id in ids {
+            self.check_admin_runtime(&id).await;
+        }
+    }
+
+    async fn check_admin_runtime(&mut self, session: &str) -> bool {
+        let Some(runtime) = self.admin_runtimes.get(session) else {
+            return true;
+        };
+        if self.retiring.contains_key(session) || self.retirement_receipts.contains_key(session) {
+            return !runtime.fenced;
+        }
+        let (generation, already_fenced) = (runtime.generation, runtime.fenced);
+        let admission_lost = self
+            .cfg
+            .admission
+            .as_ref()
+            .is_some_and(|a| !a.contains(session));
+        if admission_lost || already_fenced {
+            self.fence_admin_runtime_locally(session);
+        }
+        let must_stop = match tokio::time::timeout(
+            Duration::from_secs(2),
+            self.port
+                .fence_admin_runtime(session, generation, already_fenced),
+        )
+        .await
+        {
+            Ok(Ok(fenced)) => fenced || already_fenced || admission_lost,
+            error => {
+                eprintln!("crewd: administrative runtime authority unavailable: {error:?}");
+                true
+            }
+        };
+        if !must_stop {
+            return true;
+        }
+        self.fence_admin_runtime_locally(session);
+        false
+    }
+
+    fn fence_admin_runtime_locally(&mut self, session: &str) {
+        let runtime = self
+            .admin_runtimes
+            .get_mut(session)
+            .expect("actor-owned runtime");
+        runtime.fenced = true;
+        runtime.brief = None;
+        self.port.revoke_token(session);
+        if let Some(admission) = &self.cfg.admission {
+            admission.revoke(session);
+        }
+        self.revoke_codex_metadata(session);
+        if let Some(starting) = self.starting.get_mut(session) {
+            starting.halt_requested = true;
+        }
+        if let Some(live) = self.live.get_mut(session) {
+            live.handle.fence_inputs();
+            live.halting = true;
+            refuse_queued_nudges(live, session);
+            if let Err(error) = live.handle.stop() {
+                eprintln!("crewd: administrative runtime stop remains unconfirmed: {error:?}");
+            }
+        }
+    }
+
+    fn send_admin_brief(&mut self, session: &str) -> anyhow::Result<()> {
+        let Some(runtime) = self.admin_runtimes.get_mut(session) else {
+            return Ok(());
+        };
+        if runtime.fenced || runtime.awaiting_profile {
+            return Ok(());
+        }
+        let Some(live) = self.live.get(session).filter(|l| !l.stopping && !l.halting) else {
+            return Ok(());
+        };
+        if let Some(brief) = runtime.brief.take() {
+            match live.handle.send(brief, &Default::default()) {
+                Ok(delivery) => runtime.initial_delivery = Some(delivery),
+                Err(error) => {
+                    self.fence_admin_runtime_locally(session);
+                    anyhow::bail!("administrative first task rejected: {error}");
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn lang(&self) -> text::Lang {
         self.cfg.lang
     }
@@ -1169,6 +1281,12 @@ impl<P: Port> Core<P> {
 
     async fn on_cmd(&mut self, c: Cmd) {
         match c {
+            #[cfg(test)]
+            Cmd::CheckAdminAuthority { reply } => {
+                self.admin_authority_after = None;
+                self.check_admin_runtimes(self.admin_runtimes.len()).await;
+                let _ = reply.send(Ok(()));
+            }
             Cmd::PublicExecution { call, reply } => {
                 let call = *call;
                 if matches!(
@@ -1833,6 +1951,8 @@ impl<P: Port> Core<P> {
         } else if let Some(st) = self.starting.get_mut(session) {
             st.stop_requested = true;
         }
+        self.admin_authority_after = None;
+        self.check_admin_runtimes(self.admin_runtimes.len()).await;
         Ok(())
     }
 
@@ -1845,6 +1965,9 @@ impl<P: Port> Core<P> {
             || self.terminal_obligations.contains_key(session)
             || self.retirement_receipts.contains_key(session)
             || self.held.contains(session)
+            || self.admin_runtimes.get(session).is_some_and(|r| {
+                r.awaiting_profile || r.brief.is_some() || r.initial_delivery.is_some()
+            })
             || self.decisions.contains_key(session)
             || self
                 .public_physical_controls
@@ -2440,6 +2563,18 @@ impl<P: Port> Core<P> {
             return Err(error);
         }
         let (title, codex_options) = self.port.codex_launch_options(&row.id).await?;
+        if administrative_case {
+            self.admin_runtimes.insert(
+                row.id.clone(),
+                AdminRuntime {
+                    generation: generator,
+                    brief: text.clone(),
+                    initial_delivery: None,
+                    awaiting_profile: row.executor == "codex",
+                    fenced: false,
+                },
+            );
+        }
         let req = LaunchRequest {
             native_policy,
             managed_resume_id,
@@ -2452,7 +2587,11 @@ impl<P: Port> Core<P> {
             model: row.model.clone(),
             effort: row.effort.clone(),
             system_prompt,
-            initial_prompt: text.clone(),
+            initial_prompt: if administrative_case {
+                None
+            } else {
+                text.clone()
+            },
             initial_context,
             token,
             ledger: self.port.ledger(&row.id),
@@ -2481,6 +2620,7 @@ impl<P: Port> Core<P> {
                 });
                 return;
             }
+            drop(launch_port);
             match exec.launch(req).await {
                 Ok((handle, mut events)) => {
                     // 先报 Launched、再转事件：同一个发送端按序到达，actor 先建好 Live 再收 Spawned。
@@ -2542,6 +2682,7 @@ impl<P: Port> Core<P> {
             .is_some_and(|s| s.generator == generator)
         {
             let st = self.starting.remove(session).expect("checked");
+            self.admin_runtimes.remove(session);
             log_err(self.port.admin_launch_unknown(session).await);
             self.binary_replaced = true;
             self.port.revoke_token(session);
@@ -2587,6 +2728,7 @@ impl<P: Port> Core<P> {
         }
         let st = self.starting.remove(session).expect("上面查过");
         if result.is_err() {
+            self.admin_runtimes.remove(session);
             log_err(self.port.admin_launch_unknown(session).await);
             if st.managed_resume_wake_cut.is_some() {
                 if let Some(a) = &self.cfg.admission {
@@ -2601,6 +2743,7 @@ impl<P: Port> Core<P> {
             Ok(handle) => {
                 self.observe_public_runtime(session, generator);
                 if st.stop_requested || st.halt_requested {
+                    handle.fence_inputs();
                     let _ = handle.stop();
                 }
                 let inflight = st.batch.has_work().then(|| Inflight {
@@ -3028,6 +3171,8 @@ impl<P: Port> Core<P> {
         {
             return Ok(());
         }
+        let admin_spawned = self.admin_runtimes.contains_key(session)
+            && matches!(event, SessionEvent::Spawned { .. });
         self.retirement_activity
             .entry(session.to_string())
             .and_modify(|n| *n = n.saturating_add(1))
@@ -3036,6 +3181,40 @@ impl<P: Port> Core<P> {
         let notification_generation = self.current_public_target(session).generation;
         self.settle_public_physical_event(session, generator, &event)
             .await;
+        if admin_spawned {
+            if !self.check_admin_runtime(session).await {
+                return Ok(());
+            }
+            match tokio::time::timeout(
+                Duration::from_secs(2),
+                self.port.confirm_admin_started(session, generator),
+            )
+            .await
+            {
+                Ok(Ok(true)) => {}
+                _ => {
+                    if let Some(runtime) = self.admin_runtimes.get_mut(session) {
+                        runtime.fenced = true;
+                    }
+                    self.check_admin_runtime(session).await;
+                    return Ok(());
+                }
+            }
+            if !self.check_admin_runtime(session).await {
+                return Ok(());
+            }
+        }
+        if let SessionEvent::Delivery { id, outcome, .. } = &event
+            && outcome.is_final()
+            && let Some(runtime) = self.admin_runtimes.get_mut(session)
+            && runtime.initial_delivery == Some(*id)
+        {
+            runtime.initial_delivery = None;
+            if !matches!(outcome, DeliveryOutcome::Delivered) {
+                runtime.fenced = true;
+                self.check_admin_runtime(session).await;
+            }
+        }
         let l = self
             .live
             .get_mut(session)
@@ -3053,7 +3232,11 @@ impl<P: Port> Core<P> {
             SessionEvent::Spawned {
                 agent_session_id, ..
             } => {
-                match self.port.confirm_admin_started(session, generator).await {
+                match if admin_spawned {
+                    Ok(true)
+                } else {
+                    self.port.confirm_admin_started(session, generator).await
+                } {
                     Ok(true) => {}
                     outcome => {
                         if let Err(error) = outcome {
@@ -3067,12 +3250,15 @@ impl<P: Port> Core<P> {
                 // 续跑被拒后驱动层换新号再起，会再来一条 Spawned：以最后一条为准（裁定 12 / M2c）。
                 l.agent_session_id = agent_session_id;
                 // 控制者裁定 C18：进程真的起来了才算「要它在跑」；人已经叫停的不写。
-                if !l.stopping {
+                if !l.stopping && !admin_spawned {
                     let patch = SessionPatch {
                         desired: Some(Desired::Running),
                         ..Default::default()
                     };
                     self.port.patch_session(session, patch).await?;
+                }
+                if admin_spawned {
+                    self.send_admin_brief(session)?;
                 }
             }
             SessionEvent::Working(on) => {
@@ -3232,16 +3418,53 @@ impl<P: Port> Core<P> {
                 return self.port.record_usage(session, snapshot, now).await;
             }
             SessionEvent::Profile(profile) => {
-                self.port
-                    .patch_session(
-                        session,
-                        SessionPatch {
-                            model: profile.model.clone(),
-                            effort: profile.effort.clone(),
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
+                if self.admin_runtimes.contains_key(session) {
+                    let missing_initial_model = self.admin_runtimes[session].awaiting_profile
+                        && profile
+                            .model
+                            .as_deref()
+                            .is_none_or(|model| model.trim().is_empty());
+                    if missing_initial_model
+                        || !matches!(
+                            tokio::time::timeout(
+                                Duration::from_secs(2),
+                                self.port.observe_admin_profile(
+                                    session,
+                                    generator,
+                                    profile.clone()
+                                )
+                            )
+                            .await,
+                            Ok(Ok(Some(true)))
+                        )
+                    {
+                        self.admin_runtimes
+                            .get_mut(session)
+                            .expect("known case")
+                            .fenced = true;
+                        self.check_admin_runtime(session).await;
+                        return Ok(());
+                    }
+                    self.admin_runtimes
+                        .get_mut(session)
+                        .expect("known case")
+                        .awaiting_profile = false;
+                    if !self.check_admin_runtime(session).await {
+                        return Ok(());
+                    }
+                    self.send_admin_brief(session)?;
+                } else {
+                    self.port
+                        .patch_session(
+                            session,
+                            SessionPatch {
+                                model: profile.model.clone(),
+                                effort: profile.effort.clone(),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                }
                 self.port.publish(OrchestraEvent::RunnerProfile {
                     session: session.into(),
                     profile,
@@ -3330,6 +3553,7 @@ impl<P: Port> Core<P> {
         let Some(mut l) = self.live.remove(session) else {
             return Ok(());
         };
+        self.admin_runtimes.remove(session);
         log_err(self.port.admin_launch_unknown(session).await);
         if let Some(snapshot) = self.retiring.remove(session)
             && snapshot.actor.generation == l.generator

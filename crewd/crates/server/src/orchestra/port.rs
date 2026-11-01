@@ -476,6 +476,22 @@ pub trait Port: Send + Sync + 'static {
     fn admin_case_bound(&self, _session: &str) -> impl Future<Output = Result<bool>> + Send {
         async { Ok(false) }
     }
+    fn fence_admin_runtime(
+        &self,
+        _session: &str,
+        _generation: u64,
+        _already_fenced: bool,
+    ) -> impl Future<Output = Result<bool>> + Send {
+        async { anyhow::bail!("administrative runtime authority unavailable") }
+    }
+    fn observe_admin_profile(
+        &self,
+        _session: &str,
+        _generation: u64,
+        _profile: crewd_exec::session::Profile,
+    ) -> impl Future<Output = Result<Option<bool>>> + Send {
+        async { Ok(None) }
+    }
     /// Production-only authenticated allocation. A fake Port cannot silently
     /// skip the original public actor/receipt transaction.
     fn insert_public_session(

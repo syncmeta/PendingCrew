@@ -1,9 +1,6 @@
 //! Actual administrative retirement after independently verified business outcomes.
 use super::*;
-use crewd_exec::{
-    delivery::Subject,
-    session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
-};
+use crewd_exec::session::SessionEvent;
 use crewd_proto::{RetirementPhase, RetirementView};
 
 fn retirement_answer() -> Reply {
@@ -60,16 +57,7 @@ async fn running(resolved: bool, retirement_reply: Reply) -> (Rig, Source, Strin
         .await
         .unwrap()
         .unwrap();
-    if r.exec.launches(&sid).first().unwrap().initial.is_some() {
-        r.exec.emit(
-            &sid,
-            SessionEvent::Delivery {
-                id: BRIEF_DELIVERY_ID,
-                subject: Subject::Brief,
-                outcome: DeliveryOutcome::Delivered,
-            },
-        );
-    }
+    acknowledge_initial_input(&r, &sid).await;
     r.exec.emit(&sid, SessionEvent::Working(true));
     r.exec.emit(&sid, SessionEvent::Working(false));
     r.handle.latches().await.unwrap();
@@ -345,12 +333,21 @@ async fn late_work_source_stop_configuration_or_restore_prevents_admin_retiremen
             _ => unreachable!(),
         }
         pending.await.unwrap();
-        r.handle.latches().await.unwrap();
-        assert!(
-            !r.exec.lock().stops.contains(&sid),
-            "{mutation} did not invalidate retirement"
-        );
-        assert!(r.handle.live(&sid).await.unwrap().running);
+        r.handle.check_admin_authority().await.unwrap();
+        if mutation == "work" {
+            assert!(
+                !r.exec.lock().stops.contains(&sid),
+                "new obligation must prevent retirement without revoking the original case authority"
+            );
+            assert!(r.handle.live(&sid).await.unwrap().running);
+        } else {
+            assert!(
+                r.exec.lock().stops.contains(&sid),
+                "{mutation} must fence native execution independently of retirement"
+            );
+            assert!(!r.f.state.admission.contains(&sid));
+            assert_eq!(view(&r.f, &source.id).await["execution"], "unknown");
+        }
         assert!(
             record(&r, &sid)
                 .await

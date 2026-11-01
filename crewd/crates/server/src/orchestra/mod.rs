@@ -203,6 +203,8 @@ async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>)
     let hb = Duration::from_millis(core.cfg.heartbeat_ms.max(1) as u64);
     let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + hb, hb);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut native_authority = tokio::time::interval(Duration::from_secs(1));
+    native_authority.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let wait = core.next_deadline().await.since(core.now()).max(0) as u64;
         tokio::select! {
@@ -217,6 +219,7 @@ async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>)
                 heartbeat.reset();
             }
             _ = heartbeat.tick() => core.handle(Input::Tick).await,
+            _ = native_authority.tick() => core.check_admin_runtimes(32).await,
         }
         if core.shutdown_done() {
             return;
@@ -343,6 +346,11 @@ impl Handle {
     ) -> Result<SessionRow, ControlError> {
         self.call(|reply| Cmd::StartAdminCase { permit, reply })
             .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn check_admin_authority(&self) -> Result<(), ControlError> {
+        self.call(|reply| Cmd::CheckAdminAuthority { reply }).await
     }
 
     pub async fn resume(&self, session: &str, origin: Origin) -> Result<(), ControlError> {

@@ -55,6 +55,237 @@ pub struct Registration {
     pub session: Session,
     pub witness: ExecutionWitness,
 }
+/// Internal runtime evidence; callers cannot synthesize a different binding.
+#[derive(Clone, Debug)]
+pub struct ExecutionLease {
+    witness: ExecutionWitness,
+    generation: Option<u64>,
+}
+impl ExecutionLease {
+    pub fn witness(&self) -> &ExecutionWitness {
+        &self.witness
+    }
+    pub fn generation(&self) -> Option<u64> {
+        self.generation
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeRevocationReason {
+    AuthorityChanged,
+    AuthorityUnknown,
+    GenerationMismatch,
+    TargetChanged,
+    CaptainChanged,
+    MissingWitness,
+    ExecutionUnknown,
+    SourceAdmissionLost,
+    AdminAdmissionLost,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeReleaseReason {
+    Resolved,
+    HandoffAccepted,
+}
+#[derive(Clone, Debug)]
+pub enum NativeLeaseState {
+    Active(ExecutionLease),
+    Released(ExecutionLease, NativeReleaseReason),
+    Revoked(ExecutionLease, NativeRevocationReason),
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NativeRevocation {
+    attempt: String,
+    generation: Option<u64>,
+    reason: NativeRevocationReason,
+    at: i64,
+    checksum: String,
+}
+fn captain_witness(c: &Connection, crew: &str) -> Result<String> {
+    let crew = crewd_store::crews::get(c, crew)?.ok_or_else(invalid)?;
+    let captain = crew
+        .captain_session_id
+        .as_deref()
+        .map(|id| crewd_store::sessions::get(c, id))
+        .transpose()?
+        .flatten();
+    if let Some(id) = crew.captain_session_id.as_deref() {
+        let row = captain.as_ref().ok_or_else(invalid)?;
+        if row.id != id
+            || row.crew_id != crew.id
+            || row.role != Role::Captain
+            || row.resume_failed_at.is_some()
+            || crate::wakes::automatic_work_paused(c, id)?
+        {
+            return Err(invalid());
+        }
+    }
+    let stops = crew
+        .captain_session_id
+        .as_deref()
+        .map(|id| -> Result<_> {
+            Ok((
+                judgments::stop_epoch(c, id)?,
+                crate::wakes::human_stop_floor(c, id)?,
+            ))
+        })
+        .transpose()?;
+    judgments::fingerprint(&(crew.captain_session_id, stops))
+}
+fn revocation_checksum(r: &NativeRevocation) -> Result<String> {
+    judgments::fingerprint(&(&r.attempt, r.generation, r.reason, r.at))
+}
+/// Only the trusted Core's native Profile event may call this with its live generation.
+pub fn observe_native_profile(
+    tx: &mut Tx<'_>,
+    w: &ExecutionWitness,
+    observed_generation: u64,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Result<bool> {
+    let mut r = matching(tx.conn(), w)?;
+    if r.view.phase != AdminCaseExecution::Running
+        || generation(tx.conn(), w)? != Some(observed_generation)
+        || matches!(
+            native_lease(tx.conn(), w, tx.now_ms())?,
+            NativeLeaseState::Revoked(_, _)
+        )
+    {
+        return Ok(false);
+    }
+    let row = crewd_store::sessions::get(tx.conn(), w.session_id())?.ok_or_else(invalid)?;
+    for (existing, observed) in [(&row.model, &model), (&row.effort, &effort)] {
+        if let Some(observed) = observed
+            && (observed.trim().is_empty()
+                || existing
+                    .as_ref()
+                    .is_some_and(|existing| existing != observed))
+        {
+            return Ok(false);
+        }
+    }
+    if model
+        .as_ref()
+        .is_some_and(|value| row.model.as_ref() != Some(value))
+        || effort
+            .as_ref()
+            .is_some_and(|value| row.effort.as_ref() != Some(value))
+    {
+        crate::sessions::set_profile(tx, w.session_id(), model, effort)?;
+    }
+    r.context = environment(tx.conn(), &r)?;
+    save(tx, &r)?;
+    Ok(true)
+}
+/// DB authority only: the runtime additionally checks both admissions in this same transaction.
+pub fn native_lease(c: &Connection, w: &ExecutionWitness, now: i64) -> Result<NativeLeaseState> {
+    let r = matching(c, w)?;
+    let lease = ExecutionLease {
+        witness: w.clone(),
+        generation: generation(c, w)?,
+    };
+    let revoked = |reason| Ok(NativeLeaseState::Revoked(lease.clone(), reason));
+    if let Some(revocation) = &r.native_revocation {
+        if revocation.attempt != w.attempt
+            || revocation.generation != lease.generation
+            || revocation.checksum != revocation_checksum(revocation)?
+        {
+            return Err(invalid());
+        }
+        return revoked(revocation.reason);
+    }
+    if !matches!(
+        r.view.phase,
+        AdminCaseExecution::Registered
+            | AdminCaseExecution::Requested
+            | AdminCaseExecution::Running
+    ) {
+        return revoked(NativeRevocationReason::ExecutionUnknown);
+    }
+    let Some(captain) = &r.native_captain else {
+        return revoked(NativeRevocationReason::MissingWitness);
+    };
+    if environment(c, &r).ok().as_deref() != Some(r.context.as_str()) {
+        return revoked(NativeRevocationReason::AuthorityChanged);
+    }
+    if captain_witness(c, &r.crew).ok().as_ref() != Some(captain) {
+        return revoked(NativeRevocationReason::CaptainChanged);
+    }
+    // Released authority preserves the original object scope, not mutable work revisions.
+    let source = admin_cases::source_get(
+        c,
+        &AdminCaseGetParams {
+            crew_id: r.crew.clone(),
+            id: r.case.clone(),
+        },
+    )?;
+    if source.revision != r.source_revision {
+        return revoked(NativeRevocationReason::TargetChanged);
+    }
+    for id in &r.targets {
+        if scope_work(c, &r, id).is_err() {
+            return revoked(NativeRevocationReason::TargetChanged);
+        }
+    }
+    if crate::admin_case_outcome::status_at(c, &r.crew, &r.case, now)?
+        .is_some_and(|v| v.phase == AdminCaseOutcomePhase::Resolved)
+    {
+        return Ok(NativeLeaseState::Released(
+            lease,
+            NativeReleaseReason::Resolved,
+        ));
+    }
+    if crate::admin_case_handoff::current_accepted(c, &r.crew, &r.case, now)?.is_some() {
+        return Ok(NativeLeaseState::Released(
+            lease,
+            NativeReleaseReason::HandoffAccepted,
+        ));
+    }
+    if current(c, &r, now).is_err() {
+        return revoked(NativeRevocationReason::TargetChanged);
+    }
+    Ok(NativeLeaseState::Active(lease))
+}
+/// Persist a terminal native revocation before stopping the matching physical generation.
+/// Admission reasons must be checked by the runtime in this transaction; all DB reasons
+/// are recomputed so an old observation cannot kill a newer valid checkpoint.
+pub fn revoke_native(
+    tx: &mut Tx<'_>,
+    lease: &ExecutionLease,
+    reason: NativeRevocationReason,
+) -> Result<bool> {
+    let mut r = matching(tx.conn(), &lease.witness)?;
+    if generation(tx.conn(), &lease.witness)? != lease.generation {
+        return Ok(false);
+    }
+    if r.native_revocation.is_some() {
+        return Ok(false);
+    }
+    let reason = match reason {
+        NativeRevocationReason::SourceAdmissionLost
+        | NativeRevocationReason::AdminAdmissionLost
+        | NativeRevocationReason::AuthorityUnknown
+        | NativeRevocationReason::GenerationMismatch => reason,
+        _ => match native_lease(tx.conn(), &lease.witness, tx.now_ms())? {
+            NativeLeaseState::Revoked(_, current) => current,
+            _ => return Ok(false),
+        },
+    };
+    let mut receipt = NativeRevocation {
+        attempt: r.view.attempt_id.clone(),
+        generation: lease.generation,
+        reason,
+        at: tx.now_ms(),
+        checksum: String::new(),
+    };
+    receipt.checksum = revocation_checksum(&receipt)?;
+    r.native_revocation = Some(receipt);
+    r.view.phase = AdminCaseExecution::Unknown;
+    r.view.reason = AdminCaseExecutionReason::StateChanged;
+    save(tx, &r)?;
+    Ok(true)
+}
 #[derive(Clone, Debug)]
 pub enum ReadScope {
     Work { id: String },
@@ -94,6 +325,10 @@ struct Saved {
     checkpoint: String,
     context: String,
     view: AdminCaseExecutionView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_captain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_revocation: Option<NativeRevocation>,
 }
 fn invalid() -> crate::CollabError {
     StoreError::Invalid("invalid admin case execution authority".into()).into()
@@ -186,7 +421,20 @@ pub fn session_binding(c: &Connection, session: &str) -> Result<Option<Execution
     let index = meta_get(c, &session_key(session))?;
     let marker = session_marker(c, session)?;
     match (index, marker) {
-        (None, None) => Ok(None),
+        (None, None) => {
+            // O(history) fallback, used only when both identity hints are absent.
+            // Search valid JSON for this exact session, including duplicate-key
+            // occurrences. Unrelated corrupt cases do not deny ordinary sessions.
+            let prefix = "admin.case.execution.v1:";
+            let found: bool = c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM meta m, json_tree(CASE WHEN json_valid(m.value) THEN m.value ELSE '{}' END) j WHERE m.key>=?1 AND m.key<?2 AND j.fullkey='$.view.sessionId' AND j.type='text' AND j.value=?3)",
+                params![prefix, format!("{prefix}\u{10ffff}"), session], |row| row.get(0),
+            )?;
+            if found {
+                return Err(invalid());
+            }
+            Ok(None)
+        }
         (Some(id), Some(marker)) if id == marker.case_id => {
             let r = record(c, &id)?.ok_or_else(invalid)?;
             if r.view.session_id != session || r.view.attempt_id != marker.attempt_id {
@@ -298,6 +546,8 @@ pub fn register_and_bind(tx: &mut Tx<'_>, permit: &AdminLaunchPermit) -> Result<
             .collect(),
         checkpoint: permit.fingerprint.clone(),
         context: String::new(),
+        native_captain: Some(captain_witness(tx.conn(), &permit.crew)?),
+        native_revocation: None,
         view: AdminCaseExecutionView {
             session_id: session.id.clone(),
             attempt_id: uuid::Uuid::new_v4().to_string(),
@@ -339,6 +589,13 @@ fn matching(c: &Connection, w: &ExecutionWitness) -> Result<Saved> {
     Ok(r)
 }
 fn current(c: &Connection, r: &Saved, now: i64) -> Result<()> {
+    if r.native_revocation.is_some()
+        || r.native_captain
+            .as_ref()
+            .is_some_and(|expected| captain_witness(c, &r.crew).ok().as_ref() != Some(expected))
+    {
+        return Err(invalid());
+    }
     if environment(c, r)? != r.context {
         return Err(invalid());
     }
@@ -443,9 +700,12 @@ pub fn validate_read(
     scope: ReadScope,
     now: i64,
 ) -> Result<()> {
-    let r = if crate::admin_case_handoff::writes_relinquished(c, w.case_id())? {
+    let r = if crate::admin_case_handoff::writes_relinquished(c, w.case_id())?
+        || crate::admin_case_outcome::status_at(c, w.crew_id(), w.case_id(), now)?
+            .is_some_and(|v| v.phase == AdminCaseOutcomePhase::Resolved)
+    {
         let r = matching(c, w)?;
-        if environment_for(c, &r, false)? != r.context {
+        if r.native_revocation.is_some() || environment_for(c, &r, false)? != r.context {
             return Err(invalid());
         }
         r
@@ -468,7 +728,10 @@ pub fn validate_effect(
     w: &ExecutionWitness,
     scope: ActionScope,
 ) -> Result<EffectPermit> {
-    if crate::admin_case_handoff::writes_relinquished(tx.conn(), w.case_id())? {
+    if crate::admin_case_handoff::writes_relinquished(tx.conn(), w.case_id())?
+        || crate::admin_case_outcome::status_at(tx.conn(), w.crew_id(), w.case_id(), tx.now_ms())?
+            .is_some_and(|v| v.phase == AdminCaseOutcomePhase::Resolved)
+    {
         return Err(invalid());
     }
     let r = running(tx.conn(), w, tx.now_ms())?;
@@ -775,6 +1038,469 @@ pub(crate) mod tests {
         )));
         (case, registered)
     }
+    #[test]
+    fn native_lease_source_stop_must_revoke_physical_authority() {
+        let mut s = store();
+        let (_, reg) = running_case(&mut s);
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Active(_)
+        ));
+        s.conn()
+            .execute("UPDATE sessions SET desired='stopped' WHERE id='w-a1'", [])
+            .unwrap();
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Revoked(_, NativeRevocationReason::AuthorityChanged)
+        ));
+    }
+    #[test]
+    fn native_profile_first_observation_preserves_native_authority() {
+        let mut s = store();
+        let (_, reg) = running_case(&mut s);
+        let row = crewd_store::sessions::get(s.conn(), &reg.session.id)
+            .unwrap()
+            .unwrap();
+        assert!(row.model.is_none() && row.effort.is_none());
+        assert!(ok(&mut s, |tx| observe_native_profile(
+            tx,
+            &reg.witness,
+            1,
+            Some("actual-native-model".into()),
+            Some("high".into())
+        )));
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Active(_)
+        ));
+    }
+    #[test]
+    fn native_profile_repeat_is_idempotent_and_conflicting_values_do_not_write() {
+        let mut s = store();
+        let (_, reg) = running_case(&mut s);
+        assert!(ok(&mut s, |tx| observe_native_profile(
+            tx,
+            &reg.witness,
+            1,
+            Some("native-model".into()),
+            Some("high".into())
+        )));
+        let raw = meta_get(s.conn(), &key(reg.witness.case_id())).unwrap();
+        assert!(ok(&mut s, |tx| observe_native_profile(
+            tx,
+            &reg.witness,
+            1,
+            Some("native-model".into()),
+            Some("high".into())
+        )));
+        assert_eq!(
+            meta_get(s.conn(), &key(reg.witness.case_id())).unwrap(),
+            raw
+        );
+        assert!(!ok(&mut s, |tx| observe_native_profile(
+            tx,
+            &reg.witness,
+            1,
+            Some("changed-model".into()),
+            None
+        )));
+        assert!(!ok(&mut s, |tx| observe_native_profile(
+            tx,
+            &reg.witness,
+            2,
+            None,
+            Some("low".into())
+        )));
+        assert_eq!(
+            meta_get(s.conn(), &key(reg.witness.case_id())).unwrap(),
+            raw
+        );
+        let row = crewd_store::sessions::get(s.conn(), &reg.session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.model.as_deref(), Some("native-model"));
+        assert_eq!(row.effort.as_deref(), Some("high"));
+    }
+    #[test]
+    fn native_profile_does_not_reauthorize_revoked_captain_or_external_profile_changes() {
+        for mode in 0..3 {
+            let mut s = store();
+            let (_, reg) = running_case(&mut s);
+            match mode {
+                0 => {
+                    let NativeLeaseState::Active(lease) =
+                        native_lease(s.conn(), &reg.witness, NOW).unwrap()
+                    else {
+                        panic!("active")
+                    };
+                    ok(&mut s, |tx| {
+                        revoke_native(tx, &lease, NativeRevocationReason::AdminAdmissionLost)
+                    });
+                }
+                1 => {
+                    s.conn()
+                        .execute(
+                            "UPDATE crews SET captain_session_id=NULL WHERE id='crew-a'",
+                            [],
+                        )
+                        .unwrap();
+                }
+                _ => {
+                    s.conn()
+                        .execute(
+                            "UPDATE sessions SET model='external-change' WHERE id=?1",
+                            [&reg.session.id],
+                        )
+                        .unwrap();
+                }
+            }
+            let raw = meta_get(s.conn(), &key(reg.witness.case_id())).unwrap();
+            assert!(!ok(&mut s, |tx| observe_native_profile(
+                tx,
+                &reg.witness,
+                1,
+                Some("native-model".into()),
+                Some("high".into())
+            )));
+            assert_eq!(
+                meta_get(s.conn(), &key(reg.witness.case_id())).unwrap(),
+                raw
+            );
+            let row = crewd_store::sessions::get(s.conn(), &reg.session.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.effort, None);
+        }
+    }
+    #[test]
+    fn native_profile_must_match_explicit_inherited_model_and_effort() {
+        let mut s = store();
+        s.conn()
+            .execute(
+                "UPDATE sessions SET model='explicit-model', effort='high' WHERE id='w-a1'",
+                [],
+            )
+            .unwrap();
+        let (_, reg) = running_case(&mut s);
+        assert!(!ok(&mut s, |tx| observe_native_profile(
+            tx,
+            &reg.witness,
+            1,
+            Some("different-model".into()),
+            Some("high".into())
+        )));
+        assert!(!ok(&mut s, |tx| observe_native_profile(
+            tx,
+            &reg.witness,
+            1,
+            Some("explicit-model".into()),
+            Some("low".into())
+        )));
+        assert!(ok(&mut s, |tx| observe_native_profile(
+            tx,
+            &reg.witness,
+            1,
+            Some("explicit-model".into()),
+            Some("high".into())
+        )));
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Active(_)
+        ));
+    }
+    #[test]
+    fn native_profile_row_and_context_rollback_together() {
+        let mut s = store();
+        let (_, reg) = running_case(&mut s);
+        let raw = meta_get(s.conn(), &key(reg.witness.case_id())).unwrap();
+        assert!(
+            crate::run::<()>(&mut s, NOW, |tx| {
+                assert!(observe_native_profile(
+                    tx,
+                    &reg.witness,
+                    1,
+                    Some("native-model".into()),
+                    Some("high".into())
+                )?);
+                Err(invalid())
+            })
+            .is_err()
+        );
+        assert_eq!(
+            meta_get(s.conn(), &key(reg.witness.case_id())).unwrap(),
+            raw
+        );
+        let row = crewd_store::sessions::get(s.conn(), &reg.session.id)
+            .unwrap()
+            .unwrap();
+        assert!(row.model.is_none() && row.effort.is_none());
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Active(_)
+        ));
+    }
+    #[test]
+    fn native_lease_revocation_is_durable_and_preserves_attempt_generation() {
+        let mut s = store();
+        let (_, reg) = running_case(&mut s);
+        let NativeLeaseState::Active(lease) = native_lease(s.conn(), &reg.witness, NOW).unwrap()
+        else {
+            panic!("active")
+        };
+        assert!(ok(&mut s, |tx| revoke_native(
+            tx,
+            &lease,
+            NativeRevocationReason::SourceAdmissionLost
+        )));
+        assert!(!ok(&mut s, |tx| revoke_native(
+            tx,
+            &lease,
+            NativeRevocationReason::SourceAdmissionLost
+        )));
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Revoked(_, NativeRevocationReason::SourceAdmissionLost)
+        ));
+        let saved = record(s.conn(), reg.witness.case_id()).unwrap().unwrap();
+        assert_eq!(saved.view.phase, AdminCaseExecution::Unknown);
+        assert_eq!(saved.view.generation.as_deref(), Some("1"));
+        assert_eq!(saved.view.attempt_id, reg.witness.attempt_id());
+        assert!(
+            binding(s.conn(), "crew-a", reg.witness.case_id())
+                .unwrap()
+                .is_some()
+        );
+        let raw = meta_get(s.conn(), &key(reg.witness.case_id()))
+            .unwrap()
+            .unwrap();
+        let mut tampered: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        tampered["native_revocation"]["reason"] = "admin_admission_lost".into();
+        meta_set(s.conn(), &key(reg.witness.case_id()), &tampered.to_string()).unwrap();
+        assert!(native_lease(s.conn(), &reg.witness, NOW).is_err());
+    }
+    #[test]
+    fn native_lease_old_records_and_captain_changes_fail_closed() {
+        let mut s = store();
+        let (_, reg) = running_case(&mut s);
+        s.conn()
+            .execute(
+                "UPDATE crews SET captain_session_id=NULL WHERE id='crew-a'",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Revoked(_, NativeRevocationReason::CaptainChanged)
+        ));
+        let mut saved = record(s.conn(), reg.witness.case_id()).unwrap().unwrap();
+        saved.native_captain = None;
+        ok(&mut s, |tx| save(tx, &saved));
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Revoked(_, NativeRevocationReason::MissingWitness)
+        ));
+    }
+    #[test]
+    fn native_lease_legal_effects_refresh_but_external_changes_revoke() {
+        let mut s = store();
+        let (case, reg) = running_case(&mut s);
+        ok(&mut s, |tx| {
+            let p = validate_effect(
+                tx,
+                &reg.witness,
+                ActionScope::WorkClose {
+                    id: case.targets[0].id.clone(),
+                    kind: WorkClosureKind::Done,
+                },
+            )?;
+            close(tx, &reg.session.id, &case.targets[0].id)?;
+            finish_effect(tx, p)
+        });
+        let NativeLeaseState::Active(lease) = native_lease(s.conn(), &reg.witness, NOW).unwrap()
+        else {
+            panic!("legal effect")
+        };
+        assert!(!ok(&mut s, |tx| revoke_native(
+            tx,
+            &lease,
+            NativeRevocationReason::TargetChanged
+        )));
+        ok(&mut s, |tx| close(tx, "cap-a", &case.targets[1].id));
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Revoked(_, NativeRevocationReason::TargetChanged)
+        ));
+        ok(&mut s, |tx| {
+            crate::admin_case_outcome::verify(tx, "crew-a", &case.id)
+        });
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Released(_, NativeReleaseReason::Resolved)
+        ));
+        assert!(
+            validate_read(
+                s.conn(),
+                &reg.witness,
+                ReadScope::Work {
+                    id: case.targets[0].id.clone()
+                },
+                NOW
+            )
+            .is_ok()
+        );
+        ok(&mut s, |tx| {
+            assert!(
+                validate_effect(
+                    tx,
+                    &reg.witness,
+                    ActionScope::WorkClose {
+                        id: case.targets[0].id.clone(),
+                        kind: WorkClosureKind::Done
+                    }
+                )
+                .is_err()
+            );
+            Ok(())
+        });
+    }
+    #[test]
+    fn native_lease_starting_without_generation_and_revocation_rollback() {
+        let mut s = store();
+        let case = adopted(&mut s);
+        let p = ok(&mut s, |tx| launch_permit(tx, "crew-a", &case.id)).unwrap();
+        let reg = ok(&mut s, |tx| register_and_bind(tx, &p));
+        ok(&mut s, |tx| claim_launch(tx, &reg.witness));
+        let NativeLeaseState::Active(lease) = native_lease(s.conn(), &reg.witness, NOW).unwrap()
+        else {
+            panic!("starting")
+        };
+        assert_eq!(lease.generation(), None);
+        assert!(
+            crate::run::<()>(&mut s, NOW, |tx| {
+                revoke_native(tx, &lease, NativeRevocationReason::AuthorityUnknown)?;
+                Err(invalid())
+            })
+            .is_err()
+        );
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Active(_)
+        ));
+        assert!(ok(&mut s, |tx| revoke_native(
+            tx,
+            &lease,
+            NativeRevocationReason::AuthorityUnknown
+        )));
+        assert!(!ok(&mut s, |tx| confirm_started(
+            tx,
+            &reg.witness,
+            "1".into()
+        )));
+    }
+    #[test]
+    fn native_lease_configuration_and_restore_revoke_even_released_work() {
+        for restore in [false, true] {
+            let mut s = store();
+            let (case, reg) = running_case(&mut s);
+            for target in &case.targets {
+                ok(&mut s, |tx| close(tx, "cap-a", &target.id));
+            }
+            ok(&mut s, |tx| {
+                crate::admin_case_outcome::verify(tx, "crew-a", &case.id)
+            });
+            assert!(matches!(
+                native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+                NativeLeaseState::Released(_, _)
+            ));
+            if restore {
+                crewd_store::judgment_state::restored(s.conn()).unwrap();
+            } else {
+                let mut settings = judgments::configuration(s.conn()).unwrap();
+                settings.revision = Some("changed-native-lease".into());
+                meta_set(
+                    s.conn(),
+                    judgments::CONFIG_KEY,
+                    &serde_json::to_string(&settings).unwrap(),
+                )
+                .unwrap();
+            }
+            assert!(matches!(
+                native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+                NativeLeaseState::Revoked(_, NativeRevocationReason::AuthorityChanged)
+            ));
+        }
+    }
+    #[test]
+    fn native_lease_accepted_handoff_allows_captain_progress_not_admin_writes() {
+        let mut s = store();
+        let (case, reg) = running_case(&mut s);
+        let id = uuid::Uuid::new_v4().to_string();
+        let v = ok(&mut s, |tx| {
+            crate::admin_case_handoff::request(
+                tx,
+                &Sender::Session(reg.session.id.clone()),
+                &id,
+                "need custody",
+            )
+        });
+        ok(&mut s, |tx| {
+            crate::wakes::claim(tx, &[v.wake_id])?;
+            crate::wakes::ack_delivered(
+                tx,
+                &v.captain_session_id,
+                &[v.wake_id],
+                crate::wakes::Riders::Release,
+                &[],
+                &[],
+            )
+        });
+        let v = crate::admin_case_handoff::get(
+            s.conn(),
+            &Sender::Session(v.captain_session_id.clone()),
+            &id,
+            NOW,
+        )
+        .unwrap();
+        ok(&mut s, |tx| {
+            crate::admin_case_handoff::accept(
+                tx,
+                &Sender::Session(v.captain_session_id.clone()),
+                &id,
+                &v.revision,
+                "accept custody",
+            )
+        });
+        ok(&mut s, |tx| close(tx, "cap-a", &case.targets[0].id));
+        assert!(matches!(
+            native_lease(s.conn(), &reg.witness, NOW).unwrap(),
+            NativeLeaseState::Released(_, NativeReleaseReason::HandoffAccepted)
+        ));
+        ok(&mut s, |tx| {
+            assert!(
+                validate_effect(
+                    tx,
+                    &reg.witness,
+                    ActionScope::WorkClose {
+                        id: case.targets[1].id.clone(),
+                        kind: WorkClosureKind::Done
+                    }
+                )
+                .is_err()
+            );
+            Ok(())
+        });
+        assert!(
+            validate_read(
+                s.conn(),
+                &reg.witness,
+                ReadScope::Work {
+                    id: case.targets[0].id.clone()
+                },
+                NOW
+            )
+            .is_ok()
+        );
+    }
     pub(crate) fn close(tx: &mut Tx<'_>, session: &str, id: &str) -> Result<WorkPlan> {
         let plan = work::get(tx.conn(), id)?;
         work::close_factual(
@@ -1013,6 +1739,41 @@ pub(crate) mod tests {
             AdminCaseExecution::Unknown
         );
         assert!(!ok(&mut s, |tx| claim_launch(tx, &registration.witness)));
+    }
+    #[test]
+    fn missing_both_identity_hints_still_find_durable_case_without_blocking_others() {
+        let mut s = store();
+        let (case, reg) = running_case(&mut s);
+        s.conn()
+            .execute(
+                "DELETE FROM meta WHERE key=?1",
+                [session_key(&reg.session.id)],
+            )
+            .unwrap();
+        s.conn()
+            .execute(
+                "UPDATE sessions SET extra=json_remove(extra,'$.adminCaseExecutionV1') WHERE id=?1",
+                [&reg.session.id],
+            )
+            .unwrap();
+        assert!(session_binding(s.conn(), &reg.session.id).is_err());
+        assert!(session_binding(s.conn(), "w-a1").unwrap().is_none());
+        meta_set(
+            s.conn(),
+            "admin.case.execution.v1:unrelated-corrupt",
+            "not json",
+        )
+        .unwrap();
+        assert!(session_binding(s.conn(), "w-a1").unwrap().is_none());
+        assert!(session_binding(s.conn(), &reg.session.id).is_err());
+        // JSON duplicate-key selection must not hide a retained identity witness.
+        let raw = format!(
+            "{{\"view\":{{\"sessionId\":\"other\"}},\"view\":{{\"sessionId\":{}}}}}",
+            serde_json::to_string(&reg.session.id).unwrap()
+        );
+        meta_set(s.conn(), &key(&case.id), &raw).unwrap();
+        assert!(session_binding(s.conn(), &reg.session.id).is_err());
+        assert!(session_binding(s.conn(), "w-a1").unwrap().is_none());
     }
     #[test]
     fn missing_reverse_index_cannot_reclassify_bound_admin_as_ordinary() {

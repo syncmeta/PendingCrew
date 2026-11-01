@@ -393,6 +393,54 @@ mod tests {
     use crate::agent::text::{self, Locale};
     use crewd_collab::Change;
 
+    fn assert_role_tools(value: &serde_json::Value, role: Role) {
+        use std::collections::BTreeSet;
+        let actual: BTreeSet<_> = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect();
+        let identity = crate::agent::Identity {
+            session_id: "expected-session".into(),
+            crew_id: "expected-crew".into(),
+            role,
+            label: "expected".into(),
+        };
+        let expected: BTreeSet<_> = crate::agent::catalog::tools_for(&identity, Locale::Zh)
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(
+            actual.len(),
+            value.as_array().unwrap().len(),
+            "duplicate tools"
+        );
+        assert_eq!(
+            actual, expected,
+            "RPC must expose the catalog for the expected role"
+        );
+        // Eight All-scope additions since the old 43/54-count fixture; Captain
+        // additionally receives authenticated handoff acceptance.
+        for name in [
+            "work_item_close",
+            "work_closure_history",
+            "channel_archive_check",
+            "channel_archive_verified",
+            "channel_restore_verified",
+            "admin_case_handoff_request",
+            "admin_case_handoff_get",
+            "admin_case_handoff_list",
+        ] {
+            assert!(actual.contains(name), "missing landed tool {name}");
+        }
+        assert_eq!(
+            actual.contains("admin_case_handoff_accept"),
+            role == Role::Captain
+        );
+        assert_eq!(actual.contains("start_session"), role == Role::Captain);
+    }
+
     #[test]
     fn knowledge_mcp_error_detail_is_closed_to_public_input_structure() {
         let typed = crewd_proto::RpcError::new(
@@ -511,24 +559,14 @@ mod tests {
                 "surfaceHash": crate::agent::surface::hash(Locale::Zh),
                 "buildCheck": {"status":"unknown"}})
         );
-        assert_eq!(
-            w.call(methods::TOOLS, json!(null))
-                .await
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            43
+        assert_role_tools(
+            &w.call(methods::TOOLS, json!(null)).await.unwrap(),
+            Role::Worker,
         );
         let mut cap = attached(&f, &f.captain).await;
-        assert_eq!(
-            cap.call(methods::TOOLS, json!(null))
-                .await
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            54
+        assert_role_tools(
+            &cap.call(methods::TOOLS, json!(null)).await.unwrap(),
+            Role::Captain,
         );
         requirement_readable(&f, &mut w).await;
         requirement_readable(&f, &mut cap).await;
@@ -574,14 +612,9 @@ mod tests {
             .expect("应推 tools_changed");
         assert_eq!(ev.event, TOOLS_CHANGED);
         assert_eq!(ev.data["role"], "captain");
-        assert_eq!(
-            w.call(methods::TOOLS, json!(null))
-                .await
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .len(),
-            54
+        assert_role_tools(
+            &w.call(methods::TOOLS, json!(null)).await.unwrap(),
+            Role::Captain,
         );
         let r = w
             .call(methods::CALL, json!({"tool": "list_sessions"}))
@@ -692,7 +725,7 @@ mod tests {
         assert_eq!(code, -32009);
         // Still the worker: the refused attach changed nothing.
         let n = c.call(methods::TOOLS, json!(null)).await.unwrap();
-        assert_eq!(n.as_array().unwrap().len(), 43);
+        assert_role_tools(&n, Role::Worker);
         let a = c
             .call(
                 methods::ATTACH,
