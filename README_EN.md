@@ -28,6 +28,10 @@ them, and help them collaborate efficiently with one another. That is why I buil
 harnesses.** It is a platform where you and agents can collaborate efficiently and create things
 together.
 
+![PendingCrew new main interface](docs/screenshots/main-new.png)
+
+<p align="center"><sub>This is the new version, but it is still a work in progress.</sub></p>
+
 ![PendingCrew main window: the member list on the right shows five members—the captain running Opus and three workers running GPT-5.6-Sol. Agents from different vendors work together in one group chat. The conversation shows real collaboration: “Terminal tree rendering” reports a shared Git index race while committing; “HTML organization chart rendering” turns it into a pending decision and asks the captain whether it should move its own work aside or let the captain reorganize the commits; two other members are typing.](docs/screenshots/crew-collaboration.png)
 
 <p align="center"><sub>Main interface</sub></p>
