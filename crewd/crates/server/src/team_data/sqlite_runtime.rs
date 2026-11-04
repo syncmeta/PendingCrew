@@ -356,7 +356,14 @@ fn route_sync(
             {
                 return encode(result);
             }
-            knowledge.check(&p.context).map_err(error)?;
+            if knowledge.context().map_err(error)? != p.context {
+                return Err(RpcError::new(
+                    RpcError::CONFLICT,
+                    "knowledge generation or restore context changed before submission",
+                )
+                .with_refusal("data.context_conflict")
+                .into());
+            }
             match &p.change {
                 DataChange::Apply { message, edits } => {
                     if message.len() > 2048 {
@@ -1214,6 +1221,54 @@ mod tests {
             {"kind":"createBlock","alias":"dailyKnowledge","attributes":{},"content":"日用版知识验收完成","contentType":"text/plain","sources":[]},
             {"kind":"createView","alias":"dailyPage","attributes":{},"definition":{"kind":"document","layout":{},"placements":[{"block":{"alias":"dailyKnowledge","kind":"created"},"kind":"set","layout":{}}]},"sources":[],"title":"日用版知识验收"}
         ]})
+    }
+
+    #[tokio::test]
+    async fn sqlite_native_document_context_conflict_is_typed_after_receipt_retry() {
+        let f = Fixture::new().await;
+        let rt = runtime(&f).await;
+        let call = |method: &str, params| {
+            rt.handle(
+                f.state.clone(),
+                human(),
+                Request {
+                    id: 1,
+                    method: method.into(),
+                    params,
+                },
+            )
+        };
+        let result = |reply: Response| match reply.outcome {
+            crewd_proto::Outcome::Result(value) => value,
+            crewd_proto::Outcome::Error(error) => panic!("unexpected RPC refusal: {error:?}"),
+        };
+        let workspace = result(call("data.workspace.get", json!({"crewId":f.crew})).await);
+        let context = workspace["context"].clone();
+        let mut change = real02_document_change();
+        change["edits"][1]["definition"]["placements"][0]["alias"] = json!("position");
+        let original = json!({"context":context,"requestId":uuid::Uuid::new_v4().to_string(),"change":change});
+        let committed = result(call("data.submit", original.clone()).await);
+        assert_eq!(committed["phase"], "committed");
+        let known = result(call("data.submit", original.clone()).await);
+        assert_eq!(known, committed, "original UUID still returns the original receipt");
+
+        let mut stale = original;
+        stale["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        let crewd_proto::Outcome::Error(refusal) = call("data.submit", stale.clone()).await.outcome
+        else {
+            panic!("a stale context accepted a new request");
+        };
+        assert_eq!(refusal.code, RpcError::CONFLICT);
+        assert_eq!(refusal.data.unwrap().refusal, "data.context_conflict");
+        let lookup = result(
+            call(
+                "data.request.get",
+                json!({"context":context,"requestId":stale["requestId"]}),
+            )
+            .await,
+        );
+        assert_eq!(lookup["lookup"]["status"], "notFound");
+        assert_eq!(lookup["workspace"]["context"], committed["context"]);
     }
 
     #[tokio::test]

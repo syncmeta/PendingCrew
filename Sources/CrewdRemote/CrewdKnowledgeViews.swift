@@ -60,6 +60,7 @@ struct CrewdKnowledgeWorkspaceView: View {
     @State private var showSystem = false
     @State private var showArchived = false
     @State private var confirmArchive: CrewdDataObject?
+    @State private var editTarget: CrewdDataObjectDetail?
     @State private var previewToken = ""
     @State private var confirmingPreview = false
     var body: some View {
@@ -104,6 +105,10 @@ struct CrewdKnowledgeWorkspaceView: View {
         .onChange(of: store.workspace?.context) { old, current in
             if old?.authorityId != current?.authorityId || old?.crewId != current?.crewId || old?.namespace != current?.namespace {
                 selected = ""
+                if let current, let editTarget,
+                   editTarget.context.authorityId != current.authorityId || editTarget.context.crewId != current.crewId || editTarget.context.namespace != current.namespace {
+                    self.editTarget = nil
+                }
             }
             // Native confirmations bind the state the user actually reviewed.
             confirmArchive = nil; restoreTarget = nil; confirmingPreview = false
@@ -118,6 +123,11 @@ struct CrewdKnowledgeWorkspaceView: View {
             #else
             ScrollView { systemControls }
             #endif
+        }
+        .sheet(isPresented: Binding(get:{editTarget != nil},set:{if !$0 {editTarget=nil}})) {
+            if let editTarget {
+                CrewdNativeDocumentEditor(store:store,parent:editTarget,scopeCurrent:{ true },onSaved:{ await reload() })
+            }
         }
     }
     private var pagePicker: some View {
@@ -153,7 +163,13 @@ struct CrewdKnowledgeWorkspaceView: View {
     }
     private func page(_ detail:CrewdDataObjectDetail)->some View {
         VStack(alignment:.leading,spacing:0) {
-            Text(detail.object.displayTitle).font(CrewdType.title).padding(.horizontal,24).padding(.top,20).padding(.bottom,8)
+            HStack {
+                Text(detail.object.displayTitle).font(CrewdType.title)
+                Spacer()
+                if collection == .documents, store.canPrepareNativeDocumentEdit(detail) {
+                    Button("编辑文档",systemImage:"pencil") { editTarget = detail }.disabled(store.busy || store.hasBlockingPending)
+                }
+            }.padding(.horizontal,24).padding(.top,20).padding(.bottom,8)
             CrewdKnowledgeObjectSurface(store:store,detail:detail)
         }.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
     }
@@ -287,6 +303,7 @@ private struct CrewdGroupKnowledgeView:View {
     @ObservedObject var group:CrewdChannelKnowledgeStore
     @ObservedObject var resources:CrewdResources
     @ObservedObject var content:CrewdKnowledgeStore
+    @ObservedObject var library:CrewdKnowledgeStore
     let collection:CrewdKnowledgeCollection
     @State private var owner=UUID()
     @State private var selected:String?
@@ -295,7 +312,14 @@ private struct CrewdGroupKnowledgeView:View {
     @State private var reading=false
     @State private var failure:String?
     @State private var retry=UUID()
-    init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){self.workspace=workspace;self.group=workspace.channelKnowledge;self.resources=workspace.channelResources;self.content=workspace.linkedKnowledge;self.collection=collection}
+    private struct EditTarget: Identifiable {
+        let id = UUID()
+        let parent: CrewdDataObjectDetail
+        let channel: String
+        let link: String
+    }
+    @State private var editTarget: EditTarget?
+    init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){self.workspace=workspace;self.group=workspace.channelKnowledge;self.resources=workspace.channelResources;self.content=workspace.linkedKnowledge;self.library=workspace.knowledge;self.collection=collection}
     private var folder:Binding<String>{Binding(get:{workspace.resourceDrafts.selection(resources.crew,.documents,channel:resources.channel)},set:{workspace.resourceDrafts.select(resources.crew,.documents,$0,channel:resources.channel)})}
     private func folderObject(_ source:CrewdChannelKnowledgeReference)->CrewdValue {
         .object(["kind":.string("knowledgeView"),"id":.string(source.reference.id),"knowledge":(try? CrewdKnowledgeStore.encode(source)) ?? .null])
@@ -318,6 +342,23 @@ private struct CrewdGroupKnowledgeView:View {
                 .padding(.horizontal,16).padding(.bottom,10)
             CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:group.crew,channel:group.channel)
                 .padding(.horizontal,16)
+            if collection == .documents {
+                ForEach(library.pendingNativeDocumentEdits(crew:group.crew)) { intent in
+                    HStack {
+                        Text("原编辑结果待核对").foregroundStyle(.orange)
+                        Button("查询原编辑结果") {
+                            Task {
+                                await library.refresh()
+                                await library.lookup(intent.id)
+                                content.synchronizePending()
+                                if library.result.flatMap({ UUID(uuidString:$0.requestId) }) == intent.id,
+                                   library.result?.phase == .committed { await refreshAfterEdit() }
+                                else { failure = library.status }
+                            }
+                        }.disabled(library.busy)
+                    }.font(CrewdType.caption).padding(.horizontal,16)
+                }
+            }
             if let error=group.failure ?? failure{Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(8)}
             if group.loading || reading{ProgressView().controlSize(.small)}
             if group.loaded,!group.loading,!reading,group.failure == nil,failure == nil,rows.isEmpty {
@@ -332,11 +373,20 @@ private struct CrewdGroupKnowledgeView:View {
         }
         .onAppear{group.setActive(true,owner:owner)}.onDisappear{group.setActive(false,owner:owner);content.renderer.revoke()}
         .task(id:group.crew+group.channel+group.activationEpoch.uuidString){do{try await group.refresh()}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
+        .task(id:group.crew+collection.rawValue+group.activationEpoch.uuidString){if collection == .documents {library.synchronizePending()}}
         .task(id:readKey){guard let chosen,chosen.state == "ready" else{return};reading=true;defer{reading=false};do{try await workspace.openLinkedKnowledge(chosen);failure=nil}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
         .sheet(isPresented:$linking,onDismiss:{retry=UUID()}){CrewdKnowledgeLinkPicker(workspace:workspace,collection:collection)}
         .sheet(isPresented:$creating){CrewdNativeDocumentCreation(workspace:workspace)}
-        .onChange(of:group.crew+group.channel){_,_ in selected=nil;linking=false;creating=false;failure=nil}
-        .onChange(of:collection){_,_ in selected=nil;content.renderer.revoke()}
+        .sheet(item:$editTarget){ target in
+            CrewdNativeDocumentEditor(store:content,parent:target.parent,scopeCurrent:{
+                group.crew == target.parent.context.crewId && group.channel == target.channel &&
+                    chosen?.id == target.link && chosen?.state == "ready"
+            },onSaved:{await refreshAfterEdit()})
+        }
+        .onChange(of:content.pending){_,_ in if collection == .documents {library.synchronizePending()}}
+        .onChange(of:library.pending){_,pending in if collection == .documents && pending.isEmpty {library.synchronizePending()}}
+        .onChange(of:group.crew+group.channel){_,_ in selected=nil;linking=false;creating=false;editTarget=nil;failure=nil}
+        .onChange(of:collection){_,_ in selected=nil;editTarget=nil;content.renderer.revoke()}
         .onChange(of:chosen?.id){_,id in if id == nil{content.renderer.revoke()}}
         .controlSize(.small).tint(.gray)
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
@@ -384,6 +434,10 @@ private struct CrewdGroupKnowledgeView:View {
                 DisclosureGroup("来源信息"){Text("原机组："+chosen.source.context.crewId).textSelection(.enabled);Text(chosen.source.reference.id).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary).padding(.horizontal,24)
                 if chosen.state == "ready",let detail=content.detail,detail.object.identity == chosen.source.reference.id,
                    detail.resolvedContext.crewId == chosen.source.context.crewId {
+                    if collection == .documents, group.crew == chosen.source.context.crewId, content.canPrepareNativeDocumentEdit(detail) {
+                        Button("编辑原文",systemImage:"pencil") { editTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
+                            .disabled(content.busy || content.hasBlockingPending).padding(.horizontal,24)
+                    }
                     CrewdKnowledgeObjectSurface(store:content,detail:detail)
                 }else{CrewdEmptySurface(title:"原内容尚不可读",detail:chosen.state == "contextChanged" ? "原知识上下文已变化，引用保留；不会把历史对象当作当前正文。":"请核对当前权限与源机组状态。",symbol:"doc.questionmark")}
                 Button("解除本群引用"){unlink(chosen)}.font(.caption).foregroundStyle(.secondary).padding(.horizontal,14).padding(.vertical,8)
@@ -391,10 +445,119 @@ private struct CrewdGroupKnowledgeView:View {
             }
         }else{Text("选择资料查看内容").font(.callout).foregroundStyle(.secondary).frame(maxWidth:.infinity,maxHeight:.infinity)}
     }
+    private func refreshAfterEdit() async {
+        do { try await group.refresh(); retry = UUID() } catch { failure = error.localizedDescription }
+    }
     private func unlink(_ item:CrewdChannelKnowledgeItem){
         guard !pendingLinks.contains(where: { $0.source.identity == item.id }),
               let revision=group.linkRevision,let snapshot=workspace.knowledgeLinkDrafts.begin(crew:group.crew,channel:group.channel,source:item.source,revision:revision,linked:false) else{return}
         Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if selected == item.id{selected=nil}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure=error.localizedDescription}}
+    }
+}
+
+private struct CrewdNativeDocumentEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: CrewdKnowledgeStore
+    let parent: CrewdDataObjectDetail
+    let scopeCurrent: @MainActor () -> Bool
+    let onSaved: @MainActor () async -> Void
+    @State private var edit: CrewdKnowledgeStore.NativeDocumentEdit?
+    @State private var title = ""
+    @State private var bodyText = ""
+    @State private var failure: String?
+    @State private var working = true
+    @State private var needsReview = false
+    @State private var refreshedBaseline = false
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            HStack { Text("编辑文档").font(CrewdType.title); Spacer(); Button("关闭") { dismiss() }.disabled(working) }
+            if let edit {
+                TextField("标题",text:$title).disabled(working || store.hasBlockingPending)
+                TextEditor(text:$bodyText).frame(minHeight:160).accessibilityLabel("文档正文")
+                    .disabled(working || store.hasBlockingPending)
+                if refreshedBaseline {
+                    DisclosureGroup("已重新读取后台版本，保存前可核对") {
+                        Text(edit.title).font(CrewdType.label).textSelection(.enabled)
+                        ScrollView { Text(edit.body).frame(maxWidth:.infinity,alignment:.leading).textSelection(.enabled) }.frame(maxHeight:120)
+                    }
+                }
+                ForEach(store.pendingNativeDocumentEdits(viewID:parent.object.identity)) { intent in
+                    HStack {
+                        Text("原编辑待核对").font(CrewdType.caption)
+                        Button("查询原编辑结果") { lookup(intent.id) }.disabled(working || store.busy)
+                    }
+                }
+                HStack {
+                    if needsReview && !store.hasBlockingPending {
+                        Button("读取当前版本以核对") { reread(edit) }.disabled(working || store.busy)
+                    }
+                    Spacer()
+                    Button(refreshedBaseline ? "按当前版本保存草稿" : "保存更改") { save(edit) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(working || store.busy || needsReview || store.hasBlockingPending ||
+                                  title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !edit.hasChanges(title:title,body:bodyText))
+                }
+            }
+            if let failure { Text(failure).font(CrewdType.caption).foregroundStyle(.orange).textSelection(.enabled) }
+            if working { ProgressView().controlSize(.small) }
+        }.padding(20)
+        #if os(macOS)
+        .frame(minWidth:520)
+        #endif
+        .interactiveDismissDisabled(working)
+        .task {
+            defer { working = false }
+            do {
+                guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
+                let original = try await store.prepareNativeDocumentEdit(parent)
+                guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
+                edit = original; title = original.title; bodyText = original.body
+            } catch { failure = "无法确认可编辑的原文。此入口支持机组内当前的人类单段纯文本文档。" }
+        }
+    }
+
+    private func save(_ original: CrewdKnowledgeStore.NativeDocumentEdit) {
+        working = true
+        Task {
+            defer { working = false }
+            do {
+                guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
+                let result = try await store.submitNativeDocumentEdit(original,title:title,body:bodyText)
+                if result?.phase == .committed { if scopeCurrent() { await onSaved() }; dismiss(); return }
+                if result == nil { await store.refresh() }
+                failure = store.hasBlockingPending ? "编辑结果待核对。请查询原请求，草稿保留。" : "保存尚未确认，请读取当前版本核对。"
+            } catch let error as CrewdClientError { failure = error.localizedDescription }
+            catch { failure = "原文或连接已变化，或输入超出限制。当前草稿保留。" }
+            needsReview = true
+        }
+    }
+
+    private func lookup(_ id: UUID) {
+        working = true
+        Task {
+            defer { working = false }
+            guard scopeCurrent() else { return }
+            await store.lookup(id)
+            if store.result.flatMap({ UUID(uuidString:$0.requestId) }) == id, store.result?.phase == .committed, scopeCurrent() {
+                await onSaved(); dismiss()
+            } else { failure = store.status }
+        }
+    }
+
+    private func reread(_ original: CrewdKnowledgeStore.NativeDocumentEdit) {
+        working = true
+        Task {
+            defer { working = false }
+            do {
+                guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
+                let current = try await store.reloadNativeDocumentEdit(original)
+                guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
+                let draft = current.rebasedDraft(from:original,title:title,body:bodyText)
+                title = draft.title; bodyText = draft.body
+                edit = current; needsReview = false; refreshedBaseline = true; failure = nil
+            } catch { failure = "未能核对当前原文，草稿保留。" }
+        }
     }
 }
 

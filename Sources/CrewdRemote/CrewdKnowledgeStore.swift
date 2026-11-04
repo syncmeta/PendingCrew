@@ -18,6 +18,43 @@ import CryptoKit
         let context: CrewdDataContext
         let method: String? // operation identity only; never a replay payload
         let changeDigest: String // no replay payload or view code in the observation journal
+        var documentEdit: NativeDocumentEditReceipt? = nil
+    }
+    struct NativeDocumentEdit: Equatable {
+        let title: String
+        let body: String
+        fileprivate let origin: Origin
+        fileprivate let parent: CrewdDataObjectDetail
+        fileprivate let view: CrewdDataRef
+        fileprivate let placement: CrewdDataPlacement
+        fileprivate let layout: CrewdValue
+        fileprivate let viewAttributes: CrewdValue
+        fileprivate let bodyRef: CrewdDataRef
+        fileprivate let bodyRevision: String
+        fileprivate let bodyAttributes: CrewdValue
+
+        func hasChanges(title: String, body: String) -> Bool {
+            !title.utf8.elementsEqual(self.title.utf8) || !body.utf8.elementsEqual(self.body.utf8)
+        }
+        func rebasedDraft(from previous: Self, title: String, body: String) -> (title: String, body: String) {
+            (title.utf8.elementsEqual(previous.title.utf8) ? self.title : title,
+             body.utf8.elementsEqual(previous.body.utf8) ? self.body : body)
+        }
+    }
+    struct NativeDocumentEditReceipt: Codable, Equatable {
+        fileprivate let view: CrewdDataObjectVersion
+        fileprivate let replacedBody: CrewdDataRef?
+
+        fileprivate func matches(_ result: CrewdDataChangeResult) -> Bool {
+            if let replacedBody {
+                guard result.created.count == 1, case .object(let body)? = result.created["replacementBody"],
+                      body.revision == "1", body.reference.kind == "block",
+                      body.reference.namespace == view.reference.namespace, body.reference != replacedBody,
+                      UUID(uuidString:body.reference.id)?.uuidString.lowercased() == body.reference.id else { return false }
+                return result.changed.count == 2 && result.changed.contains(view) && result.changed.contains(body)
+            }
+            return result.created.isEmpty && result.changed == [view]
+        }
     }
     enum Failure: Error { case unavailable, invalid, stale, unresolved, unsupported }
     typealias RPC = (String, CrewdValue) async throws -> CrewdValue
@@ -98,19 +135,25 @@ import CryptoKit
     }
     func synchronizeOrigin() { if let active, origin() != active { invalidate() } }
     private func current(_ o: Origin, _ token: UUID) -> Bool { origin() == o && active == o && operation == token }
+    private func reconcilePending(_ o: Origin) throws {
+        let stored = try journal().unknownRecords().filter { $0.method == "data.submit.observation" && $0.scope == o.scope && $0.crew == o.crew }
+        var refreshed: [Intent] = []
+        var evidence: [UUID:CrewdPresentationJournal.Prepared] = [:]
+        for record in stored {
+            let intent = try Self.decode(record.params, Intent.self)
+            guard intent.context.crewId == o.crew, intent.context.dbId == o.scope.databaseID,
+                  intent.context.authorityId == o.knowledgeAuthorityID, evidence[intent.id] == nil else { throw Failure.invalid }
+            evidence[intent.id] = record
+            refreshed.append(intent)
+        }
+        records = evidence
+        if pending != refreshed { pending = refreshed }
+    }
     private func begin() throws -> (Origin, UUID) {
         guard !busy, let o = origin(), !o.crew.isEmpty else { throw Failure.unavailable }
-        if active != o {
-            invalidate()
-            let stored = try journal().unknownRecords().filter { $0.method == "data.submit.observation" && $0.scope == o.scope && $0.crew == o.crew }
-            for record in stored {
-                let intent = try Self.decode(record.params, Intent.self)
-                guard intent.context.crewId == o.crew, intent.context.dbId == o.scope.databaseID,
-                      intent.context.authorityId == o.knowledgeAuthorityID, records[intent.id] == nil else { throw Failure.invalid }
-                records[intent.id] = record; pending.append(intent)
-            }
-            active = o
-        }
+        if active != o { invalidate() }
+        try reconcilePending(o)
+        active = o
         let token = UUID(); operation = token; busy = true; return (o, token)
     }
     private func finish(_ o: Origin, _ token: UUID) {
@@ -265,12 +308,16 @@ import CryptoKit
             applyObservation(response,intent:intent)
         } catch { if current(o,token) { renderer.revoke(); status = "结果未确认；只可核对原请求，不自动重试。" } }
     }
-    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext) throws -> (Intent, CrewdPresentationJournal.Prepared) {
+    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
         guard let o = active, origin() == o else { throw Failure.stale }
         try checked(context, o)
+        // The library, group detail and renderer can hold distinct live stores.
+        // Consult their common durable scope before preparing any new write.
+        try reconcilePending(o)
+        guard !hasBlockingPending else { throw Failure.unresolved }
         let bytes = try JSONEncoder().encode(change)
         guard bytes.count <= 8_388_608 else { throw Failure.invalid }
-        let intent = Intent(id: id, context: context, method: "data.submit", changeDigest: SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined())
+        let intent = Intent(id: id, context: context, method: "data.submit", changeDigest: SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined(), documentEdit: documentEdit)
         let record = try journal().prepare(method: "data.submit.observation", params: Self.encode(intent), crew: o.crew)
         records[id] = record; pending.append(intent)
         return (intent, record)
@@ -281,6 +328,7 @@ import CryptoKit
               intent.method == "data.restore" || response.context.restoreEpoch == intent.context.restoreEpoch else { throw Failure.invalid }
         if response.phase == .committed {
             guard response.beforeGeneration == intent.context.generation, response.afterGeneration == response.context.generation else { throw Failure.invalid }
+            if let edit = intent.documentEdit, !edit.matches(response) { throw Failure.invalid }
         }
         // Unknown/historical stays durable. A lookup can never replay the mutation.
         switch response.phase {
@@ -301,21 +349,108 @@ import CryptoKit
     }
     /// Only native controls call this with an explicitly confirmed change. The JS path below allows Apply only.
     @discardableResult func submitFromNativeHost(_ change: CrewdDataChange, requestID:UUID?=nil) async -> CrewdDataChangeResult? {
-        let o: Origin, token: UUID
-        do { (o, token) = try begin() } catch { return nil }
+        try? await submitNativeChange(change, requestID: requestID)
+    }
+    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil) async throws -> CrewdDataChangeResult? {
+        let (o, token) = try begin()
         defer { finish(o, token) }
+        guard !hasBlockingPending else { throw Failure.unresolved }
         do {
             guard let info = workspace else { throw Failure.unavailable }
-            guard !hasBlockingPending else { throw Failure.unresolved }
-            let (intent, record) = try stage(change, id: requestID ?? UUID(), context: info.context)
             let ledger = try journal()
-            let response: CrewdDataChangeResult = try await call("data.submit", CrewdDataSubmitParams(requestId:intent.id.uuidString.lowercased(), context:intent.context, change:change))
+            let (intent, record) = try stage(change, id: requestID ?? UUID(), context: info.context, documentEdit: documentEdit)
+            let response: CrewdDataChangeResult
+            do {
+                response = try await call("data.submit", CrewdDataSubmitParams(requestId:intent.id.uuidString.lowercased(), context:intent.context, change:change))
+            } catch let error as CrewdClientError where documentEdit != nil && Self.definiteEditRefusal(error) {
+                try ledger.finish(record, state:"refused")
+                if current(o, token) { pending.removeAll { $0.id == intent.id }; records.removeValue(forKey: intent.id) }
+                throw error
+            }
             try observe(response, intent:intent, record:record, ledger:ledger)
             guard current(o, token) else { return origin() == o ? response:nil }
             applyObservation(response, intent:intent)
             return response
+        } catch let error as CrewdClientError where documentEdit != nil && Self.definiteEditRefusal(error) {
+            if current(o,token) { status = "后台拒绝保存。重新读取原文后再处理此次编辑。" }
+            throw error
         } catch { if current(o,token) { renderer.revoke(); status = "未获得完整提交结果；保留原 UUID，不自动重试。" } }
         return nil
+    }
+    private static func definiteEditRefusal(_ error: CrewdClientError) -> Bool {
+        if case .notSubmitted = error.kind { return true }
+        // An untyped conflict can also report a storage fault at commit time.
+        return error.code == -32602 || error.code == -32003 ||
+            (error.code == -32009 && error.refusal == "data.context_conflict")
+    }
+    func canPrepareNativeDocumentEdit(_ parent: CrewdDataObjectDetail) -> Bool {
+        guard let context = workspace?.context, workspace?.state == "ready", let active, origin() == active,
+              !detailIsSnapshot, detail == parent, parent.context == context, parent.resolvedContext == context,
+              parent.generation == context.generation,
+              detailReference == .init(namespace:context.namespace,kind:"view",id:parent.object.identity),
+              case .view(_,_,_,.document(let placements,_),false,let provenance) = parent.object,
+              provenance.createdBy["kind"].string == "human", placements.count == 1,
+              let placement = placements.first, placement.atRevision == nil,
+              case .visible(let block) = placement.block, block.namespace == context.namespace, block.kind == "block" else { return false }
+        return parent.references.contains { $0.anchor == "placement:" + placement.id && $0.target == placement.block && $0.live && $0.complete && $0.revision != nil }
+    }
+    func prepareNativeDocumentEdit(_ parent: CrewdDataObjectDetail) async throws -> NativeDocumentEdit {
+        guard canPrepareNativeDocumentEdit(parent), let active, let view = detailReference,
+              case .view(_,_,let title,.document(let placements,let layout),_,let provenance) = parent.object,
+              let placement = placements.first, case .visible(let bodyRef) = placement.block else { throw Failure.unsupported }
+        let anchor = "placement:" + placement.id
+        guard let body = try await resolved(placement.block,anchor:anchor,atRevision:nil,parent:parent),
+              canPrepareNativeDocumentEdit(parent), body.context == parent.context, body.resolvedContext == parent.context,
+              body.generation == parent.generation,
+              case .block(let id,let revision,"text/plain",.string(let text),false,let bodyProvenance) = body.object,
+              id == bodyRef.id, bodyProvenance.createdBy["kind"].string == "human",
+              parent.references.contains(where: { $0.anchor == anchor && $0.target == placement.block && $0.revision == revision && $0.live && $0.complete }) else { throw Failure.unsupported }
+        return .init(title:title,body:text,origin:active,parent:parent,view:view,placement:placement,layout:layout,
+                     viewAttributes:provenance.attributes,bodyRef:bodyRef,bodyRevision:revision,bodyAttributes:bodyProvenance.attributes)
+    }
+    func reloadNativeDocumentEdit(_ edit: NativeDocumentEdit) async throws -> NativeDocumentEdit {
+        guard origin() == edit.origin else { throw Failure.stale }
+        await refresh()
+        guard origin() == edit.origin, let context = workspace?.context,
+              sameAuthority(edit.parent.context,context) else { throw Failure.stale }
+        await open(edit.view)
+        guard let detail else { throw Failure.unavailable }
+        return try await prepareNativeDocumentEdit(detail)
+    }
+    func pendingNativeDocumentEdits(viewID: String? = nil, crew: String? = nil) -> [Intent] {
+        guard let active, origin() == active, crew == nil || crew == active.crew else { return [] }
+        return pending.filter { intent in
+            guard let edit = intent.documentEdit else { return false }
+            if let context = workspace?.context, !sameAuthority(intent.context,context) { return false }
+            return viewID == nil || edit.view.reference.id == viewID
+        }
+    }
+    func synchronizePending() {
+        guard let (o, token) = try? begin() else { return }
+        finish(o,token)
+    }
+    func submitNativeDocumentEdit(_ edit: NativeDocumentEdit, title: String, body: String) async throws -> CrewdDataChangeResult? {
+        guard !busy, active == edit.origin, canPrepareNativeDocumentEdit(edit.parent) else { throw Failure.stale }
+        let revision = edit.parent.object.revision
+        guard !title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, title.utf8.count <= 512, body.utf8.count <= 1_048_576,
+              edit.hasChanges(title:title,body:body), let currentRevision = Int64(revision), currentRevision > 0,
+              currentRevision < Int64.max else { throw Failure.invalid }
+        let bodyChanged = !body.utf8.elementsEqual(edit.body.utf8)
+        let placement: CrewdDataPlacementEdit
+        var edits: [CrewdDataEdit] = []
+        if bodyChanged {
+            // Existing live consumers continue to read the old block. The new body
+            // keeps a pinned provenance link to the exact original revision.
+            let source = CrewdDataSourceInput(reference:.existing(reference:edit.bodyRef),atRevision:edit.bodyRevision,attributes:.object([:]))
+            edits.append(.createBlock(alias:"replacementBody",contentType:"text/plain",content:.string(body),sources:[source],attributes:edit.bodyAttributes))
+            placement = .set(id:edit.placement.id,alias:nil,block:.created(alias:"replacementBody"),atRevision:nil,layout:edit.placement.layout)
+        } else {
+            placement = .keep(id:edit.placement.id,layout:edit.placement.layout)
+        }
+        edits.append(.updateView(id:edit.view.id,expectedRevision:revision,title:title,
+                                 definition:.document(placements:[placement],layout:edit.layout),sources:nil,attributes:edit.viewAttributes))
+        let witness = NativeDocumentEditReceipt(view:.init(reference:edit.view,revision:String(currentRevision + 1)),replacedBody:bodyChanged ? edit.bodyRef:nil)
+        return try await submitNativeChange(.apply(message:"编辑文档",edits:edits),documentEdit:witness)
     }
     func nativeDocumentStage(channel:String)throws->CrewdPresentationJournal.DocumentStage? {
         guard let o=active,origin() == o else{throw Failure.stale}
@@ -334,8 +469,10 @@ import CryptoKit
     /// or process lifetime. Reopening can only adopt/lookup the same save UUID.
     func submitNativeDocument(title:String,body:String,channel:String)async->CrewdDataChangeResult? {
         do {
-            guard canSaveNativeDocument, !busy, !hasBlockingPending else { throw Failure.unavailable }
+            guard canSaveNativeDocument, !busy else { throw Failure.unavailable }
             guard let o=active,origin() == o,let context=workspace?.context else{throw Failure.stale}
+            try reconcilePending(o)
+            guard !hasBlockingPending else { throw Failure.unresolved }
             let ledger=try journal()
             let stage=try ledger.prepareDocumentStage(crew:o.crew,channel:channel,title:title,body:body,context:Self.encode(context))
             if try ledger.documentStageAttempted(stage){status="原文档已送交保存；仅核对原请求或加入已保存原文。";return try nativeDocumentResult(stage)}
