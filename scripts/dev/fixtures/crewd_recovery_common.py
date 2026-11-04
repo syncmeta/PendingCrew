@@ -38,7 +38,7 @@ def wait_for(fn, label, seconds=20):
         time.sleep(.03)
 
 class Public:
-    def __init__(self,path,owned):
+    def __init__(self,path,owned,required_capabilities=('command.receipts','session.terminal')):
         self.socket=socket.socket(socket.AF_UNIX); self.socket.settimeout(10); self.socket.connect(str(path)); self.counter=0; self.pending=b''; self.events=[]
         if sys.platform=='darwin':
             pid=struct.unpack('i',self.socket.getsockopt(0,2,4))[0]
@@ -46,7 +46,7 @@ class Public:
         else:pid,uid,_=struct.unpack('3i',self.socket.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
         assert pid==owned['pid'] and uid==os.getuid() and same(birth(pid),owned)
         self.hello=self.rpc('system.hello',{})
-        assert 'command.receipts' in self.hello['capabilities'] and 'session.terminal' in self.hello['capabilities']
+        assert set(required_capabilities) <= set(self.hello['capabilities']), self.hello['capabilities']
         self.identity=self.hello['runtimeIdentity']; assert all(self.identity.values())
     def frame(self):
         while b'\n' not in self.pending:
