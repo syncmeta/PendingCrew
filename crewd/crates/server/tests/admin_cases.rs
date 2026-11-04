@@ -24,6 +24,7 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
         "adminCase.custodyPropose",
         "adminCase.automaticExecution",
         "adminCase.effects",
+        "adminCase.humanBrief",
         "adminCase.legacyRecovery",
         "adminCase.legacyList",
         "adminCase.legacyGet",
@@ -86,6 +87,7 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
                 "adminCase.effects",
                 json!({"crewId":f.crew,"id":"AC00000000000000000001"}),
             ),
+            ("adminCase.humanBrief", json!({"crewId":f.crew})),
             (
                 "adminCase.custodyGet",
                 json!({"crewId":f.crew,"caseId":"AC00000000000000000001"}),
@@ -128,6 +130,38 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn human_brief_socket_reads_the_original_question_without_mutating_it() {
+    use crewd_collab::asks;
+    let f = Fixture::new().await;
+    let worker = f.worker.clone();
+    let original = f.state.collab(move |tx| asks::open(tx, &worker, asks::OpenAsk {
+        question: "original fixture question".into(), default: None, resume_note: None,
+    })).await.unwrap();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let mut human = RpcClient::connect(&f.data_dir().join("crewd.sock")).await;
+    let before = f.state.db.call(|s| s.conn().total_changes()).await.unwrap();
+    let params = json!({"crewId": f.crew});
+    let brief = call(&mut human, "adminCase.humanBrief", params.clone()).await.unwrap();
+    assert_eq!(brief["crewId"], f.crew);
+    assert_eq!(brief["caseCoverage"], "complete");
+    assert_eq!(brief["patrol"]["state"], "not_recorded");
+    assert_eq!(brief["humanWaits"].as_array().unwrap().len(), 1);
+    let row = &brief["humanWaits"][0];
+    assert_eq!(row["kind"], "question");
+    assert_eq!(row["askId"], original.ask);
+    assert_eq!(row["question"], original.question);
+    assert_eq!(row["sourceMessageId"], original.message_id.unwrap());
+    assert_eq!(f.state.db.call(|s| s.conn().total_changes()).await.unwrap(), before);
+    let crew = f.crew.clone();
+    let id = original.ask;
+    f.state.collab(move |tx| asks::answer(tx, &crew, &id, "confirmed")).await.unwrap();
+    assert_eq!(call(&mut human, "adminCase.humanBrief", params).await.unwrap()["humanWaits"], json!([]));
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), task).await.unwrap().unwrap();
 }
 
 #[tokio::test]

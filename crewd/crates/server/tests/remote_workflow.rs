@@ -256,6 +256,9 @@ async fn public_pairing_actual_tls_work_flow_and_online_revoke() {
         crewd_proto::RpcError::INVALID_PARAMS,
         "paired Human reaches the case lookup through the current grant"
     );
+    let brief = remote.call(crewd_proto::admin_cases::HUMAN_BRIEF, json!({"crewId":crew})).await;
+    assert_eq!(brief["crewId"], crew);
+    assert_eq!(brief["humanWaits"], json!([]));
     // Paired Human access reaches the same passive lookup as the local UI.
     // A missing UUID must not become a new transfer or a remote permission error.
     let missing_custody = remote

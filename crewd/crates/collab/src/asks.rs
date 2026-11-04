@@ -230,7 +230,7 @@ fn resolve_ask(conn: &Connection, crew: &str, ask: &str) -> Result<AskId> {
     .and_then(|id| id.parse().ok())
     .ok_or_else(|| unknown_id(crew, ask))
 }
-fn public_ask(conn: &Connection, h: AskId) -> Result<crewd_store::object_refs::ObjectReference> {
+pub(crate) fn public_ask(conn: &Connection, h: AskId) -> Result<crewd_store::object_refs::ObjectReference> {
     crewd_store::work_organization::reference_for_core(
         conn,
         crewd_store::object_refs::ObjectKind::HumanTask,
@@ -240,7 +240,7 @@ fn public_ask(conn: &Connection, h: AskId) -> Result<crewd_store::object_refs::O
         crewd_store::StoreError::Invalid("question has no published identity".into()).into()
     })
 }
-fn meta_key(r: &crewd_store::object_refs::ObjectReference) -> &str {
+pub(crate) fn meta_key(r: &crewd_store::object_refs::ObjectReference) -> &str {
     r.source_id.strip_prefix("work:").unwrap_or(&r.source_id)
 }
 

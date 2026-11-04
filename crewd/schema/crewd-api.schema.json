@@ -1692,6 +1692,252 @@
       ],
       "type": "object"
     },
+    "AdminHumanBrief": {
+      "properties": {
+        "caseCoverage": {
+          "$ref": "#/$defs/AdminHumanBriefCaseCoverage"
+        },
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/AdminHumanBriefCase"
+          },
+          "type": "array"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "humanWaits": {
+          "items": {
+            "$ref": "#/$defs/AdminHumanBriefWait"
+          },
+          "type": "array"
+        },
+        "humanWaitsTruncated": {
+          "type": "boolean"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "patrol": {
+          "$ref": "#/$defs/AdminHumanBriefPatrol"
+        }
+      },
+      "required": [
+        "crewId",
+        "observedAtMs",
+        "humanWaits",
+        "humanWaitsTruncated",
+        "cases",
+        "caseCoverage",
+        "patrol"
+      ],
+      "type": "object"
+    },
+    "AdminHumanBriefCase": {
+      "properties": {
+        "caseId": {
+          "type": "string"
+        },
+        "createdAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "custodyPhase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseCustodyPhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decision": {
+          "$ref": "#/$defs/AdminCaseDecision"
+        },
+        "execution": {
+          "$ref": "#/$defs/AdminCaseExecution"
+        },
+        "outcomePhase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseOutcomePhase"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "caseId",
+        "createdAtMs",
+        "decision",
+        "execution"
+      ],
+      "type": "object"
+    },
+    "AdminHumanBriefCaseCoverage": {
+      "enum": [
+        "complete",
+        "recent_sample",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "AdminHumanBriefParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "AdminHumanBriefPatrol": {
+      "properties": {
+        "completedAtMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "findingCounts": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "findingsTruncated": {
+          "type": "boolean"
+        },
+        "runId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scannedCounts": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "startedAtMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/AdminHumanBriefPatrolState"
+        }
+      },
+      "required": [
+        "state",
+        "scannedCounts",
+        "findingCounts",
+        "findingsTruncated"
+      ],
+      "type": "object"
+    },
+    "AdminHumanBriefPatrolState": {
+      "enum": [
+        "not_recorded",
+        "in_progress",
+        "complete",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "AdminHumanBriefWait": {
+      "properties": {
+        "askId": {
+          "type": "string"
+        },
+        "askedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "blockersTruncated": {
+          "type": "boolean"
+        },
+        "blockingWorkIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "defaultDueAtMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/AdminHumanBriefWaitKind"
+        },
+        "notifiedTier": {
+          "$ref": "#/$defs/WaitTierView"
+        },
+        "question": {
+          "type": "string"
+        },
+        "questionTruncated": {
+          "type": "boolean"
+        },
+        "sourceChannelId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceMessageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "$ref": "#/$defs/WaitTierView"
+        },
+        "waitedMs": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "askId",
+        "kind",
+        "question",
+        "questionTruncated",
+        "askedAtMs",
+        "waitedMs",
+        "tier",
+        "notifiedTier",
+        "blockingWorkIds",
+        "blockersTruncated"
+      ],
+      "type": "object"
+    },
+    "AdminHumanBriefWaitKind": {
+      "enum": [
+        "question",
+        "human_task"
+      ],
+      "type": "string"
+    },
     "Ask": {
       "description": "一条人类待确认；H 号全组织签发，旧机组编号仅保留为显式别名。",
       "properties": {
@@ -17860,6 +18106,14 @@
       },
       "result": {
         "$ref": "#/$defs/AdminCaseView"
+      }
+    },
+    "adminCase.humanBrief": {
+      "params": {
+        "$ref": "#/$defs/AdminHumanBriefParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminHumanBrief"
       }
     },
     "adminCase.legacyConfirm": {

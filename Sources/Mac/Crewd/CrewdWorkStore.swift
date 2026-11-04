@@ -634,6 +634,15 @@ final class CrewdWorkStore: ObservableObject {
         }
         return page
     }
+    func humanBrief() async throws -> CrewdHumanBrief {
+        let crew = selectedCrew, token = generation
+        guard capabilities.contains("adminCase.humanBrief"), !crew.isEmpty else {
+            throw CrewdClientError(message: "当前后台未开放行政简报。", kind: .notSubmitted)
+        }
+        let value = try await call("adminCase.humanBrief", .object(["crewId": .string(crew)]))
+        try check(token)
+        return try CrewdHumanBrief(value: value, crew: crew)
+    }
     private func legacyError()->CrewdClientError {CrewdClientError(message:"历史核验身份、范围或字段不完整。")}
     private func validateLegacy(_ row:CrewdValue)throws {
         guard row["messageId"].string?.isEmpty == false,row["messageSeq"].int != nil,row["historicalText"].string != nil,row["createdAt"].string != nil,row["revision"].string?.isEmpty == false,
@@ -1175,6 +1184,76 @@ enum CrewdCaptainBriefPhase: String {
         case .dropped: "已取消"
         case .unknown: "结果未知"
         }
+    }
+}
+
+struct CrewdHumanBrief {
+    let observedAt: Int
+    let waits: [CrewdValue]
+    let waitsTruncated: Bool
+    let cases: [CrewdValue]
+    let caseCoverage: String
+    let patrol: CrewdValue
+
+    init(value: CrewdValue, crew: String) throws {
+        let error = CrewdClientError(message: "行政简报的机组或来源记录不完整。")
+        guard value["crewId"] == .string(crew), let observedAt = value["observedAtMs"].int, observedAt >= 0,
+              case .array(let waits) = value["humanWaits"], waits.count <= 20,
+              case .bool(let waitsTruncated) = value["humanWaitsTruncated"],
+              case .array(let cases) = value["cases"], cases.count <= 12,
+              let coverage = value["caseCoverage"].string,
+              ["complete", "recent_sample", "unavailable"].contains(coverage),
+              coverage != "unavailable" || cases.isEmpty else { throw error }
+        var asks = Set<CrewdWorkID>(), caseIDs = Set<String>()
+        for wait in waits {
+            guard let id = CrewdWorkID(wait["askId"].string ?? "", kind: .human), asks.insert(id).inserted,
+                  let kind = wait["kind"].string, ["question", "human_task"].contains(kind),
+                  wait["question"].string?.isEmpty == false,
+                  case .bool = wait["questionTruncated"], case .bool = wait["blockersTruncated"],
+                  (wait["askedAtMs"].int ?? -1) >= 0,
+                  let elapsed = wait["waitedMs"].int, elapsed >= 0,
+                  ["fresh", "pinned", "still_wanted"].contains(wait["tier"].string ?? ""),
+                  ["fresh", "pinned", "still_wanted"].contains(wait["notifiedTier"].string ?? ""),
+                  wait["defaultDueAtMs"] == .null || (wait["defaultDueAtMs"].int ?? -1) >= 0,
+                  case .array(let blockers) = wait["blockingWorkIds"], blockers.count <= 12,
+                  Set(blockers.compactMap({ CrewdWorkID($0.string ?? "", kind: .plan) })).count == blockers.count else { throw error }
+            if kind == "human_task" {
+                guard wait["tier"] == .string("fresh"), wait["notifiedTier"] == .string("fresh") else { throw error }
+            }
+            let channel = wait["sourceChannelId"], message = wait["sourceMessageId"]
+            guard (channel == .null && message == .null) ||
+                    (channel.string?.isEmpty == false && message.string?.isEmpty == false) else { throw error }
+        }
+        for item in cases {
+            guard let id = item["caseId"].string, id.hasPrefix("AC"), caseIDs.insert(id).inserted,
+                  (item["createdAtMs"].int ?? -1) >= 0,
+                  item["decision"].string?.isEmpty == false, item["execution"].string?.isEmpty == false,
+                  item["outcomePhase"] == .null || ["unresolved", "stale"].contains(item["outcomePhase"].string ?? ""),
+                  item["custodyPhase"] == .null || ["active", "stale", "discharged"].contains(item["custodyPhase"].string ?? "") else { throw error }
+        }
+        let patrol = value["patrol"]
+        guard let patrolState = patrol["state"].string,
+              case .object(let scanned) = patrol["scannedCounts"], case .object(let findings) = patrol["findingCounts"],
+              (Array(scanned.values) + Array(findings.values)).allSatisfy({ ($0.int ?? -1) >= 0 }),
+              case .bool = patrol["findingsTruncated"] else { throw error }
+        switch patrolState {
+        case "complete", "in_progress":
+            guard patrol["runId"].string?.isEmpty == false, let started = patrol["startedAtMs"].int,
+                  started >= 0, started <= observedAt else { throw error }
+            if patrolState == "complete" {
+                guard let completed = patrol["completedAtMs"].int, completed >= started, completed <= observedAt else { throw error }
+            } else if patrol["completedAtMs"] != .null { throw error }
+        case "not_recorded", "unavailable":
+            guard patrol["runId"] == .null, patrol["startedAtMs"] == .null, patrol["completedAtMs"] == .null,
+                  scanned.isEmpty, findings.isEmpty else { throw error }
+        default: throw error
+        }
+        self.observedAt = observedAt
+        self.waits = waits
+        self.waitsTruncated = waitsTruncated
+        self.cases = cases
+        self.caseCoverage = coverage
+        self.patrol = patrol
     }
 }
 

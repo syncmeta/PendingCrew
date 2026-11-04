@@ -97,6 +97,13 @@ pub(crate) fn run(c: &Connection, crew: &str) -> Result<Option<PatrolRun>> {
     Ok(load(c, crew)?.map(|saved| saved.run))
 }
 
+pub(crate) fn human_observation(c: &Connection, crew: &str) -> Result<Option<PatrolRun>> {
+    if error_saved(c, crew)?.is_some() {
+        return Err(StoreError::Invalid("patrol observation is unavailable".into()).into());
+    }
+    run(c, crew)
+}
+
 /// After a scan step, only inspect the same round-robin crew. Core owns live
 /// process admission and makes the separate enqueue decision.
 pub fn brief_candidate(c: &Connection) -> Result<Option<(String, String)>> {

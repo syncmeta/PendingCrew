@@ -184,15 +184,21 @@ struct CrewdHumanActions:View {
     @ObservedObject var store:CrewdWorkStore
     @Binding var drafts:CrewdHumanDrafts
     let target:CrewdHumanTarget
+    var readExactly = false
     @Environment(\.dismiss) private var dismiss
     @State private var failure:String?
     @State private var humanOrigin=false
+    @State private var exactAsk:CrewdValue?
+    @State private var verifiedOrigin=false
     @State private var reading=false
     @State private var reviewedUnknown=false
     @State private var readUnknown=false
     private var key:CrewdHumanDrafts.Key {target.key}
     private var id:CrewdWorkID? {CrewdWorkID(key.ask,kind:.human)}
-    private var ask:CrewdValue {id.flatMap{store.humanTasks[$0]}?["ask"] ?? .null}
+    private var ask:CrewdValue {
+        if readExactly { return exactAsk ?? .null }
+        return id.flatMap{store.humanTasks[$0]}?["ask"] ?? .null
+    }
     private var fields:CrewdHumanDrafts.Fields {drafts.fields(key)}
     private func binding<T>(_ path:WritableKeyPath<CrewdHumanDrafts.Fields,T>)->Binding<T> {Binding(get:{drafts.fields(key)[keyPath:path]},set:{var f=drafts.fields(key);f[keyPath:path]=$0;drafts.edit(key,f);reviewedUnknown=false;readUnknown=false})}
     var body:some View {
@@ -200,7 +206,7 @@ struct CrewdHumanActions:View {
             CrewdPanelHeader(title:"处理人工待办",detail:"答复或撤回 Agent 的原问题。",symbol:"person.crop.circle.badge.questionmark")
             DisclosureGroup("原事项编号"){Text(key.ask).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary)
             Text("所属机组："+(target.crewTitle ?? "机组资料尚未加载")).font(.caption).foregroundStyle(.secondary)
-            Text(ask["question"].string ?? "此问题已不在当前待处理收件箱，请刷新核对。").textSelection(.enabled)
+            Text(ask["question"].string ?? (reading ? "正在读取原问题…" : "此问题已不在当前待处理收件箱，请刷新核对。")).textSelection(.enabled)
             if let item=ask["item"].string {Text("关联计划："+item).font(.caption)}
             if let original=ask["default"]["text"].string {Text("预设答复："+original).font(.caption).textSelection(.enabled)}
             ForEach(drafts.uncertain(key),id:\.version){snapshot in
@@ -218,29 +224,51 @@ struct CrewdHumanActions:View {
             if fields.action == .withdraw {Text("仍阻塞活跃计划的问题不能撤回；请先由负责人调整计划，后台会最终校验。").font(.caption).foregroundStyle(.secondary)}
             if let failure {Text(failure).foregroundStyle(.orange).textSelection(.enabled)}
             Spacer()
-            HStack{Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(humanOrigin || drafts.busy(key) || reading || store.selectedCrew != key.scope || ask["state"] != .string("open") || fields.text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || (!drafts.uncertain(key).isEmpty && !reviewedUnknown))}
+            HStack{Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":"提交"){submit()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(humanOrigin || (readExactly && !verifiedOrigin) || drafts.busy(key) || reading || store.selectedCrew != key.scope || ask["state"] != .string("open") || fields.text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || (!drafts.uncertain(key).isEmpty && !reviewedUnknown))}
         }.padding(20).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:540,height:580))
-        .task(id:key){guard let id else{return};do{let value=try await store.humanTodoAttributes(id);humanOrigin=value["origin"] == .string("humanTask")}catch{failure=error.localizedDescription}}
+        .task(id:key) {
+            guard let id else { return }
+            if readExactly { await refresh(); return }
+            do { let value = try await store.humanTodoAttributes(id); humanOrigin = value["origin"] == .string("humanTask") }
+            catch { failure = error.localizedDescription }
+        }
+        .onChange(of: store.readScope) { _, _ in if readExactly { dismiss() } }
     }
     private func describe(_ error:Error)->String {
         guard let e=error as? CrewdClientError else {return error.localizedDescription}
         return [e.message,e.code.map{"错误 \($0)"},e.refusal].compactMap{$0}.joined(separator:" · ")
     }
     private func refresh() async {
+        let scope = store.readScope
         reading=true;defer{reading=false}
-        do {try await store.refresh();if store.selectedCrew == key.scope {failure=nil;readUnknown=true;reviewedUnknown=false}}
+        do {
+            if readExactly, let id {
+                verifiedOrigin = false
+                let detail = try await store.humanDetail(id, crew: key.crew)
+                let source = try await store.humanTodoAttributes(id)
+                guard store.readScope == scope else { return }
+                exactAsk = detail
+                humanOrigin = source["origin"] == .string("humanTask")
+                verifiedOrigin = true
+            } else { try await store.refresh() }
+            if store.selectedCrew == key.scope {failure=nil;readUnknown=true;reviewedUnknown=false}
+        }
         catch {if store.selectedCrew == key.scope {failure=describe(error)}}
     }
     private func submit() {
         guard let snapshot=drafts.begin(key),let id else {return}
         let original=ask
+        let scope = store.readScope
         Task {
             var attempted=false
             do {
-                try await store.refresh()
+                let current: CrewdValue?
+                if readExactly { current = try await store.humanDetail(id, crew: key.crew) }
+                else { try await store.refresh(); current = store.humanTasks[id]?["ask"] }
                 guard store.selectedCrew == key.scope else {throw CancellationError()}
-                guard let current=store.humanTasks[id]?["ask"],current["crewId"] == .string(key.crew),current["question"] == original["question"],current["state"] == .string("open") else {throw CrewdClientError(message:"问题状态已变化，请核对收件箱后再决定。",code:-32009)}
+                guard let current,current["crewId"] == .string(key.crew),current["question"] == original["question"],current["state"] == .string("open") else {throw CrewdClientError(message:"问题状态已变化，请核对收件箱后再决定。",code:-32009)}
                 let source=try await store.humanTodoAttributes(id)
+                guard !readExactly || store.readScope == scope else { throw CancellationError() }
                 guard source["origin"] != .string("humanTask") else{humanOrigin=true;throw CrewdClientError(message:"人创建的待办须从关联群更新人工状态。",kind:.notSubmitted)}
                 attempted=true
                 _ = try await store.resolveHuman(id,crew:key.crew,text:snapshot.fields.text,withdraw:snapshot.fields.action == .withdraw)

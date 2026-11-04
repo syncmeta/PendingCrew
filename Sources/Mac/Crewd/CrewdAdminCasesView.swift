@@ -1,6 +1,7 @@
 import SwiftUI
 struct CrewdAdminCasesView:View {
     @ObservedObject var store:CrewdWorkStore
+    var initialCaseID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var rows:[CrewdValue]=[]
     @State private var next:String?
@@ -105,12 +106,15 @@ struct CrewdAdminCasesView:View {
                     }
                 }.frame(maxWidth:.infinity,alignment:.leading)
             }.frame(maxHeight:460)
-        }.padding().frame(width:560)
+        }.padding().modifier(CrewdAdaptiveFormFrame(width: 560, scrolls: false))
         .sheet(isPresented:$showLegacy) {CrewdAdminLegacyView(store:store)}
         .sheet(isPresented: $showEffects) {
             if let id = detail?["id"].string { CrewdAdminCaseEffectsView(store: store, caseID: id) }
         }
-        .task {load(reset:true)}
+        .task {
+            if let initialCaseID { readDetail(initialCaseID) }
+            else { load(reset: true) }
+        }
         .onChange(of:store.readScope) {_,_ in token=UUID();rows=[];detail=nil;next=nil;dismiss()}
         .onDisappear {token=UUID()}
     }

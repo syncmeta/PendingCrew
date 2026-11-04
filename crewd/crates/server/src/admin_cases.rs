@@ -204,6 +204,19 @@ async fn route(
                 .map_err(dispatch::collab_err)?;
             serde_json::to_value(view).map_err(dispatch::internal)
         }
+        HUMAN_BRIEF => {
+            let p: AdminHumanBriefParams = crewd_proto::parse_params(req.params)?;
+            let brief = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), HUMAN_BRIEF)?;
+                    crewd_collab::admin_human_brief::get(store.conn(), &p.crew_id, crewd_store::now_ms())
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(brief).map_err(dispatch::internal)
+        }
         EFFECTS => {
             let p: AdminCaseEffectsParams = crewd_proto::parse_params(req.params)?;
             let page = state

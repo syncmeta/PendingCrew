@@ -2,6 +2,158 @@ import SwiftUI
 
 enum CrewdWorkPanelDomain:Equatable { case all, requirements, human }
 
+private struct CrewdHumanBriefView: View {
+    @ObservedObject var store: CrewdWorkStore
+    @Binding var drafts: CrewdHumanDrafts
+    let crewTitle: String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var brief: CrewdHumanBrief?
+    @State private var failure: String?
+    @State private var loading = false
+    @State private var reload = UUID()
+    @State private var humanTarget: CrewdHumanTarget?
+    @State private var caseID: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("行政简报").font(.headline)
+                Spacer()
+                Button("刷新") { reload = UUID() }.disabled(loading)
+                Button("关闭") { dismiss() }
+            }
+            Text(crewTitle ?? "当前机组").font(.subheadline)
+            if let failure { Text(failure).foregroundStyle(.orange) }
+            if loading { ProgressView("正在核对当前事项…").controlSize(.small) }
+            if let brief {
+                Text("事项核对时间  " + timestamp(brief.observedAt)).font(.caption).foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        waits(brief)
+                        Divider()
+                        cases(brief)
+                        Divider()
+                        patrol(brief.patrol)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }.padding(18).modifier(CrewdAdaptiveFormFrame(width: 560, height: 570, scrolls: false))
+            .task(id: reload) { await read(reload) }
+            .onChange(of: store.readScope) { _, _ in brief = nil; dismiss() }
+            .sheet(item: $humanTarget, onDismiss: { reload = UUID() }) {
+                CrewdHumanActions(store: store, drafts: $drafts, target: $0, readExactly: true)
+            }
+            .sheet(isPresented: Binding(get: { caseID != nil }, set: { if !$0 { caseID = nil } })) {
+                if let caseID { CrewdAdminCasesView(store: store, initialCaseID: caseID) }
+            }
+    }
+
+    private func waits(_ brief: CrewdHumanBrief) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("等你处理").font(.subheadline.weight(.semibold))
+            if brief.waits.isEmpty { Text("当前机组没有符合简报条件的待处理事项。") }
+            if brief.waitsTruncated { Text("这里只显示前 \(brief.waits.count) 项，其余事项可在待办查看。") }
+            ForEach(Array(brief.waits.enumerated()), id: \.offset) { _, wait in
+                let id = wait["askId"].string ?? ""
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(verbatim: id).font(.caption.weight(.semibold)).textSelection(.enabled)
+                        if wait["kind"] == .string("human_task") {
+                            Text("人工待办").foregroundStyle(.secondary)
+                        } else if let summary = CrewdHumanWaitPresentation.summary(wait) {
+                            Text(summary).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if store.capabilities.contains("channelWork") {
+                            Button("打开原事项") {
+                                let crew = store.selectedCrew
+                                humanTarget = CrewdHumanTarget(key: .init(scope: crew, crew: crew, ask: id), crewTitle: crewTitle)
+                            }
+                        }
+                    }.font(.caption)
+                    Text(verbatim: (wait["question"].string ?? "") + (wait["questionTruncated"] == .bool(true) ? "…" : ""))
+                        .textSelection(.enabled)
+                    if let deadline = wait["defaultDueAtMs"].int {
+                        Text("预设答复截止  " + timestamp(deadline)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    let blockers = wait["blockingWorkIds"].array.compactMap(\.string)
+                    if !blockers.isEmpty {
+                        Text("阻塞工作  " + blockers.joined(separator: "、")
+                             + (wait["blockersTruncated"] == .bool(true) ? " 等" : ""))
+                            .font(.caption).textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    private func cases(_ brief: CrewdHumanBrief) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("待核实行政案件").font(.subheadline.weight(.semibold))
+            if brief.caseCoverage == "unavailable" { Text("当前无法读取案件记录。").foregroundStyle(.orange) }
+            if brief.caseCoverage == "recent_sample" { Text("这里只核对最近一批案件。").foregroundStyle(.secondary) }
+            if brief.caseCoverage != "unavailable" && brief.cases.isEmpty {
+                Text("已读取的案件中没有待核实项。")
+            }
+            ForEach(Array(brief.cases.enumerated()), id: \.offset) { _, row in
+                HStack {
+                    let id = row["caseId"].string ?? ""
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: id).textSelection(.enabled)
+                        let status = row["custodyPhase"] == .string("stale") ? "责任待核对"
+                            : row["outcomePhase"] == .string("stale") ? "核验依据已变化"
+                            : row["outcomePhase"] == .string("unresolved") ? "仍待解决" : "尚无核验结果"
+                        Text(status + " · " + timestamp(row["createdAtMs"].int ?? 0)).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("查看案件") { caseID = id }
+                }.font(.caption)
+            }
+        }
+    }
+
+    private func patrol(_ value: CrewdValue) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("后台巡检记录").font(.subheadline.weight(.semibold))
+            switch value["state"].string {
+            case "complete":
+                if let at = value["completedAtMs"].int { Text("最近一次结束  " + timestamp(at)) }
+                let observations = CrewdPatrolBrief.Kind.allCases.compactMap { kind in
+                    value["findingCounts"][kind.rawValue].int.map { "\(kind.title) \($0)\(kind.unit)" }
+                }
+                if !observations.isEmpty { Text(observations.joined(separator: " · ")) }
+                if value["findingsTruncated"] == .bool(true) { Text("该轮只保存了部分发现的编号。") }
+                Text("这是已保存的观察，处理前请在巡检页核对当前情况。").foregroundStyle(.secondary)
+            case "in_progress":
+                if let at = value["startedAtMs"].int { Text("本轮进行中 · " + timestamp(at)) }
+            case "not_recorded": Text("尚无后台巡检记录。")
+            default: Text("后台巡检记录暂不可读取。").foregroundStyle(.orange)
+            }
+        }.font(.caption)
+    }
+
+    private func timestamp(_ ms: Int) -> String {
+        Date(timeIntervalSince1970: Double(ms) / 1_000).formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private func read(_ request: UUID) async {
+        let scope = store.readScope
+        loading = true
+        failure = nil
+        brief = nil
+        defer { if reload == request { loading = false } }
+        do {
+            let result = try await store.humanBrief()
+            guard !Task.isCancelled, reload == request, store.readScope == scope else { return }
+            brief = result
+        } catch {
+            if !Task.isCancelled, reload == request, store.readScope == scope {
+                failure = error.localizedDescription
+            }
+        }
+    }
+}
+
 struct CrewdWorkPanels: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: CrewdWorkStore
@@ -27,6 +179,7 @@ struct CrewdWorkPanels: View {
         }
     }
     @State private var patrolPresented = false
+    @State private var humanBriefPresented = false
     @State private var collapsed:Set<String>=[]
     @State private var selected:String?
     @State private var failure:String?
@@ -45,6 +198,9 @@ struct CrewdWorkPanels: View {
                 HStack(spacing:10) {
                     CrewdFolderControls(store:resources,drafts:$resourceDrafts,selection:folderSelection,view:folderView,compact:true).fixedSize(horizontal:true,vertical:false)
                     Button("巡检") { patrolPresented = true }.disabled(store.selectedCrew.isEmpty)
+                    if !progressOnly && store.capabilities.contains("adminCase.humanBrief") {
+                        Button("行政简报") { humanBriefPresented = true }.disabled(store.selectedCrew.isEmpty)
+                    }
                     Spacer(minLength:8)
                     Button {Task {do {try await store.refresh()} catch {failure=error.localizedDescription}}} label: {Image(systemName:"arrow.clockwise")}
                         .buttonStyle(CrewdToolButtonStyle()).help("刷新").accessibilityLabel("刷新")
@@ -118,6 +274,10 @@ struct CrewdWorkPanels: View {
         }.padding(compact ? 8:16).foregroundStyle(CrewdChatStyle.ink(colorScheme)).background(pageBackground)
         .task(id:store.readScope.uuidString+store.capabilities.sorted().joined(separator:",")) { await store.ensureLoaded() }
         .sheet(isPresented: $patrolPresented) { CrewdPatrolView(store: store, workspace: patrolWorkspace) }
+        .sheet(isPresented: $humanBriefPresented) {
+            CrewdHumanBriefView(store: store, drafts: $humanDrafts,
+                crewTitle: crews.first { $0["id"] == .string(store.selectedCrew) }?["title"].string)
+        }
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
     }

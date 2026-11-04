@@ -147,6 +147,7 @@ import Foundation
   let transferResult=try await transferStore.adminCase(id:"AC00000000000000000001")
   precondition(transferResult == transferPayload && transferResult["outcomeRecord"]["phase"] == .string("unresolved") && transferResult["retirement"] == .string("parked"))
   try await effectReport()
+  try await humanBrief()
   print("admin cases opaque pagination, detail, malformed/foreign, crew and connection stale rejection passed")
  }
 
@@ -203,5 +204,63 @@ import Foundation
   store.selectCrew("b")
   continuation!.resume(returning: firstPage)
   do { _ = try await stale.value; fatalError("old report accepted") } catch is CancellationError {}
+ }
+
+ @MainActor private static func humanBrief() async throws {
+  let wait: CrewdValue = .object([
+   "askId": .string("H53"), "kind": .string("question"), "question": .string("仍需决策"), "questionTruncated": .bool(false),
+   "askedAtMs": .integer(5), "waitedMs": .integer(25), "tier": .string("pinned"),
+   "notifiedTier": .string("fresh"), "blockingWorkIds": .array([.string("W12")]), "blockersTruncated": .bool(false)
+  ])
+  guard case .object(var taskFields) = wait else { fatalError() }
+  taskFields["askId"] = .string("H54")
+  taskFields["kind"] = .string("human_task")
+  taskFields["tier"] = .string("fresh")
+  let manualTask: CrewdValue = .object(taskFields)
+  let caseRecord: CrewdValue = .object([
+   "caseId": .string("AC00000000000000000001"), "createdAtMs": .integer(12),
+   "decision": .string("observed"), "execution": .string("not_started"), "outcomePhase": .string("unresolved")
+  ])
+  let patrol: CrewdValue = .object([
+   "state": .string("complete"), "runId": .string("original"), "startedAtMs": .integer(7),
+   "completedAtMs": .integer(10), "scannedCounts": .object(["work": .integer(14)]),
+   "findingCounts": .object(["long_waits": .integer(1)]), "findingsTruncated": .bool(true)
+  ])
+  let original: [String: CrewdValue] = [
+   "crewId": .string("a"), "observedAtMs": .integer(30), "humanWaits": .array([wait, manualTask]),
+   "humanWaitsTruncated": .bool(false), "cases": .array([caseRecord]),
+   "caseCoverage": .string("recent_sample"), "patrol": patrol
+  ]
+  var response: CrewdValue = .object(original)
+  var held: CheckedContinuation<CrewdValue, Error>?
+  var hold = false
+  var calls = 0
+  let store = CrewdWorkStore { method, params in
+   precondition(method == "adminCase.humanBrief" && params == .object(["crewId": .string("a")]))
+   calls += 1
+   if hold { return try await withCheckedThrowingContinuation { held = $0 } }
+   return response
+  }
+  store.selectCrew("a")
+  do { _ = try await store.humanBrief(); fatalError("brief capability ignored") } catch {}
+  precondition(calls == 0)
+  store.configureCapabilities(["adminCase.humanBrief"])
+  let report = try await store.humanBrief()
+  precondition(report.waits == [wait, manualTask] && report.cases == [caseRecord] && report.patrol == patrol)
+  for (field, invalid) in [
+   ("crewId", CrewdValue.string("b")), ("humanWaits", .array([wait, wait])),
+   ("caseCoverage", .string("unavailable")), ("patrol", .object(["state": .string("complete")]))
+  ] {
+   var payload = original
+   payload[field] = invalid
+   response = .object(payload)
+   do { _ = try await store.humanBrief(); fatalError("invalid brief accepted") } catch {}
+  }
+  hold = true
+  let pending = Task { try await store.humanBrief() }
+  while held == nil { await Task.yield() }
+  store.invalidateConnection()
+  held!.resume(returning: .object(original))
+  do { _ = try await pending.value; fatalError("old brief accepted") } catch is CancellationError {}
  }
 }

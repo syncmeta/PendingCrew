@@ -32,6 +32,90 @@ pub struct SimilarRequirement {
 pub const LIST: &str = "adminCase.list";
 pub const GET: &str = "adminCase.get";
 pub const EFFECTS: &str = "adminCase.effects";
+pub const HUMAN_BRIEF: &str = "adminCase.humanBrief";
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminHumanBriefParams {
+    pub crew_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminHumanBrief {
+    pub crew_id: String,
+    pub observed_at_ms: i64,
+    pub human_waits: Vec<AdminHumanBriefWait>,
+    pub human_waits_truncated: bool,
+    pub cases: Vec<AdminHumanBriefCase>,
+    pub case_coverage: AdminHumanBriefCaseCoverage,
+    pub patrol: AdminHumanBriefPatrol,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminHumanBriefWait {
+    pub ask_id: String,
+    pub kind: AdminHumanBriefWaitKind,
+    pub question: String,
+    pub question_truncated: bool,
+    pub asked_at_ms: i64,
+    pub waited_ms: i64,
+    pub tier: crate::WaitTierView,
+    pub notified_tier: crate::WaitTierView,
+    pub default_due_at_ms: Option<i64>,
+    pub blocking_work_ids: Vec<String>,
+    pub blockers_truncated: bool,
+    pub source_message_id: Option<String>,
+    pub source_channel_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminHumanBriefWaitKind {
+    Question,
+    HumanTask,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminHumanBriefCase {
+    pub case_id: String,
+    pub created_at_ms: i64,
+    pub decision: AdminCaseDecision,
+    pub execution: AdminCaseExecution,
+    pub outcome_phase: Option<AdminCaseOutcomePhase>,
+    pub custody_phase: Option<AdminCaseCustodyPhase>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminHumanBriefCaseCoverage {
+    Complete,
+    RecentSample,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminHumanBriefPatrol {
+    pub state: AdminHumanBriefPatrolState,
+    pub run_id: Option<String>,
+    pub started_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+    pub scanned_counts: std::collections::BTreeMap<String, u64>,
+    pub finding_counts: std::collections::BTreeMap<String, u64>,
+    pub findings_truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminHumanBriefPatrolState {
+    NotRecorded,
+    InProgress,
+    Complete,
+    Unavailable,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

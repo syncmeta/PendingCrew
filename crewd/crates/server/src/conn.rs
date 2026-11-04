@@ -664,6 +664,7 @@ async fn request_step(
                 crewd_proto::admin_cases::LIST
                     | crewd_proto::admin_cases::GET
                     | crewd_proto::admin_cases::EFFECTS
+                    | crewd_proto::admin_cases::HUMAN_BRIEF
                     | crewd_proto::methods::ADMIN_CASE_CUSTODY_GET
                     | crewd_proto::methods::ADMIN_CASE_CUSTODY_PROPOSE
                     | crewd_proto::methods::ADMIN_CASE_CUSTODY_TRANSFER_GET
