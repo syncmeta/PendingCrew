@@ -8,7 +8,7 @@ use crewd_store::{
     StoreError, channel_work as db,
     object_refs::{self, ObjectKind, ObjectReference},
 };
-use crewd_work::{AskId, AskState, EntryNo, EntryStatus, Status, WorkBook};
+use crewd_work::{AskId, AskState, EntryNo, Status, WorkBook};
 use rusqlite::Connection;
 fn denied() -> CollabError {
     CollabError::Forbidden(Refusal::new(Code::ResourceForbidden))
@@ -158,7 +158,11 @@ pub fn link_created(
         linked: r.linked,
     })
 }
-pub(crate) fn summary(c: &Connection, b: &WorkBook, o: ChannelWorkObject) -> Result<ChannelWorkSummary> {
+pub(crate) fn summary(
+    c: &Connection,
+    b: &WorkBook,
+    o: ChannelWorkObject,
+) -> Result<ChannelWorkSummary> {
     let r = identity(c, &o)?;
     let core = crewd_store::work_organization::core_for_reference(c, r.kind, r.number)?
         .ok_or_else(|| StoreError::Invalid("channel reference lacks core identity".into()))?;
@@ -191,21 +195,10 @@ pub(crate) fn summary(c: &Connection, b: &WorkBook, o: ChannelWorkObject) -> Res
             let n: EntryNo = core.parse().map_err(|_| acl::invalid("requirement"))?;
             let v = b.entry_view(n).ok_or_else(|| acl::invalid("requirement"))?;
             let text:String=c.query_row("SELECT substr(t.text,1,121) FROM todos t JOIN object_refs r ON r.raw_todo_id=t.id WHERE r.number=?1 AND r.kind='requirement'",[r.number],|row|row.get(0))?;
-            let status = if v.status == EntryStatus::Closed {
-                "closed"
-            } else {
-                match todo.as_ref().and_then(|t| t.manual_state) {
-                    Some(ManualTodoState::Open) => "open",
-                    Some(ManualTodoState::Done) => "done",
-                    None => match v.status {
-                        EntryStatus::Unclaimed => "unclaimed",
-                        EntryStatus::InProgress => "in_progress",
-                        EntryStatus::Done => "done",
-                        EntryStatus::NeedsRuling => "needs_ruling",
-                        EntryStatus::Closed => "closed",
-                    },
-                }
-            };
+            let status = crewd_store::todos::requirement_status(
+                v.status,
+                todo.as_ref().and_then(|t| t.manual_state),
+            );
             (text, status, todo.as_ref().map(|t| t.revision.clone()))
         }
         ChannelWorkKind::HumanTask => {

@@ -1,5 +1,8 @@
 use crate::{Result, json_col};
-use crewd_proto::{Ledger, Todo, TodoResponse};
+use crewd_proto::{
+    ChannelWorkKind, ChannelWorkObject, Ledger, ManualTodoState, Todo, TodoResponse,
+};
+use crewd_work::EntryStatus;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
@@ -58,6 +61,19 @@ fn insert_rows(conn: &Connection, t: &Todo, extra: Option<&Value>) -> Result<()>
     Ok(())
 }
 
+/// Explicit Human state overrides the derived view unless a final ruling closed the source.
+pub fn requirement_status(derived: EntryStatus, manual: Option<ManualTodoState>) -> &'static str {
+    match (derived, manual) {
+        (EntryStatus::Closed, _) => "closed",
+        (_, Some(ManualTodoState::Open)) => "open",
+        (_, Some(ManualTodoState::Done)) => "done",
+        (EntryStatus::Unclaimed, None) => "unclaimed",
+        (EntryStatus::InProgress, None) => "in_progress",
+        (EntryStatus::Done, None) => "done",
+        (EntryStatus::NeedsRuling, None) => "needs_ruling",
+    }
+}
+
 pub fn list(conn: &Connection, crew_id: &str, ledger: Ledger) -> Result<Vec<Todo>> {
     let mut stmt = conn.prepare(
         "SELECT id,crew_id,number,text,status,created_at,updated_at,deleted_at,attachments
@@ -90,6 +106,11 @@ pub fn list(conn: &Connection, crew_id: &str, ledger: Ledger) -> Result<Vec<Todo
             crate::work_organization::verify_references(conn, &state)?;
             let book = crewd_work::WorkBook::restore(state, crewd_work::Config::default())
                 .map_err(|v| crate::StoreError::Invalid(v.to_string()))?;
+            let has_attributes: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='todo_attribute_events')",
+                [],
+                |r| r.get(0),
+            )?;
             for todo in &mut todos {
                 let (core,public):(String,i64)=conn.query_row("SELECT core_id,number FROM object_refs WHERE raw_todo_id=?1 AND crew_id=?2 AND kind='requirement'",params![todo.id,todo.crew_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
                 let core = core.parse().map_err(|_| {
@@ -98,15 +119,24 @@ pub fn list(conn: &Connection, crew_id: &str, ledger: Ledger) -> Result<Vec<Todo
                 let view = book.entry_view(core).ok_or_else(|| {
                     crate::StoreError::Invalid("raw requirement entry authority is missing".into())
                 })?;
-                todo.requirement_id = Some(format!("#{public}"));
-                todo.status = match view.status {
-                    crewd_work::EntryStatus::Unclaimed => "unclaimed",
-                    crewd_work::EntryStatus::InProgress => "in_progress",
-                    crewd_work::EntryStatus::Done => "done",
-                    crewd_work::EntryStatus::NeedsRuling => "needs_ruling",
-                    crewd_work::EntryStatus::Closed => "closed",
-                }
-                .into();
+                let object = ChannelWorkObject {
+                    kind: ChannelWorkKind::Requirement,
+                    id: format!("#{public}"),
+                };
+                let manual = if has_attributes
+                    && let Some(a) = crate::todo_attributes::get(conn, &object)?
+                {
+                    if a.crew_id != todo.crew_id || a.object != object {
+                        return Err(crate::StoreError::Invalid(
+                            "todo source witness mismatch".into(),
+                        ));
+                    }
+                    a.manual_state
+                } else {
+                    None
+                };
+                todo.status = requirement_status(view.status, manual).into();
+                todo.requirement_id = Some(object.id);
             }
         }
     }

@@ -172,11 +172,12 @@ fn read_other(conn: &Connection, p: WorkPatrolParams, now: i64) -> Result<WorkPa
                 .parse()
                 .map_err(|_| bad())?;
                 let view = book.entry_view(core).ok_or_else(bad)?;
+                let resolved = book.state().entries.get(&core).ok_or_else(bad)?.manual_done;
                 out.entries.push(WorkPatrolEntry {
                     id,
                     crew_id,
-                    unclaimed: view.status == crewd_work::EntryStatus::Unclaimed,
-                    needs_ruling: view.status == crewd_work::EntryStatus::NeedsRuling,
+                    unclaimed: !resolved && view.status == crewd_work::EntryStatus::Unclaimed,
+                    needs_ruling: !resolved && view.status == crewd_work::EntryStatus::NeedsRuling,
                 });
             }
             out.unavailable_categories = vec!["work_items".into(), "archivable_channels".into()];

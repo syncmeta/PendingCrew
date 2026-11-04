@@ -707,9 +707,19 @@ async fn store17_global_todo_owner_manual_done_and_original_receipts_do_not_star
         done
     );
     assert_eq!(rpc(&mut h, "todo.setState", params.clone()).await, done);
+    let detail = rpc(&mut h, "todo.get", json!({"id":req["requirementId"]})).await;
+    assert_eq!(detail["status"], "done");
+    assert_eq!(detail["derivedStatus"], "in_progress");
+    let listed = rpc(
+        &mut h,
+        "todo.list",
+        json!({"crewId":f.crew,"ledger":"agent"}),
+    )
+    .await;
+    assert_eq!(listed[0]["requirementId"], req["requirementId"]);
     assert_eq!(
-        rpc(&mut h, "todo.get", json!({"id":req["requirementId"]})).await["status"],
-        "done"
+        listed[0]["status"], "done",
+        "crew list uses the same effective state as detail"
     );
     assert_eq!(page(&mut h, &b).await["items"][0]["status"], "done");
     assert_eq!(
@@ -722,6 +732,15 @@ async fn store17_global_todo_owner_manual_done_and_original_receipts_do_not_star
     assert_eq!(snapshot(&f).await, snap);
     let reopened=rpc(&mut h,"todo.setState",json!({"requestId":uuid::Uuid::new_v4().to_string(),"channelId":b,"object":object,"expectedRevision":done["revision"],"state":"open"})).await;
     assert_eq!(reopened["manualState"], "open");
+    assert_eq!(
+        rpc(
+            &mut h,
+            "todo.list",
+            json!({"crewId":f.crew,"ledger":"agent"})
+        )
+        .await[0]["status"],
+        "open"
+    );
     assert_eq!(wakes(&f).await, before);
     let mut attributes = 0;
     while let Ok(event) = observations.try_recv() {
@@ -742,6 +761,97 @@ async fn store17_global_todo_owner_manual_done_and_original_receipts_do_not_star
     assert!(call(&mut h, "todo.setState", mismatch).await.is_err());
     assert_eq!(snapshot(&f).await, snap);
     close_socket(task, stop).await;
+}
+
+#[tokio::test]
+async fn resolved_unclaimed_requirement_stays_out_of_patrol_after_real_restart() {
+    let f = Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let path = f.data_dir().to_owned();
+    let socket = path.join("crewd.sock");
+    let mut h = RpcClient::connect(&socket).await;
+    let ch = channel(&mut h, &f.crew, "resolved requirement", &f.worker).await;
+    let req = rpc(
+        &mut h,
+        "todo.create",
+        json!({
+            "requestId": uuid::Uuid::new_v4().to_string(), "crewId": f.crew,
+            "channelId": ch, "text": "no plan needed; a human will close this"
+        }),
+    )
+    .await;
+    let id = &req["requirementId"];
+    let patrol = json!({"crewId": f.crew, "scan": "entries"});
+    assert_eq!(
+        rpc(&mut h, "work.patrol", patrol.clone()).await["entries"][0]["unclaimed"],
+        true
+    );
+    let done = json!({
+        "requestId": uuid::Uuid::new_v4().to_string(), "channelId": ch,
+        "object": {"kind":"requirement", "id":id}, "expectedRevision":"0", "state":"done"
+    });
+    let before_wakes = wakes(&f).await;
+    let receipt = rpc(&mut h, "todo.setState", done.clone()).await;
+    let before_restart = rpc(&mut h, "work.patrol", patrol.clone()).await;
+    assert_eq!(before_restart["entries"][0]["id"], *id);
+    assert_eq!(before_restart["entries"][0]["unclaimed"], false);
+    assert_eq!(wakes(&f).await, before_wakes);
+    drop(h);
+    close_socket(task, stop).await;
+    let db = f.state.db.clone();
+    tokio::task::spawn_blocking(move || db.shutdown())
+        .await
+        .unwrap();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        crewd_server::serve(path, async {
+            let _ = stopping.await;
+        })
+        .await
+        .unwrap();
+    });
+    tokio::time::timeout(LIMIT, async {
+        while tokio::net::UnixStream::connect(&socket).await.is_err() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut h = RpcClient::connect(&socket).await;
+    assert_eq!(
+        rpc(&mut h, "work.patrol", patrol).await["entries"],
+        before_restart["entries"]
+    );
+    assert_eq!(
+        rpc(
+            &mut h,
+            "todo.list",
+            json!({"crewId":f.crew,"ledger":"agent"})
+        )
+        .await[0]["status"],
+        "done"
+    );
+    assert_eq!(page(&mut h, &ch).await["items"][0]["status"], "done");
+    assert_eq!(
+        rpc(
+            &mut h,
+            "resource.requestLookup",
+            json!({"requestId":done["requestId"]})
+        )
+        .await["result"],
+        receipt
+    );
+    assert_eq!(rpc(&mut h, "todo.setState", done).await, receipt);
+    drop(h);
+    close_socket(server, stop).await;
+    let reopened = crewd_store::Store::open(&f.data_dir().join("crewd.db")).unwrap();
+    let (count, requests): (i64, i64) = reopened.conn().query_row(
+        "SELECT (SELECT COUNT(*) FROM wakes),(SELECT COUNT(*) FROM resource_mutation_requests WHERE operation='todo.setState')",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).unwrap();
+    assert_eq!((count, requests), (before_wakes, 1));
 }
 
 #[tokio::test]

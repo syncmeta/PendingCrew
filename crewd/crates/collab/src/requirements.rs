@@ -9,7 +9,7 @@ use crewd_store::{
     StoreError,
     object_refs::{self, ObjectKind, ObjectReference},
 };
-use crewd_work::{Actor, EntryNo, EntryStatus};
+use crewd_work::{Actor, EntryNo};
 use rusqlite::Connection;
 const SOURCE: &str = "requirement-new:";
 fn invalid(code: Code) -> CollabError {
@@ -31,15 +31,6 @@ fn reference(conn: &Connection, id: &str) -> Result<ObjectReference> {
     object_refs::get(conn, ObjectKind::Requirement, n)?.ok_or_else(|| {
         CollabError::NotFound(Refusal::new(Code::TodoNotFound).arg("number", n.to_string()))
     })
-}
-fn status(s: EntryStatus) -> &'static str {
-    match s {
-        EntryStatus::Unclaimed => "unclaimed",
-        EntryStatus::InProgress => "in_progress",
-        EntryStatus::Done => "done",
-        EntryStatus::NeedsRuling => "needs_ruling",
-        EntryStatus::Closed => "closed",
-    }
 }
 fn core(conn: &Connection, r: &ObjectReference) -> Result<EntryNo> {
     crewd_store::work_organization::core_for_reference(conn, ObjectKind::Requirement, r.number)?
@@ -70,7 +61,7 @@ pub fn get(conn: &Connection, id: &str) -> Result<RequirementDetail> {
         .entry_view(no)
         .ok_or_else(|| StoreError::Invalid("requirement lacks authoritative entry".into()))?;
     todo.requirement_id = Some(r.id());
-    let derived_status = status(view.status).to_string();
+    let derived_status = crewd_store::todos::requirement_status(view.status, None).to_string();
     let todo_attributes = crate::todo_attributes::get(
         conn,
         &Sender::Human,
@@ -79,15 +70,8 @@ pub fn get(conn: &Connection, id: &str) -> Result<RequirementDetail> {
             id: r.id(),
         },
     )?;
-    todo.status = if view.status == EntryStatus::Closed {
-        "closed".into()
-    } else {
-        match todo_attributes.manual_state {
-            Some(crewd_proto::ManualTodoState::Open) => "open".into(),
-            Some(crewd_proto::ManualTodoState::Done) => "done".into(),
-            None => derived_status.clone(),
-        }
-    };
+    todo.status =
+        crewd_store::todos::requirement_status(view.status, todo_attributes.manual_state).into();
     let closure = book.state().entries[&no]
         .closed
         .as_ref()
