@@ -57,6 +57,7 @@ def fault_child():
 
 def exercise(root, fail_at):
     root.mkdir()
+    mode = ('--isolated-fixture', root.parent)
     old = fixture.ordinary(root / 'Current.app', '1' * 40)
     incoming = fixture.ordinary(root / 'New.app', '2' * 40)
     probe = old / 'Contents/Helpers/activity-probe'
@@ -85,9 +86,9 @@ def exercise(root, fail_at):
     fixture.run('prepare', '--authority', data, '--old-app', old, '--new-app', incoming,
                 '--old-source', old_package['source'], '--new-source', new_package['source'],
                 '--old-digest', old_package['bundleDigest'], '--new-digest', new_package['bundleDigest'],
-                '--requirement', fixture.REQUIREMENT, '--out', setup)
+                '--requirement', fixture.REQUIREMENT, '--out', setup, *mode)
     plan = setup / 'plan.json'
-    identity_args = ('--plan', plan, '--plan-sha', fixture.sha(plan), '--authority', data)
+    identity_args = ('--plan', plan, '--plan-sha', fixture.sha(plan), '--authority', data, *mode)
     common = (*identity_args, '--app', old)
 
     def refuse_wrong_app_path(operation, *args):
@@ -110,7 +111,9 @@ def exercise(root, fail_at):
             live = old if name == 'app' else data
             assert live.stat().st_ino == record[name + 'Inodes'][index < fail_at][1]
         retry = ('resume', '--transaction', output, '--intent-sha', fixture.sha(intent))
-        run('resume', '--transaction', output, '--intent-sha', '0' * 64, fail='record digest differs')
+        run(*retry, fail='preparation mode or fixture root differs from invocation')
+        retry += mode
+        run('resume', '--transaction', output, '--intent-sha', '0' * 64, *mode, fail='record digest differs')
         with (data / 'crewd.lock').open('rb') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             run(*retry, fail='Core authority is still in use')
@@ -129,6 +132,10 @@ def exercise(root, fail_at):
 
     upgrade = root / 'upgrade'
     if fail_at == 0:
+        run('start', 'upgrade', '--plan', plan, '--plan-sha', fixture.sha(plan), '--authority', data,
+            '--app', old, '--new-app', incoming, '--out', upgrade,
+            fail='preparation mode or fixture root differs from invocation')
+        assert not upgrade.exists()
         refuse_wrong_app_path('upgrade', '--new-app', incoming)
         process = subprocess.Popen([str(probe), '30'])
         try:
@@ -147,7 +154,7 @@ def exercise(root, fail_at):
     upgraded = fixture.contents(data)
     rollback_stage = root / 'rollback-stage'
     fixture.run('stage-rollback', '--authority', data, '--upgraded-app', old,
-                '--plan', plan, '--plan-sha', fixture.sha(plan), '--out', rollback_stage)
+                '--plan', plan, '--plan-sha', fixture.sha(plan), '--out', rollback_stage, *mode)
     rollback_record = rollback_stage / 'rollback.json'
     rollback = root / 'rollback'
     if fail_at == 0:

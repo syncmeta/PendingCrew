@@ -89,6 +89,47 @@ def package(root, requirement, source=None, expected=None):
     return snapshot
 
 
+def isolated_root(args, *paths):
+    if args.isolated_fixture is None:
+        return None
+    root = directory(args.isolated_fixture)
+    info = root.stat()
+    require(root.parent == Path('/private/tmp') and info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) == 0o700,
+            'fixture root must be a canonical owner-private directory directly under /private/tmp')
+    for raw in paths:
+        path = Path(raw)
+        require(path.is_absolute() and path.resolve() == path
+                and path != root and path.is_relative_to(root), 'fixture path escapes private root')
+    return str(root)
+
+
+def require_mode(record, fixture):
+    require('fixtureRoot' in record and record['fixtureRoot'] == fixture,
+            'preparation mode or fixture root differs from invocation')
+
+
+def qualify_upgrade(app, fixture):
+    if fixture is not None:
+        return
+    signed = subprocess.run(['/usr/bin/codesign', '-d', '--verbose=4', str(app)],
+                            capture_output=True, text=True, timeout=30)
+    lines = (signed.stdout + signed.stderr).splitlines()
+    require(signed.returncode == 0
+            and any(line.startswith('Authority=Developer ID Application: ') for line in lines)
+            and any(re.fullmatch(r'TeamIdentifier=[0-9A-Z]{10}', line) for line in lines)
+            and any(line.startswith('Timestamp=') and line != 'Timestamp=' for line in lines),
+            'ordinary upgrade requires timestamped Developer ID Application signing')
+    ticket = subprocess.run(['/usr/bin/xcrun', 'stapler', 'validate', str(app)],
+                            capture_output=True, text=True, timeout=60)
+    require(ticket.returncode == 0, 'ordinary upgrade requires a valid stapled notarization ticket')
+    policy = subprocess.run(['/usr/sbin/spctl', '--assess', '--type', 'execute', '--ignore-cache',
+                             '--no-cache', '--verbose=4', str(app)],
+                            capture_output=True, text=True, timeout=60)
+    require(policy.returncode == 0 and 'source=Notarized Developer ID' in
+            (policy.stdout + policy.stderr).splitlines(), 'Gatekeeper did not accept a notarized Developer ID App')
+
+
 @contextlib.contextmanager
 def authority_lease(root):
     initial = root.stat()
@@ -194,6 +235,7 @@ def write_record(path, value):
 
 
 def prepare(args):
+    fixture = isolated_root(args, args.authority, args.old_app, args.new_app, args.out)
     data = directory(args.authority)
     old = directory(args.old_app)
     new = directory(args.new_app)
@@ -201,6 +243,7 @@ def prepare(args):
     old_package = package(old, args.requirement, args.old_source, args.old_digest)
     new_package = package(new, args.requirement, args.new_source, args.new_digest)
     require(old_package['source'] != new_package['source'], 'distinct source generations required')
+    qualify_upgrade(new, fixture)
     with lease(data) as recheck:
         rows = inventory(data)
         identity = inspect(data, rows, 21)
@@ -216,6 +259,7 @@ def prepare(args):
         recheck()
         write_record(out / 'plan.json', {
             'format': 1, 'kind': 'pendingcrew-local-upgrade-preparation',
+            'fixtureRoot': fixture,
             'app': str(old), 'authority': str(data), 'dbId': identity, 'before21': rows,
             'oldApp': old_package, 'newApp': new_package, 'requirement': args.requirement,
         })
@@ -223,6 +267,7 @@ def prepare(args):
 
 
 def stage_rollback(args):
+    fixture = isolated_root(args, args.authority, args.upgraded_app, args.plan, args.out)
     plan_path = Path(args.plan)
     require(plan_path.name == 'plan.json' and directory(plan_path.parent) == plan_path.parent,
             'canonical preparation record required')
@@ -232,6 +277,7 @@ def stage_rollback(args):
     plan = json.loads(record)
     require(plan.get('format') == 1 and plan.get('kind') == 'pendingcrew-local-upgrade-preparation',
             'unsupported preparation record')
+    require_mode(plan, fixture)
     data = directory(args.authority)
     require(str(data) == plan['authority'], 'rollback authority differs from preparation')
     upgraded_app = directory(args.upgraded_app)
@@ -257,6 +303,7 @@ def stage_rollback(args):
         recheck()
         write_record(out / 'rollback.json', {
             'format': 1, 'kind': 'pendingcrew-local-rollback-staging',
+            'fixtureRoot': fixture,
             'planSHA256': args.plan_sha, 'app': str(upgraded_app), 'dbId': plan['dbId'], 'upgraded22': after,
             'restore21': plan['before21'], 'oldApp': plan['oldApp'], 'upgradedApp': plan['newApp'],
         })
@@ -274,10 +321,12 @@ def main():
     for name in ('authority', 'old-app', 'old-source', 'old-digest', 'new-app', 'new-source',
                  'new-digest', 'requirement', 'out'):
         cut.add_argument('--' + name, required=True)
+    cut.add_argument('--isolated-fixture')
     cut.set_defaults(action=prepare)
     restore = commands.add_parser('stage-rollback')
     for name in ('authority', 'upgraded-app', 'plan', 'plan-sha', 'out'):
         restore.add_argument('--' + name, required=True)
+    restore.add_argument('--isolated-fixture')
     restore.set_defaults(action=stage_rollback)
     args = parser.parse_args()
     args.action(args)
@@ -286,5 +335,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (OSError, ValueError, KeyError, sqlite3.Error, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, sqlite3.Error, subprocess.SubprocessError) as error:
         raise SystemExit(f'FAIL: {error}')

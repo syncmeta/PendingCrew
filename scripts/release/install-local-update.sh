@@ -32,6 +32,17 @@ set -eu
 src=${1:-}
 [ -n "$src" ] || { echo "用法: $0 <PendingCrew.app 或已公证的 .zip>" >&2; exit 2; }
 
+require_swift_only() {
+  helper="$1/Contents/Helpers/crewd"
+  if [ -e "$helper" ] || [ -L "$helper" ]; then
+    printf '%s\n' "检测到内嵌 Core，请使用 prepare-local-upgrade.py 和 commit-local-upgrade.py 的保护流程。" >&2
+    exit 1
+  fi
+}
+old="/Applications/PendingCrew.app"
+require_swift_only "$old"
+case "$src" in *.app) require_swift_only "$src" ;; esac
+
 ts=$(date +%Y%m%d-%H%M%S)
 logdir="$HOME/Library/Logs/PendingCrew"
 mkdir -p "$logdir"
@@ -56,6 +67,7 @@ case "$src" in
   *) die "只认 .app 或 .zip：$src" ;;
 esac
 [ -d "$app" ] || die "解出来没有 PendingCrew.app：$app"
+require_swift_only "$app"
 
 plist="$app/Contents/Info.plist"
 version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist") || die "读不到版本号"
@@ -68,7 +80,6 @@ spctl -a -t install -vvv "$app" || die "签名/公证校验没过 —— 不装�
 xcrun stapler validate "$app" || die "公证票据没 staple 上"
 say "签名与公证：通过"
 
-old="/Applications/PendingCrew.app"
 if [ -d "$old" ]; then
   oldver=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$old/Contents/Info.plist" 2>/dev/null || echo "?")
   oldbuild=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$old/Contents/Info.plist" 2>/dev/null || echo "?")

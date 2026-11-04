@@ -111,6 +111,8 @@ def advance(root, intent, intent_sha, leases):
     exchanged = [location(paths, intent, name, 1) == paths[name][0] for name in order]
     require(exchanged in ([False, False], [True, False], [True, True]), 'unsupported exchange order')
     verified(paths, intent, leases)
+    if intent['operation'] == 'upgrade' and not all(exchanged):
+        preparation.qualify_upgrade(location(paths, intent, 'app', 1), intent['fixtureRoot'])
     for name, swapped in zip(order, exchanged):
         if not swapped:
             exchange(*paths[name])
@@ -127,8 +129,11 @@ def advance(root, intent, intent_sha, leases):
 
 
 def start(args):
+    extra = [path for path in (args.new_app, args.rollback) if path is not None]
+    fixture = preparation.isolated_root(args, args.app, args.authority, args.plan, args.out, *extra)
     plan_path = Path(args.plan)
     plan = checked_record(plan_path, args.plan_sha, 'pendingcrew-local-upgrade-preparation')
+    preparation.require_mode(plan, fixture)
     app = preparation.directory(args.app)
     data = preparation.directory(args.authority)
     require(str(app) == plan.get('app'), 'active App path differs from preparation')
@@ -151,6 +156,7 @@ def start(args):
         require(args.rollback and args.rollback_sha and not args.new_app, 'explicit rollback staging evidence required')
         rollback_path = Path(args.rollback)
         rollback = checked_record(rollback_path, args.rollback_sha, 'pendingcrew-local-rollback-staging')
+        preparation.require_mode(rollback, fixture)
         require(rollback['planSHA256'] == args.plan_sha and rollback.get('app') == plan['app']
                 and rollback['dbId'] == plan['dbId']
                 and rollback['restore21'] == plan['before21'] and rollback['oldApp'] == plan['oldApp']
@@ -169,6 +175,8 @@ def start(args):
     require(app != incoming and preparation.package(app, plan['requirement']) == active_package
             and preparation.package(incoming, plan['requirement']) == incoming_package,
             'active or incoming ordinary App does not match preparation')
+    if args.operation == 'upgrade':
+        preparation.qualify_upgrade(incoming, fixture)
     assert_app_stopped(app, incoming)
     with preparation.authority_lease(data) as check_original:
         require(preparation.inventory(data) == active_rows
@@ -181,6 +189,7 @@ def start(args):
         with preparation.authority_lease(staged_data) as check_staged:
             intent = {
                 'format': 1, 'kind': 'pendingcrew-local-cutover-intent',
+                'fixtureRoot': fixture,
                 'id': str(uuid.uuid4()), 'operation': args.operation, 'planSHA256': args.plan_sha,
                 'app': str(app), 'authority': str(data), 'dbId': plan['dbId'],
                 'appInodes': [identity(app), identity(staged_app)],
@@ -201,8 +210,11 @@ def start(args):
 
 
 def resume(args):
+    preparation.isolated_root(args, args.transaction)
     root = preparation.directory(args.transaction)
     intent = checked_record(root / 'intent.json', args.intent_sha, 'pendingcrew-local-cutover-intent')
+    fixture = preparation.isolated_root(args, args.transaction, intent['app'], intent['authority'])
+    preparation.require_mode(intent, fixture)
     require(intent['operation'] in ('upgrade', 'rollback'), 'unsupported recorded operation')
     paths = paths_for(root, intent)
     with journal_lease(root):
@@ -229,10 +241,12 @@ def main():
         begin.add_argument('--' + name, required=True)
     for name in ('new-app', 'rollback', 'rollback-sha'):
         begin.add_argument('--' + name)
+    begin.add_argument('--isolated-fixture')
     begin.set_defaults(action=start)
     retry = commands.add_parser('resume')
     retry.add_argument('--transaction', required=True)
     retry.add_argument('--intent-sha', required=True)
+    retry.add_argument('--isolated-fixture')
     retry.set_defaults(action=resume)
     args = parser.parse_args()
     args.action(args)
@@ -241,5 +255,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (OSError, ValueError, KeyError, sqlite3.Error, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, KeyError, sqlite3.Error, subprocess.SubprocessError) as error:
         raise SystemExit(f'FAIL: {error}')

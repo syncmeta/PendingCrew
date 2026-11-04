@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -14,10 +15,12 @@ import subprocess
 import sys
 import tempfile
 import time
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / 'scripts/release/prepare-local-upgrade.py'
 REQUIREMENT = 'identifier "com.pendingname.pendingcrew"'
+sys.dont_write_bytecode = True
 
 
 def sha(path):
@@ -61,6 +64,84 @@ def sqlite(path, *statements):
 
 def contents(root):
     return {p.relative_to(root).as_posix(): sha(p) for p in root.rglob('*') if p.is_file()}
+
+
+def delivery_policy(app):
+    spec = importlib.util.spec_from_file_location('delivery_preparation', HELPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    signed = 'Authority=Developer ID Application: Fixture\nTeamIdentifier=ABCDEFGHIJ\nTimestamp=Fixture\n'
+    accepted = 'accepted\nsource=Notarized Developer ID\n'
+    def reply(output, code=0):
+        return subprocess.CompletedProcess([], code, '', output)
+
+    with mock.patch.object(module.subprocess, 'run', side_effect=[reply(signed), reply('ticket'), reply(accepted)]) as calls:
+        module.qualify_upgrade(app, None)
+        assert [call.args[0][0] for call in calls.call_args_list] == [
+            '/usr/bin/codesign', '/usr/bin/xcrun', '/usr/sbin/spctl',
+        ]
+        assert calls.call_args_list[1].args[0][1:3] == ['stapler', 'validate']
+        assert '--no-cache' in calls.call_args_list[2].args[0]
+    for replies, expected in [
+        ([reply(signed.replace('Timestamp=', 'Signed Time='))], 'timestamped Developer ID'),
+        ([reply(signed), reply('missing ticket', 1)], 'valid stapled notarization'),
+        ([reply(signed), reply('ticket'), reply('source=Unnotarized Developer ID', 3)], 'Gatekeeper did not accept'),
+    ]:
+        with mock.patch.object(module.subprocess, 'run', side_effect=replies) as calls:
+            try:
+                module.qualify_upgrade(app, None)
+            except ValueError as error:
+                assert expected in str(error) and calls.call_count == len(replies)
+            else:
+                raise AssertionError('unqualified distribution accepted')
+    print('PASS distribution gate checks timestamp, staple and Gatekeeper in order')
+
+
+def legacy_guard(root):
+    installed = root / 'InstalledSwift.app'
+    incoming = root / 'IncomingSwift.app'
+    for app in (installed, incoming):
+        (app / 'Contents/Helpers').mkdir(parents=True)
+    (incoming / 'Contents/Info.plist').write_bytes(plistlib.dumps({
+        'CFBundleShortVersionString': '0.1.0', 'CFBundleVersion': '1',
+    }))
+    script = root / 'legacy-install.sh'
+    original = (ROOT / 'scripts/release/install-local-update.sh').read_text()
+    script.write_text(original.replace('old="/Applications/PendingCrew.app"', f'old="{installed}"')
+                      .replace('/tmp/pendingcrew-local-install.XXXXXX', str(root / 'extract.XXXXXX')))
+    commands = root / 'bin'
+    commands.mkdir()
+    spctl = commands / 'spctl'
+    spctl.write_text('#!/bin/sh\necho "fixture signature gate reached" >&2\nexit 1\n')
+    spctl.chmod(0o755)
+    env = {'PATH': str(commands) + ':/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': str(root / 'home')}
+    logs = root / 'home/Library/Logs/PendingCrew'
+
+    def invoke(source):
+        result = subprocess.run(['/bin/sh', str(script), str(source)], env=env,
+                                capture_output=True, text=True, timeout=10)
+        assert result.returncode != 0
+        return result
+
+    helper = installed / 'Contents/Helpers/crewd'
+    helper.symlink_to(root / 'missing')
+    assert '保护流程' in invoke(incoming).stderr and not logs.exists()
+    helper.unlink()
+    helper = incoming / 'Contents/Helpers/crewd'
+    helper.touch()
+    assert '保护流程' in invoke(incoming).stderr and not logs.exists()
+    zip_source = root / 'zip-source/PendingCrew.app'
+    zip_source.parent.mkdir()
+    shutil.copytree(incoming, zip_source)
+    archive = root / 'incoming.zip'
+    subprocess.run(['/usr/bin/ditto', '-c', '-k', '--keepParent', str(zip_source), str(archive)],
+                   check=True, capture_output=True)
+    invoke(archive)
+    assert any('保护流程' in log.read_text() for log in logs.iterdir())
+    helper.unlink()
+    invoke(incoming)
+    assert any('fixture signature gate reached' in log.read_text() for log in logs.iterdir())
+    print('PASS legacy installer refuses installed/incoming embedded Core before live operations')
 
 
 def native_lock_probe(core, expected, root):
@@ -112,6 +193,7 @@ def main():
         old = ordinary(root / 'OldSource.app', '1' * 40)
         new = ordinary(root / 'NewSource.app', '2' * 40)
         native = ordinary(root / 'Native.app', '3' * 40, native=True)
+        delivery_policy(new)
         old_package, new_package = [
             json.loads(run('inspect-package', '--app', app, '--requirement', REQUIREMENT))
             for app in (old, new)
@@ -133,7 +215,15 @@ def main():
         base = ('prepare', '--authority', data, '--old-app', old, '--new-app', new,
                 '--old-source', old_package['source'], '--new-source', new_package['source'],
                 '--old-digest', old_package['bundleDigest'], '--requirement', REQUIREMENT)
+        run(*base, '--new-digest', new_package['bundleDigest'], '--out', root / 'unqualified-distribution',
+            refusal='ordinary upgrade requires timestamped Developer ID Application signing')
+        assert not (root / 'unqualified-distribution').exists()
+        mode = ('--isolated-fixture', root)
+        base += mode
         prepare = (*base, '--new-digest', new_package['bundleDigest'])
+        escaped = root.parent / (root.name + '-outside')
+        run(*prepare, '--out', escaped, refusal='fixture path escapes private root')
+        assert not escaped.exists()
         run(*base, '--new-digest', '0' * 64, '--out', root / 'wrong-app',
             refusal='ordinary App inventory changed')
         with (data / 'crewd.lock').open('rb') as lock:
@@ -159,6 +249,9 @@ def main():
         assert contents(data) == contents(preparation / 'before21') == before
         plan = preparation / 'plan.json'
         rollback = ('stage-rollback', '--authority', data, '--plan', plan, '--plan-sha', sha(plan))
+        run(*rollback, '--upgraded-app', old, '--out', root / 'fixture-as-production',
+            refusal='preparation mode or fixture root differs from invocation')
+        rollback += mode
         run(*rollback, '--upgraded-app', old, '--out', root / 'wrong-rollback-app',
             refusal='upgraded App differs from preparation')
         old.rename(root / 'FormerActive.app')
@@ -171,7 +264,7 @@ def main():
         (data / 'attachments/new').write_bytes(b'added after cutoff')
         upgraded = contents(data)
         run('stage-rollback', '--authority', data, '--plan', plan, '--plan-sha', sha(plan),
-            '--upgraded-app', new, '--out', root / 'wrong-rollback-path',
+            '--upgraded-app', new, '--out', root / 'wrong-rollback-path', *mode,
             refusal='upgraded App path differs from preparation')
         assert not (root / 'wrong-rollback-path').exists()
         staged = root / 'staged-rollback'
@@ -183,6 +276,7 @@ def main():
         run(*rollback, '--out', root / 'tampered', refusal='sealed pre-cut authority changed')
         assert contents(data) == upgraded
         print('PASS ordinary package checks, lock/sidecar refusal, sealed Core21 and preserved Core22')
+        legacy_guard(root)
         if args.core:
             native_lock_probe(args.core, args.core_sha, root)
 
