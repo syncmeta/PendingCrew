@@ -3248,6 +3248,164 @@
       ],
       "type": "object"
     },
+    "ChannelResponsibility": {
+      "properties": {
+        "captainSessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channelId": {
+          "type": "string"
+        },
+        "episodeId": {
+          "type": "string"
+        },
+        "handled": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelResponsibilityHandled"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "noticePhase": {
+          "$ref": "#/$defs/ChannelResponsibilityNoticePhase"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "phase": {
+          "$ref": "#/$defs/ChannelResponsibilityPhase"
+        },
+        "updatedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "wakeId": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "workIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "channelId",
+        "episodeId",
+        "phase",
+        "noticePhase",
+        "observedAtMs",
+        "updatedAtMs",
+        "workIds"
+      ],
+      "type": "object"
+    },
+    "ChannelResponsibilityHandled": {
+      "properties": {
+        "atMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "eventSeq": {
+          "type": "string"
+        },
+        "ownerSessionId": {
+          "type": "string"
+        },
+        "workId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "workId",
+        "ownerSessionId",
+        "eventSeq",
+        "atMs"
+      ],
+      "type": "object"
+    },
+    "ChannelResponsibilityNoticePhase": {
+      "enum": [
+        "not_queued",
+        "queued",
+        "inflight",
+        "delivered",
+        "dropped",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ChannelResponsibilityPage": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ChannelResponsibility"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ChannelResponsibilityParams": {
+      "additionalProperties": false,
+      "description": "Latest authoritative responsibility episodes for one crew.",
+      "properties": {
+        "after": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channelId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "ChannelResponsibilityPhase": {
+      "enum": [
+        "open",
+        "handled",
+        "ended",
+        "stale"
+      ],
+      "type": "string"
+    },
     "ChannelRestoreVerifiedParams": {
       "additionalProperties": false,
       "properties": {
@@ -20551,6 +20709,14 @@
       },
       "result": {
         "$ref": "#/$defs/WorkBlockReply"
+      }
+    },
+    "work.channelResponsibility": {
+      "params": {
+        "$ref": "#/$defs/ChannelResponsibilityParams"
+      },
+      "result": {
+        "$ref": "#/$defs/ChannelResponsibilityPage"
       }
     },
     "work.close": {

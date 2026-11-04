@@ -52,6 +52,34 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
         })
         .unwrap();
     }
+    let (topic, _) = crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+        let topic = crewd_collab::channels::create(
+            tx,
+            &crewd_collab::Sender::Session("captain-a".into()),
+            crewd_collab::channels::NewChannel {
+                crew_id: "a".into(),
+                kind: crewd_proto::ChannelKind::Topic,
+                name: "synthetic socket responsibility source".into(),
+                purpose: None,
+                members: vec![],
+            },
+        )?;
+        crewd_collab::channel_work::link(
+            tx,
+            &crewd_collab::Sender::Human,
+            crewd_proto::ChannelWorkLinkParams {
+                channel_id: topic.id.clone(),
+                expected_link_revision: "0".into(),
+                object: crewd_proto::ChannelWorkObject {
+                    kind: crewd_proto::ChannelWorkKind::Work,
+                    id: "W1".into(),
+                },
+            },
+            true,
+        )?;
+        Ok(topic.id)
+    })
+    .unwrap();
     let now = crewd_store::now_ms();
     for _ in 0..8 {
         crewd_collab::run(&mut store, now, patrol_runtime::tick).unwrap();
@@ -147,6 +175,31 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
     )
     .await;
     assert!(other.get("captainBrief").is_none());
+    let responsibility = call(
+        &mut wr,
+        &mut lines,
+        101,
+        "work.channelResponsibility",
+        json!({"crewId":"a","channelId":topic}),
+    )
+    .await;
+    assert_eq!(responsibility["crewId"], "a");
+    assert_eq!(responsibility["items"].as_array().unwrap().len(), 1);
+    let row = &responsibility["items"][0];
+    assert_eq!(row["channelId"], topic);
+    assert_eq!(row["phase"], "open");
+    assert_eq!(row["noticePhase"], "not_queued");
+    assert_eq!(row["workIds"], json!(["W1"]));
+    assert!(row.get("handled").is_none() && responsibility.get("nextAfter").is_none());
+    let foreign = call(
+        &mut wr,
+        &mut lines,
+        102,
+        "work.channelResponsibility",
+        json!({"crewId":"b","channelId":topic}),
+    )
+    .await;
+    assert_eq!(foreign, json!({"crewId":"b","items":[]}));
     let first = call(&mut wr, &mut lines, 1, "work.patrol", json!({"limit":1})).await;
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
     assert_eq!(first["items"][0]["unowned"], true);
@@ -182,7 +235,7 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
             &mut lines,
             id,
             "work.patrol",
-            json!({"scan":scan,"limit":1}),
+            json!({"scan":scan,"limit":1,"crewId":"b"}),
         )
         .await;
         assert_eq!(page["scan"], scan);
@@ -221,7 +274,23 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
             crewd_store::now_ms(),
         )
         .unwrap();
-        assert!(page.entries.is_empty() && page.channels.is_empty());
+        assert!(page.entries.is_empty());
+        if scan == crewd_proto::WorkPatrolScan::Channels {
+            assert_eq!(page.channels.len(), 1);
+            assert_eq!(page.channels[0].id, topic);
+        } else {
+            assert!(page.channels.is_empty());
+        }
     }
+    let responsibility_reopened = crewd_collab::channel_responsibility::read(
+        reopened.conn(),
+        crewd_proto::ChannelResponsibilityParams {
+            crew_id: "a".into(),
+            channel_id: Some(topic),
+            after: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(serde_json::to_value(responsibility_reopened).unwrap(), responsibility);
     assert_eq!(reopened.conn().total_changes(), changes);
 }

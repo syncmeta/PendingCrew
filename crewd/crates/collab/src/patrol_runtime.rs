@@ -196,7 +196,7 @@ fn step(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
         });
     }
     let saved = saved.as_mut().expect("initialized");
-    scan_step(tx, crew, &mut saved.run)?;
+    scan_step(tx, crew, &mut saved.run, true)?;
     meta_set(
         tx.conn(),
         &key(crew),
@@ -220,7 +220,7 @@ pub(super) fn new_run(now: i64, seq: i64) -> PatrolRun {
     }
 }
 
-pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun) -> Result<()> {
+pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun, periodic: bool) -> Result<()> {
     let page = crate::work_patrol::read(
         tx.conn(),
         WorkPatrolParams {
@@ -259,6 +259,7 @@ pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun) -> Result<()
     r.after = page.next_after;
     let mut verified = 0;
     let mut checkpoint = None;
+    let mut observed_channels = Vec::new();
     for i in page.channels {
         let now_ms = tx.now_ms();
         let review = match archive::old_enough(tx.conn(), &i, now_ms) {
@@ -276,6 +277,7 @@ pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun) -> Result<()
             Err(error) => Err(error),
         };
         checkpoint = Some(i.id.clone());
+        if periodic { observed_channels.push(i.id.clone()); }
         *r.scanned_counts.entry("channels".into()).or_default() += 1;
         if i.blocked_by
             .contains(&crewd_proto::WorkPatrolChannelBlocker::LinksTruncated)
@@ -293,6 +295,7 @@ pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun) -> Result<()
             Ok(archive::Review::Ineligible) => {}
         }
     }
+    crate::channel_responsibility::observe(tx, crew, &observed_channels)?;
     if r.after.is_none() {
         match r.scan {
             WorkPatrolScan::Work => r.scan = WorkPatrolScan::Entries,

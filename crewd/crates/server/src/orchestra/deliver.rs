@@ -477,15 +477,17 @@ impl<P: Port> Core<P> {
                 .then(|| self.current_public_target(session).generation);
             let mut obsolete_briefs = Vec::new();
             pending.retain(|wake| {
-                let obsolete = crewd_collab::patrol_brief::is_brief(&wake.source)
-                    && (wake.attempts > 0
-                        || !generation.as_deref().is_some_and(|generation| {
-                            crewd_collab::patrol_brief::matches_generation(
-                                &wake.source,
-                                wake.note.as_deref(),
-                                generation,
-                            )
-                        }));
+                use crewd_collab::{channel_responsibility as responsibility, patrol_brief};
+                let brief = patrol_brief::is_brief(&wake.source);
+                let notice = responsibility::is_notice(&wake.source);
+                let obsolete = (brief || notice) && (wake.attempts > 0
+                    || !generation.as_deref().is_some_and(|generation| {
+                        if brief {
+                            patrol_brief::matches_generation(&wake.source, wake.note.as_deref(), generation)
+                        } else {
+                            responsibility::matches_generation(&wake.source, wake.note.as_deref(), generation)
+                        }
+                    }));
                 if obsolete {
                     obsolete_briefs.push(wake.clone());
                 }
@@ -493,7 +495,7 @@ impl<P: Port> Core<P> {
             });
             if !obsolete_briefs.is_empty() {
                 let outcome = Settle::Dropped {
-                    error: "patrol brief has no current unattempted captain process".into(),
+                    error: "patrol notice has no current unattempted captain process".into(),
                 };
                 self.due
                     .touch(&self.port)

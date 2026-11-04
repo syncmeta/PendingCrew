@@ -117,6 +117,7 @@ pub fn with_book<R>(
         }
     }
     crewd_store::work_organization::save(tx.conn(), book.state(), &events, &tx.now_ts())?;
+    crate::channel_responsibility::reconcile_assignments(tx, &book, &events)?;
     // Derived requirement changes belong to the source object's crew, even
     // when its implementing plan was created/completed in another crew.
     let mut sources = std::collections::BTreeSet::new();

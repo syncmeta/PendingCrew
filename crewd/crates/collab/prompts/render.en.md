@@ -155,5 +155,8 @@ Requirements awaiting a ruling
 ## notice.patrol.category.idle_archive_candidates
 Channels to review for archival
 
+## notice.patrol.channel_responsibility
+The directly linked work still open in {channel} currently has no recorded owner. Work IDs: {work}. Review these work items and use the ordinary assignment process if appropriate.
+
 ## notice.patrol.header
 Administrative patrol brief for this crew (observed through {time}). Check current facts before taking action.

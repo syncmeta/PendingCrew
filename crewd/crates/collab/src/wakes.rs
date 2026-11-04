@@ -520,6 +520,9 @@ pub fn ack_delivered(
     for (channel, seq) in cursor_targets {
         crate::cursors::advance(tx, session, channel, *seq)?;
     }
+    for row in before.iter().filter(|row| wakes.contains(&row.id)) {
+        crate::channel_responsibility::delivered(tx, row)?;
+    }
     crate::checkpoints::delivered(
         tx,
         &before

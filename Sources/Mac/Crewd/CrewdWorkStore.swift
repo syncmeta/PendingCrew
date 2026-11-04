@@ -125,6 +125,112 @@ struct CrewdPlan: Equatable, Sendable {
     var frozen: Bool { summary["frozen"] == .bool(true) }
 }
 
+struct CrewdChannelResponsibilityPage {
+    static let method = "work.channelResponsibility"
+
+    static func ownsActiveTopic(_ channels: [CrewdValue], crew: String, channel: String) -> Bool {
+        guard !crew.isEmpty, !channel.isEmpty else { return false }
+        return channels.contains {
+            $0["id"].string?.utf8.elementsEqual(channel.utf8) == true &&
+                $0["crewId"].string?.utf8.elementsEqual(crew.utf8) == true &&
+                $0["kind"] == .string("topic") && $0["archivedAt"] == .null
+        }
+    }
+
+    struct Episode: Equatable, Identifiable {
+        enum Phase: String { case open, handled, ended, stale }
+        enum Notice: String { case notQueued = "not_queued", queued, inflight, delivered, dropped, unknown }
+        struct Ownership: Equatable {
+            let work: CrewdWorkID
+            let owner: String
+            let event: String
+            let at: Int
+        }
+        let channel: String
+        let id: UUID
+        let phase: Phase
+        let notice: Notice
+        let observedAt: Int
+        let updatedAt: Int
+        let work: [CrewdWorkID]
+        let captain: String?
+        let wake: Int?
+        let ownership: Ownership?
+
+        init(_ value: CrewdValue) throws {
+            guard case .object(let fields) = value,
+                  Set(fields.keys).isSubset(of:["channelId","episodeId","phase","noticePhase","observedAtMs","updatedAtMs",
+                    "workIds","captainSessionId","wakeId","handled"]),
+                  let channel = value["channelId"].string, token(channel),
+                  let episode = value["episodeId"].string, let id = UUID(uuidString:episode), episode == id.uuidString.lowercased(),
+                  let phase = value["phase"].string.flatMap(Phase.init(rawValue:)),
+                  let notice = value["noticePhase"].string.flatMap(Notice.init(rawValue:)),
+                  let observed = value["observedAtMs"].int, observed >= 0,
+                  let updated = value["updatedAtMs"].int, updated >= observed,
+                  case .array(let rows) = value["workIds"], (1...32).contains(rows.count) else { throw invalid() }
+            let work = rows.compactMap { $0.string.flatMap(workID) }
+            let numbers = work.compactMap { Int64($0.raw.dropFirst()) }
+            guard work.count == rows.count, Set(work).count == work.count,
+                  numbers.count == work.count, numbers == numbers.sorted() else { throw invalid() }
+            let captain = value["captainSessionId"].string
+            let wake = value["wakeId"].int
+            if notice == .notQueued {
+                guard fields["captainSessionId"] == nil, fields["wakeId"] == nil else { throw invalid() }
+            } else {
+                guard let captain, token(captain), let wake, wake > 0 else { throw invalid() }
+            }
+            let ownership: Ownership?
+            if let handled = fields["handled"] {
+                guard phase == .handled, case .object(let row) = handled,
+                      Set(row.keys) == ["workId","ownerSessionId","eventSeq","atMs"],
+                      let workID = handled["workId"].string.flatMap(CrewdChannelResponsibilityPage.workID), work.contains(workID),
+                      let owner = handled["ownerSessionId"].string, token(owner),
+                      let event = handled["eventSeq"].string, let seq = UInt64(event), seq > 0, String(seq) == event,
+                      let at = handled["atMs"].int, at >= 0 else { throw invalid() }
+                ownership = .init(work:workID,owner:owner,event:event,at:at)
+            } else {
+                guard phase != .handled else { throw invalid() }
+                ownership = nil
+            }
+            self.channel = channel; self.id = id; self.phase = phase; self.notice = notice
+            observedAt = observed; updatedAt = updated; self.work = work
+            self.captain = captain; self.wake = wake; self.ownership = ownership
+        }
+    }
+
+    let items: [Episode]
+    let next: String?
+
+    init(_ value: CrewdValue, crew: String, channel: String?, after: String?) throws {
+        guard case .object(let fields) = value, Set(fields.keys).isSubset(of:["crewId","items","nextAfter"]),
+              value["crewId"].string?.utf8.elementsEqual(crew.utf8) == true, Self.token(crew),
+              case .array(let rows) = value["items"], rows.count <= 32 else { throw Self.invalid() }
+        let episodes = try rows.map(Episode.init)
+        let ids = episodes.map(\.channel)
+        let next = value["nextAfter"].string
+        if let channel {
+            guard after == nil, Self.token(channel), fields["nextAfter"] == nil, rows.count <= 1,
+                  ids.allSatisfy({ $0.utf8.elementsEqual(channel.utf8) }) else { throw Self.invalid() }
+        } else {
+            guard Set(ids).count == ids.count, Set(episodes.map(\.id)).count == episodes.count,
+                  ids == ids.sorted(by:Self.before),
+                  after.map({ after in Self.token(after) && ids.allSatisfy { Self.before(after,$0) } }) ?? true,
+                  fields["nextAfter"] == nil || (next != nil && next == ids.last && rows.count == 32) else { throw Self.invalid() }
+        }
+        items = episodes; self.next = next
+    }
+
+    private static func before(_ left: String, _ right: String) -> Bool {
+        left.utf8.lexicographicallyPrecedes(right.utf8)
+    }
+    private static func workID(_ raw: String) -> CrewdWorkID? {
+        guard let number = Int64(raw.dropFirst()), number > 0, raw == "W\(number)" else { return nil }
+        return CrewdWorkID(raw,kind:.plan)
+    }
+    private static func token(_ value: String) -> Bool { !value.isEmpty && value.utf8.count <= 512 }
+    static func invalid() -> CrewdClientError { .init(message:"群工作归属的原始证据不完整或不属于当前机组。") }
+}
+
 struct CrewdCoordinationStatus {
     struct Assignment: Equatable {
         let decisionID: String
@@ -295,6 +401,41 @@ final class CrewdWorkStore: ObservableObject {
         ensureTask = task
         await task.value
     }
+    var supportsChannelResponsibility: Bool { capabilities.contains(CrewdChannelResponsibilityPage.method) }
+
+    func channelResponsibility(crew: String, channel: String? = nil, after: String? = nil) async throws -> CrewdChannelResponsibilityPage {
+        guard supportsChannelResponsibility, !crew.isEmpty, crew == selectedCrew,
+              channel == nil || after == nil else { throw CrewdChannelResponsibilityPage.invalid() }
+        let token = generation
+        var params: [String:CrewdValue] = ["crewId":.string(crew)]
+        if let channel { params["channelId"] = .string(channel) }
+        if let after { params["after"] = .string(after) }
+        let value = try await call(CrewdChannelResponsibilityPage.method,.object(params))
+        try check(token)
+        return try .init(value,crew:crew,channel:channel,after:after)
+    }
+
+    func channelResponsibilityWork(_ id: CrewdWorkID, episode: CrewdChannelResponsibilityPage.Episode,
+                                   crew: String) async throws -> CrewdPlan {
+        guard episode.phase == .open, episode.work.contains(id) else { throw CrewdChannelResponsibilityPage.invalid() }
+        let token = generation
+        let current = try await channelResponsibility(crew:crew,channel:episode.channel)
+        guard let row = current.items.first, row.id == episode.id, row.phase == .open, row.work.contains(id) else {
+            throw CrewdClientError(message:"该群的待指派工作已变化，请重新读取。",kind:.notSubmitted)
+        }
+        let value = try await call("work.get",.object(["id":.string(id.raw)]))
+        try check(token)
+        let plan = try parsePlan(value,full:true)
+        guard plan.id == id, plan.crew == crew, plan.status == "open",
+              case .object(let fields) = value, fields["owner"] == .null, fields["frozen"] == .bool(false),
+              let revision = UInt64(plan.revision), revision > 0,
+              plans[id].flatMap({ UInt64($0.revision) }).map({ $0 <= revision }) ?? true else {
+            throw CrewdClientError(message:"该计划已不处于当前机组的待指派状态，请重新读取。",kind:.notSubmitted)
+        }
+        adopt(plan)
+        return plan
+    }
+
     func coordinationStatus(crew: String, id: String, decisionID: String? = nil) async throws -> CrewdCoordinationStatus {
         let token = generation
         guard !crew.isEmpty, CrewdWorkID(id,kind:.plan) != nil else { throw CrewdClientError(message:"计划身份无效。") }

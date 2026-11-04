@@ -13,6 +13,7 @@ struct CrewdPatrolView: View {
     @State private var casesPresented=false
     @State private var similarPresented = false
     @State private var duplicatePresented = false
+    @State private var responsibilityTarget: CrewdChannelResponsibilityTarget?
     @State private var rulingTarget: CrewdRequirementRulingTarget?
     @State private var archived:[CrewdValue]=[]
     @State private var archivedLoaded=false
@@ -33,6 +34,11 @@ struct CrewdPatrolView: View {
                 manualSection(workspace)
             }
             Button("行政处理记录") {casesPresented=true}
+            if workspace != nil, store.supportsChannelResponsibility {
+                Button("群工作归属") {
+                    responsibilityTarget = .init(crew:store.selectedCrew,channel:nil,scope:store.readScope)
+                }.disabled(store.selectedCrew.isEmpty)
+            }
             if store.capabilities.contains("adminCase.similarRequirements") {
                 Button("审阅相近需求") { similarPresented = true }
             }
@@ -91,11 +97,14 @@ struct CrewdPatrolView: View {
         .sheet(isPresented: $duplicatePresented) {
             if let workspace { CrewdWorkDuplicateReviewView(store:store,workspace:workspace) }
         }
+        .sheet(item:$responsibilityTarget) { target in
+            if let workspace { CrewdChannelResponsibilityView(workspace:workspace,store:store,target:target) }
+        }
         .sheet(item:$rulingTarget) { target in
             if let workspace { CrewdRequirementRulingView(store:store,workspace:workspace,target:target) }
         }
         .onChange(of: scan) { _, _ in reset() }
-        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; duplicatePresented=false; rulingTarget=nil; archived=[]; archivedLoaded=false; readStatus() }
+        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; duplicatePresented=false; responsibilityTarget=nil; rulingTarget=nil; archived=[]; archivedLoaded=false; readStatus() }
         .onAppear { readStatus() }
         .onDisappear { cancel(); clearStatus() }
         .task(id: activeManualRun) {

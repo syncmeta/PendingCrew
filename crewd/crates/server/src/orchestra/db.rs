@@ -1355,10 +1355,15 @@ impl Port for DbPort {
         captain: String,
         generation: String,
     ) -> Result<()> {
-        self.write(move |tx| {
-            collab::patrol_runtime::enqueue_brief(tx, &crew, &captain, &generation)
-        })
-        .await
+        let (brief_crew, brief_captain, brief_generation) =
+            (crew.clone(), captain.clone(), generation.clone());
+        let brief = self.write(move |tx| {
+            collab::patrol_runtime::enqueue_brief(tx, &brief_crew, &brief_captain, &brief_generation)
+        }).await;
+        let responsibility = self.write(move |tx| {
+            collab::channel_responsibility::enqueue_next(tx, &crew, &captain, &generation)
+        }).await;
+        brief.and(responsibility)
     }
     async fn enqueue_work_checkpoints(&self) -> Result<()> {
         self.write(|tx| {
@@ -2421,6 +2426,93 @@ mod tests {
                 .all(|body| !body.contains("本机组行政巡检简报"))
         );
         assert_eq!(rig.exec.launches("cap-9").len(), 1);
+        rig.close().await;
+    }
+
+    #[tokio::test]
+    async fn channel_responsibility_actual_captain_delivery_does_not_spawn_or_replay() {
+        use super::super::core::Input;
+        use crewd_exec::{
+            delivery::Subject,
+            session::{DeliveryOutcome, SessionEvent},
+        };
+        use crewd_proto::{
+            ChannelKind, ChannelResponsibilityNoticePhase as Notice, ChannelResponsibilityParams,
+            ChannelResponsibilityPhase as Phase, Desired, WorkCreateParams,
+        };
+
+        let rig = S46ActorDb::new(super::super::hooks::Hooks::default()).await;
+        let (topic, idle_topic) = rig.port.write(|tx| {
+            let create = |tx: &mut collab::Tx<'_>, crew: &str, captain: &str| {
+                let topic = collab::channels::create(tx, &collab::Sender::Session(captain.into()),
+                    collab::channels::NewChannel {
+                        crew_id: crew.into(), kind: ChannelKind::Topic, name: "synthetic responsibility topic".into(),
+                        purpose: None, members: vec![],
+                    })?;
+                collab::work::create(tx, &collab::Sender::Human, WorkCreateParams {
+                    crew_id: crew.into(), channel_id: Some(topic.id.clone()),
+                    request_id: Some(uuid::Uuid::new_v4().to_string()),
+                    title: "synthetic direct work without owner".into(), ..Default::default()
+                })?;
+                Ok::<_, collab::CollabError>(topic.id)
+            };
+            Ok((create(tx, "c-1", "cap-1")?, create(tx, "c-2", "cap-2")?))
+        }).await.unwrap();
+        let tick = async || {
+            rig.clock.set(Ms(crewd_store::now_ms() + 1_000));
+            rig.handle.tx.send(Input::Tick).unwrap();
+            rig.handle.latches().await.unwrap();
+        };
+        let state = async |crew: &'static str, channel: &str| {
+            let channel = channel.to_owned();
+            rig.port.read(move |c| collab::channel_responsibility::read(c, ChannelResponsibilityParams {
+                crew_id: crew.into(), channel_id: Some(channel), after: None,
+            })).await.unwrap().items.pop()
+        };
+        for _ in 0..30 {
+            tick().await;
+        }
+        assert_eq!(state("c-1", &topic).await.unwrap().notice_phase, Notice::NotQueued);
+        assert_eq!(state("c-2", &idle_topic).await.unwrap().notice_phase, Notice::NotQueued);
+        assert!(rig.exec.launches("cap-2").is_empty());
+        // An obsolete pending row from an old physical generation may not launch the stopped captain.
+        rig.port.write(|tx| {
+            collab::sessions::set_desired(tx, "cap-2", Desired::Running)?;
+            collab::channel_responsibility::enqueue_next(tx, "c-2", "cap-2", "old-core:1:1")
+        }).await.unwrap();
+        tick().await;
+        assert_eq!(state("c-2", &idle_topic).await.unwrap().notice_phase, Notice::Dropped);
+        assert!(rig.exec.launches("cap-2").is_empty());
+
+        rig.handle.resume("cap-1", super::super::core::Origin::Human).await.unwrap();
+        let mut acked = std::collections::BTreeSet::new();
+        let sent = || rig.exec.sent("cap-1").into_iter()
+            .filter(|body| body.contains("直接关联且仍未结束") && body.contains(&topic)).count();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                tick().await;
+                if !rig.exec.sent("cap-1").is_empty() {
+                    let id = rig.exec.last_send_id("cap-1");
+                    if acked.insert(id) {
+                        rig.exec.emit("cap-1", SessionEvent::Delivery {
+                            id, subject: Subject::Steer, outcome: DeliveryOutcome::Delivered,
+                        });
+                    }
+                }
+                if state("c-1", &topic).await.is_some_and(|e| e.notice_phase == Notice::Delivered) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await.unwrap();
+        let delivered = state("c-1", &topic).await.unwrap();
+        assert_eq!(delivered.phase, Phase::Open);
+        assert!(delivered.handled.is_none());
+        for _ in 0..10 {
+            tick().await;
+        }
+        assert_eq!(sent(), 1);
+        assert_eq!(rig.exec.launches("cap-1").len(), 1);
         rig.close().await;
     }
 

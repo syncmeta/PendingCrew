@@ -268,6 +268,9 @@ private struct CrewdOriginalChannelProgress: View {
     }
     var body: some View {
         VStack(spacing: 0) {
+            if group.crew == workspace.crewID, group.channel == workspace.channelID {
+                CrewdCurrentTopicResponsibilityButton(workspace:workspace)
+            }
             if !group.capabilities.contains("channelWork") {
                 CrewdEmptySurface(title: "群进展尚不可用", detail: "当前后台尚未开放群工作引用。", symbol: "list.bullet.indent")
             } else if let error = group.failure?.localizedDescription ?? failure {

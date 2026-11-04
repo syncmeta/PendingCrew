@@ -1141,6 +1141,7 @@ fn allowed_method(method: &str) -> bool {
             | "work.history"
             | "work.patrol"
             | "work.patrolStatus"
+            | crewd_proto::methods::WORK_CHANNEL_RESPONSIBILITY
             | crewd_proto::PATROL_START
             | "work.reassignmentStatus"
             | "work.coordinationStatus"

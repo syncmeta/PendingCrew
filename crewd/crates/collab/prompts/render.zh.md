@@ -155,5 +155,8 @@ crewd 重启打断了你上一轮的工作。先核对当前状态（工作区�
 ## notice.patrol.category.idle_archive_candidates
 可复查归档条件的群
 
+## notice.patrol.channel_responsibility
+群 {channel} 直接关联且仍未结束的工作目前没有登记负责人。工作编号：{work}。请核对原工作，需要分派时沿用现有流程。
+
 ## notice.patrol.header
 本机组行政巡检简报（观察结束于 {time}）。以下为历史观察，处理前请核对当前事实。

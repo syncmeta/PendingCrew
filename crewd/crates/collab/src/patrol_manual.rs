@@ -169,7 +169,7 @@ pub fn tick(tx: &mut Tx<'_>) -> Result<()> {
         return Ok(());
     }
     let mut draft = saved.run.clone();
-    if patrol_runtime::scan_step(tx, crew, &mut draft).is_ok() {
+    if patrol_runtime::scan_step(tx, crew, &mut draft, false).is_ok() {
         saved.run = draft;
         saved.retry_at_ms = None;
     } else {

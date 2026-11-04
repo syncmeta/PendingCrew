@@ -111,6 +111,7 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
     ("notice.patrol.category.unclaimed", &[]),
     ("notice.patrol.category.needs_ruling", &[]),
     ("notice.patrol.category.idle_archive_candidates", &[]),
+    ("notice.patrol.channel_responsibility", &["channel", "work"]),
     ("notice.patrol.header", &["time"]),
     ("sender.human", &[]),
     ("sender.system", &[]),

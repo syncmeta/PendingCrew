@@ -236,6 +236,9 @@ pub(crate) fn followup_note(
     if row.source.starts_with("admin-case-handoff:") {
         return crate::admin_case_handoff::render(conn, row, now);
     }
+    if crate::channel_responsibility::is_notice(&row.source) {
+        return crate::channel_responsibility::render(conn, row);
+    }
     if crate::patrol_brief::is_brief(&row.source) {
         return crate::patrol_brief::render(conn, row);
     }

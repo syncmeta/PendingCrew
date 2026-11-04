@@ -94,10 +94,13 @@ private struct CrewdMobileCrewPane: View {
                 }.opacity(tab == .messages ? 1 : 0).allowsHitTesting(tab == .messages)
                     .disabled(tab != .messages).accessibilityHidden(tab != .messages)
                 if tab == .todo || tab == .progress {
-                    CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
-                        resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
-                        planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-                        members: Array(workspace.knownSessions.values), crews: workspace.crews, progressOnly: tab == .progress, patrolWorkspace: workspace)
+                    VStack(spacing: 0) {
+                        if tab == .progress { CrewdCurrentTopicResponsibilityButton(workspace:workspace) }
+                        CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
+                            resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
+                            planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
+                            members: Array(workspace.knownSessions.values), crews: workspace.crews, progressOnly: tab == .progress, patrolWorkspace: workspace)
+                    }
                 } else if tab == .documents { CrewdKnowledgeDocumentsEntry(workspace: workspace) }
             }
         }.navigationTitle(title)

@@ -847,6 +847,16 @@ async fn request_step(
             *forwarder = Some(task);
             return RequestStep::Continue;
         }
+        Ok(req) if req.method == methods::WORK_CHANNEL_RESPONSIBILITY => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(req.id, crate::dispatch::refused(
+                    RpcError::FORBIDDEN,
+                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
+                )))
+            } else {
+                ServerFrame::Response(crate::channel_responsibility::handle(state, &peer.command_actor(), req).await)
+            }
+        }
         Ok(req) if crate::requirement_ruling::handles(&req.method) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(req.id, crate::dispatch::refused(

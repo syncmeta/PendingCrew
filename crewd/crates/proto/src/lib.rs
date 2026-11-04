@@ -150,6 +150,7 @@ pub mod methods {
     pub const WORK_REASSIGNMENT_STATUS: &str = "work.reassignmentStatus";
     pub const WORK_COORDINATION_STATUS: &str = "work.coordinationStatus";
     pub const WORK_PATROL_STATUS: &str = "work.patrolStatus";
+    pub const WORK_CHANNEL_RESPONSIBILITY: &str = "work.channelResponsibility";
     pub const WORK_PATROL: &str = "work.patrol";
     pub const WORK_LIST: &str = "work.list";
     pub const WORK_GET: &str = "work.get";
@@ -288,6 +289,7 @@ pub mod methods {
         WORK_REASSIGNMENT_STATUS,
         WORK_COORDINATION_STATUS,
         WORK_PATROL_STATUS,
+        WORK_CHANNEL_RESPONSIBILITY,
         WORK_PATROL,
         WORK_LIST,
         WORK_GET,
@@ -1405,6 +1407,10 @@ pub fn api_schema() -> Value {
         (
             methods::WORK_PATROL_STATUS,
             m(sub::<PatrolStatusParams>(g), sub::<PatrolStatus>(g)),
+        ),
+        (
+            methods::WORK_CHANNEL_RESPONSIBILITY,
+            m(sub::<ChannelResponsibilityParams>(g), sub::<ChannelResponsibilityPage>(g)),
         ),
         (
             methods::WORK_LIST,

@@ -3297,3 +3297,92 @@ async fn paired_human_reads_original_requirement_create_receipt_and_revocation_d
     drop(remote);
     stopped(running).await;
 }
+
+#[tokio::test]
+async fn paired_human_reads_exact_channel_responsibility_and_revocation_denies() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = crewd_server::ServeOptions {
+        orchestra: Some(crewd_server::OrchestraServe {
+            config: crewd_server::orchestra::OrchestraConfig {
+                heartbeat_ms: 20,
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut running = service_with(dir.path(), options).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({"title":"synthetic responsibility scope","workingDirectory":dir.path()}),
+        )
+        .await["id"]
+        .clone();
+    let other_crew = remote
+        .call(
+            "crew.create",
+            json!({"title":"separate synthetic scope","workingDirectory":dir.path()}),
+        )
+        .await["id"]
+        .clone();
+    let topic = remote
+        .call(
+            "channel.create",
+            json!({"crewId":crew,"kind":"topic","name":"Synthetic linked work","members":[]}),
+        )
+        .await["id"]
+        .clone();
+    let work = remote
+        .call(
+            "work.create",
+            json!({"crewId":crew,"channelId":topic,"requestId":uuid::Uuid::new_v4().to_string(),"title":"Synthetic unowned work"}),
+        )
+        .await;
+    for index in 0..10 {
+        let post = draft_packet(
+            &hello,
+            "message.post",
+            json!({"channelId":topic,"text":format!("synthetic observation {index}")}),
+        );
+        assert_eq!(remote.call("command.submit", post).await["phase"], "committed");
+    }
+    let query = json!({"crewId":crew,"channelId":topic});
+    let result = tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            let result = remote.call("work.channelResponsibility", query.clone()).await;
+            if result["items"][0]["phase"] == "open" {
+                break result;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("ordinary patrol did not observe the paired Human's exact linked work");
+    let row = &result["items"][0];
+    assert_eq!(result["crewId"], crew);
+    assert_eq!(row["channelId"], topic);
+    assert_eq!(row["workIds"], json!([work["id"]]));
+    assert_eq!(row["noticePhase"], "not_queued");
+    assert_eq!(
+        remote
+            .call("work.channelResponsibility", json!({"crewId":other_crew,"channelId":topic}))
+            .await,
+        json!({"crewId":other_crew,"items":[]})
+    );
+    assert_eq!(remote.call("work.channelResponsibility", query.clone()).await, result);
+
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"responsibility fixture complete"
+    })).await;
+    let denied = tokio::time::timeout(LIMIT, remote.frame("work.channelResponsibility", query))
+        .await
+        .unwrap();
+    assert!(denied.is_err() || denied.unwrap()["error"].is_object());
+    drop(remote);
+    stopped(running).await;
+}

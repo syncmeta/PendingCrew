@@ -6,6 +6,7 @@ mod apns;
 pub mod build_info;
 pub mod causal_fence;
 mod channel_archive;
+mod channel_responsibility;
 mod claude_history;
 mod claude_recovery;
 mod codex_inputs;

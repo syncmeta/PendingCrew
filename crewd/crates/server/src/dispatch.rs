@@ -326,6 +326,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     crewd_proto::commands::ASK_RESOLVE,
                     methods::TODO_RULING_CHECK,
                     methods::TODO_CREATE_LOOKUP,
+                    methods::WORK_CHANNEL_RESPONSIBILITY,
                     methods::TODO_RULING_RESULT,
                     crewd_proto::commands::TODO_RULE_CLOSE,
                 ]
@@ -810,6 +811,10 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        methods::WORK_CHANNEL_RESPONSIBILITY => Err(refused(
+            RpcError::FORBIDDEN,
+            crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
+        )),
         methods::WORK_PATROL_STATUS => {
             let p: PatrolStatusParams = parse_params(p)?;
             read(state, move |c| {
