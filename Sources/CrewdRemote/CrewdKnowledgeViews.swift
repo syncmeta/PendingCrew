@@ -23,7 +23,8 @@ struct CrewdKnowledgeDocumentsEntry: View {
             .padding(.horizontal,16).padding(.vertical,10)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
             if library {
-                CrewdKnowledgeWorkspaceView(store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection).id(collection)
+                CrewdKnowledgeWorkspaceView(store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection)
+                    .id(workspace.crewID + "/" + collection.rawValue)
             }else{CrewdGroupKnowledgeView(workspace:workspace,collection:collection)}
         }
         .tint(.gray)
@@ -40,11 +41,14 @@ struct CrewdKnowledgeDocumentsEntry: View {
 /// their navigation stays separate. The selector never executes page code.
 enum CrewdKnowledgeCollection: String {
     case all, documents, agentPages
+    func includes(_ kind: CrewdKnowledgeStore.ViewCatalogKind) -> Bool {
+        self == .all || (self == .documents ? kind == .document : kind == .web)
+    }
     func includes(_ object: CrewdDataObject) -> Bool {
         guard case let .view(_, _, _, definition, _, _) = object else { return false }
-        switch (self, definition) {
-        case (.all, _), (.documents, .document), (.agentPages, .web): return true
-        default: return false
+        switch definition {
+        case .document: return includes(.document)
+        case .web: return includes(.web)
         }
     }
 }
@@ -54,9 +58,22 @@ struct CrewdKnowledgeWorkspaceView: View {
     let available: Bool
     var returnToMessages: (() -> Void)? = nil
     var collection: CrewdKnowledgeCollection = .all
-    private var visibleObjects: [CrewdDataObject] { store.objects.filter(collection.includes) }
+    private var catalog: CrewdKnowledgeStore.ViewCatalog? {
+        guard let catalog = store.viewCatalog, catalog.includeArchived == showArchived else { return nil }
+        return catalog
+    }
+    private var visibleObjects: [CrewdKnowledgeStore.ViewCatalogItem] {
+        catalog?.items.filter { collection.includes($0.kind) && CrewdKnowledgeTitleSearch.matches($0.title,query:query) } ?? []
+    }
+    private var visibleDetail: CrewdDataObjectDetail? {
+        guard let catalog, let detail = store.detail, detail.context == catalog.context,
+              selected == detail.object.identity, collection.includes(detail.object),
+              showArchived || !detail.object.isArchived else { return nil }
+        return detail
+    }
     @Environment(\.colorScheme) private var scheme
     @State private var selected = ""
+    @State private var query = ""
     @State private var showSystem = false
     @State private var showArchived = false
     @State private var confirmArchive: CrewdDataObject?
@@ -67,22 +84,23 @@ struct CrewdKnowledgeWorkspaceView: View {
     var body: some View {
         VStack(spacing: 0) {
             ViewThatFits(in: .horizontal) {
-                HStack { pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; reloadButton; systemButton }
+                HStack { titleSearch; pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; reloadButton; systemButton }
                 VStack(alignment: .leading, spacing: 8) {
-                    pagePicker
-                    HStack { if store.busy { ProgressView().controlSize(.small) }; reloadButton; Spacer(); systemButton }
+                    titleSearch
+                    HStack { pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; reloadButton; systemButton }
                 }
             }.font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Theme.Palette.canvas)
+            if available { catalogProgress }
             Divider().overlay(CrewdChatStyle.line(scheme))
             if !available {
                 CrewdEmptySurface(title: "知识数据尚不可用", detail: "连接具备知识权限的后台后，可读取已保存的页面。", symbol: "externaldrive.badge.questionmark")
-            } else if let detail = store.detail, collection.includes(detail.object) {
+            } else if let detail = visibleDetail {
                 page(detail)
             } else {
                 VStack(spacing:12) {
-                    Text(visibleObjects.isEmpty ? "暂无资料" : "选择资料查看内容").foregroundStyle(.secondary)
-                    if visibleObjects.isEmpty, let returnToMessages { Button("回到消息", action:returnToMessages).font(CrewdType.label) }
+                    Text(catalogEmptyText).foregroundStyle(.secondary)
+                    if catalog != nil, catalog?.next == nil, visibleObjects.isEmpty, let returnToMessages { Button("回到消息", action:returnToMessages).font(CrewdType.label) }
                 }.frame(maxWidth:.infinity,maxHeight:.infinity)
             }
             if !store.status.isEmpty,
@@ -98,11 +116,6 @@ struct CrewdKnowledgeWorkspaceView: View {
         }
         .task(id: available) { if available { await reload() } }
         .onDisappear { store.renderer.revoke() }
-        .onChange(of: selected) { _, id in
-            guard !id.isEmpty, let context = store.workspace?.context else { return }
-            UserDefaults.standard.set(id, forKey: pagePreference(context))
-            Task { await store.open(.init(namespace: context.namespace, kind: "view", id: id)) }
-        }
         .onChange(of: store.workspace?.context) { old, current in
             if old?.authorityId != current?.authorityId || old?.crewId != current?.crewId || old?.namespace != current?.namespace {
                 selected = ""
@@ -140,13 +153,49 @@ struct CrewdKnowledgeWorkspaceView: View {
             }
         }
     }
+    private var titleSearch: some View {
+        TextField("按标题搜索机组资料库",text:$query).textFieldStyle(.roundedBorder).frame(idealWidth:200)
+            .accessibilityLabel("按标题搜索机组资料库")
+    }
     private var pagePicker: some View {
-        Picker("页面", selection: $selected) {
-            Text("选择页面").tag("")
-            ForEach(visibleObjects, id: \.identity) {
-                Text($0.displayTitle).tag($0.identity)
+        Menu {
+            ForEach(visibleObjects) { item in
+                Button(item.title + (item.archived ? "（已归档）" : "")) { Task { await open(item.id,kind:item.kind) } }
             }
-        }.frame(maxWidth: 300)
+        } label: { Label(visibleDetail?.object.displayTitle ?? "选择资料",systemImage:"doc.text").lineLimit(1) }
+        .disabled(store.busy || visibleObjects.isEmpty).frame(maxWidth:300)
+    }
+    private var catalogProgress: some View {
+        HStack {
+            if let catalog {
+                let scope = catalog.next == nil ? "已读完当前范围" : "还有后续资料"
+                let result = CrewdKnowledgeTitleSearch.normalized(query).isEmpty ? "当前类型 \(visibleObjects.count) 项" : "已读取的资料中有 \(visibleObjects.count) 个标题匹配"
+                Text(store.catalogStatus == .failed ? result + " · 后续读取失败" : result + " · " + scope)
+                Spacer()
+                if catalog.next != nil {
+                    Button(store.catalogStatus == .failed ? "重读后续资料" : "读取后续资料") {
+                        Task { await store.loadNextViewCatalogPage() }
+                    }.disabled(store.busy)
+                }
+            }
+        }.font(CrewdType.caption).foregroundStyle(.secondary).padding(.horizontal,16).padding(.bottom,8)
+    }
+    private var catalogEmptyText: String {
+        if store.busy && catalog == nil { return "正在读取机组资料库…" }
+        if catalog == nil {
+            switch store.catalogStatus {
+            case .uninitialized: return "机组资料库尚未初始化。"
+            case .unavailable: return "当前机组资料库不可用。"
+            case .failed: return "资料读取未完成，请刷新。"
+            default: return "机组资料库尚未读取。"
+            }
+        }
+        if !visibleObjects.isEmpty { return "选择资料查看内容" }
+        let searching = !CrewdKnowledgeTitleSearch.normalized(query).isEmpty
+        if catalog?.next != nil {
+            return searching ? "已读取的资料没有标题匹配，仍有后续资料。" : "已读取的资料没有当前类型，仍有后续资料。"
+        }
+        return searching ? "当前范围内没有匹配标题。" : "当前范围内没有这种资料。"
     }
     private var reloadButton: some View {
         Button { Task { await reload() } } label: { Image(systemName: "arrow.clockwise") }
@@ -159,14 +208,20 @@ struct CrewdKnowledgeWorkspaceView: View {
             .help("页面权限、回收站、原请求与恢复控制")
     }
     private func reload() async {
-        await store.refresh()
-        await store.list(objectType: "view", includeArchived: showArchived)
-        // Reopen a persisted page without executing its author code or calling an Agent.
-        if let context = store.workspace?.context {
-            let preferred = selected.isEmpty ? UserDefaults.standard.string(forKey: pagePreference(context)) ?? "" : selected
-            let id = visibleObjects.contains(where: { $0.identity == preferred }) ? preferred : visibleObjects.first?.identity
-            if let id { selected = id; await store.open(.init(namespace: context.namespace, kind: "view", id: id)) }
-        }
+        await store.refreshViewCatalog(includeArchived:showArchived)
+        // Only an explicitly opened native document is eligible for read-only
+        // reopening. Browsing catalog pages never opens an Agent-authored page.
+        guard collection == .documents, visibleDetail == nil, let context = catalog?.context,
+              let preferred = UserDefaults.standard.string(forKey:pagePreference(context)) else { return }
+        await open(preferred,kind:.document,previouslyOpenedDocument:true)
+    }
+    private func open(_ id: String, kind: CrewdKnowledgeStore.ViewCatalogKind, previouslyOpenedDocument: Bool = false) async {
+        guard let context = catalog?.context else { return }
+        await store.openViewCatalogItem(id,kind:kind,previouslyOpenedDocument:previouslyOpenedDocument)
+        guard let detail = store.detail, detail.context == context, detail.object.identity == id, catalog?.context == context,
+              collection.includes(detail.object), showArchived || !detail.object.isArchived else { return }
+        selected = id
+        UserDefaults.standard.set(id,forKey:pagePreference(context))
     }
     private func pagePreference(_ context: CrewdDataContext) -> String {
         "pendingcrew.page." + context.authorityId + "." + context.crewId + "." + context.namespace + (collection == .all ? "" : "." + collection.rawValue)
@@ -190,8 +245,9 @@ struct CrewdKnowledgeWorkspaceView: View {
             Text("作者页面不能代替这里的权限、原请求核对与恢复控制。").font(.caption)
             Button("停止页面并撤回写入权限") { store.renderer.revoke() }
             Toggle("显示回收站", isOn: $showArchived)
+                .disabled(store.busy)
                 .onChange(of: showArchived) { _, _ in Task { await reload() } }
-            if let object = store.detail?.object, case .view = object {
+            if let object = visibleDetail?.object, case .view = object {
                 Button(object.isArchived ? "恢复当前页面…" : "移入回收站…") { confirmArchive = object }
             }
             ForEach(store.pending) { intent in
@@ -318,6 +374,7 @@ private struct CrewdGroupKnowledgeView:View {
     let collection:CrewdKnowledgeCollection
     @State private var owner=UUID()
     @State private var selected:String?
+    @State private var query=""
     @State private var linking=false
     @State private var creating=false
     @State private var reading=false
@@ -336,11 +393,16 @@ private struct CrewdGroupKnowledgeView:View {
     private func folderObject(_ source:CrewdChannelKnowledgeReference)->CrewdValue {
         .object(["kind":.string("knowledgeView"),"id":.string(source.reference.id),"knowledge":(try? CrewdKnowledgeStore.encode(source)) ?? .null])
     }
-    private var rows:[CrewdChannelKnowledgeItem]{group.items.filter{item in
+    private var scopedRows:[CrewdChannelKnowledgeItem]{group.items.filter{item in
         let type=collection == .agentPages ? "web":"document"
         return (item.state != "ready" || item.viewKind == type) && CrewdFolderFilter.includes(folderObject(item.source),selection:folder.wrappedValue,snapshot:resources.folders[.documents])
     }}
-    private var chosen:CrewdChannelKnowledgeItem?{rows.first{$0.id == selected}}
+    private var rows:[CrewdChannelKnowledgeItem] {
+        scopedRows.filter { CrewdKnowledgeTitleSearch.matches($0.state == "ready" ? $0.title : nil,query:query) }
+    }
+    private var chosen:CrewdChannelKnowledgeItem?{scopedRows.first{$0.id == selected}}
+    private var searching:Bool { !CrewdKnowledgeTitleSearch.normalized(query).isEmpty }
+    private var groupEmptyText:String { searching ? "本群当前分类的可读资料没有匹配标题。" : "暂无资料" }
     private var pendingLinks: [CrewdPendingKnowledgeLink] {
         CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:workspace.presentationScope,crew:group.crew,channel:group.channel)
     }
@@ -348,10 +410,15 @@ private struct CrewdGroupKnowledgeView:View {
     var body:some View {
         VStack(spacing:0){
             ViewThatFits(in:.horizontal){
-                HStack(spacing:8){documentActions;documentFolders.fixedSize(horizontal:true,vertical:false)}
-                VStack(alignment:.leading,spacing:6){documentActions;documentFolders}
+                HStack(spacing:8){documentActions;documentFolders.fixedSize(horizontal:true,vertical:false);titleSearch}
+                VStack(alignment:.leading,spacing:6){documentActions;documentFolders;titleSearch}
             }.font(CrewdType.label).frame(maxWidth:.infinity,alignment:.leading)
                 .padding(.horizontal,16).padding(.bottom,10)
+            if searching, group.loaded, !group.loading, group.failure == nil {
+                Text("本群当前分类的可读资料中有 \(rows.count) 个标题匹配")
+                    .font(CrewdType.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,16)
+            }
             CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:group.crew,channel:group.channel)
                 .padding(.horizontal,16)
             if collection == .documents {
@@ -373,8 +440,8 @@ private struct CrewdGroupKnowledgeView:View {
             }
             if let error=group.failure ?? failure{Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(8)}
             if group.loading || reading{ProgressView().controlSize(.small)}
-            if group.loaded,!group.loading,!reading,group.failure == nil,failure == nil,rows.isEmpty {
-                Text("暂无资料").font(.callout).foregroundStyle(.secondary)
+            if group.loaded,!group.loading,!reading,group.failure == nil,failure == nil,rows.isEmpty,chosen == nil {
+                Text(groupEmptyText).font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth:.infinity,maxHeight:.infinity)
             }else{
                 ViewThatFits(in:.horizontal){
@@ -397,8 +464,8 @@ private struct CrewdGroupKnowledgeView:View {
         }
         .onChange(of:content.pending){_,_ in if collection == .documents {library.synchronizePending()}}
         .onChange(of:library.pending){_,pending in if collection == .documents && pending.isEmpty {library.synchronizePending()}}
-        .onChange(of:group.crew+group.channel){_,_ in selected=nil;linking=false;creating=false;editTarget=nil;historyTarget=nil;failure=nil}
-        .onChange(of:collection){_,_ in selected=nil;editTarget=nil;historyTarget=nil;content.renderer.revoke()}
+        .onChange(of:group.crew+group.channel){_,_ in selected=nil;query="";linking=false;creating=false;editTarget=nil;historyTarget=nil;failure=nil}
+        .onChange(of:collection){_,_ in selected=nil;query="";editTarget=nil;historyTarget=nil;content.renderer.revoke()}
         .onChange(of:chosen?.id){_,id in if id == nil{content.renderer.revoke()}}
         .controlSize(.small).tint(.gray)
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
@@ -417,9 +484,16 @@ private struct CrewdGroupKnowledgeView:View {
         CrewdFolderControls(store:resources,drafts:$workspace.resourceDrafts,selection:folder,view:.documents,compact:true)
             .help("本群资料分类，只改变展示位置，不改变共享原文")
     }
+    private var titleSearch: some View {
+        TextField("按标题搜索本群引用",text:$query).textFieldStyle(.roundedBorder).frame(idealWidth:180)
+            .accessibilityLabel("按标题搜索本群引用")
+    }
     private var list:some View {
         ScrollView {
             LazyVStack(alignment:.leading,spacing:4) {
+                if rows.isEmpty, group.loaded, !group.loading, group.failure == nil {
+                    Text(groupEmptyText).font(CrewdType.caption).foregroundStyle(.secondary).padding(8)
+                }
                 ForEach(rows) { item in
                     Button { selected=item.id } label: {
                         HStack(alignment:.top,spacing:8) {

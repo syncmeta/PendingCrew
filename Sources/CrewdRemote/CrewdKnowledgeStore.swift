@@ -2,6 +2,15 @@ import Foundation
 import Combine
 import CryptoKit
 
+enum CrewdKnowledgeTitleSearch {
+    static func normalized(_ query: String) -> String { query.trimmingCharacters(in:.whitespacesAndNewlines) }
+    static func matches(_ title: String?, query: String) -> Bool {
+        let term = normalized(query)
+        if term.isEmpty { return true }
+        return title?.range(of:term,options:[.caseInsensitive,.diacriticInsensitive,.widthInsensitive],locale:.current) != nil
+    }
+}
+
 /// SQLite authority client. This model never opens the knowledge database locally.
 @MainActor final class CrewdKnowledgeStore: ObservableObject, CrewdKnowledgeViewAuthority {
     struct Origin: Equatable {
@@ -81,6 +90,21 @@ import CryptoKit
         fileprivate let source: CrewdDataRef
         fileprivate let sourceRevision: String
     }
+    enum ViewCatalogKind: Equatable { case document, web }
+    enum ViewCatalogStatus: Equatable { case idle, uninitialized, unavailable, ready, failed }
+    struct ViewCatalogItem: Identifiable, Equatable {
+        let id: String
+        let title: String
+        let kind: ViewCatalogKind
+        let archived: Bool
+    }
+    struct ViewCatalog: Equatable {
+        let context: CrewdDataContext
+        let includeArchived: Bool
+        fileprivate(set) var items: [ViewCatalogItem]
+        fileprivate(set) var next: String?
+        fileprivate let origin: Origin
+    }
     enum Failure: Error { case unavailable, invalid, stale, unresolved, unsupported }
     typealias RPC = (String, CrewdValue) async throws -> CrewdValue
     @Published private(set) var workspace: CrewdDataWorkspaceInfo?
@@ -96,6 +120,8 @@ import CryptoKit
     @Published private(set) var busy = false
     @Published private(set) var status = "知识数据尚未读取。"
     @Published private(set) var nextObjectPage: String?
+    @Published private(set) var viewCatalog: ViewCatalog?
+    @Published private(set) var catalogStatus = ViewCatalogStatus.idle
     private(set) var detailIsSnapshot = false
     private(set) var detailReference: CrewdDataRef?
     var canEditDetail: Bool { !detailIsSnapshot && detailReference?.namespace == workspace?.context.namespace }
@@ -126,6 +152,7 @@ import CryptoKit
         operation = UUID(); active = nil; workspace = nil; objects = []; detail = nil; detailReference = nil
         schema = nil; rows = nil; history = nil; snapshots = nil; preview = nil
         pending = []; result = nil; busy = false; records = [:]; nextObjectPage = nil
+        clearViewCatalog()
         rendererPrepared = [:]; rendererTerminal = [:]; renderer.revoke()
         status = "连接、机组或权限已变化；未重发旧请求。"
     }
@@ -149,7 +176,9 @@ import CryptoKit
     private func clearPresentation() {
         renderer.revoke(); detail = nil; detailReference = nil; objects = []; schema = nil; rows = nil
         history = nil; snapshots = nil; preview = nil; nextObjectPage = nil
+        clearViewCatalog()
     }
+    private func clearViewCatalog() { viewCatalog = nil; catalogStatus = .idle }
     private func perform(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         let captured = active
         do { return try await rpc(method, params) }
@@ -200,7 +229,7 @@ import CryptoKit
             let info = try Self.decode(try await perform("data.workspace.get", Self.encode(CrewdDataWorkspaceGetParams(crewId: o.crew))), CrewdDataWorkspaceInfo.self)
             try checked(info.context, o)
             guard current(o, token) else { return }
-            if let old = workspace, old.context != info.context { renderer.revoke(); detail = nil; objects = [] }
+            if let old = workspace, old.context != info.context { renderer.revoke(); detail = nil; objects = []; clearViewCatalog() }
             workspace = info
             guard info.state == "ready" else { status = info.state == "uninitialized" ? "知识工作区尚未初始化；读取不会创建数据库。" : "知识工作区不可用；未退回旧库。"; return }
             let page = try Self.decode(try await perform("data.object.list", Self.encode(CrewdDataObjectListParams(context: info.context, objectType: "view", after: nil, limit: 50, atRevision: nil, includeArchived: false))), CrewdDataObjectPage.self)
@@ -221,6 +250,94 @@ import CryptoKit
         await read { context in
             let page: CrewdDataObjectPage = try await self.call("data.object.list", CrewdDataObjectListParams(context: context, objectType: objectType, after: after, limit: 50, atRevision: nil, includeArchived: includeArchived))
             return { self.objects = after == nil ? page.items : self.objects + page.items; self.nextObjectPage = page.next }
+        }
+    }
+    private func catalogItem(_ object: CrewdDataObject) -> ViewCatalogItem? {
+        guard case .view(let id,_,let title,let definition,let archived,_) = object,
+              UUID(uuidString:id)?.uuidString.lowercased() == id else { return nil }
+        switch definition {
+        case .document: return .init(id:id,title:title,kind:.document,archived:archived)
+        case .web: return .init(id:id,title:title,kind:.web,archived:archived)
+        }
+    }
+    private func catalogPage(context: CrewdDataContext, includeArchived: Bool, after: String?) async throws -> ([ViewCatalogItem], String?) {
+        // The wire returns full View values. Keep each reply small and retain
+        // only the navigation metadata, never the Agent page HTML or scripts.
+        let limit: UInt32 = 12
+        let params = CrewdDataObjectListParams(context:context,objectType:"view",after:after,limit:limit,atRevision:nil,includeArchived:includeArchived)
+        let page: CrewdDataObjectPage = try await call("data.object.list",params,preservingPresentation:true)
+        guard page.context == context, page.generation == context.generation, page.items.count <= Int(limit),
+              after == nil || !page.items.isEmpty else { throw Failure.invalid }
+        var previous = after ?? ""
+        let items = try page.items.map { object in
+            guard let item = catalogItem(object), item.id > previous, includeArchived || !item.archived else { throw Failure.invalid }
+            previous = item.id
+            return item
+        }
+        if let next = page.next {
+            guard items.count == Int(limit), next == items.last?.id else { throw Failure.invalid }
+        }
+        return (items,page.next)
+    }
+    func refreshViewCatalog(includeArchived: Bool) async {
+        guard let (o, token) = try? begin() else { return }
+        defer { finish(o,token) }
+        clearViewCatalog()
+        do {
+            let info: CrewdDataWorkspaceInfo = try await call("data.workspace.get",CrewdDataWorkspaceGetParams(crewId:o.crew),preservingPresentation:true)
+            try checked(info.context,o)
+            guard current(o,token), !Task.isCancelled else { return }
+            if let old = workspace, old.context != info.context { clearPresentation() }
+            workspace = info
+            guard info.state == "ready" else {
+                clearPresentation()
+                catalogStatus = info.state == "uninitialized" ? .uninitialized : .unavailable
+                return
+            }
+            let (items,next) = try await catalogPage(context:info.context,includeArchived:includeArchived,after:nil)
+            guard current(o,token), workspace?.context == info.context, !Task.isCancelled else { return }
+            viewCatalog = .init(context:info.context,includeArchived:includeArchived,items:items,next:next,origin:o)
+            catalogStatus = .ready
+            status = "已读取当前数据视图；未改动数据。"
+        } catch {
+            guard current(o,token), !Task.isCancelled else { return }
+            clearPresentation()
+            catalogStatus = .failed
+        }
+    }
+    func loadNextViewCatalogPage() async {
+        guard var catalog = viewCatalog, let cursor = catalog.next, let (o, token) = try? begin() else { return }
+        defer { finish(o,token) }
+        guard catalog.origin == o, workspace?.context == catalog.context, viewCatalog == catalog else { return }
+        do {
+            let (items,next) = try await catalogPage(context:catalog.context,includeArchived:catalog.includeArchived,after:cursor)
+            guard current(o,token), workspace?.context == catalog.context, viewCatalog == catalog, !Task.isCancelled else { return }
+            catalog.items.append(contentsOf:items)
+            catalog.next = next
+            viewCatalog = catalog
+            catalogStatus = .ready
+        } catch {
+            guard current(o,token), !Task.isCancelled else { return }
+            let code = (error as? CrewdClientError)?.code
+            if code == -32003 || code == -32009 { clearPresentation() }
+            catalogStatus = .failed
+        }
+    }
+    func openViewCatalogItem(_ id: String, kind: ViewCatalogKind, previouslyOpenedDocument: Bool = false) async {
+        guard let catalog = viewCatalog, UUID(uuidString:id)?.uuidString.lowercased() == id,
+              catalog.items.contains(where: { $0.id == id && $0.kind == kind }) || (previouslyOpenedDocument && kind == .document) else { return }
+        await read { context in
+            guard active == catalog.origin, context == catalog.context, viewCatalog == catalog else { throw Failure.stale }
+            let reference = CrewdDataRef(namespace:context.namespace,kind:"view",id:id)
+            let value: CrewdDataObjectDetail = try await self.call("data.object.get",
+                CrewdDataObjectGetParams(context:context,reference:reference,atRevision:nil),preservingPresentation:true)
+            guard value.context == context, value.resolvedContext == context, value.generation == context.generation,
+                  let item = catalogItem(value.object), item.id == id, item.kind == kind,
+                  catalog.includeArchived || !item.archived else { throw Failure.invalid }
+            return {
+                self.renderer.revoke(); self.detail = value; self.detailReference = reference; self.detailIsSnapshot = false
+                self.installRenderer(value.object,snapshot:false)
+            }
         }
     }
     func open(_ reference: CrewdDataRef, atRevision: String? = nil) async {
