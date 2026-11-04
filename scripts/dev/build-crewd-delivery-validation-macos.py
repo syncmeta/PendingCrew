@@ -21,7 +21,51 @@ def load_helper(repo, name):
     spec.loader.exec_module(module)
     return module
 
-def normalize_debug_rpaths(app, products, ref, purpose, closure, seal, log):
+def compact_debug_rpaths(original, transient, closure, seal):
+    architecture, = closure.image(original, transient)
+    paths = [path for path in transient if path in architecture['rpaths']]
+    before = seal.thin(original)
+    if (original[:4] != bytes.fromhex('cffaedfe') or before['cpu'] != 0x100000c
+            or any(architecture['rpaths'].count(path) != 1 for path in paths)):
+        raise ValueError('Unexpected Debug architecture or duplicate transient paths')
+
+    def transient_rpath(command, raw):
+        return command == 0x8000001c and closure.string(raw, 12, '<') in paths
+
+    start, end = before['commandEnd'], before['contentEnd']
+    edited = original
+    if paths:
+        # Move only raw load commands. The original LINKEDIT and linker signature
+        # remain byte-for-byte intact until the regular ad-hoc signing step.
+        count = struct.unpack_from('<I', original, 16)[0]
+        cursor = 32
+        retained = []
+        for _ in range(count):
+            command, size = struct.unpack_from('<II', original, cursor)
+            raw = original[cursor:cursor + size]
+            if not transient_rpath(command, raw):
+                retained.append(raw)
+            cursor += size
+        if len(retained) + len(paths) != count:
+            raise ValueError('Unexpected Debug load command count')
+        body = b''.join(retained)
+        header = bytearray(original[:32])
+        struct.pack_into('<II', header, 16, len(retained), len(body))
+        edited = bytes(header) + body + bytes(start - 32 - len(body)) + original[start:]
+
+    closure.image(edited)
+    after = seal.thin(edited)
+    expected = [raw for raw in before['commands']
+                if not transient_rpath(struct.unpack_from('<I', raw)[0], raw)]
+    if (before['header'][:16] + before['header'][24:] != after['header'][:16] + after['header'][24:]
+            or before['rounding'] != after['rounding'] or expected != after['commands']
+            or after['commandEnd'] > start or any(edited[after['commandEnd']:start])
+            or after['contentEnd'] != end or original[start:] != edited[start:]):
+        raise ValueError('Debug executable changed beyond the transient load commands')
+    return edited, paths, closure.sha(edited[start:end])
+
+
+def normalize_debug_rpaths(app, products, ref, purpose, closure, seal):
     # Xcode injects these two paths independently of LD_RUNPATH_SEARCH_PATHS.
     # Edit only the private, unsigned copy, then require the regular strict audit.
     products = closure.reviewed_target_root(products, existing=True)
@@ -31,29 +75,14 @@ def normalize_debug_rpaths(app, products, ref, purpose, closure, seal, log):
     original = executable.read_bytes()
     if closure.sha(original) != qualified['mainBuildSignature']['sha256']:
         raise ValueError('Debug executable changed after qualification')
-    architecture, = closure.image(original, transient)
-    paths = [path for path in transient if path in architecture['rpaths']]
-    before = seal.thin(original)
-    if before['cpu'] != 0x100000c or any(architecture['rpaths'].count(path) != 1 for path in paths):
-        raise ValueError('Unexpected Debug architecture or duplicate transient paths')
+    edited, paths, payload_sha = compact_debug_rpaths(original, transient, closure, seal)
     if paths:
-        command = ['/usr/bin/install_name_tool']
-        for path in paths:
-            command.extend(('-delete_rpath', path))
-        run([*command, str(executable)], app.parent, log)
-    edited = executable.read_bytes()
-    closure.image(edited)
-    after = seal.thin(edited)
-    expected = [raw for raw in before['commands']
-                if not (struct.unpack_from('<I', raw)[0] == 0x8000001c and closure.string(raw, 12, '<') in paths)]
-    start, end = before['commandEnd'], before['contentEnd']
-    if (before['header'][:16] + before['header'][24:] != after['header'][:16] + after['header'][24:]
-            or before['rounding'] != after['rounding'] or expected != after['commands']
-            or after['commandEnd'] > start or any(edited[after['commandEnd']:start])
-            or after['contentEnd'] != end or original[start:end] != edited[start:end]):
-        raise ValueError('Debug executable changed beyond the transient paths and linker signature')
+        if executable.stat().st_nlink != 1 or executable.read_bytes() != original:
+            raise ValueError('Private Debug executable changed or has another hard link')
+        executable.write_bytes(edited)
     return {'removed': paths, 'beforeSHA256': closure.sha(original), 'afterSHA256': closure.sha(edited),
-            'unchangedPayloadSHA256': closure.sha(edited[start:end])}
+            'unchangedPayloadSHA256': payload_sha}
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -117,7 +146,7 @@ def main():
     if args.configuration == 'Debug':
         shutil.copytree(built, app, symlinks=True)
         seal = load_helper(repo, 'crewd-macho-seal-equivalence')
-        normalization = normalize_debug_rpaths(app, built.parent, args.ref, args.purpose, closure, seal, out/'rpath.log')
+        normalization = normalize_debug_rpaths(app, built.parent, args.ref, args.purpose, closure, seal)
         finalization = closure.finalize_unsigned_target(app, args.ref, args.configuration, args.purpose)
         finalization['debugRpathNormalization'] = normalization
     else:
