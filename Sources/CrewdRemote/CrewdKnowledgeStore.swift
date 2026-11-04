@@ -30,6 +30,7 @@ enum CrewdKnowledgeTitleSearch {
         var documentEdit: NativeDocumentEditReceipt? = nil
         var viewArchive: NativeViewArchiveReceipt? = nil
         var documentWorkLink: DocumentWorkLinkReceipt? = nil
+        var composition: DocumentCompositionReceipt? = nil
     }
     struct NativeDocumentEdit: Equatable {
         let title: String
@@ -139,6 +140,59 @@ enum CrewdKnowledgeTitleSearch {
         fileprivate let target: NativeDocumentHistoryTarget
         fileprivate let source: CrewdDataRef
         fileprivate let sourceRevision: String
+    }
+    struct DocumentComposition {
+        let target: NativeDocumentHistoryTarget
+        let placements: [CrewdDataPlacement]
+    }
+    struct DocumentCompositionBlock: Equatable, Identifiable {
+        var id: String { reference.id }
+        let reference: CrewdDataRef
+        let revision: String
+        let contentType: String
+        let preview: String
+    }
+    struct DocumentCompositionBlockPage {
+        let items: [DocumentCompositionBlock]
+        let next: String?
+    }
+    struct DocumentCompositionRevision {
+        let summary: NativeDocumentRevision
+        let placements: [CrewdDataPlacement]
+        fileprivate let target: NativeDocumentHistoryTarget
+        fileprivate let restorable: Bool
+        var canRestore: Bool { restorable && summary.revision != target.head }
+    }
+    struct DocumentCompositionReceipt: Codable, Equatable {
+        struct Placement: Codable, Equatable {
+            let id: String?
+            let alias: String?
+            let block: CrewdDataRef
+            let revision: String?
+            let layoutDigest: String
+        }
+        let view: CrewdDataObjectVersion
+        let titleDigest: String
+        let layoutDigest: String
+        let attributesDigest: String
+        let placements: [Placement]
+
+        func placementIDs(in result: CrewdDataChangeResult) -> [String]? {
+            let aliases = Set(placements.compactMap(\.alias))
+            guard result.changed == [view], Set(result.created.keys) == aliases else { return nil }
+            var ids: [String] = []
+            for placement in placements {
+                switch (placement.id, placement.alias) {
+                case (.some(let id), nil): ids.append(id)
+                case (nil, .some(let alias)):
+                    guard case .placement(let id, let parent)? = result.created[alias], parent == view,
+                          UUID(uuidString:id)?.uuidString.lowercased() == id else { return nil }
+                    ids.append(id)
+                default: return nil
+                }
+            }
+            return Set(ids).count == ids.count ? ids : nil
+        }
     }
     enum ViewCatalogKind: Equatable { case document, web }
     enum ViewCatalogStatus: Equatable { case idle, uninitialized, unavailable, ready, failed }
@@ -497,7 +551,7 @@ enum CrewdKnowledgeTitleSearch {
             applyObservation(response,intent:intent)
         } catch { if current(o,token) { renderer.revoke(); status = "结果未确认；只可核对原请求，不自动重试。" } }
     }
-    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
+    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil, composition: DocumentCompositionReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
         guard let o = active, origin() == o else { throw Failure.stale }
         try checked(context, o)
         // The library, group detail and renderer can hold distinct live stores.
@@ -507,7 +561,7 @@ enum CrewdKnowledgeTitleSearch {
         let bytes = try JSONEncoder().encode(change)
         guard bytes.count <= 8_388_608 else { throw Failure.invalid }
         let intent = Intent(id:id,context:context,method:"data.submit",changeDigest:SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined(),
-                            documentEdit:documentEdit,viewArchive:viewArchive,documentWorkLink:documentWorkLink)
+                            documentEdit:documentEdit,viewArchive:viewArchive,documentWorkLink:documentWorkLink,composition:composition)
         let record = try journal().prepare(method: "data.submit.observation", params: Self.encode(intent), crew: o.crew)
         records[id] = record; pending.append(intent)
         return (intent, record)
@@ -521,6 +575,7 @@ enum CrewdKnowledgeTitleSearch {
             if let edit = intent.documentEdit, !edit.matches(response) { throw Failure.invalid }
             if let archive = intent.viewArchive, !response.created.isEmpty || response.changed != [archive.view] { throw Failure.invalid }
             if let link = intent.documentWorkLink, link.version(in:response) == nil { throw Failure.invalid }
+            if let composition = intent.composition, composition.placementIDs(in:response) == nil { throw Failure.invalid }
         }
     }
     private func verifyDocumentWorkLinkReadback(_ response: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext, origin o: Origin) async throws {
@@ -579,18 +634,18 @@ enum CrewdKnowledgeTitleSearch {
     @discardableResult func submitFromNativeHost(_ change: CrewdDataChange, requestID:UUID?=nil) async -> CrewdDataChangeResult? {
         try? await submitNativeChange(change, requestID: requestID)
     }
-    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil) async throws -> CrewdDataChangeResult? {
+    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil, composition: DocumentCompositionReceipt? = nil) async throws -> CrewdDataChangeResult? {
         let (o, token) = try begin()
         defer { finish(o, token) }
         guard !hasBlockingPending else { throw Failure.unresolved }
         do {
             guard let info = workspace else { throw Failure.unavailable }
             let ledger = try journal()
-            let (intent, record) = try stage(change,id:requestID ?? UUID(),context:info.context,documentEdit:documentEdit,viewArchive:viewArchive,documentWorkLink:documentWorkLink)
+            let (intent, record) = try stage(change,id:requestID ?? UUID(),context:info.context,documentEdit:documentEdit,viewArchive:viewArchive,documentWorkLink:documentWorkLink,composition:composition)
             let response: CrewdDataChangeResult
             do {
                 response = try await call("data.submit", CrewdDataSubmitParams(requestId:intent.id.uuidString.lowercased(), context:intent.context, change:change))
-            } catch let error as CrewdClientError where (documentEdit != nil || viewArchive != nil || documentWorkLink != nil) &&
+            } catch let error as CrewdClientError where (documentEdit != nil || viewArchive != nil || documentWorkLink != nil || composition != nil) &&
                 (Self.definiteNativeRefusal(error) || (documentWorkLink != nil && error.code == -32009 && error.refusal == "data.document_work_link_refused")) {
                 try ledger.finish(record, state:"refused")
                 if current(o, token) { pending.removeAll { $0.id == intent.id }; records.removeValue(forKey: intent.id) }
@@ -598,6 +653,7 @@ enum CrewdKnowledgeTitleSearch {
             }
             if intent.viewArchive != nil { try await verifyArchiveReadback(response,intent:intent,context:response.context,origin:o) }
             if intent.documentWorkLink != nil { try await verifyDocumentWorkLinkReadback(response,intent:intent,context:response.context,origin:o) }
+            if intent.composition != nil { try await verifyCompositionReadback(response,intent:intent,context:response.context,origin:o) }
             try observe(response, intent:intent, record:record, ledger:ledger)
             guard current(o, token) else { return origin() == o ? response:nil }
             applyObservation(response, intent:intent)
@@ -796,6 +852,198 @@ enum CrewdKnowledgeTitleSearch {
         guard let detail else { throw Failure.unavailable }
         return try await prepareNativeDocumentEdit(detail)
     }
+    static let documentCompositionLimit = 128
+
+    func canPrepareNativeDocumentComposition(_ parent: CrewdDataObjectDetail) -> Bool {
+        guard let context = workspace?.context, workspace?.state == "ready", let active, origin() == active,
+              !detailIsSnapshot, detail == parent, parent.context == context, parent.resolvedContext == context,
+              parent.generation == context.generation,
+              detailReference == .init(namespace:context.namespace,kind:"view",id:parent.object.identity),
+              case .view(_,let revision,_,.document(let placements,_),false,let provenance) = parent.object,
+              provenance.createdBy["kind"].string == "human", Self.positiveRevision(revision) != nil,
+              placements.count <= Self.documentCompositionLimit else { return false }
+        return true
+    }
+
+    func nativeDocumentComposition(_ parent: CrewdDataObjectDetail) throws -> DocumentComposition {
+        guard canPrepareNativeDocumentComposition(parent), let active, let reference = detailReference,
+              case .view(_,_,_,.document(let placements,_),_,_) = parent.object else { throw Failure.unsupported }
+        return .init(target:.init(origin:active,parent:parent,reference:reference),placements:placements)
+    }
+
+    private func compositionBlock(_ object: CrewdDataObject, in context: CrewdDataContext) throws -> DocumentCompositionBlock {
+        guard case .block(let id,let revision,let type,let content,false,_) = object,
+              UUID(uuidString:id)?.uuidString.lowercased() == id, Self.positiveRevision(revision) != nil else { throw Failure.invalid }
+        let summary = content.string.map { String(decoding:$0.utf8.prefix(480),as:UTF8.self) } ?? type
+        return .init(reference:.init(namespace:context.namespace,kind:"block",id:id),
+                     revision:revision,contentType:type,preview:summary)
+    }
+
+    func loadDocumentCompositionBlocks(_ composition: DocumentComposition, after: String? = nil) async throws -> DocumentCompositionBlockPage {
+        try await readNativeHistory(composition.target) {
+            let context = composition.target.parent.context
+            let limit: UInt32 = 8
+            let params = CrewdDataObjectListParams(context:context,objectType:"block",after:after,
+                                                  limit:limit,atRevision:nil,includeArchived:false)
+            let page: CrewdDataObjectPage = try await call("data.object.list",params,preservingPresentation:true)
+            guard page.context == context, page.generation == context.generation,
+                  page.items.count <= Int(limit), after == nil || !page.items.isEmpty else { throw Failure.invalid }
+            var previous = after ?? ""
+            let items = try page.items.map { object in
+                let item = try compositionBlock(object,in:context)
+                guard item.id > previous else { throw Failure.invalid }
+                previous = item.id
+                return item
+            }
+            if let next = page.next {
+                guard items.count == Int(limit), next == items.last?.id else { throw Failure.invalid }
+            }
+            return .init(items:items,next:page.next)
+        }
+    }
+
+    func inspectDocumentCompositionRevision(_ composition: DocumentComposition, revision: NativeDocumentRevision) async throws -> DocumentCompositionRevision {
+        let target = composition.target
+        return try await readNativeHistory(target) {
+            let context = target.parent.context
+            guard let requested = Self.positiveRevision(revision.revision),
+                  let head = Self.positiveRevision(target.head), requested <= head else { throw Failure.invalid }
+            let historical: CrewdDataObjectDetail = try await call("data.object.get",
+                CrewdDataObjectGetParams(context:context,reference:target.reference,atRevision:revision.revision),preservingPresentation:true)
+            let observed = try nativeRevision(historical.object,target:target)
+            guard historical.context == context, historical.resolvedContext == context,
+                  historical.generation == context.generation, observed == revision,
+                  case .view(_,_,_,.document(let placements,_),_,_) = historical.object else { throw Failure.invalid }
+            let captures = Dictionary(grouping:historical.references,by:\.anchor)
+            let unique = Set(placements.map(\.id)).count == placements.count
+            let restorable = unique && placements.count <= Self.documentCompositionLimit && placements.allSatisfy { position in
+                guard case .visible(let block) = position.block, block.kind == "block", block.namespace == context.namespace,
+                      let pinned = position.atRevision, Self.positiveRevision(pinned) != nil,
+                      let links = captures["placement:" + position.id], links.count == 1, let link = links.first else { return false }
+                return link.complete && !link.live && link.target == position.block && link.revision == pinned
+            }
+            return .init(summary:observed,placements:placements,target:target,restorable:restorable)
+        }
+    }
+
+    enum DocumentCompositionPosition: Equatable {
+        case existing(String)
+        case pinned(DocumentCompositionBlock)
+    }
+
+    func saveDocumentComposition(_ composition: DocumentComposition, positions: [DocumentCompositionPosition]) async throws -> CrewdDataChangeResult? {
+        let target = composition.target
+        let existing = Dictionary(grouping:composition.placements,by:\.id)
+        let selectedBlocks = positions.compactMap { position -> DocumentCompositionBlock? in
+            if case .pinned(let block) = position { return block }
+            return nil
+        }
+        guard positions.count <= Self.documentCompositionLimit,
+              positions != composition.placements.map({ .existing($0.id) }) else { throw Failure.invalid }
+        if !selectedBlocks.isEmpty {
+            try await readNativeHistory(target) {
+                let context = target.parent.context
+                var checked: Set<String> = []
+                for block in selectedBlocks where checked.insert(block.id).inserted {
+                    guard block.reference.namespace == context.namespace, block.reference.kind == "block" else { throw Failure.invalid }
+                    let value: CrewdDataObjectDetail = try await call("data.object.get",
+                        CrewdDataObjectGetParams(context:context,reference:block.reference,atRevision:nil),preservingPresentation:true)
+                    guard value.context == context, value.resolvedContext == context, value.generation == context.generation,
+                          try compositionBlock(value.object,in:context) == block else { throw Failure.stale }
+                }
+            }
+        }
+        let desired = try positions.map { position -> (String?, CrewdDataPlacement, Bool) in
+            switch position {
+            case .existing(let id):
+                guard let matches = existing[id], matches.count == 1, let item = matches.first else { throw Failure.invalid }
+                return (id,item,true)
+            case .pinned(let block):
+                guard selectedBlocks.first(where:{$0.id == block.id}) == block else { throw Failure.invalid }
+                return (nil,.init(id:"",block:.visible(reference:block.reference),atRevision:block.revision,layout:.object([:])),false)
+            }
+        }
+        return try await submitDocumentComposition(target,desired:desired,restoring:false)
+    }
+
+    func restoreDocumentComposition(_ revision: DocumentCompositionRevision, replacing composition: DocumentComposition) async throws -> CrewdDataChangeResult? {
+        guard revision.target == composition.target, revision.canRestore else { throw Failure.invalid }
+        let current = Set(composition.placements.map(\.id))
+        let desired = revision.placements.map { position in
+            (current.contains(position.id) ? position.id : nil,position,false)
+        }
+        return try await submitDocumentComposition(composition.target,desired:desired,restoring:true)
+    }
+
+    private static func compositionDigest<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return SHA256.hash(data:try encoder.encode(value)).map { String(format:"%02x",$0) }.joined()
+    }
+
+    private func submitDocumentComposition(_ target: NativeDocumentHistoryTarget,
+            desired: [(String?, CrewdDataPlacement, Bool)], restoring: Bool) async throws -> CrewdDataChangeResult? {
+        try checkNativeHistoryTarget(target)
+        guard !busy, let current = Self.positiveRevision(target.head), current < Int64.max,
+              case .view(_,_,let title,.document(_,let layout),false,let provenance) = target.parent.object else { throw Failure.stale }
+        var edits: [CrewdDataPlacementEdit] = []
+        var expected: [DocumentCompositionReceipt.Placement] = []
+        var seen: Set<String> = []
+        for (index, entry) in desired.enumerated() {
+            let (id, position, keep) = entry
+            if let id, !seen.insert(id).inserted { throw Failure.invalid }
+            guard case .visible(let block) = position.block, block.namespace == target.parent.context.namespace,
+                  block.kind == "block" else { throw Failure.unsupported }
+            let alias = id == nil ? "compositionPosition\(index)" : nil
+            if keep, let id { edits.append(.keep(id:id,layout:position.layout)) }
+            else {
+                guard let pinned = position.atRevision, Self.positiveRevision(pinned) != nil else { throw Failure.invalid }
+                edits.append(.set(id:id,alias:alias,block:.existing(reference:block),atRevision:pinned,layout:position.layout))
+            }
+            expected.append(.init(id:id,alias:alias,block:block,revision:position.atRevision,
+                                  layoutDigest:try Self.compositionDigest(position.layout)))
+        }
+        let next = CrewdDataObjectVersion(reference:target.reference,revision:String(current + 1))
+        let witness = DocumentCompositionReceipt(view:next,titleDigest:try Self.compositionDigest(title),
+            layoutDigest:try Self.compositionDigest(layout),attributesDigest:try Self.compositionDigest(provenance.attributes),placements:expected)
+        let change = CrewdDataChange.apply(message:restoring ? "恢复文档编排" : "编辑文档编排",
+            edits:[.updateView(id:target.reference.id,expectedRevision:target.head,title:title,
+                definition:.document(placements:edits,layout:layout),sources:nil,attributes:provenance.attributes)])
+        return try await submitNativeChange(change,composition:witness)
+    }
+
+    func pendingDocumentCompositions(viewID: String? = nil, crew: String? = nil) -> [Intent] {
+        guard let active, origin() == active, crew == nil || crew == active.crew else { return [] }
+        return pending.filter { intent in
+            guard let composition = intent.composition else { return false }
+            if let context = workspace?.context, !sameAuthority(intent.context,context) { return false }
+            return viewID == nil || composition.view.reference.id == viewID
+        }
+    }
+
+    private func verifyCompositionReadback(_ response: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext, origin o: Origin) async throws {
+        guard let witness = intent.composition, response.phase == .committed else { return }
+        try checkObservation(response,intent:intent)
+        guard origin() == o, sameAuthority(intent.context,context),
+              let ids = witness.placementIDs(in:response) else { throw Failure.stale }
+        let value: CrewdDataObjectDetail = try await call("data.object.get",
+            CrewdDataObjectGetParams(context:context,reference:witness.view.reference,atRevision:witness.view.revision),preservingPresentation:true)
+        guard origin() == o, value.context == context, value.resolvedContext == context, value.generation == context.generation,
+              case .view(let id,let revision,let title,.document(let positions,let layout),false,let provenance) = value.object,
+              id == witness.view.reference.id, revision == witness.view.revision, positions.map(\.id) == ids,
+              try Self.compositionDigest(title) == witness.titleDigest,
+              try Self.compositionDigest(layout) == witness.layoutDigest,
+              try Self.compositionDigest(provenance.attributes) == witness.attributesDigest else { throw Failure.invalid }
+        let captures = Dictionary(grouping:value.references,by:\.anchor)
+        for (position, expected) in zip(positions,witness.placements) {
+            guard position.block == .visible(reference:expected.block),
+                  let revision = position.atRevision, Self.positiveRevision(revision) != nil,
+                  expected.revision == nil || revision == expected.revision,
+                  try Self.compositionDigest(position.layout) == expected.layoutDigest,
+                  let links = captures["placement:" + position.id], links.count == 1, let link = links.first,
+                  link.complete, !link.live, link.revision == revision, link.target == position.block else { throw Failure.invalid }
+        }
+    }
+
     func nativeDocumentHistoryTarget(_ parent: CrewdDataObjectDetail) throws -> NativeDocumentHistoryTarget {
         guard canPrepareNativeDocumentEdit(parent), let active, let reference = detailReference,
               Self.positiveRevision(parent.object.revision) != nil else { throw Failure.unsupported }
@@ -807,7 +1055,7 @@ enum CrewdKnowledgeTitleSearch {
     }
     private func checkNativeHistoryTarget(_ target: NativeDocumentHistoryTarget) throws {
         guard active == target.origin, detailReference == target.reference,
-              canPrepareNativeDocumentEdit(target.parent) else { throw Failure.stale }
+              canPrepareNativeDocumentComposition(target.parent) else { throw Failure.stale }
     }
     private func readNativeHistory<T>(_ target: NativeDocumentHistoryTarget, _ read: () async throws -> T) async throws -> T {
         try checkNativeHistoryTarget(target)
@@ -984,6 +1232,7 @@ enum CrewdKnowledgeTitleSearch {
             case .known(let original):
                 if intent.viewArchive != nil { try await verifyArchiveReadback(original,intent:intent,context:response.workspace.context,origin:o) }
                 if intent.documentWorkLink != nil { try await verifyDocumentWorkLinkReadback(original,intent:intent,context:response.workspace.context,origin:o) }
+                if intent.composition != nil { try await verifyCompositionReadback(original,intent:intent,context:response.workspace.context,origin:o) }
                 guard current(o,token) else { return }
                 try observe(original,intent:intent,record:record,ledger:ledger)
                 applyObservation(original,intent:intent)

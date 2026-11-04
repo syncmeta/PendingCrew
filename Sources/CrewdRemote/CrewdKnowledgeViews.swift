@@ -83,6 +83,7 @@ struct CrewdKnowledgeWorkspaceView: View {
     @State private var lifecycleFeedback: String?
     @State private var editTarget: CrewdDataObjectDetail?
     @State private var historyTarget: CrewdDataObjectDetail?
+    @State private var compositionTarget: CrewdDataObjectDetail?
     @State private var documentWorkTarget: CrewdDataObjectDetail?
     @State private var previewToken = ""
     @State private var confirmingPreview = false
@@ -165,6 +166,13 @@ struct CrewdKnowledgeWorkspaceView: View {
         .sheet(isPresented: Binding(get:{historyTarget != nil},set:{if !$0 {historyTarget=nil}})) {
             if let historyTarget {
                 CrewdNativeDocumentHistory(store:store,parent:historyTarget,scopeCurrent:{ true },onRestored:{ await reload() })
+            }
+        }
+        .sheet(isPresented: Binding(get:{compositionTarget != nil},set:{if !$0 {compositionTarget=nil}})) {
+            if let compositionTarget {
+                CrewdDocumentCompositionEditor(store:store,parent:compositionTarget,
+                    scopeCurrent:{ self.compositionTarget == compositionTarget && collection == .documents && !showArchived },
+                    onChanged:{ await reload() })
             }
         }
         .sheet(isPresented: Binding(get:{documentWorkTarget != nil},set:{if !$0 {documentWorkTarget=nil}}),onDismiss:{ Task { await reload() } }) {
@@ -277,6 +285,9 @@ struct CrewdKnowledgeWorkspaceView: View {
                     Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = detail }.disabled(store.busy)
                     Button("编辑文档",systemImage:"pencil") { editTarget = detail }.disabled(store.busy || store.hasBlockingPending)
                 }
+                if collection == .documents, store.canPrepareNativeDocumentComposition(detail) {
+                    Button("编排内容块",systemImage:"square.stack") { compositionTarget = detail }.disabled(store.busy)
+                }
                 Button(detail.object.isArchived ? "恢复资料…" : "移入回收站…",systemImage:detail.object.isArchived ? "arrow.uturn.backward" : "archivebox") {
                     confirmArchive = try? store.prepareNativeViewArchive(detail)
                 }.disabled(store.busy || store.hasBlockingPending)
@@ -291,7 +302,7 @@ struct CrewdKnowledgeWorkspaceView: View {
             Button("停止页面并撤回写入权限") { store.renderer.revoke() }
             ForEach(store.pending) { intent in
                 HStack {
-                    let label = intent.viewArchive.map{$0.archived ? "原归档" : "原恢复"} ?? "待核对操作"
+                    let label = intent.viewArchive.map{$0.archived ? "原归档" : "原恢复"} ?? (intent.composition == nil ? "待核对操作" : "原文档编排")
                     Text(label + " " + intent.id.uuidString).font(.caption).textSelection(.enabled)
                     Button("查询原结果") { Task { await lookup(intent) } }.disabled(store.busy)
                 }
@@ -447,6 +458,7 @@ private struct CrewdGroupKnowledgeView:View {
     }
     @State private var editTarget: DocumentTarget?
     @State private var historyTarget: DocumentTarget?
+    @State private var compositionTarget: DocumentTarget?
     @State private var documentWorkTarget: DocumentTarget?
     init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){self.workspace=workspace;self.group=workspace.channelKnowledge;self.resources=workspace.channelResources;self.content=workspace.linkedKnowledge;self.library=workspace.knowledge;self.collection=collection}
     private var folder:Binding<String>{Binding(get:{workspace.resourceDrafts.selection(resources.crew,.documents,channel:resources.channel)},set:{workspace.resourceDrafts.select(resources.crew,.documents,$0,channel:resources.channel)})}
@@ -482,13 +494,17 @@ private struct CrewdGroupKnowledgeView:View {
             CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:group.crew,channel:group.channel)
                 .padding(.horizontal,16)
             if collection == .documents {
-                ForEach(library.pendingNativeDocumentEdits(crew:group.crew)) { intent in
+                ForEach(library.pendingNativeDocumentEdits(crew:group.crew) +
+                        library.pendingDocumentCompositions(crew:group.crew)) { intent in
                     HStack {
-                        Text("原编辑结果待核对").foregroundStyle(.orange)
-                        Button("查询原编辑结果") {
+                        Text(intent.composition == nil ? "原编辑结果待核对" : "原编排结果待核对").foregroundStyle(.orange)
+                        Button("仅查询原请求") {
+                            let crew = group.crew, channel = group.channel
                             Task {
                                 await library.refresh()
+                                guard group.crew == crew, group.channel == channel else { return }
                                 await library.lookup(intent.id)
+                                guard group.crew == crew, group.channel == channel else { return }
                                 content.synchronizePending()
                                 if library.result.flatMap({ UUID(uuidString:$0.requestId) }) == intent.id,
                                    library.result?.phase == .committed { await refreshAfterEdit() }
@@ -522,14 +538,18 @@ private struct CrewdGroupKnowledgeView:View {
         .sheet(item:$historyTarget){ target in
             CrewdNativeDocumentHistory(store:content,parent:target.parent,scopeCurrent:{ isCurrent(target) },onRestored:{await refreshAfterEdit()})
         }
+        .sheet(item:$compositionTarget) { target in
+            CrewdDocumentCompositionEditor(store:content,parent:target.parent,
+                scopeCurrent:{ isCurrent(target) },onChanged:{ await refreshAfterEdit() })
+        }
         .sheet(item:$documentWorkTarget,onDismiss:{ Task { await refreshAfterEdit() } }){ target in
             CrewdDocumentWorkLinksView(store:content,workStore:workspace.workStore,parent:target.parent,
                 scopeCurrent:{ isCurrent(target) && workspace.client.capabilities.contains("data.documentWorkLinks") })
         }
         .onChange(of:content.pending){_,_ in if collection == .documents {library.synchronizePending()}}
         .onChange(of:library.pending){_,pending in if collection == .documents && pending.isEmpty {library.synchronizePending()}}
-        .onChange(of:group.crew+group.channel){_,_ in selected=nil;query="";linking=false;creating=false;editTarget=nil;historyTarget=nil;documentWorkTarget=nil;failure=nil}
-        .onChange(of:collection){_,_ in selected=nil;query="";editTarget=nil;historyTarget=nil;documentWorkTarget=nil;content.renderer.revoke()}
+        .onChange(of:group.crew+group.channel){_,_ in selected=nil;query="";linking=false;creating=false;editTarget=nil;historyTarget=nil;compositionTarget=nil;documentWorkTarget=nil;failure=nil}
+        .onChange(of:collection){_,_ in selected=nil;query="";editTarget=nil;historyTarget=nil;compositionTarget=nil;documentWorkTarget=nil;content.renderer.revoke()}
         .onChange(of:chosen?.id){_,id in if id == nil{content.renderer.revoke()}}
         .controlSize(.small).tint(.gray)
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
@@ -600,6 +620,11 @@ private struct CrewdGroupKnowledgeView:View {
                                     .disabled(content.busy || content.hasBlockingPending)
                                 Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
                                     .disabled(content.busy)
+                            }
+                            if content.canPrepareNativeDocumentComposition(detail) {
+                                Button("编排内容块",systemImage:"square.stack") {
+                                    compositionTarget = .init(parent:detail,channel:group.channel,link:chosen.id)
+                                }.disabled(content.busy)
                             }
                         }.padding(.horizontal,24)
                     }
@@ -854,6 +879,266 @@ private struct CrewdDocumentWorkLinksView: View {
         feedback = store.status
         do { try await reread(anchor) }
         catch { feedback = (feedback ?? "") + " 当前关联列表尚未重新读取。" }
+    }
+}
+
+private struct CrewdDocumentCompositionEditor: View {
+    private typealias Store = CrewdKnowledgeStore
+    private enum Section: String, CaseIterable {
+        case arrangement = "编排"
+        case blocks = "可用内容块"
+        case history = "编排历史"
+    }
+    private struct Row: Identifiable {
+        let id = UUID()
+        let position: Store.DocumentCompositionPosition
+    }
+    private enum Confirmation: String, Identifiable {
+        case save, restore
+        var id: String { rawValue }
+    }
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: CrewdKnowledgeStore
+    let parent: CrewdDataObjectDetail
+    let scopeCurrent: @MainActor () -> Bool
+    let onChanged: @MainActor () async -> Void
+    @State private var composition: Store.DocumentComposition?
+    @State private var section = Section.arrangement
+    @State private var rows: [Row] = []
+    @State private var blocks: [Store.DocumentCompositionBlock] = []
+    @State private var revisions: [Store.NativeDocumentRevision] = []
+    @State private var preview: Store.DocumentCompositionRevision?
+    @State private var nextBlock: String?
+    @State private var nextRevision: String?
+    @State private var blocksLoaded = false
+    @State private var historyLoaded = false
+    @State private var working = false
+    @State private var confirmation: Confirmation?
+    @State private var feedback: String?
+
+    private var positions: [Store.DocumentCompositionPosition] { rows.map(\.position) }
+    private var current: Bool {
+        scopeCurrent() && store.canPrepareNativeDocumentComposition(parent)
+    }
+    private var pending: [Store.Intent] {
+        guard scopeCurrent() else { return [] }
+        return store.pendingDocumentCompositions(viewID:parent.object.identity,crew:parent.context.crewId)
+    }
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            HStack {
+                Text("文档内容块编排").font(CrewdType.title)
+                Spacer()
+                Button("关闭") { dismiss() }.disabled(working)
+            }
+            if let composition {
+                Text("打开时的文档版本 \(composition.target.head)").font(CrewdType.caption)
+                if current {
+                    Picker("编排视图",selection:$section) {
+                        ForEach(Section.allCases,id:\.self) { section in Text(section.rawValue).tag(section) }
+                    }.pickerStyle(.segmented)
+                    ScrollView {
+                        VStack(alignment:.leading,spacing:10) {
+                            switch section {
+                            case .arrangement: arrangement(composition)
+                            case .blocks: catalog(composition)
+                            case .history: history(composition)
+                            }
+                        }.frame(maxWidth:.infinity,alignment:.leading)
+                    }.frame(minHeight:180,maxHeight:390)
+                } else {
+                    Text("文档或连接已变化。关闭后从当前文档重新打开可继续编辑。").font(CrewdType.caption)
+                }
+                ForEach(pending) { intent in
+                    HStack {
+                        Text("原编排请求待核对").foregroundStyle(.orange)
+                        Text(intent.id.uuidString).textSelection(.enabled)
+                        Button("仅查询原请求") { recover(intent) }.disabled(working || store.busy)
+                    }.font(CrewdType.caption)
+                }
+            }
+            if let feedback { Text(feedback).font(CrewdType.caption).textSelection(.enabled) }
+            if working { ProgressView().controlSize(.small) }
+        }.padding(20)
+        #if os(macOS)
+        .frame(minWidth:540)
+        #endif
+        .interactiveDismissDisabled(working)
+        .task {
+            guard scopeCurrent(), composition == nil else { return }
+            do {
+                let value = try store.nativeDocumentComposition(parent)
+                composition = value
+                rows = value.placements.map { Row(position:.existing($0.id)) }
+                store.synchronizePending()
+            } catch { feedback = error.localizedDescription }
+        }
+        .confirmationDialog(confirmation == .restore ? "恢复选定版本的排列？" : "保存当前排列？",
+            isPresented:Binding(get:{confirmation != nil},set:{if !$0 {confirmation=nil}})) {
+            if let confirmation {
+                Button(confirmation == .restore ? "恢复为新版本" : "保存为新版本") {
+                    guard let composition else { return }
+                    switch confirmation {
+                    case .save:
+                        let reviewed = positions
+                        submit { try await store.saveDocumentComposition(composition,positions:reviewed) }
+                    case .restore:
+                        if let preview { submit { try await store.restoreDocumentComposition(preview,replacing:composition) } }
+                    }
+                }
+            }
+            Button("取消",role:.cancel) {}
+        } message: {
+            Text(confirmation == .restore
+                ? "历史内容按当时的版本固定引用。当前标题和工作关联保留。"
+                : "保存顺序和引用。新增内容块固定到所选版本，源块不会改变。")
+        }
+    }
+
+    private func arrangement(_ composition: Store.DocumentComposition) -> some View {
+        VStack(alignment:.leading,spacing:8) {
+            if rows.isEmpty { Text("当前排列没有内容块。").foregroundStyle(.secondary) }
+            ForEach(Array(rows.enumerated()),id:\.element.id) { index, row in
+                HStack {
+                    switch row.position {
+                    case .existing(let id):
+                        if let position = composition.placements.first(where:{$0.id == id}) {
+                            placementLabel(position)
+                        }
+                    case .pinned(let block):
+                        VStack(alignment:.leading) {
+                            Text(block.preview).lineLimit(2)
+                            Text("固定版本 \(block.revision)").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button { move(row.id,by:-1) } label: { Image(systemName:"arrow.up") }
+                        .accessibilityLabel("上移").disabled(index == 0)
+                    Button { move(row.id,by:1) } label: { Image(systemName:"arrow.down") }
+                        .accessibilityLabel("下移").disabled(index + 1 == rows.count)
+                    Button { rows.removeAll { $0.id == row.id } } label: { Image(systemName:"minus.circle") }
+                        .accessibilityLabel("移除引用")
+                }.disabled(working)
+            }
+            Button("保存编排…") { confirmation = .save }
+                .disabled(working || store.busy || store.hasBlockingPending ||
+                    positions == composition.placements.map { .existing($0.id) })
+        }
+    }
+
+    private func move(_ id: UUID, by offset: Int) {
+        guard let index = rows.firstIndex(where:{$0.id == id}), rows.indices.contains(index + offset) else { return }
+        rows.swapAt(index,index + offset)
+    }
+
+    private func placementLabel(_ position: CrewdDataPlacement) -> some View {
+        VStack(alignment:.leading) {
+            if case .visible(let block) = position.block { Text(block.id).lineLimit(1).textSelection(.enabled) }
+            else { Text("内容块不可用") }
+            Text(position.atRevision.map { "固定版本 \($0)" } ?? "跟随当前内容")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func catalog(_ composition: Store.DocumentComposition) -> some View {
+        VStack(alignment:.leading,spacing:8) {
+            Text("新增引用会固定到这里显示的版本，源块更新后仍显示这个版本。").font(CrewdType.caption)
+            if !blocksLoaded { Button("读取本机组内容块") { loadBlocks(composition) } }
+            else if blocks.isEmpty { Text("本机组没有可用内容块。").foregroundStyle(.secondary) }
+            ForEach(blocks) { block in
+                HStack {
+                    VStack(alignment:.leading) {
+                        Text(block.preview.isEmpty ? "空内容" : block.preview).lineLimit(2)
+                        Text(block.contentType + " · 版本 " + block.revision + " · " + block.id)
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button("添加固定版本") { rows.append(.init(position:.pinned(block))); section = .arrangement }
+                        .disabled(rows.count >= Store.documentCompositionLimit)
+                }
+            }
+            if let nextBlock { Button("读取更多内容块") { loadBlocks(composition,after:nextBlock) } }
+        }.disabled(working || store.busy)
+    }
+
+    private func history(_ composition: Store.DocumentComposition) -> some View {
+        VStack(alignment:.leading,spacing:8) {
+            if !historyLoaded { Button("读取编排历史") { loadHistory(composition) } }
+            ForEach(revisions) { revision in
+                Button("版本 " + revision.revision + " · " + revision.updatedAt) { inspect(composition,revision:revision) }
+            }
+            if let nextRevision { Button("读取更多版本") { loadHistory(composition,after:nextRevision) } }
+            if let preview {
+                Divider()
+                Text("版本 " + preview.summary.revision + " 的排列").font(CrewdType.label)
+                if preview.placements.isEmpty { Text("此版本没有内容块。").foregroundStyle(.secondary) }
+                ForEach(Array(preview.placements.enumerated()),id:\.offset) { _, position in placementLabel(position) }
+                if preview.canRestore {
+                    Button("恢复这份排列…") { confirmation = .restore }.disabled(store.hasBlockingPending)
+                } else if preview.summary.revision != composition.target.head {
+                    Text("该版本包含不可恢复的引用。").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }.disabled(working || store.busy)
+    }
+
+    private func run(_ operation: @escaping @MainActor () async throws -> Void) {
+        guard !working, scopeCurrent() else { return }
+        working = true; feedback = nil
+        Task {
+            defer { working = false }
+            do { try await operation() }
+            catch { feedback = (error as? CrewdClientError)?.message ?? "当前文档、引用或连接已变化，请重新读取后再操作。" }
+        }
+    }
+    private func loadBlocks(_ composition: Store.DocumentComposition, after: String? = nil) {
+        run {
+            let page = try await store.loadDocumentCompositionBlocks(composition,after:after)
+            guard current else { return }
+            blocks.append(contentsOf:page.items); nextBlock = page.next; blocksLoaded = true
+        }
+    }
+    private func loadHistory(_ composition: Store.DocumentComposition, after: String? = nil) {
+        run {
+            let page = try await store.loadNativeDocumentRevisions(composition.target,after:after)
+            guard current else { return }
+            revisions.append(contentsOf:page.items); nextRevision = page.next; historyLoaded = true
+        }
+    }
+    private func inspect(_ composition: Store.DocumentComposition, revision: Store.NativeDocumentRevision) {
+        run {
+            preview = nil
+            let result = try await store.inspectDocumentCompositionRevision(composition,revision:revision)
+            if current { preview = result }
+        }
+    }
+    private func submit(_ operation: @escaping @MainActor () async throws -> CrewdDataChangeResult?) {
+        run {
+            guard current, !store.hasBlockingPending else { return }
+            let result = try await operation()
+            guard scopeCurrent() else { return }
+            if result?.phase == .committed {
+                dismiss()
+                await onChanged()
+            } else {
+                store.synchronizePending()
+                feedback = store.status
+            }
+        }
+    }
+    private func recover(_ intent: Store.Intent) {
+        run {
+            await store.refresh(loadViews:false)
+            guard scopeCurrent() else { return }
+            await store.lookup(intent.id)
+            guard scopeCurrent() else { return }
+            if let result = store.result, UUID(uuidString:result.requestId) == intent.id, result.phase == .committed {
+                dismiss()
+                await onChanged()
+            } else { feedback = store.status }
+        }
     }
 }
 
