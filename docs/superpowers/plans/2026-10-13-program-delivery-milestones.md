@@ -23,6 +23,8 @@ Mac 代理参数和真实 Tirkadavur 类验收的摘要见 `/private/tmp/pcw-tir
 
 `2cb8f0b3` 的实际机长连接回归见 `/private/tmp/pcw-coordination-split-socket-runtime.log`。同源普通 Core 在未配置判断服务时拒绝指派和拆项，两次进程均正常退出。Core 21→22 隔离迁移和整份旧数据回退也通过，确认原回执、需求、工作和文档均可读回。普通后台、Mac Debug 和迁移证据分别见 `/private/tmp/pcw-coord-smoke._j3yyfjt/result.json`、`/private/tmp/pcw-split-ordinary.3WoYkW/mac-debug-proof.json`、`/private/tmp/pcw-2cb8f0b3-upgrade-E5703728/result.json`。迁移验收运行的是后台二进制，正式安装包的签名、安装和回退另行验收。
 
+`2cb8f0b3` 的私有 macOS Release 候选为 0.2.4，构建 `20761.71404`。应用与内嵌后台完成带安全时间戳的 Developer ID 签名，公证输入 ZIP 重新解包后通过严格签名检查。公证输入 SHA-256 为 `0c6b7b081615742004b36ca3e7e8c0a537c29ba3523cb941a759315b031af19f`。使用包中实际签名后台复测 Core 21→22 与整份旧数据回退也通过。候选及迁移记录见 `/private/tmp/pcw-split-ordinary.3WoYkW/notary-input-proof.json` 和 `/private/tmp/pcw-024-signed-core-1767AF70/result.json`。此候选待提交 Apple 公证；正式整包安装、回退和窗口验收另记。
+
 ## 2026-10-31 执行基线：逐项接完整决策能力
 
 用户明确纠正：不能以“先让人住一个晚上”式的一次演示成功作为建设目标；原先未落地的决策须逐项扎实完成，并明确要求子代理并行。本节覆盖下方历史执行顺序。演示是验收材料，不替代完整能力。
