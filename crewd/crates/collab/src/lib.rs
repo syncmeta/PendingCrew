@@ -5,6 +5,7 @@
 pub mod admin_cases;
 pub mod admin_case_execution;
 pub mod admin_case_launch;
+pub mod admin_case_legacy;
 pub mod admin_case_handoff;
 pub mod admin_case_custody;
 pub mod admin_case_outcome;

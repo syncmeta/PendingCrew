@@ -35,7 +35,8 @@ def clean_auth(base):
     return removed
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--codex',default=shutil.which('codex'));parser.add_argument('--core-fence',action='store_true');parser.add_argument('--refresh-on-case',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--codex',default=shutil.which('codex'));parser.add_argument('--core-fence',action='store_true');parser.add_argument('--refresh-on-case',action='store_true');parser.add_argument('--legacy-recovery',action='store_true');args=parser.parse_args()
+    assert not args.legacy_recovery or args.core_fence, 'legacy proof requires automatic Core case execution'
     assert not args.refresh_on_case or args.core_fence, 'refresh proof requires original native owner'
     assert args.codex,'codex executable required'
     repo=pathlib.Path(__file__).resolve().parents[2]
@@ -92,7 +93,14 @@ def main():
         (base/'helper-build.log').write_text(build.stdout+build.stderr);assert build.returncode==0,build.stderr[-2500:]
         helper=repo/'crewd'/'target'/'debug'/'crewd'
         (base/'helper-sha256').write_text(hashlib.sha256(helper.read_bytes()).hexdigest()+'\n')
-        env=dict(os.environ,CODEX_HOME=str(source),PCW_ADMIN_NATIVE_PROBE='loopback',PCW_ADMIN_NATIVE_PROGRAM=str(wrapper),PCW_ADMIN_NATIVE_HELPER=str(helper),PCW_ADMIN_NATIVE_EVIDENCE=str(base),TMPDIR=str(base))
+        head=subprocess.run(['git','rev-parse','HEAD'],cwd=repo,capture_output=True,text=True,check=True).stdout.strip()
+        names=subprocess.run(['git','ls-files','--cached','--others','--exclude-standard','-z','--','crewd'],cwd=repo,capture_output=True,check=True).stdout.split(b'\0')
+        digest=hashlib.sha256()
+        for name in sorted(set(n for n in names if n)):
+            path=repo/os.fsdecode(name)
+            if path.is_file() and not path.is_symlink(): digest.update(name+b'\0'+hashlib.sha256(path.read_bytes()).digest())
+        (base/'source-fingerprint.json').write_text(json.dumps({'head':head,'crewdSourceSha256':digest.hexdigest(),'includes':'tracked and untracked nonignored crewd source files'},indent=2)+'\n')
+        env=dict(os.environ,CODEX_HOME=str(source),PCW_ADMIN_NATIVE_PROBE='loopback',PCW_ADMIN_NATIVE_PROGRAM=str(wrapper),PCW_ADMIN_NATIVE_HELPER=str(helper),PCW_ADMIN_NATIVE_EVIDENCE=str(base),TMPDIR=str(base),PCW_ADMIN_LEGACY_PROBE='1' if args.legacy_recovery else '0')
         run=subprocess.run(['cargo','test','-p','crewd-server','--lib','real_core_native_case_source_revocation_stops_physical_process' if args.core_fence else 'real_native_case_tools_scope_and_factual_close','--','--ignored','--nocapture'],cwd=repo/'crewd',env=env,capture_output=True,text=True,timeout=240)
         (base/'test.log').write_text(run.stdout+run.stderr);assert run.returncode==0,(run.returncode,run.stdout[-3000:],run.stderr[-1500:])
         assert '1 passed' in run.stdout,'ignored test was not registered/executed'
@@ -102,6 +110,11 @@ def main():
                 # Case get, rejected next response, accepted retry, final response.
                 # An idle resumed source need not issue any model HTTP request.
                 hashes=state['caseAuthHashes'];assert len(hashes)==4 and hashes[1]!=hashes[2], ('401 retry must carry changed access',hashes)
+            if args.legacy_recovery:
+                legacy=json.loads((base/'legacy-recovery-receipt.json').read_text())
+                assert len(legacy['preview']['targets'])==55 and legacy['preview']['budgetEpoch']==0
+                assert legacy['history']['historyComplete'] is False and legacy['receipt']==legacy['lookup']
+                print('PASS old 50-item summary -> natural historical discovery -> Human preview/UUID+CAS confirmation of all 55 current targets, epoch zero preserved; one verified closure does not resolve the entire case.')
             assert state['coreRequests']==3, ('first real Core turn incomplete',state['coreRequests'])
             assert not list((base/'runtime').glob('codex-case-home-*/auth.json')), 'case must not persist auth'
             receipt=json.loads((base/'core-fence-receipt.json').read_text())

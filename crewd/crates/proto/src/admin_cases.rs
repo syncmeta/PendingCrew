@@ -76,6 +76,8 @@ pub struct AdminCaseTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminCaseSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<AdminCaseProvenance>,
     pub session_id: String,
     pub budget_epoch: i64,
     pub restore_epoch: String,
@@ -433,4 +435,155 @@ pub struct AdminCaseLaunchView {
     pub updated_at: i64,
     pub attempt_id: Option<String>,
     pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AdminCaseProvenance {
+    HumanRevalidation {
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "legacyMessageId")]
+        legacy_message_id: String,
+        #[serde(rename = "announcementDigest")]
+        announcement_digest: String,
+        #[serde(rename = "previewRevision")]
+        preview_revision: String,
+        note: String,
+        #[serde(rename = "revalidatedAt")]
+        revalidated_at: i64,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseLegacyState {
+    Observed,
+    Linked,
+    Invalid,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyView {
+    pub message_id: String,
+    pub message_seq: i64,
+    pub historical_text: String,
+    pub created_at: String,
+    pub revision: String,
+    pub state: AdminCaseLegacyState,
+    pub history_complete: bool,
+    pub linked_case_id: Option<String>,
+    pub linked_crew_id: Option<String>,
+    pub reason: AdminCaseLegacyReason,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyList {
+    pub items: Vec<AdminCaseLegacyView>,
+    pub next_after: Option<String>,
+    pub scan: AdminCaseLegacyScan,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyPreviewParams {
+    pub message_id: String,
+    pub crew_id: String,
+    pub session_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseLegacyBlocker {
+    InvalidHistory,
+    SourceUnavailable,
+    CrewUnavailable,
+    Stopped,
+    MissingBudget,
+    NotEscalated,
+    BudgetMismatch,
+    NoTargets,
+    NoInScopeTargets,
+    IndexIncomplete,
+    AlreadyLinked,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyPreview {
+    pub message_id: String,
+    pub crew_id: String,
+    pub session_id: String,
+    pub revision: String,
+    pub can_confirm: bool,
+    pub blockers: Vec<AdminCaseLegacyBlocker>,
+    pub targets: Vec<AdminCaseTarget>,
+    pub budget_epoch: Option<i64>,
+    pub restore_epoch: String,
+    pub existing_case_id: Option<String>,
+    pub observed_at: i64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyConfirmParams {
+    pub message_id: String,
+    pub crew_id: String,
+    pub session_id: String,
+    pub request_id: String,
+    pub expected_preview_revision: String,
+    pub note: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyReceipt {
+    pub request_id: String,
+    pub message_id: String,
+    pub crew_id: String,
+    pub session_id: String,
+    pub case_id: String,
+    pub created: bool,
+    pub confirmed_at: i64,
+    pub note: String,
+    pub preview_revision: String,
+}
+pub const LEGACY_LIST: &str = "adminCase.legacyList";
+pub const LEGACY_GET: &str = "adminCase.legacyGet";
+pub const LEGACY_PREVIEW: &str = "adminCase.legacyPreview";
+pub const LEGACY_CONFIRM: &str = "adminCase.legacyConfirm";
+pub const LEGACY_RECEIPT: &str = "adminCase.legacyReceipt";
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyListParams {
+    pub after: Option<String>,
+    pub limit: Option<u32>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyGetParams {
+    pub message_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyReceiptParams {
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseLegacyReason {
+    HistoricalHintOnly,
+    InvalidHistory,
+    InvalidEvidence,
+    HumanRevalidated,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminCaseLegacyScanPhase {
+    Indexing,
+    Scanning,
+    Current,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseLegacyScan {
+    pub phase: AdminCaseLegacyScanPhase,
+    pub through_seq: i64,
+    pub captured_upper: i64,
+    pub unverified_sources: u32,
 }

@@ -2,9 +2,135 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-/// Knowledge files have an independent SQLite schema; personal draft restore writer barrier is Core21.
-pub const SCHEMA_VERSION: i64 = 21;
+/// Knowledge files have an independent schema. Core21 remains the personal draft
+/// writer barrier; Core22 adds an indexed historical escalation discovery source.
+pub const SCHEMA_VERSION: i64 = 22;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
+
+#[cfg(test)]
+mod historical_escalation_index_tests {
+    use super::*;
+
+    #[test]
+    fn historical_escalation_scan_uses_a_partial_index_instead_of_ordinary_messages() {
+        let store = crate::Store::open_in_memory().unwrap();
+        let conn = store.conn();
+        let plan: Vec<String> = conn.prepare(
+            "EXPLAIN QUERY PLAN SELECT seq,id FROM messages WHERE category='work_stop_escalation' AND seq>?1 AND seq<=?2 ORDER BY seq LIMIT 64"
+        ).unwrap().query_map(params![0i64, i64::MAX], |r| r.get(3)).unwrap()
+            .collect::<rusqlite::Result<_>>().unwrap();
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("messages_stop_escalations_seq")),
+            "sparse old escalation discovery must use its indexed source: {plan:?}"
+        );
+    }
+
+    #[test]
+    fn real_core21_upgrade_keeps_data_and_draft_authority_and_protects_a_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("core.db");
+        let store = crate::Store::open(&path).unwrap();
+        store.conn().execute_batch("DROP INDEX messages_stop_escalations_seq;
+            PRAGMA user_version=21;
+            INSERT INTO crews(id,title,created_at,updated_at) VALUES('retained21','retained','now','now');
+            INSERT INTO meta(key,value) VALUES('legacy-scan-retained','unchanged');").unwrap();
+        let draft = crate::meta_get(store.conn(), "personalDraft.restoreStamp.v1").unwrap();
+        store.finish().unwrap();
+        drop(store);
+        let upgraded = crate::Store::open(&path).unwrap();
+        assert_eq!(
+            upgraded
+                .conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            22
+        );
+        assert_eq!(
+            crate::meta_get(upgraded.conn(), "legacy-scan-retained")
+                .unwrap()
+                .as_deref(),
+            Some("unchanged")
+        );
+        assert_eq!(
+            crate::meta_get(upgraded.conn(), "personalDraft.restoreStamp.v1").unwrap(),
+            draft
+        );
+        assert_eq!(
+            upgraded
+                .conn()
+                .query_row(
+                    "SELECT count(*) FROM crews WHERE id='retained21'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        let snapshots: Vec<_> = std::fs::read_dir(dir.path().join("backups"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(snapshots.len(), 1);
+        let snapshot =
+            Connection::open_with_flags(&snapshots[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        assert_eq!(
+            snapshot
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            21
+        );
+        assert_eq!(
+            crate::meta_get(&snapshot, "personalDraft.restoreStamp.v1").unwrap(),
+            draft
+        );
+        assert_eq!(
+            snapshot
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name='messages_stop_escalations_seq'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        upgraded.finish().unwrap();
+    }
+
+    #[test]
+    fn failed_core22_index_creation_preserves_core21_version_and_evidence() {
+        let store = crate::Store::open_in_memory().unwrap();
+        let conn = store.conn();
+        conn.execute_batch(
+            "DROP INDEX messages_stop_escalations_seq;
+            PRAGMA user_version=21;
+            CREATE TABLE messages_stop_escalations_seq(retained TEXT);
+            INSERT INTO messages_stop_escalations_seq VALUES('conflicting evidence');",
+        )
+        .unwrap();
+        let draft = crate::meta_get(conn, "personalDraft.restoreStamp.v1").unwrap();
+        assert!(migrate_guarded(conn, None).is_err());
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            21
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT retained FROM messages_stop_escalations_seq",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "conflicting evidence"
+        );
+        assert_eq!(
+            crate::meta_get(conn, "personalDraft.restoreStamp.v1").unwrap(),
+            draft
+        );
+    }
+}
 
 pub(crate) const V1: &str = r#"
 BEGIN;
@@ -908,6 +1034,14 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         // Never inherit experimental pre21 membership authority on upgrade.
         crate::personal_drafts::initialize_new_format(&tx)?;
         tx.execute_batch("PRAGMA user_version=21;")?;
+        tx.commit()?;
+    }
+    if v < 22 {
+        let tx = conn.unchecked_transaction()?;
+        // Match the historical scanner's exact category predicate. Ordinary
+        // chat rows must not cost one background scan turn each.
+        tx.execute_batch("CREATE INDEX messages_stop_escalations_seq ON messages(seq) WHERE category='work_stop_escalation';
+            PRAGMA user_version=22;")?;
         tx.commit()?;
     }
     Ok(())

@@ -304,6 +304,12 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     methods::ADMIN_CASE_CUSTODY_TRANSFER_GET,
                     methods::ADMIN_CASE_CUSTODY_PROPOSE,
                     "adminCase.automaticExecution",
+                    "adminCase.legacyRecovery",
+                    admin_cases::LEGACY_LIST,
+                    admin_cases::LEGACY_GET,
+                    admin_cases::LEGACY_PREVIEW,
+                    admin_cases::LEGACY_CONFIRM,
+                    admin_cases::LEGACY_RECEIPT,
                 ]
                 .into_iter()
                 .map(str::to_owned),

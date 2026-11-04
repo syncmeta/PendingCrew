@@ -29,7 +29,7 @@ impl Candidate {
 fn invalid(s: &str) -> crate::CollabError {
     StoreError::Invalid(s.into()).into()
 }
-fn targets(conn: &Connection, session: &str, now: i64) -> Result<Vec<Target>> {
+pub(crate) fn targets(conn: &Connection, session: &str, now: i64) -> Result<Vec<Target>> {
     let b = asks::load_org(conn)?;
     let mut out = Vec::new();
     for v in b.stop_violations(&SessionId::new(session), Ts(now)) {

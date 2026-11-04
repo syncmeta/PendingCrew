@@ -1011,6 +1011,9 @@ final class CrewdWorkspace: ObservableObject {
             let history = try journal.firstMessageRecords()
             if client.capabilities.contains("command.receipts") { try publicCommands.restore(unknown) }
             guard acceptsObservation(epoch), client.connectionEpoch == connection, client.runtimeIdentity == runtime, client.authorityBinding == binding else { throw CancellationError() }
+            try workStore.restoreLegacyIntents(unknown.filter {
+                $0.method == "adminCase.legacyConfirm" && $0.scope == scope
+            }.map(\.params))
             personalDraftContexts=personalDraftContexts.filter{$0.value.dbId == scope.databaseID}
             originalJournal = journal; presentationScope = scope; durableUnknown = unknown
             originalFirstMessageHistory = history; journalFailureConnection = nil
@@ -1031,12 +1034,18 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     private func isReadOnly(_ method: String) -> Bool {
+        if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt"].contains(method) { return true }
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
         return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet", "session.claude.recoveryInspect"].contains(method)
     }
     private func submitRPC(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         if isReadOnly(method) {
-            do { return try await client.call(method, params) }
+            do {
+                if method == "adminCase.legacyReceipt" {
+                    return try await lookupOriginalLegacyConfirmation(params)
+                }
+                return try await client.call(method, params)
+            }
             catch {
                 // Cancelling a projection read is not an uncertain submission.
                 // Mutation paths below retain their original Unknown semantics.
@@ -1084,30 +1093,59 @@ final class CrewdWorkspace: ObservableObject {
         }
         guard !originalJournalRequired || originalJournalReady else { throw CrewdClientError(message: "原提交历史尚未可靠读取；本次尚未发送。", kind: .notSubmitted) }
         guard client.connected else { throw CrewdClientError(message: "当前连接未就绪；本次尚未发送。", kind: .notSubmitted) }
+        let journal = originalJournal
+        let legacyIntent: CrewdLegacyIntent?
+        if method == "adminCase.legacyConfirm" {
+            guard originalJournalReady, journal != nil else {
+                throw CrewdClientError(message: "历史核验请求尚不能耐久保存，本次尚未发送。", kind: .notSubmitted)
+            }
+            legacyIntent = try CrewdLegacyIntent(prepared: params)
+        } else {
+            legacyIntent = nil
+        }
         if Self.resourceMutationMethods.contains(method) {
             guard let journal=originalJournal else{throw CrewdClientError(message:"原资源提交历史尚未可靠读取，本次尚未发送。",kind:.notSubmitted)}
             do{return try await journal.performResourceMutation(method,params:params,crew:params["crewId"].string ?? crewID,call:{try await self.client.call($0,$1)})}
             catch{durableUnknown=(try? journal.unknownRecords()) ?? durableUnknown;throw error}
         }
         let prepared: CrewdPresentationJournal.Prepared?
-        do { prepared = try originalJournal?.prepare(method: method, params: params, crew: params["crewId"].string ?? crewID) }
+        do { prepared = try journal?.prepare(method: method, params: params, crew: params["crewId"].string ?? crewID) }
         catch { throw CrewdClientError(message: "本次提交快照未能耐久保存，尚未发送后台操作：" + error.localizedDescription, kind: .notSubmitted) }
         do {
             let result = try await client.call(method, params)
+            try legacyIntent?.validate(result)
             if ["crew.create", "session.start"].contains(method) {
                 guard let id = result["id"].string, !id.isEmpty else { throw CrewdClientError(message: "创建回复缺少正式编号，原提交结果待确认。") }
             }
-            if let prepared { try originalJournal?.finish(prepared, state: "replyObserved") }
+            if let prepared { try journal?.finish(prepared, state: "replyObserved") }
             return result
         } catch {
             if let prepared {
                 let uncertain = CrewdClientError.isUncertainSubmission(error)
-                do { try originalJournal?.finish(prepared, state: uncertain ? "unknown" : "refused", detail: error.localizedDescription) }
+                do { try journal?.finish(prepared, state: uncertain ? "unknown" : "refused", detail: error.localizedDescription) }
                 catch { self.error = "原请求返回结果与历史未能同时确认，保留提交快照。" }
-                if let journal = originalJournal { do { durableUnknown = try journal.unknownRecords() } catch { self.error = error.localizedDescription } }
+                if let journal, journal === originalJournal { do { durableUnknown = try journal.unknownRecords() } catch { self.error = error.localizedDescription } }
             }
             throw error
         }
+    }
+    private func lookupOriginalLegacyConfirmation(_ params: CrewdValue) async throws -> CrewdValue {
+        let epoch = observationGeneration
+        let connection = client.connectionEpoch
+        let crew = crewID
+        let journal = originalJournal
+        let record = durableUnknown.first {
+            $0.scope == journal?.scope && $0.crew == crew &&
+            $0.method == "adminCase.legacyConfirm" && $0.params["requestId"] == params["requestId"]
+        }
+        let result = try await client.call("adminCase.legacyReceipt", params)
+        guard acceptsObservation(epoch), client.connectionEpoch == connection, crewID == crew else { throw CancellationError() }
+        if let journal, let record, journal === originalJournal {
+            try CrewdLegacyIntent(prepared: record.params).validate(result)
+            try journal.acknowledge(record, detail: "只读核对原历史行政确认回执")
+            durableUnknown = try journal.unknownRecords()
+        }
+        return result
     }
     /// Normal session controls first return dispatched. Follow only that original
     /// receipt while the explicit click is in progress; never submit a second

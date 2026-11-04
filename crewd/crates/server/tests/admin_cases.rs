@@ -23,6 +23,12 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
         "adminCase.custodyTransferGet",
         "adminCase.custodyPropose",
         "adminCase.automaticExecution",
+        "adminCase.legacyRecovery",
+        "adminCase.legacyList",
+        "adminCase.legacyGet",
+        "adminCase.legacyPreview",
+        "adminCase.legacyConfirm",
+        "adminCase.legacyReceipt",
     ] {
         assert!(
             hello["capabilities"]
@@ -87,6 +93,21 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
                 json!({"crewId":f.crew,"caseId":"AC00000000000000000001",
                     "requestId":unknown_request,"expectedRevision":"untrusted","reason":"cannot self authorize"}),
             ),
+            ("adminCase.legacyList", json!({})),
+            ("adminCase.legacyGet", json!({"messageId":unknown_request})),
+            (
+                "adminCase.legacyPreview",
+                json!({"messageId":unknown_request,"crewId":f.crew,"sessionId":sid}),
+            ),
+            (
+                "adminCase.legacyConfirm",
+                json!({"messageId":unknown_request,"crewId":f.crew,"sessionId":sid,
+                    "requestId":unknown_request,"expectedPreviewRevision":"untrusted","note":"cannot self authorize"}),
+            ),
+            (
+                "adminCase.legacyReceipt",
+                json!({"requestId":unknown_request}),
+            ),
         ] {
             assert_eq!(
                 call(&mut agent, method, params).await.unwrap_err().0,
@@ -94,6 +115,78 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
                 "{method} must retain authenticated Human access"
             );
         }
+    }
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn legacy_get_does_not_expose_recent_ordinary_messages_or_dms() {
+    use crewd_collab::{Sender, channels, messages};
+    use crewd_proto::MemberRef;
+
+    let f = Fixture::new().await;
+    f.state
+        .collab(crewd_collab::admin_case_legacy::tick)
+        .await
+        .unwrap();
+    let ordinary = f
+        .human_post(
+            &crewd_store::channels::lobby_id(&f.crew),
+            "ordinary chat outside historical recovery",
+            Vec::new(),
+        )
+        .await;
+    let crew = f.crew.clone();
+    let captain = f.captain.clone();
+    let worker = f.worker.clone();
+    let dm = f
+        .state
+        .collab(move |tx| {
+            let (channel, _) = channels::ensure_dm(
+                tx,
+                &crew,
+                &MemberRef::Session {
+                    id: captain.clone(),
+                },
+                &MemberRef::Session { id: worker },
+            )?;
+            Ok(messages::post(
+                tx,
+                Sender::Session(captain),
+                messages::NewPost {
+                    channel_id: channel.id,
+                    text: "direct message outside historical recovery".into(),
+                    ..Default::default()
+                },
+            )?
+            .message)
+        })
+        .await
+        .unwrap();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let mut human = RpcClient::connect(&f.data_dir().join("crewd.sock")).await;
+    let page = call(&mut human, "adminCase.legacyList", json!({}))
+        .await
+        .unwrap();
+    assert!(page["scan"]["throughSeq"].as_i64().unwrap() < ordinary.seq);
+    assert!(ordinary.seq < dm.seq);
+    for message in [ordinary, dm] {
+        assert_eq!(
+            call(
+                &mut human,
+                "adminCase.legacyGet",
+                json!({"messageId": message.id}),
+            )
+            .await
+            .expect_err("history read must not expose unrelated message text")
+            .0,
+            crewd_proto::RpcError::NOT_FOUND
+        );
     }
     stop.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), task)

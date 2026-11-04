@@ -262,6 +262,18 @@ async fn public_pairing_actual_tls_work_flow_and_online_revoke() {
         missing_custody["error"]["code"],
         crewd_proto::RpcError::NOT_FOUND
     );
+    let missing_legacy = remote
+        .frame(
+            "adminCase.legacyReceipt",
+            json!({"requestId":uuid::Uuid::new_v4().to_string()}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        missing_legacy["error"]["code"],
+        crewd_proto::RpcError::NOT_FOUND,
+        "paired Human must reach pure historical receipt lookup through the same grant"
+    );
     let requirement = remote.call("todo.create",json!({"requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew,"text":"Actual remote principal requirement"})).await;
     assert_eq!(
         remote

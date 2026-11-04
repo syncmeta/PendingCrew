@@ -1,6 +1,8 @@
 //! Independent execution acceptance using real case sources, local native provider and Core.
 #[path = "admin_activation_review.rs"]
 mod activation_review;
+#[path = "admin_legacy_review.rs"]
+mod legacy_review;
 use super::*;
 use crate::orchestra::{
     self,

@@ -17,6 +17,10 @@ xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
 "$fixture/patrol"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-patrol-brief.swift" -o "$fixture/patrol-brief"
+"$fixture/patrol-brief"
+xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
+ "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-coordination.swift" -o "$fixture/coordination"
 "$fixture/coordination"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
@@ -45,6 +49,10 @@ xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-admin-launch.swift" -o "$fixture/admin-launch"
+xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
+ "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-admin-legacy.swift" -o "$fixture/admin-legacy"
+"$fixture/admin-legacy"
 "$fixture/admin-launch"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \

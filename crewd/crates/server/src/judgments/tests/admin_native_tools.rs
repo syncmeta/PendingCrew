@@ -227,6 +227,7 @@ async fn real_native_case_tools_scope_and_factual_close() {
 #[derive(Default)]
 struct NativeJournal {
     requested_model: Option<String>,
+    launch_error: Option<String>,
     observed_model: Option<String>,
     pid: Option<u32>,
     ended: bool,
@@ -263,7 +264,13 @@ impl crate::orchestra::exec::Executor for CaseNativeExecutor {
                 self.journal.clone()
             };
             journal.lock().unwrap().requested_model = req.model.clone();
-            let (handle, mut events) = self.native.launch(req).await?;
+            let (handle, mut events) = match self.native.launch(req).await {
+                Ok(launched) => launched,
+                Err(error) => {
+                    journal.lock().unwrap().launch_error = Some(format!("{error:?}"));
+                    return Err(error);
+                }
+            };
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             tokio::spawn(async move {
                 while let Some(event) = events.recv().await {
@@ -406,7 +413,83 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
     .unwrap();
     // Core must persist the original source Profile before the case captures it.
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let source = sources(&rig.f, 1).await.remove(0);
+    let source = if std::env::var("PCW_ADMIN_LEGACY_PROBE").as_deref() == Ok("1") {
+        let old =
+            super::legacy_review::old_announcement(&rig.f, 55, crewd_proto::SenderKind::System)
+                .await;
+        // The actual production discovery tick must expose the old message;
+        // neither this read nor the preview is allowed to import it lazily.
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let discovered = rig
+                    .f
+                    .rpc("adminCase.legacyList", json!({"limit":100}))
+                    .await
+                    .unwrap();
+                if discovered["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|row| row["messageId"] == old.message)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let preview = rig
+            .f
+            .rpc(
+                "adminCase.legacyPreview",
+                json!({"messageId":old.message,"crewId":rig.f.crew,"sessionId":old.owner}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preview["targets"].as_array().unwrap().len(), 55);
+        assert_eq!(preview["budgetEpoch"], 0);
+        assert_eq!(preview["canConfirm"], true);
+        let current = current_work(&rig.f, &old.works[0]).await;
+        std::fs::write(
+            evidence.join("fixture.json"),
+            serde_json::to_vec(
+                &json!({"mode":"core","work":old.works[0],"revision":current.revision}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let request = uuid::Uuid::new_v4().to_string();
+        let receipt = rig.f.rpc("adminCase.legacyConfirm", json!({"messageId":old.message,"crewId":rig.f.crew,"sessionId":old.owner,"requestId":request,"expectedPreviewRevision":preview["revision"],"note":"Human revalidated complete current 55 targets; old summary is incomplete"})).await.unwrap();
+        let lookup = rig
+            .f
+            .rpc("adminCase.legacyReceipt", json!({"requestId":request}))
+            .await
+            .unwrap();
+        assert_eq!(lookup, receipt);
+        let history = rig
+            .f
+            .rpc("adminCase.legacyGet", json!({"messageId":old.message}))
+            .await
+            .unwrap();
+        assert_eq!(history["historyComplete"], false);
+        std::fs::write(
+            evidence.join("legacy-recovery-receipt.json"),
+            serde_json::to_vec_pretty(
+                &json!({"preview":preview,"receipt":receipt,"history":history,"lookup":lookup}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        Source {
+            id: receipt["caseId"].as_str().unwrap().to_owned(),
+            work: old.works[0].clone(),
+            owner: old.owner,
+        }
+    } else {
+        sources(&rig.f, 1).await.remove(0)
+    };
+
     let original_work = current_work(&rig.f, &source.work).await;
     std::fs::write(
         evidence.join("fixture.json"),
@@ -481,7 +564,51 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
             && event["kind"]["evidence"]["value"]
                 == "isolated native integration fixture verified closure"
     });
+    let mut authority_timings = serde_json::Value::Null;
+    if ready && std::env::var("PCW_ADMIN_LEGACY_PROBE").as_deref() == Ok("1") {
+        use crate::orchestra::port::Port as _;
+        let case_running = rig.handle.live(&sid).await.unwrap().running;
+        let measured_session = sid.clone();
+        let begin = std::time::Instant::now();
+        let lease = rig
+            .f
+            .state
+            .db
+            .call_result(move |store| {
+                let witness = execution::session_binding(store.conn(), &measured_session)?
+                    .ok_or_else(|| {
+                        crewd_collab::resource_invalid("fixture case binding missing")
+                    })?;
+                execution::native_lease(store.conn(), &witness, crewd_store::now_ms())
+            })
+            .await;
+        let lease_ms = begin.elapsed().as_secs_f64() * 1000.0;
+        let lease_result = match lease {
+            Ok(Ok(state)) => format!("{state:?}"),
+            other => format!("{other:?}"),
+        };
+        let port = DbPort::new(
+            rig.f.state.clone(),
+            rig.f.dir.path().join(crewd_store::DB_FILE),
+        );
+        let begin = std::time::Instant::now();
+        let auth_source = port.admin_case_auth_source(&sid).await;
+        let auth_ms = begin.elapsed().as_secs_f64() * 1000.0;
+        authority_timings = json!({"caseRunningBeforeRead":case_running,"nativeLeaseMs":lease_ms,"nativeLeaseResult":lease_result,
+            "authSourceMs":auth_ms,"authSourceMatched":auth_source.ok().flatten().as_deref()==Some(source.owner.as_str()),
+            "measurement":"one real DB read each after actual native close, before source revocation; queue latency included"});
+    }
     let before = view(&rig.f, &source.id).await;
+    if std::env::var("PCW_ADMIN_LEGACY_PROBE").as_deref() == Ok("1") {
+        assert_eq!(before["source"]["provenance"]["kind"], "human_revalidation");
+        assert_eq!(before["source"]["budgetEpoch"], 0);
+        assert_eq!(before["targets"].as_array().unwrap().len(), 55);
+        assert_ne!(
+            before["outcomeRecord"]["phase"], "resolved",
+            "one closure cannot resolve all 55 original targets"
+        );
+    }
+
     let session = sid.clone();
     let effective_model = rig
         .f
@@ -500,6 +627,8 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
             && observed.observed_model == original.observed_model
             && effective_model == observed.observed_model
     };
+    let launch_error = journal.lock().unwrap().launch_error.clone();
+    let launch_requested_model = journal.lock().unwrap().requested_model.clone();
     let pid = journal.lock().unwrap().pid;
     let live_before = pid.is_some_and(|pid| {
         matches!(
@@ -530,14 +659,29 @@ async fn real_core_native_case_source_revocation_stops_physical_process() {
     let revoked = !rig.f.state.admission.contains(&sid);
     let after = view(&rig.f, &source.id).await;
     let items = journal.lock().unwrap().items.clone();
+    let diagnostic_messages = rig.f.state.db.call_result(|s| {
+        let mut q = s.conn().prepare("SELECT text FROM messages WHERE sender_kind='system' AND COALESCE(category,'')!='work_stop_escalation' ORDER BY seq DESC LIMIT 20")?;
+        let rows = q.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok::<_, crewd_store::StoreError>(rows)
+    }).await.unwrap().unwrap();
+
     let source_profile = {
         let source = source_journal.lock().unwrap();
         json!({"pid":source.pid,"requestedModel":source.requested_model,"observedModel":source.observed_model})
     };
-    std::fs::write(evidence.join("core-fence-receipt.json"),serde_json::to_vec_pretty(&json!({"ready":ready,"sourceProfile":source_profile,"sourceProfileInherited":profile_adopted_from_unset,"closedWork":closed_work,"closureActorVerified":closure_actor_verified,"workEvents":work_events,"profileAdoptedFromUnset":profile_adopted_from_unset,"effectiveModel":effective_model,"pid":pid,"liveBeforeRevocation":live_before,"fencedBeforeCleanup":fenced,"physicallyGoneBeforeCleanup":physically_gone,"adminAdmissionRevoked":revoked,"before":before,"after":after,"items":items,"boundary":"real Core -> production Codex adapter for original source and case -> real native and crew helper; synthetic source credentials only"})).unwrap()).unwrap();
+    std::fs::write(evidence.join("core-fence-receipt.json"),serde_json::to_vec_pretty(&json!({"authorityTimings":authority_timings,"diagnosticMessages":diagnostic_messages,"launchError":launch_error,"launchRequestedModel":launch_requested_model,"ready":ready,"sourceProfile":source_profile,"sourceProfileInherited":profile_adopted_from_unset,"closedWork":closed_work,"closureActorVerified":closure_actor_verified,"workEvents":work_events,"profileAdoptedFromUnset":profile_adopted_from_unset,"effectiveModel":effective_model,"pid":pid,"liveBeforeRevocation":live_before,"fencedBeforeCleanup":fenced,"physicallyGoneBeforeCleanup":physically_gone,"adminAdmissionRevoked":revoked,"before":before,"after":after,"items":items,"boundary":"real Core -> production Codex adapter for original source and case -> real native and crew helper; synthetic source credentials only"})).unwrap()).unwrap();
     serving.abort();
     let _ = serving.await;
     rig.close().await;
+    if std::env::var("PCW_ADMIN_LEGACY_PROBE").as_deref() == Ok("1") {
+        assert_eq!(authority_timings["caseRunningBeforeRead"], true);
+        assert_eq!(authority_timings["authSourceMatched"], true);
+        assert!(
+            authority_timings["nativeLeaseResult"]
+                .as_str()
+                .is_some_and(|v| v.starts_with("Active("))
+        );
+    }
     assert_eq!(
         serde_json::to_value(&closed_work).unwrap()["status"],
         "done",

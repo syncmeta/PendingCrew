@@ -14,6 +14,7 @@ struct CrewdAdminCasesView:View {
     @State private var busy=false
     @State private var failure:String?
     @State private var token=UUID()
+    @State private var showLegacy=false
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
             Text("行政处理记录").font(.headline)
@@ -21,6 +22,7 @@ struct CrewdAdminCasesView:View {
             HStack {
                 Button("重新读取") {load(reset:true)}.disabled(busy)
                 if next != nil {Button("下一页") {load(reset:false)}.disabled(busy)}
+                if store.capabilities.contains("adminCase.legacyList") {Button("历史线索核验") {showLegacy=true}}
                 Spacer();Button("关闭") {dismiss()}
             }
             if let failure {Text(failure).foregroundStyle(.orange)}
@@ -54,6 +56,10 @@ struct CrewdAdminCasesView:View {
                             Text("等待条件变化不会重新询问模型；绑定后的运行结果以执行记录为准，未知启动不自动重放。").font(.caption).foregroundStyle(.secondary)
                         } else {
                             Text(store.capabilities.contains("adminCase.automaticExecution") ? "尚无启动调度记录；未配置、未采纳或依据已失效时不会新建执行成员。" : "当前后台尚未提供自动行政启动调度记录。").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if detail["source"]["provenance"] != .null {
+                            Text("来源：人类重新核验的当前事实；旧公告仅作历史锚点，不代表恢复历史权限。").font(.caption)
+                            Text(detail["source"]["provenance"]["note"].string ?? "").font(.caption).textSelection(.enabled)
                         }
                         Text("执行："+executionPhase(detail["execution"].string ?? ""))
                         if detail["executionRecord"] != .null {
@@ -96,6 +102,7 @@ struct CrewdAdminCasesView:View {
                 }.frame(maxWidth:.infinity,alignment:.leading)
             }.frame(maxHeight:460)
         }.padding().frame(width:560)
+        .sheet(isPresented:$showLegacy) {CrewdAdminLegacyView(store:store)}
         .task {load(reset:true)}
         .onChange(of:store.readScope) {_,_ in token=UUID();rows=[];detail=nil;next=nil;dismiss()}
         .onDisappear {token=UUID()}
@@ -256,4 +263,80 @@ struct CrewdAdminCasesView:View {
             catch {if token == request {failure=error.localizedDescription}}
         }
     }
+}
+
+
+private struct CrewdAdminLegacyView:View {
+    @ObservedObject var store:CrewdWorkStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var rows:[CrewdValue]=[]
+    @State private var sessions:[CrewdValue]=[]
+    @State private var scan:CrewdValue = .null
+    @State private var chosen:CrewdValue?
+    @State private var preview:CrewdValue?
+    @State private var sessionID=""
+    @State private var note=""
+    @State private var next:String?
+    @State private var failure:String?
+    @State private var busy=false
+    @State private var token=UUID()
+    var body:some View {
+        VStack(alignment:.leading,spacing:12) {
+            HStack {Text("历史行政线索 · 人类重新核验").font(.headline);Spacer();Button("关闭") {dismiss()}}
+            Text("这里列出全库历史线索。旧正文只能提示，不能证明当时的完整目标、版本或权限。当前选择的机组只用于下面的新核验。").font(.caption).foregroundStyle(.secondary)
+            Text("当前核验机组："+store.selectedCrew).font(.caption)
+            HStack {Button("读取历史与成员") {load(false)};if next != nil {Button("下一页") {load(true)}}}.disabled(busy)
+            if scan != .null {Text("扫描："+scanPhase(scan["phase"].string ?? "")+" · 已核到消息序号 \(scan["throughSeq"].int ?? 0) / 本轮 \(scan["capturedUpper"].int ?? 0) · 未核实来源 \(scan["unverifiedSources"].int ?? 0)").font(.caption)}
+            if let failure {Text(failure).foregroundStyle(.orange)}
+            ScrollView {
+                VStack(alignment:.leading,spacing:10) {
+                    if rows.isEmpty {Text("暂无已发现的历史线索；请同时查看扫描进度。").foregroundStyle(.secondary)}
+                    ForEach(Array(rows.enumerated()),id:\.offset) {_,r in
+                        Button {chosen=r;preview=nil;sessionID="";note=""} label: {Text((r["createdAt"].string ?? "")+" · "+state(r["state"].string ?? ""))}
+                    }
+                    if let chosen {
+                        Divider();Text("原历史公告（不改写）").font(.headline)
+                        Text(chosen["historicalText"].string ?? "").textSelection(.enabled)
+                        Text("正文可能仅含前 50 项摘要；即使未截断，也没有历史 revision / epoch 证据。下面目标是另行读取的当前完整事实。").font(.caption).foregroundStyle(.secondary)
+                        if let linked=chosen["linkedCaseId"].string {Text("已关联事项："+linked)}
+                        Picker("明确选择当前机组的真实来源成员",selection:$sessionID) {
+                            Text("请选择，不从公告正文推断").tag("")
+                            ForEach(Array(sessions.enumerated()),id:\.offset) {_,s in Text((s["displayName"].string ?? s["id"].string ?? "")+" · "+(s["role"].string ?? "")).tag(s["id"].string ?? "")}
+                        }.onChange(of:sessionID) {_,_ in preview=nil}
+                        Button("读取当前完整核验") {readPreview(chosen)}.disabled(busy || sessionID.isEmpty || chosen["state"] != .string("observed"))
+                        if let preview {
+                            Text("当前核验目标：\(preview["targets"].array.count) 项；当前预算 epoch：\(preview["budgetEpoch"].int ?? -1)").font(.headline)
+                            ForEach(Array(preview["targets"].array.enumerated()),id:\.offset) {_,t in Text((t["id"].string ?? "")+" · 版本 "+(t["revision"].string ?? "")+" · "+(t["scope"] == .string("in_scope") ? "当前范围":"范围外，仅保留事实"))}
+                            ForEach(Array(preview["blockers"].array.enumerated()),id:\.offset) {_,b in Text(blocker(b.string ?? "")).foregroundStyle(.orange)}
+                            TextField("我核实当前成员与完整目标的说明",text:$note,axis:.vertical)
+                            Button("确认当前新来源") {confirm(chosen,preview)}.disabled(busy || preview["canConfirm"] != .bool(true) || note.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                            Text("确认只建立当前事实来源；不会补造旧版本、重置提醒预算或直接授权执行。之后仍需有效判断与启动门禁。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    ForEach(store.legacyIntents.filter{$0.crew==store.selectedCrew}) {intent in
+                        Divider();Text("请求 "+intent.id).font(.caption).textSelection(.enabled)
+                        Text(intent.status == .unknown ? "提交结果未知；保留原编号，不自动重发。" : intent.status == .notFound ? "当前未查到原请求，不代表它永远未提交。" : intent.status == .recorded ? "已取得持久回执："+(intent.record["caseId"].string ?? "") : intent.status == .submitting ? "提交中":"请求已明确拒绝，请重新核验。")
+                        Button("只读查证原请求") {lookup(intent.id)}.disabled(busy || intent.status == .submitting)
+                    }
+                }.frame(maxWidth:.infinity,alignment:.leading)
+            }.frame(maxHeight:500)
+        }.padding().frame(width:650)
+        .task {load(false)}
+        .onChange(of:store.readScope) {_,_ in token=UUID();dismiss()}
+        .onDisappear {token=UUID()}
+    }
+    private func run(_ action:@escaping @MainActor () async throws -> Void) {
+        let mark=token;busy=true;failure=nil
+        Task {@MainActor in defer {if mark==token {busy=false}};do {try await action()}catch {if mark==token {failure=error.localizedDescription}}}
+    }
+    private func load(_ more:Bool) {let mark=token;run {
+        let p=try await store.legacyCases(after:more ? next:nil);let s=try await store.legacySessions();guard mark==token else{return}
+        rows=more ? rows+p["items"].array:p["items"].array;next=p["nextAfter"].string;scan=p["scan"];sessions=s
+    }}
+    private func readPreview(_ row:CrewdValue) {let mark=token,session=sessionID;preview=nil;run {let p=try await store.legacyPreview(messageID:row["messageId"].string ?? "",sessionID:session);if mark==token && sessionID==session {preview=p}}}
+    private func confirm(_ row:CrewdValue,_ p:CrewdValue) {let mark=token;run {_ = try await store.confirmLegacy(messageID:row["messageId"].string ?? "",sessionID:p["sessionId"].string ?? "",revision:p["revision"].string ?? "",note:note);if mark==token {preview=nil;chosen=nil;load(false)}}}
+    private func lookup(_ id:String) {let mark=token;run {_ = try await store.legacyReceipt(requestID:id);if mark==token {preview=nil;load(false)}}}
+    private func state(_ s:String)->String {["observed":"待重新核验","linked":"已有事项关联","invalid":"证据损坏或不合格"] [s] ?? "未知状态"}
+    private func scanPhase(_ s:String)->String {["indexing":"核对已有事项索引","scanning":"扫描历史公告","current":"本轮已扫描"] [s] ?? "未知进度"}
+    private func blocker(_ s:String)->String {["invalid_history":"历史锚点不合格","source_unavailable":"来源成员不可用或不属于当前机组","crew_unavailable":"机组不可用","stopped":"来源已停止","missing_budget":"缺少实际提醒预算","not_escalated":"当前预算尚未升级","budget_mismatch":"当前完整目标与预算不一致","no_targets":"当前没有目标","no_in_scope_targets":"没有当前范围内目标","index_incomplete":"已有来源索引未核验完整","already_linked":"历史已有事项关联"] [s] ?? "未知核验阻碍"}
 }

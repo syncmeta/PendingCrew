@@ -177,6 +177,11 @@ pub mod methods {
         ADMIN_CASE_CUSTODY_GET,
         ADMIN_CASE_CUSTODY_PROPOSE,
         ADMIN_CASE_CUSTODY_TRANSFER_GET,
+        crate::admin_cases::LEGACY_LIST,
+        crate::admin_cases::LEGACY_GET,
+        crate::admin_cases::LEGACY_PREVIEW,
+        crate::admin_cases::LEGACY_CONFIRM,
+        crate::admin_cases::LEGACY_RECEIPT,
         crate::channel_archive::CHECK,
         crate::channel_archive::ARCHIVE,
         crate::channel_archive::RESTORE,
@@ -806,6 +811,41 @@ pub fn api_schema() -> Value {
         (
             admin_cases::GET,
             m(sub::<AdminCaseGetParams>(g), sub::<AdminCaseView>(g)),
+        ),
+        (
+            admin_cases::LEGACY_LIST,
+            m(
+                sub::<AdminCaseLegacyListParams>(g),
+                sub::<AdminCaseLegacyList>(g),
+            ),
+        ),
+        (
+            admin_cases::LEGACY_GET,
+            m(
+                sub::<AdminCaseLegacyGetParams>(g),
+                sub::<AdminCaseLegacyView>(g),
+            ),
+        ),
+        (
+            admin_cases::LEGACY_PREVIEW,
+            m(
+                sub::<AdminCaseLegacyPreviewParams>(g),
+                sub::<AdminCaseLegacyPreview>(g),
+            ),
+        ),
+        (
+            admin_cases::LEGACY_CONFIRM,
+            m(
+                sub::<AdminCaseLegacyConfirmParams>(g),
+                sub::<AdminCaseLegacyReceipt>(g),
+            ),
+        ),
+        (
+            admin_cases::LEGACY_RECEIPT,
+            m(
+                sub::<AdminCaseLegacyReceiptParams>(g),
+                sub::<AdminCaseLegacyReceipt>(g),
+            ),
         ),
         (
             methods::ADMIN_CASE_CUSTODY_GET,

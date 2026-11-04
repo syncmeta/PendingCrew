@@ -217,7 +217,22 @@ async fn native_high_and_low_decisions_are_persisted_without_admin_or_delivery_e
             .run_admin_case(f.crew.clone(), source.id.clone(), true)
             .await
             .unwrap();
-        let v = view(&f, &source.id).await;
+        // The periodic runtime can claim this source before the explicit
+        // call. In that case the call returns without waiting for its peer.
+        let v = tokio::time::timeout(LIMIT, async {
+            loop {
+                let current = view(&f, &source.id).await;
+                if !matches!(
+                    current["decisionRecord"]["phase"].as_str(),
+                    Some("prepared" | "dispatched") | None
+                ) {
+                    break current;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the original judgment should reach a durable terminal phase");
         assert_eq!(v["decisionRecord"]["phase"], "answered", "{v}");
         assert_eq!(v["decisionRecord"]["probability"], p);
         assert_eq!(v["decisionRecord"]["adopted"], p >= 0.5);

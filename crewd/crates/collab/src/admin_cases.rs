@@ -19,7 +19,7 @@ fn invalid(message: &str) -> crate::CollabError {
 fn crew_prefix(crew: &str) -> Result<String> {
     Ok(format!("{PREFIX}{}:", judgments::fingerprint(&crew)?))
 }
-fn key(crew: &str, id: &str) -> Result<String> {
+pub(crate) fn key(crew: &str, id: &str) -> Result<String> {
     sequence(id)?;
     Ok(format!("{}{id}", crew_prefix(crew)?))
 }
@@ -72,7 +72,8 @@ fn decode(raw: &str, crew: &str, id: &str) -> Result<AdminCaseView> {
         || v.decision != AdminCaseDecision::Observed
         || v.id != id
         || v.crew_id != crew
-        || v.source.budget_epoch < 1
+        || v.source.budget_epoch < 0
+        || (v.source.budget_epoch == 0 && v.source.provenance.is_none())
         || v.source.session_id.is_empty()
         || v.source.announcement_id.is_empty()
         || v.source.restore_epoch.is_empty()
@@ -81,6 +82,24 @@ fn decode(raw: &str, crew: &str, id: &str) -> Result<AdminCaseView> {
     {
         return Err(invalid("invalid admin case record"));
     }
+    if let Some(AdminCaseProvenance::HumanRevalidation {
+        request_id,
+        legacy_message_id,
+        announcement_digest,
+        preview_revision,
+        note,
+        revalidated_at,
+    }) = &v.source.provenance
+        && (uuid::Uuid::parse_str(request_id).is_err()
+            || legacy_message_id != &v.source.announcement_id
+            || announcement_digest.is_empty()
+            || preview_revision.is_empty()
+            || note.trim().is_empty()
+            || *revalidated_at != v.created_at)
+    {
+        return Err(invalid("invalid human source provenance"));
+    }
+
     sequence(id)?;
     let mut seen = std::collections::BTreeSet::new();
     for t in &v.targets {
@@ -162,10 +181,31 @@ pub(crate) fn record_stop_escalation(
     targets: &[crate::stop_checks::Target],
     announcement: &str,
 ) -> Result<AdminCaseView> {
+    record_source(tx, session, targets, announcement, None)
+}
+pub(crate) fn record_revalidated_source(
+    tx: &mut Tx<'_>,
+    session: &str,
+    targets: &[crate::stop_checks::Target],
+    announcement: &str,
+    provenance: AdminCaseProvenance,
+) -> Result<AdminCaseView> {
+    record_source(tx, session, targets, announcement, Some(provenance))
+}
+fn record_source(
+    tx: &mut Tx<'_>,
+    session: &str,
+    targets: &[crate::stop_checks::Target],
+    announcement: &str,
+    provenance: Option<AdminCaseProvenance>,
+) -> Result<AdminCaseView> {
     let s = crewd_store::sessions::get(tx.conn(), session)?
         .ok_or_else(|| invalid("missing escalation source"))?;
     let budget = crewd_store::work_stop_checks::get(tx.conn(), session)?
         .ok_or_else(|| invalid("missing escalation budget"))?;
+    if budget.epoch < 0 || (budget.epoch == 0 && provenance.is_none()) {
+        return Err(invalid("invalid escalation budget epoch"));
+    }
     if !budget.streak.escalated || targets.is_empty() || budget.streak.last.len() != targets.len() {
         return Err(invalid("unaccepted escalation source"));
     }
@@ -212,7 +252,9 @@ pub(crate) fn record_stop_escalation(
         "admin.case.source.v1:{}",
         judgments::fingerprint(&(session, budget.epoch, &s.crew_id))?
     );
-    if let Some(id) = meta_get(tx.conn(), &source_key)? {
+    if let Some(id) =
+        crate::admin_case_legacy::current_source(tx.conn(), session, budget.epoch, &s.crew_id)?
+    {
         let existing = source_get(
             tx.conn(),
             &AdminCaseGetParams {
@@ -220,6 +262,9 @@ pub(crate) fn record_stop_escalation(
                 id,
             },
         )?;
+        if provenance.is_some() {
+            return Ok(existing);
+        }
         if existing.targets != full || existing.source.announcement_id != announcement {
             return Err(invalid("conflicting escalation source"));
         }
@@ -257,6 +302,7 @@ pub(crate) fn record_stop_escalation(
         revision: String::new(),
         created_at: tx.now_ms(),
         source: AdminCaseSource {
+            provenance,
             session_id: session.into(),
             budget_epoch: budget.epoch,
             restore_epoch: crewd_store::judgment_state::epoch(tx.conn())?,
@@ -287,6 +333,7 @@ pub(crate) fn record_stop_escalation(
     meta_set(tx.conn(), COUNTER, &seq.to_string())?;
     meta_set(tx.conn(), &global_key, &k)?;
     meta_set(tx.conn(), &source_key, &view.id)?;
+    crate::admin_case_legacy::index_source(tx, &view)?;
     Ok(view)
 }
 #[derive(Debug, Clone, Serialize)]

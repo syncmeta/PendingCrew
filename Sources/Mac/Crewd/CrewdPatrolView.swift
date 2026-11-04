@@ -22,7 +22,7 @@ struct CrewdPatrolView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("当前机组巡检").font(.headline)
-            Text("只检查事实，不调用模型，也不会自动派活、关闭事项或归档群。分页期间状态可能变化。")
+            Text("显示当前机组的巡检事实。检查和查看简报不会派活、关闭事项或归档群。分页期间状态可能变化。")
                 .font(.caption).foregroundStyle(.secondary)
             backgroundSection
             Button("行政处理记录") {casesPresented=true}
@@ -69,7 +69,8 @@ struct CrewdPatrolView: View {
         }
         .sheet(isPresented:$casesPresented) {CrewdAdminCasesView(store:store)}
         .onChange(of: scan) { _, _ in reset() }
-        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; archived=[]; archivedLoaded=false }
+        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; archived=[]; archivedLoaded=false; readStatus() }
+        .onAppear { readStatus() }
         .onDisappear { cancel(); clearStatus() }
     }
     private func readArchived() {
@@ -106,16 +107,46 @@ struct CrewdPatrolView: View {
                 if status["run"] == .null { Text("后台尚无巡检记录。") }
                 else {
                     let run = status["run"]
-                    Text(run["completedAtMs"] == .null ? "后台巡检进行中" : "后台本轮扫描结束；不代表所有事项没有问题。")
                     Text("开始观察：" + time(run["startedAtMs"]))
-                    if run["completedAtMs"] != .null { Text("结束观察：" + time(run["completedAtMs"])) }
                     Text("已扫描：" + counts(run["scannedCounts"]))
-                    Text("发现计数：" + counts(run["counts"]))
-                    if run["truncated"] == .bool(true) { Text("发现明细仅保留部分；此标记不代表扫描未完成。") }
-                    Text("以上是后台保存的观察结果，操作前仍须核实最新事实。").foregroundStyle(.secondary)
+                    if run["completedAtMs"] == .null {
+                        Text("后台巡检进行中。本轮结束后生成简报。")
+                    } else {
+                        Text("结束观察：" + time(run["completedAtMs"]))
+                        if let brief = try? CrewdPatrolBrief(run: run) {
+                            briefSection(brief)
+                        } else {
+                            Text("本轮简报无法读取。可使用下方的实时检查。").foregroundStyle(.orange)
+                        }
+                    }
                 }
             }
         }.font(.caption)
+    }
+    private func briefSection(_ brief: CrewdPatrolBrief) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("本轮行政简报").font(.subheadline.weight(.semibold))
+            Text("这是本轮保存的观察。同一事项可能出现在多类，处理前请检查最新状态。")
+                .foregroundStyle(.secondary)
+            if brief.hasPartialReferences { Text("部分发现只保存了编号样本，计数是本轮观察总数。") }
+            if brief.hasIncompleteChannels { Text("仍有群因关联过多未完整检查。") }
+            if brief.hasUnrecognizedFindings { Text("本轮还有当前版本未识别的发现类别。") }
+            if brief.groups.isEmpty && !brief.hasUnrecognizedFindings {
+                Text("本轮在已扫描范围内未发现这些问题。")
+            }
+            ForEach(brief.groups, id: \.kind) { group in
+                DisclosureGroup("\(group.kind.title) · \(group.count)\(group.kind.unit)") {
+                    if group.references.count < group.count {
+                        Text("保留 \(group.references.count) 个编号")
+                    }
+                    ScrollView {
+                        Text(verbatim: group.references.joined(separator: "、"))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 74)
+                }
+            }
+        }
     }
     private func time(_ value: CrewdValue) -> String {
         guard let ms = value.int else { return "未知" }

@@ -21,6 +21,89 @@ async fn route(
     let owner = state.clone();
     let by = actor.clone();
     match req.method.as_str() {
+        LEGACY_LIST => {
+            let p: AdminCaseLegacyListParams = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), LEGACY_LIST)?;
+                    crewd_collab::admin_case_legacy::list(
+                        store.conn(),
+                        &crewd_collab::Sender::Human,
+                        p.after,
+                        p.limit.unwrap_or(50),
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
+        LEGACY_GET => {
+            let p: AdminCaseLegacyGetParams = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), LEGACY_GET)?;
+                    crewd_collab::admin_case_legacy::get(
+                        store.conn(),
+                        &crewd_collab::Sender::Human,
+                        &p.message_id,
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
+        LEGACY_PREVIEW => {
+            let p: AdminCaseLegacyPreviewParams = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), LEGACY_PREVIEW)?;
+                    crewd_collab::admin_case_legacy::preview(
+                        store.conn(),
+                        &crewd_collab::Sender::Human,
+                        &p,
+                        crewd_store::now_ms(),
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
+        LEGACY_CONFIRM => {
+            let p: AdminCaseLegacyConfirmParams = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .collab(move |tx| {
+                    by.authorize_tx(&owner, tx.conn(), LEGACY_CONFIRM)?;
+                    // Confirmation records current Human revalidation, not session
+                    // admission and not a replacement for the native judgment.
+                    crewd_collab::admin_case_legacy::confirm(tx, &crewd_collab::Sender::Human, p)
+                })
+                .await
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
+        LEGACY_RECEIPT => {
+            let p: AdminCaseLegacyReceiptParams = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), LEGACY_RECEIPT)?;
+                    crewd_collab::admin_case_legacy::receipt(
+                        store.conn(),
+                        &crewd_collab::Sender::Human,
+                        &p.request_id,
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
         crewd_proto::methods::ADMIN_CASE_CUSTODY_TRANSFER_GET => {
             let p: AdminCaseCustodyTransferGetParams = crewd_proto::parse_params(req.params)?;
             let view = state

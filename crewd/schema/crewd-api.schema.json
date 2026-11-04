@@ -609,6 +609,358 @@
       ],
       "type": "object"
     },
+    "AdminCaseLegacyBlocker": {
+      "enum": [
+        "invalid_history",
+        "source_unavailable",
+        "crew_unavailable",
+        "stopped",
+        "missing_budget",
+        "not_escalated",
+        "budget_mismatch",
+        "no_targets",
+        "no_in_scope_targets",
+        "index_incomplete",
+        "already_linked"
+      ],
+      "type": "string"
+    },
+    "AdminCaseLegacyConfirmParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "expectedPreviewRevision": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "crewId",
+        "sessionId",
+        "requestId",
+        "expectedPreviewRevision",
+        "note"
+      ],
+      "type": "object"
+    },
+    "AdminCaseLegacyGetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "messageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId"
+      ],
+      "type": "object"
+    },
+    "AdminCaseLegacyList": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseLegacyView"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scan": {
+          "$ref": "#/$defs/AdminCaseLegacyScan"
+        }
+      },
+      "required": [
+        "items",
+        "scan"
+      ],
+      "type": "object"
+    },
+    "AdminCaseLegacyListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AdminCaseLegacyPreview": {
+      "additionalProperties": false,
+      "properties": {
+        "blockers": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseLegacyBlocker"
+          },
+          "type": "array"
+        },
+        "budgetEpoch": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "canConfirm": {
+          "type": "boolean"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "existingCaseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "observedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "restoreEpoch": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "targets": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseTarget"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "messageId",
+        "crewId",
+        "sessionId",
+        "revision",
+        "canConfirm",
+        "blockers",
+        "targets",
+        "restoreEpoch",
+        "observedAt"
+      ],
+      "type": "object"
+    },
+    "AdminCaseLegacyPreviewParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId",
+        "crewId",
+        "sessionId"
+      ],
+      "type": "object"
+    },
+    "AdminCaseLegacyReason": {
+      "enum": [
+        "historical_hint_only",
+        "invalid_history",
+        "invalid_evidence",
+        "human_revalidated"
+      ],
+      "type": "string"
+    },
+    "AdminCaseLegacyReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "caseId": {
+          "type": "string"
+        },
+        "confirmedAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "created": {
+          "type": "boolean"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "previewRevision": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "messageId",
+        "crewId",
+        "sessionId",
+        "caseId",
+        "created",
+        "confirmedAt",
+        "note",
+        "previewRevision"
+      ],
+      "type": "object"
+    },
+    "AdminCaseLegacyReceiptParams": {
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "AdminCaseLegacyScan": {
+      "additionalProperties": false,
+      "properties": {
+        "capturedUpper": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "phase": {
+          "$ref": "#/$defs/AdminCaseLegacyScanPhase"
+        },
+        "throughSeq": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "unverifiedSources": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "phase",
+        "throughSeq",
+        "capturedUpper",
+        "unverifiedSources"
+      ],
+      "type": "object"
+    },
+    "AdminCaseLegacyScanPhase": {
+      "enum": [
+        "indexing",
+        "scanning",
+        "current"
+      ],
+      "type": "string"
+    },
+    "AdminCaseLegacyState": {
+      "enum": [
+        "observed",
+        "linked",
+        "invalid"
+      ],
+      "type": "string"
+    },
+    "AdminCaseLegacyView": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "historicalText": {
+          "type": "string"
+        },
+        "historyComplete": {
+          "type": "boolean"
+        },
+        "linkedCaseId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "linkedCrewId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "messageSeq": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "reason": {
+          "$ref": "#/$defs/AdminCaseLegacyReason"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AdminCaseLegacyState"
+        }
+      },
+      "required": [
+        "messageId",
+        "messageSeq",
+        "historicalText",
+        "createdAt",
+        "revision",
+        "state",
+        "historyComplete",
+        "reason"
+      ],
+      "type": "object"
+    },
     "AdminCaseList": {
       "additionalProperties": false,
       "properties": {
@@ -761,6 +1113,48 @@
       ],
       "type": "object"
     },
+    "AdminCaseProvenance": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "announcementDigest": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "human_revalidation",
+              "type": "string"
+            },
+            "legacyMessageId": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "previewRevision": {
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "revalidatedAt": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "requestId",
+            "legacyMessageId",
+            "announcementDigest",
+            "previewRevision",
+            "note",
+            "revalidatedAt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "AdminCaseResolutionActor": {
       "enum": [
         "case_admin",
@@ -805,6 +1199,16 @@
         "budgetEpoch": {
           "format": "int64",
           "type": "integer"
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "restoreEpoch": {
           "type": "string"
@@ -17050,6 +17454,46 @@
       },
       "result": {
         "$ref": "#/$defs/AdminCaseView"
+      }
+    },
+    "adminCase.legacyConfirm": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseLegacyConfirmParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseLegacyReceipt"
+      }
+    },
+    "adminCase.legacyGet": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseLegacyGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseLegacyView"
+      }
+    },
+    "adminCase.legacyList": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseLegacyListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseLegacyList"
+      }
+    },
+    "adminCase.legacyPreview": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseLegacyPreviewParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseLegacyPreview"
+      }
+    },
+    "adminCase.legacyReceipt": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseLegacyReceiptParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseLegacyReceipt"
       }
     },
     "adminCase.list": {

@@ -46,6 +46,27 @@ fn selection(result: JudgmentResult) -> (Option<f64>, Reason) {
 }
 
 impl super::Runtime {
+    /// Historical announcements are discovery anchors only. This bounded pass
+    /// cannot launch a session or treat message prose as source authority.
+    pub(super) async fn scan_legacy_admin_cases(&self) -> anyhow::Result<()> {
+        if self.closed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let Some(state) = self.state.upgrade() else {
+            return Ok(());
+        };
+        let closed = self.closed.clone();
+        state
+            .collab(move |tx| {
+                if closed.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                crewd_collab::admin_case_legacy::tick(tx)
+            })
+            .await?;
+        Ok(())
+    }
+
     /// One keyset page per tick bounds DB work; a cursor prevents tail starvation.
     pub(super) async fn schedule_admin_launches(self: &Arc<Self>) -> anyhow::Result<()> {
         if !self.automatic_admin || self.closed.load(Ordering::Acquire) {

@@ -666,6 +666,11 @@ async fn request_step(
                     | crewd_proto::methods::ADMIN_CASE_CUSTODY_GET
                     | crewd_proto::methods::ADMIN_CASE_CUSTODY_PROPOSE
                     | crewd_proto::methods::ADMIN_CASE_CUSTODY_TRANSFER_GET
+                    | crewd_proto::admin_cases::LEGACY_LIST
+                    | crewd_proto::admin_cases::LEGACY_GET
+                    | crewd_proto::admin_cases::LEGACY_PREVIEW
+                    | crewd_proto::admin_cases::LEGACY_CONFIRM
+                    | crewd_proto::admin_cases::LEGACY_RECEIPT
             ) =>
         {
             if agent.is_attached() {

@@ -263,6 +263,11 @@ impl Runtime {
         this.recover_reassignment().await?;
         this.recover_retirement().await?;
         this.recover_admin_cases().await?;
+        // Import failures are visible discovery failures, not a reason to stop
+        // the daemon or restart unknown administrative dispatches.
+        if let Err(error) = this.scan_legacy_admin_cases().await {
+            eprintln!("crewd: historical administrative discovery failed closed: {error}");
+        }
         this.scan_pending(true).await?;
         let weak = Arc::downgrade(&this);
         *this.pump.lock().await = Some(tokio::spawn(async move {
@@ -281,6 +286,9 @@ impl Runtime {
                         }
                         if let Err(e) = runtime.scan_retirement().await {
                             eprintln!("crewd: retirement scan failed: {e}");
+                        }
+                        if let Err(e) = runtime.scan_legacy_admin_cases().await {
+                            eprintln!("crewd: historical administrative discovery scan failed closed: {e}");
                         }
                         if let Err(e) = runtime.resume_pending_admin_cases().await {
                             eprintln!("crewd: administrative pending scan failed: {e}");

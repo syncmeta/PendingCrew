@@ -13,6 +13,39 @@ struct CrewdCustodyIntent:Identifiable {
     var message:String?
 }
 
+struct CrewdLegacyIntent:Identifiable {
+    let id:String,crew:String,messageID:String,sessionID:String,revision:String,note:String
+    var status:CrewdCustodyIntent.Status
+    var record:CrewdValue = .null
+
+    init(id:String,crew:String,messageID:String,sessionID:String,revision:String,note:String,status:CrewdCustodyIntent.Status) {
+        self.id=id;self.crew=crew;self.messageID=messageID;self.sessionID=sessionID
+        self.revision=revision;self.note=note;self.status=status
+    }
+
+    init(prepared params:CrewdValue) throws {
+        guard let id=params["requestId"].string,UUID(uuidString:id) != nil,
+              let crew=params["crewId"].string,!crew.isEmpty,
+              let message=params["messageId"].string,!message.isEmpty,
+              let session=params["sessionId"].string,!session.isEmpty,
+              let revision=params["expectedPreviewRevision"].string,!revision.isEmpty,
+              let note=params["note"].string,!note.isEmpty else {
+            throw CrewdClientError(message:"原历史核验请求的身份或内容不完整。")
+        }
+        self.init(id:id,crew:crew,messageID:message,sessionID:session,revision:revision,note:note,status:.unknown)
+    }
+
+    func validate(_ value:CrewdValue) throws {
+        guard value["requestId"] == .string(id),value["messageId"] == .string(messageID),
+              value["crewId"] == .string(crew),value["sessionId"] == .string(sessionID),
+              value["previewRevision"] == .string(revision),value["note"] == .string(note),
+              value["caseId"].string?.isEmpty == false,value["confirmedAt"].int != nil,
+              case .bool=value["created"] else {
+            throw CrewdClientError(message:"历史核验回执与原请求不符。")
+        }
+    }
+}
+
 /// Public identity, never inferred from a legacy per-crew number or converted to Double.
 struct CrewdWorkID: Hashable, Sendable {
     enum Kind: Character, Sendable { case requirement = "#", plan = "W", human = "H" }
@@ -85,6 +118,8 @@ final class CrewdWorkStore: ObservableObject {
     @Published private(set) var readScope = UUID()
     @Published private(set) var capabilities:Set<String>=[]
     @Published private(set) var custodyIntents:[CrewdCustodyIntent]=[]
+    @Published private(set) var legacyIntents:[CrewdLegacyIntent]=[]
+    private var legacyPreviewRead:CrewdValue?
     private var custodyReads:[String:CrewdValue]=[:]
     private let call: Call
     private var generation = UUID()
@@ -115,6 +150,7 @@ final class CrewdWorkStore: ObservableObject {
         ensureTask?.cancel(); ensureTask = nil
         capabilities=[]
         invalidateCustodyReads()
+        legacyIntents=[]
         generation = UUID(); refreshID = UUID(); pendingDetails.removeAll(); loading = false
         hasLoaded = false; readScope = UUID()
     }
@@ -327,6 +363,13 @@ final class CrewdWorkStore: ObservableObject {
         guard row["crewId"] == .string(crew),row["id"].string?.isEmpty == false,row["revision"].string?.isEmpty == false,row["createdAt"].int != nil,
               row["source"]["sessionId"].string?.isEmpty == false,row["source"]["budgetEpoch"].int != nil,row["source"]["restoreEpoch"].string?.isEmpty == false,row["source"]["announcementId"].string?.isEmpty == false,
               ["observed","prepared","dispatched","answered","unknown","unconfigured","waiting_admission","stale"].contains(row["decision"].string ?? ""),["not_started","registered","requested","running","unknown","stale"].contains(row["execution"].string ?? ""),["not_started","prepared","dispatched","decision_ready","exit_requested","parked","unknown","stale","suppressed"].contains(row["retirement"].string ?? ""),case .array(let targets)=row["targets"] else {throw CrewdClientError(message:"行政记录身份、来源或状态不完整。")}
+        let provenance=row["source"]["provenance"]
+        guard let budget=row["source"]["budgetEpoch"].int,budget>=0,budget>0 || provenance != .null else {throw CrewdClientError(message:"原生来源不能使用迁移零预算。")}
+        if provenance != .null {
+            guard provenance["kind"] == .string("human_revalidation"),provenance["requestId"].string.flatMap(UUID.init(uuidString:)) != nil,
+                  provenance["legacyMessageId"] == row["source"]["announcementId"],provenance["announcementDigest"].string?.isEmpty == false,provenance["previewRevision"].string?.isEmpty == false,
+                  provenance["note"].string?.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty == false,provenance["revalidatedAt"] == row["createdAt"] else {throw CrewdClientError(message:"人类重新核验来源证据不完整。")}
+        }
         guard case .object(let fields)=row,let record=fields["decisionRecord"] else {throw CrewdClientError(message:"行政判断记录字段缺失。")}
         if record == .null {
             guard row["decision"] == .string("observed") else {throw CrewdClientError(message:"行政判断阶段缺少记录。")}
@@ -445,8 +488,75 @@ final class CrewdWorkStore: ObservableObject {
         guard row["id"] == .string(id) else {throw CrewdClientError(message:"行政详情返回了其他案件。")}
         return row
     }
+    private func legacyError()->CrewdClientError {CrewdClientError(message:"历史核验身份、范围或字段不完整。")}
+    private func validateLegacy(_ row:CrewdValue)throws {
+        guard row["messageId"].string?.isEmpty == false,row["messageSeq"].int != nil,row["historicalText"].string != nil,row["createdAt"].string != nil,row["revision"].string?.isEmpty == false,
+              ["observed","linked","invalid"].contains(row["state"].string ?? ""),row["historyComplete"] == .bool(false),
+              ["historical_hint_only","invalid_history","invalid_evidence","human_revalidated"].contains(row["reason"].string ?? ""),case .object(let f)=row,let linked=f["linkedCaseId"],let crew=f["linkedCrewId"],
+              (linked == .null && crew == .null) || (linked.string?.isEmpty == false && crew.string?.isEmpty == false) else {throw legacyError()}
+    }
+    func legacyCases(after:String?=nil) async throws -> CrewdValue {
+        let token=generation
+        var p:[String:CrewdValue]=["limit":.integer(20)];if let after {p["after"] = .string(after)}
+        let v=try await call("adminCase.legacyList",.object(p));try check(token)
+        guard case .array(let rows)=v["items"],case .object(let fields)=v,let next=fields["nextAfter"],next == .null || next.string?.isEmpty == false,
+              ["indexing","scanning","current"].contains(v["scan"]["phase"].string ?? ""),let through=v["scan"]["throughSeq"].int,let upper=v["scan"]["capturedUpper"].int,through>=0,upper>=through,let errors=v["scan"]["unverifiedSources"].int,errors>=0 else {throw legacyError()}
+        guard next == .null || next.string != after else {throw legacyError()}
+        for row in rows {try validateLegacy(row)}
+        return v
+    }
+    func legacySessions() async throws -> [CrewdValue] {
+        let token=generation,crew=selectedCrew
+        let v=try await call("session.list",.object(["crewId":.string(crew)]));try check(token)
+        guard case .array(let rows)=v,rows.allSatisfy({$0["crewId"] == .string(crew) && $0["id"].string?.isEmpty == false}) else {throw legacyError()}
+        return rows
+    }
+    func legacyPreview(messageID:String,sessionID:String) async throws -> CrewdValue {
+        let token=generation,crew=selectedCrew;legacyPreviewRead=nil
+        let v=try await call("adminCase.legacyPreview",.object(["messageId":.string(messageID),"crewId":.string(crew),"sessionId":.string(sessionID)]));try check(token)
+        guard v["messageId"] == .string(messageID),v["crewId"] == .string(crew),v["sessionId"] == .string(sessionID),v["revision"].string?.isEmpty == false,
+              v["restoreEpoch"].string?.isEmpty == false,v["observedAt"].int != nil,case .bool(let can)=v["canConfirm"],case .array(let blockers)=v["blockers"],case .array(let targets)=v["targets"],case .object(let fields)=v,let budget=fields["budgetEpoch"],budget == .null || (budget.int ?? -1)>=0,let existing=fields["existingCaseId"],existing == .null || existing.string?.isEmpty == false,
+              can == blockers.isEmpty,blockers.allSatisfy({["invalid_history","source_unavailable","crew_unavailable","stopped","missing_budget","not_escalated","budget_mismatch","no_targets","no_in_scope_targets","index_incomplete","already_linked"].contains($0.string ?? "")}) else {throw legacyError()}
+        for t in targets {guard CrewdWorkID(t["id"].string ?? "",kind:.plan) != nil,t["crewId"].string?.isEmpty == false,t["revision"].string?.isEmpty == false,["unanswered","overdue","ready_unscheduled"].contains(t["kind"].string ?? ""),["in_scope","out_of_scope"].contains(t["scope"].string ?? ""),(t["scope"] == .string("in_scope")) == (t["crewId"] == .string(crew)) else {throw legacyError()}}
+        if can && (targets.isEmpty || budget == .null) {throw legacyError()}
+        legacyPreviewRead=v;return v
+    }
+    func restoreLegacyIntents(_ requests:[CrewdValue]) throws {
+        let restored=try requests.map {try CrewdLegacyIntent(prepared:$0)}
+        guard Set(restored.map(\.id)).count == restored.count else {throw legacyError()}
+        legacyIntents=restored
+    }
+    func confirmLegacy(messageID:String,sessionID:String,revision:String,note:String) async throws -> CrewdValue {
+        let note=note.trimmingCharacters(in:.whitespacesAndNewlines),crew=selectedCrew,token=generation
+        guard activeMutations==0,!note.isEmpty,note.utf8.count<=2000,let p=legacyPreviewRead,p["messageId"] == .string(messageID),p["sessionId"] == .string(sessionID),p["crewId"] == .string(crew),p["revision"] == .string(revision),p["canConfirm"] == .bool(true),!legacyIntents.contains(where:{$0.messageID==messageID && ($0.status == .unknown || $0.status == .submitting)}) else {throw CrewdClientError(message:"请先查证未知提交并重新核验当前完整事实。",kind:.notSubmitted)}
+        let intent=CrewdLegacyIntent(id:UUID().uuidString.lowercased(),crew:crew,messageID:messageID,sessionID:sessionID,revision:revision,note:note,status:.submitting)
+        legacyIntents.append(intent);legacyPreviewRead=nil;activeMutations += 1
+        defer {activeMutations -= 1}
+        do {
+            let v=try await call("adminCase.legacyConfirm",.object(["requestId":.string(intent.id),"messageId":.string(messageID),"crewId":.string(crew),"sessionId":.string(sessionID),"expectedPreviewRevision":.string(revision),"note":.string(note)]));try check(token);try intent.validate(v)
+            if let i=legacyIntents.firstIndex(where:{$0.id==intent.id}) {legacyIntents[i].status = .recorded;legacyIntents[i].record=v};return v
+        } catch {
+            if let i=legacyIntents.firstIndex(where:{$0.id==intent.id}),legacyIntents[i].status == .submitting {legacyIntents[i].status = CrewdClientError.isUncertainSubmission(error) ? .unknown:.refused}
+            throw error
+        }
+    }
+    func legacyReceipt(requestID:String) async throws -> CrewdValue {
+        guard let intent=legacyIntents.first(where:{$0.id==requestID}),intent.crew==selectedCrew else {throw legacyError()}
+        let token=generation
+        do {
+            let v=try await call("adminCase.legacyReceipt",.object(["requestId":.string(requestID)]));try check(token);try intent.validate(v)
+            if let i=legacyIntents.firstIndex(where:{$0.id==requestID}) {legacyIntents[i].status = .recorded;legacyIntents[i].record=v};legacyPreviewRead=nil;return v
+        }catch {
+            try check(token)
+            if let e=error as? CrewdClientError,e.refusal == "resource.not_found",let i=legacyIntents.firstIndex(where:{$0.id==requestID}),legacyIntents[i].status != .recorded {legacyIntents[i].status = .notFound}
+            legacyPreviewRead=nil;throw error
+        }
+    }
     private func custodyKey(_ crew:String,_ id:String)->String {"\(crew.utf8.count):\(crew)\(id)"}
     private func invalidateCustodyReads() {
+        legacyPreviewRead=nil
+        for i in legacyIntents.indices where legacyIntents[i].status == .submitting {legacyIntents[i].status = .unknown}
+
         custodyReads.removeAll()
         for i in custodyIntents.indices where custodyIntents[i].status == .submitting {custodyIntents[i].status = .unknown;custodyIntents[i].message="连接或机组已切换，原请求结果待查证。"}
     }
@@ -852,5 +962,85 @@ final class CrewdWorkStore: ObservableObject {
             if token == generation && !(error is CancellationError) { lastFailure = failure(error) }
             throw error
         }
+    }
+}
+
+/// The brief is a projection of one completed patrol, with no write or execution authority.
+struct CrewdPatrolBrief {
+    enum Kind: String, CaseIterable {
+        case longWaits = "long_waits"
+        case needsRuling = "needs_ruling"
+        case unclaimed
+        case unowned
+        case lost
+        case stopEscalated = "stop_escalated"
+        case archiveCandidates = "archive_candidates"
+        case incompleteChannels = "incomplete_channels"
+
+        var title: String {
+            switch self {
+            case .longWaits: "等待人类决定较久的工作"
+            case .needsRuling: "待裁定需求"
+            case .unclaimed: "待认领需求"
+            case .unowned: "无人负责的工作"
+            case .lost: "负责人失联的工作"
+            case .stopEscalated: "停工检查已升级的工作"
+            case .archiveCandidates: "待核实归档条件的群"
+            case .incompleteChannels: "未完整检查的群"
+            }
+        }
+
+        var unit: String {
+            switch self {
+            case .archiveCandidates, .incompleteChannels: "个群"
+            default: "项"
+            }
+        }
+
+        func accepts(_ reference: String) -> Bool {
+            switch self {
+            case .needsRuling, .unclaimed:
+                return CrewdWorkID(reference, kind: .requirement) != nil
+            case .archiveCandidates, .incompleteChannels:
+                return !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && reference.rangeOfCharacter(from: .controlCharacters) == nil
+            default:
+                return CrewdWorkID(reference, kind: .plan) != nil
+            }
+        }
+    }
+
+    struct Group {
+        let kind: Kind
+        let count: Int
+        let references: [String]
+    }
+
+    let groups: [Group]
+    let hasPartialReferences: Bool
+    let hasUnrecognizedFindings: Bool
+    var hasIncompleteChannels: Bool { groups.contains { $0.kind == .incompleteChannels } }
+
+    init(run: CrewdValue) throws {
+        let invalid = CrewdClientError(message: "本轮行政简报不完整。")
+        guard let started = run["startedAtMs"].int, let completed = run["completedAtMs"].int,
+              completed >= started, case .bool(let truncated) = run["truncated"],
+              case .object(let counts) = run["counts"], case .object(let findings) = run["findings"],
+              Set(counts.keys) == Set(findings.keys) else { throw invalid }
+        groups = try Kind.allCases.compactMap { kind in
+            guard let rawCount = counts[kind.rawValue] else { return nil }
+            guard let count = rawCount.int, count > 0,
+                  case .array(let samples)? = findings[kind.rawValue],
+                  !samples.isEmpty, samples.count <= 50, samples.count <= count,
+                  truncated || samples.count == count else { throw invalid }
+            let references = try samples.map { sample in
+                guard let reference = sample.string, kind.accepts(reference) else { throw invalid }
+                return reference
+            }
+            guard Set(references).count == references.count else { throw invalid }
+            return Group(kind: kind, count: count, references: references)
+        }
+        hasPartialReferences = truncated
+        hasUnrecognizedFindings = counts.keys.contains { Kind(rawValue: $0) == nil }
     }
 }
