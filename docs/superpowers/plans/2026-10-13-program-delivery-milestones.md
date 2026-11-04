@@ -39,6 +39,10 @@ Mac 修正 `3931d202` 将裁决入口放到已完成的巡检简报分组中。�
 
 `f55bfc28` 接通多内容块文档的单位置编辑。资料库和群内原文使用同一入口。保存保持原位置 ID、其他位置、顺序和布局。编辑固定版本时，新块以原固定版本为来源，其他引用保留。普通 Core 与实际 Swift 数据层在提交答复未读的情况下分别重启，客户端只查原请求，并在文档已更新到第 4 版时核对原保存的第 3 版。跨范围位置和过期版本拒绝写入。见 `/private/tmp/pcw-placement.he_rykl3/result.json`。Mac 私有预览和 iPhoneOS 完整构建记录见 `/private/tmp/pcw-doc-placement-gate.ojhUY5/mac-preview-final/candidate.json`、`/private/tmp/pcw-doc-placement-gate.ojhUY5/ios-debug-proof.json`。两次源码之间后台 Rust 输入一致。
 
+`46e6d630` 让用户从 Mac、iPad 和两套 iPhone 消息入口查看人工归属纠正历史。模型原判断、当前有效归属和人工设置、清除、重置分开展示。查询按原消息、群和机组校验，每页 20 条，最多展示 256 条并明确提示还有更早记录。普通 Core 实际退出并重开后查回 24 条，原消息、回复关系和判断状态一致，已解除群关联的工作隐藏编号。配对撤权、附着代理拒绝、旧分页失效和损坏记录的回归通过。见 `/private/tmp/pcw-attr.w0f26jop/result.json`、`/private/tmp/pcw-attribution-gate.m3vDtI/paired.log`。同源 Mac 私有预览封装和 iPhoneOS 完整构建均通过，见 `/private/tmp/pcw-attribution-gate.m3vDtI/mac-preview/candidate.json`、`/private/tmp/pcw-attribution-gate.m3vDtI/ios-debug-proof.json`。
+
+下一消息模块按原设计 §29.4 补充实际唤醒与投递说明，分别记录决策、实际入队原因和送达结果。历史记录没有可信理由或回执已清理时显示未知。后端和客户端已在独立检出并行实施。
+
 `2cb8f0b3` 的私有 macOS Release 候选为 0.2.4，构建 `20761.71404`。应用与内嵌后台完成带安全时间戳的 Developer ID 签名，公证输入 ZIP 重新解包后通过严格签名检查。公证输入 SHA-256 为 `0c6b7b081615742004b36ca3e7e8c0a537c29ba3523cb941a759315b031af19f`。使用包中实际签名后台复测 Core 21→22 与整份旧数据回退也通过。候选及迁移记录见 `/private/tmp/pcw-split-ordinary.3WoYkW/notary-input-proof.json` 和 `/private/tmp/pcw-024-signed-core-1767AF70/result.json`。此候选待提交 Apple 公证；正式整包安装、回退和窗口验收另记。
 
 ## 2026-10-31 执行基线：逐项接完整决策能力
