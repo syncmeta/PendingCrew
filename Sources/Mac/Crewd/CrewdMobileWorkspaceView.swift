@@ -97,7 +97,7 @@ private struct CrewdMobileCrewPane: View {
                     CrewdWorkPanels(store: workspace.workStore, resources: workspace.resources,
                         resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
                         planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-                        members: Array(workspace.knownSessions.values), crews: workspace.crews, progressOnly: tab == .progress)
+                        members: Array(workspace.knownSessions.values), crews: workspace.crews, progressOnly: tab == .progress, patrolWorkspace: workspace)
                 } else if tab == .documents { CrewdKnowledgeDocumentsEntry(workspace: workspace) }
             }
         }.navigationTitle(title)

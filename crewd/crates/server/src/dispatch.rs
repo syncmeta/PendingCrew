@@ -284,6 +284,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 capabilities.push("command.receipts".into());
                 capabilities.push("session.claude.recovery".into());
                 capabilities.push("crew.defaultWorkingDirectory".into());
+                if state.orchestra.get().is_some() {
+                    capabilities.push(crewd_proto::PATROL_START.into());
+                }
             }
             if state.orchestra.get().is_some()
                 && state.native_helpers.get().is_some()

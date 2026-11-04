@@ -63,11 +63,33 @@ pub fn status(c: &Connection, crew: &str) -> Result<PatrolStatus> {
         },
         None => (None, None),
     };
+    use crate::patrol_manual::Issue;
+    let (manual_run, manual_run_active, manual_error) = match crate::patrol_manual::status(c, crew)
+    {
+        Ok((run, issue)) => {
+            let active = run
+                .as_ref()
+                .map(|r| r.completed_at_ms.is_none() && !matches!(issue, Some(Issue::Interrupted)));
+            let error = issue.map(|issue| match issue {
+                Issue::Retrying => prompts.get("notice.patrol.retry").into(),
+                Issue::Interrupted => prompts.get("notice.patrol.manual_interrupted").into(),
+            });
+            (run, active, error)
+        }
+        Err(_) => (
+            None,
+            None,
+            Some(prompts.get("notice.patrol.unreadable").into()),
+        ),
+    };
     Ok(PatrolStatus {
         crew_id: crew.into(),
         run,
         error: error.or(brief_error),
         captain_brief,
+        manual_run,
+        manual_run_active,
+        manual_error,
     })
 }
 
@@ -163,22 +185,35 @@ fn step(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
         saved = Some(Saved {
             version: 1,
             epoch: crewd_store::judgment_state::epoch(tx.conn())?,
-            run: PatrolRun {
-                run_id: uuid::Uuid::new_v4().to_string(),
-                started_at_ms: tx.now_ms(),
-                completed_at_ms: None,
-                scan: WorkPatrolScan::Work,
-                after: None,
-                captured_seq: seq,
-                scanned_counts: BTreeMap::new(),
-                findings: BTreeMap::new(),
-                counts: BTreeMap::new(),
-                truncated: false,
-            },
+            run: new_run(tx.now_ms(), seq),
         });
     }
     let saved = saved.as_mut().expect("initialized");
-    let r = &mut saved.run;
+    scan_step(tx, crew, &mut saved.run)?;
+    meta_set(
+        tx.conn(),
+        &key(crew),
+        &serde_json::to_string(saved).map_err(StoreError::from)?,
+    )?;
+    Ok(())
+}
+
+pub(super) fn new_run(now: i64, seq: i64) -> PatrolRun {
+    PatrolRun {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        started_at_ms: now,
+        completed_at_ms: None,
+        scan: WorkPatrolScan::Work,
+        after: None,
+        captured_seq: seq,
+        scanned_counts: BTreeMap::new(),
+        findings: BTreeMap::new(),
+        counts: BTreeMap::new(),
+        truncated: false,
+    }
+}
+
+pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun) -> Result<()> {
     let page = crate::work_patrol::read(
         tx.conn(),
         WorkPatrolParams {
@@ -258,11 +293,6 @@ fn step(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
             WorkPatrolScan::Channels => r.completed_at_ms = Some(tx.now_ms()),
         }
     }
-    meta_set(
-        tx.conn(),
-        &key(crew),
-        &serde_json::to_string(saved).map_err(StoreError::from)?,
-    )?;
     Ok(())
 }
 

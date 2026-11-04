@@ -23,10 +23,16 @@ import Foundation
             ])
         ]
         var delivery: [String: CrewdValue]?
+        var manual: [String: CrewdValue]?
+        var manualActive = false
         let store = CrewdWorkStore { method, params in
             precondition(method == "work.patrolStatus" && params["crewId"] == .string("a"))
             var status: [String: CrewdValue] = ["crewId": .string("a"), "error": .null, "run": .object(run)]
             if let delivery { status["captainBrief"] = .object(delivery) }
+            if let manual {
+                status["manualRun"] = .object(manual)
+                status["manualRunActive"] = .bool(manualActive)
+            }
             return .object(status)
         }
         store.selectCrew("a")
@@ -55,6 +61,27 @@ import Foundation
         delivery?["runId"] = .string("original-run")
         delivery?["phase"] = .string("not-a-phase")
         try await rejectsDelivery(store)
+        delivery = nil
+
+        let manualID = UUID().uuidString.lowercased()
+        manual = run
+        manual?["runId"] = .string(manualID)
+        manual?["completedAtMs"] = .null
+        manualActive = true
+        let active = try await store.patrolStatus()
+        precondition(active["manualRun"]["runId"] == .string(manualID))
+        precondition(active["run"]["runId"] == .string("original-run"))
+        precondition(active["manualRun"]["completedAtMs"] == .null)
+        manualActive = false
+        let interrupted = try await store.patrolStatus()
+        precondition(interrupted["manualRunActive"] == .bool(false))
+        precondition(interrupted["manualRun"]["completedAtMs"] == .null)
+        manual?["completedAtMs"] = .integer(3)
+        let completed = try await store.patrolStatus()
+        precondition(completed["manualRun"]["completedAtMs"] == .integer(3))
+        manual?["runId"] = .string("unrelated")
+        try await rejectsDelivery(store)
+        manual = nil
 
         run["truncated"] = .bool(true)
         run["counts"] = .object(["unowned": .integer(53), "future_kind": .integer(1)])
@@ -82,7 +109,7 @@ import Foundation
         precondition(empty.groups.isEmpty && !empty.hasIncompleteChannels && !empty.hasUnrecognizedFindings)
         run["completedAtMs"] = .null
         precondition(throwsInvalid(run))
-        print("patrol brief: completed source, categories, original references, partial and malformed states passed")
+        print("patrol brief: separate manual and background runs, original references, partial and malformed states passed")
     }
 
     @MainActor static func rejectsDelivery(_ store: CrewdWorkStore) async throws {

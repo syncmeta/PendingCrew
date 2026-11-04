@@ -1182,6 +1182,12 @@ impl<P: Port> Core<P> {
         self.clock.now()
     }
 
+    pub(crate) async fn advance_manual_patrol(&self) {
+        if !self.shutting_down {
+            log_err(self.port.advance_manual_patrol().await);
+        }
+    }
+
     /// Case-only authority checks; corrupt/missing state never becomes Ordinary.
     pub(crate) async fn check_admin_runtimes(&mut self, limit: usize) {
         let ids = retirement_source_page(

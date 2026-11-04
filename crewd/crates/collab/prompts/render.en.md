@@ -122,6 +122,9 @@ Background acknowledgement; full text at #{seq}.
 ## notice.patrol.retry
 巡检读取失败；原进度保留，稍后重试
 
+## notice.patrol.manual_interrupted
+The manual patrol was interrupted. Its progress is retained, and a new patrol can be started.
+
 ## notice.patrol.error_unreadable
 巡检错误记录不可读取；原记录已保留
 

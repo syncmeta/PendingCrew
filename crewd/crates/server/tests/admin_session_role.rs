@@ -210,6 +210,8 @@ async fn attached_worker_cannot_create_admin_via_human_rpc_public_command_or_age
     assert_eq!(snapshot(&r.f).await, before);
     let command=call(&mut worker,"command.submit",json!({"requestId":uuid::Uuid::new_v4().to_string(),"dbId":"synthetic","runtimeBindingId":"synthetic","command":{"operation":"session.start","params":start(&r.f.crew,"admin")}})).await;
     assert_eq!(command.unwrap_err().0, crewd_proto::RpcError::FORBIDDEN);
+    let patrol = call(&mut worker,"command.submit",json!({"requestId":uuid::Uuid::new_v4().to_string(),"dbId":"synthetic","runtimeBindingId":"synthetic","command":{"operation":"work.patrolStart","params":{"crewId":r.f.crew}}})).await;
+    assert_eq!(patrol.unwrap_err().0, crewd_proto::RpcError::FORBIDDEN);
     assert_eq!(snapshot(&r.f).await, before);
     let denied=rpc(&mut worker,"agent.call",json!({"tool":"start_session","args":{"brief":"must not create admin","isolation":false,"role":"admin"}})).await;
     assert_eq!(denied["isError"], true);

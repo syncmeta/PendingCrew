@@ -18,6 +18,7 @@ struct CrewdWorkPanels: View {
     var compact = false
     var openTodo: (() -> Void)? = nil
     var visiblePlanIDs: Set<String>? = nil
+    var patrolWorkspace: CrewdWorkspace? = nil
     private var visibleProgress: [CrewdPlan] {
         guard let visiblePlanIDs else { return store.progress }
         return visiblePlanIDs.sorted().compactMap { raw in
@@ -116,7 +117,7 @@ struct CrewdWorkPanels: View {
             }
         }.padding(compact ? 8:16).foregroundStyle(CrewdChatStyle.ink(colorScheme)).background(pageBackground)
         .task(id:store.readScope.uuidString+store.capabilities.sorted().joined(separator:",")) { await store.ensureLoaded() }
-        .sheet(isPresented: $patrolPresented) { CrewdPatrolView(store: store) }
+        .sheet(isPresented: $patrolPresented) { CrewdPatrolView(store: store, workspace: patrolWorkspace) }
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
     }

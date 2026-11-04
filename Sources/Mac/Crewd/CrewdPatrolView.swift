@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CrewdPatrolView: View {
     @ObservedObject var store: CrewdWorkStore
+    let workspace: CrewdWorkspace?
     @Environment(\.dismiss) private var dismiss
     @State private var backgroundStatus: CrewdValue?
     @State private var statusError: String?
@@ -23,9 +24,12 @@ struct CrewdPatrolView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("当前机组巡检").font(.headline)
-            Text("显示当前机组的巡检事实。检查和查看简报不会派活、关闭事项或归档群。分页期间状态可能变化。")
+            Text("手动巡检保存本轮观察。下方的即时读取可核对最新事实。巡检不会派活、关闭事项或归档群。")
                 .font(.caption).foregroundStyle(.secondary)
             backgroundSection
+            if let workspace, store.capabilities.contains("work.patrolStart") {
+                manualSection(workspace)
+            }
             Button("行政处理记录") {casesPresented=true}
             if store.capabilities.contains("adminCase.similarRequirements") {
                 Button("审阅相近需求") { similarPresented = true }
@@ -47,7 +51,7 @@ struct CrewdPatrolView: View {
                 Text("群归档候选").tag("channels")
             }.pickerStyle(.segmented)
             HStack {
-                Button(loaded ? "重新检查" : "开始检查") { reset(); load() }.disabled(task != nil)
+                Button(loaded ? "重新读取事实" : "读取当前事实") { reset(); load() }.disabled(task != nil)
                 if task != nil { Button("取消读取") { cancel() } }
                 if loaded && cursor != nil { Button("继续下一页") { load() }.disabled(task != nil) }
                 Spacer()
@@ -77,6 +81,13 @@ struct CrewdPatrolView: View {
         .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; archived=[]; archivedLoaded=false; readStatus() }
         .onAppear { readStatus() }
         .onDisappear { cancel(); clearStatus() }
+        .task(id: activeManualRun) {
+            guard let run = activeManualRun else { return }
+            while !Task.isCancelled && activeManualRun == run {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                if !Task.isCancelled { readStatus() }
+            }
+        }
     }
     private func readArchived() {
         let scope=store.readScope
@@ -166,6 +177,31 @@ struct CrewdPatrolView: View {
             }
         }
     }
+    private var activeManualRun: String? {
+        guard let status = backgroundStatus, status["manualRunActive"] == .bool(true) else { return nil }
+        let run = status["manualRun"]
+        return run["runId"].string
+    }
+    private func manualSection(_ workspace: CrewdWorkspace) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            CrewdManualPatrolControls(workspace: workspace, crew: store.selectedCrew,
+                running: activeManualRun != nil, refresh: readStatus).id(store.readScope)
+            if let failure = backgroundStatus?["manualError"].string {
+                Text(failure).foregroundStyle(.orange)
+            }
+            if let run = backgroundStatus?["manualRun"], run != .null {
+                Text("手动巡检开始于 " + time(run["startedAtMs"]))
+                Text("已扫描 " + counts(run["scannedCounts"]))
+                if activeManualRun != nil {
+                    Text("手动巡检进行中，可以关闭此页后回来查看。")
+                } else if run["completedAtMs"] != .null {
+                    Text("手动巡检结束于 " + time(run["completedAtMs"]))
+                    if let brief = try? CrewdPatrolBrief(run: run) { briefSection(brief) }
+                    else { Text("本轮手动简报无法读取。").foregroundStyle(.orange) }
+                }
+            }
+        }.font(.caption)
+    }
     private func time(_ value: CrewdValue) -> String {
         guard let ms = value.int else { return "未知" }
         return Date(timeIntervalSince1970: Double(ms) / 1000).formatted(date: .abbreviated, time: .standard)
@@ -178,7 +214,7 @@ struct CrewdPatrolView: View {
     private func clearStatus() { statusRequest = UUID(); statusTask?.cancel(); statusTask = nil; backgroundStatus = nil; statusError = nil }
     private func readStatus() {
         guard statusTask == nil else { return }
-        let token = UUID(); statusRequest = token; statusError = nil; backgroundStatus = nil
+        let token = UUID(); statusRequest = token; statusError = nil
         statusTask = Task { @MainActor in
             defer { if statusRequest == token { statusTask = nil } }
             do {
@@ -207,6 +243,74 @@ struct CrewdPatrolView: View {
         if !row["longWaits"].array.isEmpty { facts.append("有人类决定等待较久") }
         if row["longWaitsTruncated"] == .bool(true) { facts.append("等待项仅显示部分") }
         return facts.isEmpty ? "本次未发现上述运转问题" : facts.joined(separator: "；")
+    }
+}
+
+private struct CrewdManualPatrolControls: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    let crew: String
+    let running: Bool
+    let refresh: () -> Void
+    @State private var busy = false
+    @State private var feedback: String?
+
+    private var pending: [CrewdPresentationJournal.Prepared] {
+        workspace.durableUnknown.filter {
+            workspace.isCurrentOriginalObservation($0) && $0.method == "command.submit" &&
+                $0.params["command"]["operation"] == .string(CrewdPublicOperation.patrolStart.rawValue) &&
+                $0.params["command"]["params"]["crewId"] == .string(crew)
+        }
+    }
+
+    var body: some View {
+        Button(running ? "手动巡检进行中" : "启动手动巡检") { start() }
+            .disabled(busy || running || !pending.isEmpty || !workspace.client.readyForWork)
+        ForEach(pending) { original in
+            Button("查询原巡检请求") { lookup(original) }.disabled(busy || !workspace.client.readyForWork)
+        }
+        if let feedback { Text(feedback).foregroundStyle(.secondary) }
+    }
+
+    private func start() {
+        busy = true
+        feedback = nil
+        Task {
+            defer { busy = false }
+            do {
+                let receipt = try await workspace.submitPublicCommand(.patrolStart,
+                    params: .object(["crewId": .string(crew)]), crew: crew)
+                observe(receipt)
+            } catch { feedback = error.localizedDescription }
+        }
+    }
+
+    private func lookup(_ original: CrewdPresentationJournal.Prepared) {
+        busy = true
+        feedback = nil
+        Task {
+            defer { busy = false }
+            do {
+                let receipt = try await workspace.lookupOriginalCommand(original)
+                if let receipt, [.committed, .rejected, .suppressed].contains(receipt.phase) {
+                    try workspace.acknowledgeOriginalCommand(original, receipt: receipt)
+                }
+                observe(receipt)
+            } catch { feedback = error.localizedDescription }
+        }
+    }
+
+    private func observe(_ receipt: CrewdPublicReceipt?) {
+        guard workspace.crewID == crew else { return }
+        if let receipt, receipt.historical, [.committed, .rejected, .suppressed].contains(receipt.phase) {
+            feedback = "原历史回执已核对。这里显示当前可读的巡检轮次。"
+        } else if let receipt, receipt.phase == .committed {
+            feedback = "原请求已记录。这里显示最近一轮手动巡检。"
+        } else if let receipt, [.rejected, .suppressed].contains(receipt.phase) {
+            feedback = "后台未接受此巡检请求。"
+        } else {
+            feedback = "原请求结果未确认，可以继续查询原回执。"
+        }
+        refresh()
     }
 }
 

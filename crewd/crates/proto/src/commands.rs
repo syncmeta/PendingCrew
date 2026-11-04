@@ -145,6 +145,8 @@ pub enum PublicCommand {
     CrewCreateFirstMessage(FirstMessageParams),
     #[serde(rename = "message.post")]
     MessagePost(MessagePostParams),
+    #[serde(rename = "work.patrolStart")]
+    PatrolStart(crate::PatrolStartParams),
     #[serde(rename = "session.start")]
     SessionStart(orchestra::SessionStartParams),
     #[serde(rename = "session.codex.configure")]
@@ -227,6 +229,7 @@ impl PublicCommand {
             Self::CrewCreateFirstMessage(_) => &["crew.create", "message.post"],
             Self::CrewCreate(_) => &["crew.create"],
             Self::MessagePost(_) => &["message.post"],
+            Self::PatrolStart(_) => &[crate::PATROL_START],
             Self::SessionStart(_) => &["session.start"],
             Self::CodexConfigure(_) => &["session.codex.configure"],
             Self::CodexCompact(_) => &["session.codex.compact"],
@@ -263,6 +266,7 @@ impl PublicCommand {
             Self::CrewCreate(_) => "crew.create",
             Self::CrewCreateFirstMessage(_) => "crew.createFirstMessage",
             Self::MessagePost(_) => "message.post",
+            Self::PatrolStart(_) => crate::PATROL_START,
             Self::SessionStart(_) => "session.start",
             Self::CodexConfigure(_) => "session.codex.configure",
             Self::CodexCompact(_) => "session.codex.compact",

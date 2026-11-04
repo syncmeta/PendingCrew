@@ -220,7 +220,10 @@ async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>)
                 heartbeat.reset();
             }
             _ = heartbeat.tick() => core.handle(Input::Tick).await,
-            _ = native_authority.tick() => core.check_admin_runtimes(32).await,
+            _ = native_authority.tick() => {
+                core.check_admin_runtimes(32).await;
+                core.advance_manual_patrol().await;
+            }
         }
         if core.shutdown_done() {
             return;

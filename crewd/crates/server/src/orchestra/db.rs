@@ -1343,6 +1343,12 @@ impl Port for DbPort {
         self.write(collab::patrol_runtime::tick).await?;
         self.read(collab::patrol_runtime::brief_candidate).await
     }
+    async fn advance_manual_patrol(&self) -> Result<()> {
+        if self.read(collab::patrol_manual::has_pending).await? {
+            self.write(collab::patrol_manual::tick).await?;
+        }
+        Ok(())
+    }
     async fn enqueue_patrol_brief(
         &self,
         crew: String,

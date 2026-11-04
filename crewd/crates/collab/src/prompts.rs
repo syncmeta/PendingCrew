@@ -100,6 +100,7 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
     ("notice.admin.title", &[]),
     ("notice.patrol.unreadable", &[]),
     ("notice.patrol.retry", &[]),
+    ("notice.patrol.manual_interrupted", &[]),
     ("notice.patrol.error_unreadable", &[]),
     ("notice.patrol.receipt_unreadable", &[]),
     ("notice.ask.still_wanted", &["public"]),

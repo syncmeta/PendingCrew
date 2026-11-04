@@ -65,8 +65,8 @@ struct CrewdWorkspaceView: View {
                     Divider()
                     switch tab {
                     case .messages: messageLayout
-                    case .todo: CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews)
-                    case .progress: CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,progressOnly:true)
+                    case .todo: CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,patrolWorkspace:workspace)
+                    case .progress: CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,progressOnly:true,patrolWorkspace:workspace)
                     case .documents: CrewdKnowledgeDocumentsEntry(workspace: workspace)
                     }
                 }

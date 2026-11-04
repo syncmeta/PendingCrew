@@ -55,6 +55,13 @@ struct CrewdPublicReceipt {
             let params=originalCommand["params"]
             try CrewdClaudeWire.recoveryResult(value["result"],session:try CrewdCommandTarget(params["target"]).sessionID,originalRequestIDs:params["originalRequestIds"])
         }
+        if originalCommand["operation"] == .string("work.patrolStart"), phase == .committed {
+            let result = value["result"]
+            guard result["crewId"] == originalCommand["params"]["crewId"],
+                  result["runId"].string.flatMap(UUID.init(uuidString:)) != nil,
+                  let disposition = result["disposition"].string,
+                  ["started", "joined"].contains(disposition) else { throw CrewdPublicWire.invalid() }
+        }
         if originalCommand["operation"].string?.hasPrefix("personalDraft.")==true,phase == .committed{try CrewPersonalCoreWire.validateResult(value["result"],command:originalCommand)}
         if originalCommand["operation"].string?.hasPrefix("session.codex.") == true,phase == .confirmed {
             try CrewdCodexWire.validateResult(value["result"],command:originalCommand)
@@ -146,6 +153,7 @@ enum CrewdPublicOperation: String, Codable {
     case hibernate = "crewd.hibernate"
     case crewCreate = "crew.create"
     case firstMessage = "crew.createFirstMessage"
+    case patrolStart = "work.patrolStart"
     case messagePost = "message.post"
     case sessionStart = "session.start"
     case sessionStop = "session.stop"
@@ -243,6 +251,9 @@ private enum CrewdPublicParameters {
         switch operation {
         case .personalDraftOwner,.personalDraftMember,.personalDraftConsent,.personalDraftCheckpoint,.personalDraftResolve:return try CrewPersonalCoreWire.canonical(operation.rawValue,value)
         case .crewCreate: required = ["title", "workingDirectory"]; defaults = ["parentId": .null]
+        case .patrolStart:
+            required = ["crewId"]
+            _ = try CrewdPublicWire.token(fields["crewId"] ?? .null)
         case .firstMessage:
             required = ["crew", "text"]
             guard case .object(var crew) = fields["crew"], crew["title"] != nil,

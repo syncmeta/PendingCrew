@@ -334,6 +334,7 @@ fn sql_effect(
             )?
             .message,
         ),
+        PublicCommand::PatrolStart(p) => serde_json::to_value(collab::patrol_manual::start(tx, &p.crew_id)?),
         _ => {
             return Err(crewd_store::StoreError::Invalid(
                 "external command requires production scheduler".into(),
@@ -362,6 +363,7 @@ async fn submit(
         | PublicCommand::LocalClientTrustRevoke(_)
         | PublicCommand::CrewCreate(_)
         | PublicCommand::CrewCreateFirstMessage(_)
+        | PublicCommand::PatrolStart(_)
         | PublicCommand::MessagePost(_) => submit_sql(state, actor, p).await,
         PublicCommand::CodexConfigure(_)
         | PublicCommand::CodexCompact(_)
@@ -419,6 +421,10 @@ async fn submit_sql_with_home(
     for method in p.command.authorized_methods() {
         actor.authorize(state, method).await?;
     }
+    if matches!(&p.command, PublicCommand::PatrolStart(_)) && state.orchestra.get().is_none() {
+        return Err(RpcError::new(RpcError::CONFLICT, "orchestra is not running")
+            .with_refusal("orchestra.not_running"));
+    }
     if !crewd_proto::valid_remote_uuid(&p.request_id)
         || !crewd_proto::valid_remote_uuid(&p.runtime_binding_id)
     {
@@ -435,6 +441,7 @@ async fn submit_sql_with_home(
             | PublicCommand::LocalClientTrustRevoke(_)
             | PublicCommand::CrewCreate(_)
             | PublicCommand::CrewCreateFirstMessage(_)
+            | PublicCommand::PatrolStart(_)
             | PublicCommand::MessagePost(_)
     ) {
         return Err(RpcError::new(

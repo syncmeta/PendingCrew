@@ -588,6 +588,7 @@ pub fn archive(tx: &mut Tx<'_>, id: &str) -> Result<Crew> {
     crate::asks::withdraw_open_for_archive(tx, id)?;
     // 它的 session 还排着队（pending）的唤醒一并作废（归档的 session 起不来）。
     crate::wakes::drop_for_crew(tx, id, "crew archived")?;
+    crate::patrol_manual::cancel(tx, id)?;
     let now = tx.now_ts();
     tx.conn().execute(
         "UPDATE crews SET archived_at=?2, updated_at=?2 WHERE id=?1",

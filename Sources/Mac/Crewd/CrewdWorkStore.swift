@@ -263,14 +263,20 @@ final class CrewdWorkStore: ObservableObject {
               let run = fields["run"], let error = fields["error"],
               error == .null || error.string != nil else { throw CrewdClientError(message:"后台巡检状态不完整或范围不符。") }
         if run != .null {
-            guard case .object(let record) = run,
-                  record["startedAtMs"]?.int != nil,
-                  let end = record["completedAtMs"], end == .null || end.int != nil,
-                  case .bool? = record["truncated"],
-                  case .object(let scanned)? = record["scannedCounts"],
-                  case .object(let counts)? = record["counts"],
-                  scanned.values.allSatisfy({ ($0.int ?? -1) >= 0 }),
-                  counts.values.allSatisfy({ ($0.int ?? -1) >= 0 }) else { throw CrewdClientError(message:"后台巡检记录不完整。") }
+            try validatePatrolRun(run)
+        }
+        if let manual = fields["manualRun"], manual != .null {
+            guard manual["runId"].string.flatMap(UUID.init(uuidString:)) != nil,
+                  case .bool(let active)? = fields["manualRunActive"],
+                  !active || manual["completedAtMs"] == .null else {
+                throw CrewdClientError(message: "手动巡检轮次身份或活动状态无效。")
+            }
+            try validatePatrolRun(manual)
+        } else if let active = fields["manualRunActive"], active != .null {
+            throw CrewdClientError(message: "手动巡检活动状态缺少对应轮次。")
+        }
+        if let failure = fields["manualError"], failure != .null, failure.string == nil {
+            throw CrewdClientError(message: "手动巡检状态不完整。")
         }
         if let brief = fields["captainBrief"], brief != .null {
             guard let runId = run["runId"].string, !runId.isEmpty,
@@ -284,6 +290,18 @@ final class CrewdWorkStore: ObservableObject {
             }
         }
         return value
+    }
+    private func validatePatrolRun(_ run: CrewdValue) throws {
+        guard case .object(let record) = run,
+              record["startedAtMs"]?.int != nil,
+              let end = record["completedAtMs"], end == .null || end.int != nil,
+              case .bool? = record["truncated"],
+              case .object(let scanned)? = record["scannedCounts"],
+              case .object(let counts)? = record["counts"],
+              scanned.values.allSatisfy({ ($0.int ?? -1) >= 0 }),
+              counts.values.allSatisfy({ ($0.int ?? -1) >= 0 }) else {
+            throw CrewdClientError(message: "后台巡检记录不完整。")
+        }
     }
     func similarRequirementPage(after: String?) async throws -> CrewdValue {
         let token = generation, crew = selectedCrew

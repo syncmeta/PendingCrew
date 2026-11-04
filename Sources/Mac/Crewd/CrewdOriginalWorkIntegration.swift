@@ -150,7 +150,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
         CrewdWorkPanels(store:workspace.workStore,resources:workspace.resources,
             resourceDrafts:$workspace.resourceDrafts,drafts:$workspace.requirementDrafts,
             planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,
-            members:workspace.sessions,crews:workspace.crews,domain:domain,humanCrewOnly:humanCrewOnly,progressOnly:progress)
+            members:workspace.sessions,crews:workspace.crews,domain:domain,humanCrewOnly:humanCrewOnly,progressOnly:progress,patrolWorkspace:workspace)
     }
     private func scopedTodo(human:Bool)->some View {
         let selection=scope(human ? "human":"ai",default:human ? "crew":"channel")
@@ -288,7 +288,7 @@ private struct CrewdOriginalChannelProgress: View {
                     resourceDrafts: $workspace.resourceDrafts, drafts: $workspace.requirementDrafts,
                     planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
                     members: workspace.sessions, crews: workspace.crews, progressOnly: true,
-                    openTodo: { workspace.originalSection = "Todo" }, visiblePlanIDs: planIDs)
+                    openTodo: { workspace.originalSection = "Todo" }, visiblePlanIDs: planIDs, patrolWorkspace: workspace)
             }
         }
         .onAppear { group.setActive(true, owner: owner) }

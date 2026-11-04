@@ -689,6 +689,9 @@ pub trait Port: Send + Sync + 'static {
     fn advance_patrol(&self) -> impl Future<Output = Result<Option<(String, String)>>> + Send {
         async { Ok(None) }
     }
+    fn advance_manual_patrol(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
     fn enqueue_patrol_brief(
         &self,
         _crew: String,

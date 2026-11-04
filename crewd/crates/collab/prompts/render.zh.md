@@ -122,6 +122,9 @@ crewd 重启打断了你上一轮的工作。先核对当前状态（工作区�
 ## notice.patrol.retry
 巡检读取失败；原进度保留，稍后重试
 
+## notice.patrol.manual_interrupted
+手动巡检已中断。原进度保留，可重新开始。
+
 ## notice.patrol.error_unreadable
 巡检错误记录不可读取；原记录已保留
 

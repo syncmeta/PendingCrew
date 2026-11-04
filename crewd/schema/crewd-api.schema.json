@@ -11606,6 +11606,18 @@
       ],
       "type": "object"
     },
+    "PatrolStartParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
     "PatrolStatus": {
       "properties": {
         "captainBrief": {
@@ -11624,6 +11636,28 @@
         "error": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "manualError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manualRun": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PatrolRun"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manualRunActive": {
+          "type": [
+            "boolean",
             "null"
           ]
         },
@@ -12687,6 +12721,23 @@
             },
             "params": {
               "$ref": "#/$defs/MessagePostParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "work.patrolStart",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/PatrolStartParams"
             }
           },
           "required": [

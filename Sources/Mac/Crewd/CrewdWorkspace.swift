@@ -1194,6 +1194,17 @@ final class CrewdWorkspace: ObservableObject {
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID(), validateReceipt:((CrewdPublicReceipt)throws->Void)?=nil) async throws -> CrewdPublicReceipt {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
+        if operation == .patrolStart {
+            guard client.capabilities.contains(operation.rawValue), client.readyForWork,
+                  !crew.isEmpty, crew == crewID, params["crewId"] == .string(crew),
+                  !hasOriginalUnknown(method: operation.rawValue, crew: crew),
+                  !publicCommands.observations.values.contains(where: {
+                      publicCommands.pending.contains($0.id) && $0.envelope.operation == operation &&
+                          $0.envelope.params["crewId"] == .string(crew)
+                  }) else {
+                throw CrewdClientError(message: "当前机组无法启动手动巡检，或已有原请求待核对。", kind: .notSubmitted)
+            }
+        }
         if operation.isCodex {
             let session=params["target"]["sessionId"].string
             guard client.capabilities.contains("session.codex"),session != nil else{throw CrewdClientError(message:"当前后台未接入 Codex 会话控制。",kind:.notSubmitted)}
@@ -1418,7 +1429,12 @@ final class CrewdWorkspace: ObservableObject {
             throw CrewdClientError(message:"请在个人同步设置中核对这项原请求；需先核实原空间与设备 writer，不能从通用回执入口结束。",kind:.notSubmitted)
         }
         _ = try publicCommandBinding(for: client)
-        guard record.scope == presentationScope, !receipt.historical,
+        // A terminal patrol receipt settles whether the original request was
+        // recorded even across restart. Current scan state is a separate read.
+        let historicalPatrol = receipt.historical &&
+            record.params["command"]["operation"] == .string(CrewdPublicOperation.patrolStart.rawValue) &&
+            [.committed, .rejected, .suppressed].contains(receipt.phase)
+        guard record.scope == presentationScope, !receipt.historical || historicalPatrol,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,
               record.params["dbId"].string == receipt.databaseID,
               record.params["runtimeBindingId"].string == receipt.runtimeBindingID,
@@ -1426,7 +1442,7 @@ final class CrewdWorkspace: ObservableObject {
               [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase),
               let journal = originalJournal else { throw CrewdPublicWire.invalid() }
         if record.params["command"]["operation"].string == "session.start", !settledSessionStart(receipt) { throw CrewdPublicWire.invalid() }
-        try journal.acknowledge(record, detail: detail)
+        try journal.acknowledge(record, detail: historicalPatrol ? "已核对原巡检请求的历史回执。当前轮次另行读取。" : detail)
         durableUnknown = try journal.unknownRecords()
         if record.params["command"]["operation"].string == "session.start" {
             uncertainSessionStartRecords.removeAll { $0.request == receipt.requestID }

@@ -345,11 +345,14 @@ struct Service {
     task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
 async fn service(root: &std::path::Path) -> Service {
+    service_with(root, Default::default()).await
+}
+async fn service_with(root: &std::path::Path, options: crewd_server::ServeOptions) -> Service {
     let root = root.to_owned();
     let socket = root.join("crewd.sock");
     let (stop, stopping) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
-        crewd_server::serve_with(root, Default::default(), async {
+        crewd_server::serve_with(root, options, async {
             let _ = stopping.await;
         })
         .await
@@ -421,6 +424,167 @@ async fn approved(
     let accepted =
         serde_json::from_value(local(owner, "remote.accept", input.clone()).await).unwrap();
     (client, input, accepted)
+}
+
+#[tokio::test]
+async fn paired_and_local_manual_patrol_refuse_fresh_intent_without_scheduler() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, _) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let crew = local(&mut running.owner, "crew.create", json!({"title":"scheduler-less patrol fixture","workingDirectory":dir.path()})).await["id"].clone();
+    let hello = local(&mut running.owner, "system.hello", json!({})).await;
+    assert!(!hello["capabilities"].as_array().unwrap().iter().any(|v| v == "work.patrolStart"));
+    let packet = draft_packet(&hello, "work.patrolStart", json!({"crewId":crew}));
+    let denied = running.owner.call("command.submit", packet.clone()).await.unwrap_err();
+    assert_eq!(denied.0, crewd_proto::RpcError::CONFLICT);
+    let lookup = json!({"dbId":packet["dbId"],"requestId":packet["requestId"]});
+    assert!(local(&mut running.owner, "command.lookup", lookup).await.is_null());
+
+    let hello = remote.call("system.hello", json!({})).await;
+    let packet = draft_packet(&hello, "work.patrolStart", json!({"crewId":crew}));
+    let denied = remote.frame("command.submit", packet.clone()).await.unwrap();
+    assert_eq!(denied["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    assert!(remote.call("command.lookup",json!({"dbId":packet["dbId"],"requestId":packet["requestId"]})).await.is_null());
+    assert!(remote.call("work.patrolStatus",json!({"crewId":crew})).await["manualRun"].is_null());
+    let raw = remote.frame("work.patrolStart", json!({"crewId":crew})).await.unwrap();
+    assert!(raw["error"].is_object());
+    drop(remote);
+    stopped(running).await;
+}
+
+#[tokio::test]
+async fn paired_human_manual_patrol_has_original_receipt_and_scoped_progress_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = || crewd_server::ServeOptions {
+        orchestra: Some(crewd_server::OrchestraServe::default()), // Both native executors disabled.
+        ..Default::default()
+    };
+    let mut running = service_with(dir.path(), options()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == "work.patrolStart")
+    );
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({"title":"isolated manual patrol","workingDirectory":dir.path()}),
+        )
+        .await["id"]
+        .clone();
+    let foreign = remote
+        .call(
+            "crew.create",
+            json!({"title":"isolated other crew","workingDirectory":dir.path()}),
+        )
+        .await["id"]
+        .clone();
+    let w = remote
+        .call(
+            "work.create",
+            json!({"crewId":crew,"title":"local unowned work"}),
+        )
+        .await["id"]
+        .clone();
+    remote
+        .call(
+            "work.create",
+            json!({"crewId":foreign,"title":"foreign unowned work"}),
+        )
+        .await;
+    let packet = draft_packet(&hello, "work.patrolStart", json!({"crewId":crew}));
+    let receipt = remote.call("command.submit", packet.clone()).await;
+    assert_eq!(receipt["phase"], "committed");
+    assert_eq!(receipt["result"]["crewId"], crew);
+    assert_eq!(receipt["result"]["disposition"], "started");
+    let id = receipt["result"]["runId"].clone();
+    let joined = remote
+        .call(
+            "command.submit",
+            draft_packet(&hello, "work.patrolStart", json!({"crewId":crew})),
+        )
+        .await;
+    assert_eq!(joined["result"]["disposition"], "joined");
+    assert_eq!(joined["result"]["runId"], id);
+    let lookup = json!({"dbId":packet["dbId"],"requestId":packet["requestId"]});
+    assert_eq!(remote.call("command.lookup", lookup.clone()).await, receipt);
+    drop(remote);
+    stopped(running).await;
+
+    let mut running = service_with(dir.path(), options()).await;
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            let status = local(&mut running.owner, "remote.status", json!({})).await;
+            if status["listening"] == true {
+                assert_eq!(status["identity"], serde_json::to_value(&identity).unwrap());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("persisted loopback endpoint did not reopen");
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let reopened = remote.call("command.lookup", lookup.clone()).await;
+    assert_eq!(reopened["result"], receipt["result"]);
+    assert_eq!(reopened["phase"], "committed");
+    assert_eq!(reopened["historical"], true);
+    let result = tokio::time::timeout(LIMIT, async {
+        loop {
+            let status = remote
+                .call("work.patrolStatus", json!({"crewId":crew}))
+                .await;
+            if status["manualRun"]["completedAtMs"].is_number() {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(result["manualRun"]["runId"], id);
+    assert_eq!(result["manualRunActive"], false);
+    assert_eq!(result["manualRun"]["findings"]["unowned"], json!([w]));
+    assert!(result["captainBrief"].is_null());
+    assert!(
+        remote
+            .call("work.patrolStatus", json!({"crewId":foreign}))
+            .await["manualRun"]
+            .is_null()
+    );
+    assert_eq!(
+        remote.call("work.get", json!({"id":w})).await["status"],
+        "open"
+    );
+
+    let hello = remote.call("system.hello", json!({})).await;
+    let next = remote
+        .call(
+            "command.submit",
+            draft_packet(&hello, "work.patrolStart", json!({"crewId":crew})),
+        )
+        .await;
+    assert_ne!(next["result"]["runId"], id);
+    assert_eq!(
+        remote.call("command.lookup", lookup).await["result"],
+        receipt["result"]
+    );
+    local(&mut running.owner,"remote.revoke",json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"fixture complete"})).await;
+    let denied = tokio::time::timeout(LIMIT, remote
+        .frame(
+            "command.submit",
+            draft_packet(&hello, "work.patrolStart", json!({"crewId":foreign})),
+        )).await.unwrap();
+    assert!(denied.is_err() || denied.unwrap()["error"].is_object());
+    stopped(running).await;
 }
 
 #[tokio::test]
