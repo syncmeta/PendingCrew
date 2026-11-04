@@ -382,9 +382,13 @@ private struct CrewdSimilarRequirementsView: View {
                         Text(verbatim: original.1).textSelection(.enabled)
                     }
                     if let workspace, store.capabilities.contains("adminCase.requirementReview") {
+                        let openedRequest = request
+                        let openedPage = page
                         CrewdRequirementReviewControls(
                             workspace: workspace, crew: store.selectedCrew, scope: store.readScope,
-                            isCurrent: { store.readScope == $0 }, source: selected.map { pair(in: $0) },
+                            isCurrent: { store.readScope == $0 },
+                            presentationIsCurrent: { request == openedRequest && page == openedPage },
+                            source: selected.map { pair(in: $0) },
                             saved: page == .reviews, originalsRead: originals.count == 2 && !busy,
                             refresh: { message in actionFeedback = message; load() }
                         ).id(selectionKey)
@@ -474,6 +478,7 @@ private struct CrewdRequirementReviewControls: View {
     let crew: String
     let scope: UUID
     let isCurrent: (UUID) -> Bool
+    let presentationIsCurrent: () -> Bool
     let source: CrewdValue?
     let saved: Bool
     let originalsRead: Bool
@@ -498,7 +503,8 @@ private struct CrewdRequirementReviewControls: View {
     }
 
     private var ready: Bool {
-        !busy && !writing && isCurrent(scope) && workspace.crewID == crew && workspace.client.readyForWork
+        !busy && !writing && isCurrent(scope) && presentationIsCurrent() &&
+            workspace.crewID == crew && workspace.client.readyForWork
     }
 
     var body: some View {
@@ -537,7 +543,8 @@ private struct CrewdRequirementReviewControls: View {
         feedback = nil
         Task { @MainActor in
             defer { busy = false }
-            guard isCurrent(scope), workspace.crewID == crew, pending.isEmpty, !writing else { return }
+            guard isCurrent(scope), presentationIsCurrent(), workspace.crewID == crew,
+                  pending.isEmpty, !writing else { return }
             do {
                 let receipt = try await workspace.submitPublicCommand(.requirementReview, params: .object(params), crew: crew) { result in
                     if result.phase == .committed, result.value["result"]["channelId"] != source["channelId"] {
@@ -546,7 +553,7 @@ private struct CrewdRequirementReviewControls: View {
                 }
                 observe(receipt)
             } catch {
-                if isCurrent(scope) { feedback = error.localizedDescription }
+                if isCurrent(scope), presentationIsCurrent() { feedback = error.localizedDescription }
             }
         }
     }
@@ -565,13 +572,13 @@ private struct CrewdRequirementReviewControls: View {
                 }
                 observe(receipt)
             } catch {
-                if isCurrent(scope) { feedback = error.localizedDescription }
+                if isCurrent(scope), presentationIsCurrent() { feedback = error.localizedDescription }
             }
         }
     }
 
     private func observe(_ receipt: CrewdPublicReceipt?) {
-        guard isCurrent(scope), workspace.crewID == crew else { return }
+        guard isCurrent(scope), presentationIsCurrent(), workspace.crewID == crew else { return }
         switch receipt?.phase {
         case .committed:
             refresh(receipt?.historical == true ? "原历史回执已核对，当前审阅记录已另行读取。" : "审阅已记录，可在「已审阅」查看。")
