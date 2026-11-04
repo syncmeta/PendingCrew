@@ -27,9 +27,11 @@ Mac 代理参数和真实 Tirkadavur 类验收的摘要见 `/private/tmp/pcw-tir
 
 `90f999e7` 接通所有直属工作均被放弃后的原需求裁定。人和有管辖权的机长可核对当前关联及作废理由，继续为原需求建计划，或填写理由关闭。原工作与需求正文保留。真实本机、机长连接和配对测试通过，涵盖跨机组、分页、过期拒绝、撤权、重复请求与事务回滚。普通 Core 在隔离目录内实际退出并重开，原提交答复未被读取，之后仅查原 UUID，账本只有一条关闭事件。结果见 `/private/tmp/pcw-rule.ptjui964/result.json`，公开 API schema 与同一二进制的生成结果逐字节一致。
 
-Mac 修正 `3931d202` 将裁决入口放到已完成的巡检简报分组中。完整 Debug 编译通过并嵌入已实测的普通 Core，两提交的 Rust 源码一致。Xcode 的额外动态库搜索路径仍被封装校验拒绝，证据见 `/private/tmp/pcw-90f999e7-mac.xUEnnl/mac-debug-proof.json`。窗口、安装和发布另行验收。
+Mac 修正 `3931d202` 将裁决入口放到已完成的巡检简报分组中。该版完整 Debug 编译通过，原封装校验发现 Xcode 注入额外动态库路径。后续 `1aaf0876` 在私有 Debug 副本中移除两条已知构建路径，并核对其余加载指令和可执行内容。新的独立 Mac 预览包含裁决与待办恢复，严格签名及系统动态库校验通过。预览嵌入经过实测的 `c2b2f6fa` 普通 Core，两提交的 Rust 源码一致。包和来源记录见 `/private/tmp/pcw-todo-lookup-gate.bgSION/mac-preview/candidate.json`。窗口、安装和发布另行验收。
 
-待办原提交恢复进入独立实施。旧普通 Core 的隔离重现实验中，机组和群内的确认动作均可创建此前从未发送的原需求，群内动作还建立关联。重开后两份需求和关联均保留。结果见 `/private/tmp/pcw-tcr.uqy_ujyr/result.json`。下一候选覆盖机组、群待办和聊天内三个生产入口，按原编号做只读查询，未查到时保留待核对记录。
+待办原提交恢复在 `c2b2f6fa` 接通机组、群待办和聊天三个入口。确认只读查询原请求，未查到时保留待核对记录。旧版复现见 `/private/tmp/pcw-tcr.uqy_ujyr/result.json`。新普通 Core 实际退出并重开，查回两个原编号，数据库内容不变，已解除的群关联保持未关联，见 `/private/tmp/pcw-tcr.ir48gnjs/result.json`。本机、配对撤权和账本回归均通过。Swift 测试中两个独立进程同时准备同一个原请求，只有一个留下持久提交记录。
+
+下一行政模块按原设计 §17 接通协作群工作无人负责的提醒。复用既有巡检、机长送达和工作指派，分别核对当前关联、通知状态和真实接手事件。后台与界面在独立检出并行实施。
 
 `2cb8f0b3` 的私有 macOS Release 候选为 0.2.4，构建 `20761.71404`。应用与内嵌后台完成带安全时间戳的 Developer ID 签名，公证输入 ZIP 重新解包后通过严格签名检查。公证输入 SHA-256 为 `0c6b7b081615742004b36ca3e7e8c0a537c29ba3523cb941a759315b031af19f`。使用包中实际签名后台复测 Core 21→22 与整份旧数据回退也通过。候选及迁移记录见 `/private/tmp/pcw-split-ordinary.3WoYkW/notary-input-proof.json` 和 `/private/tmp/pcw-024-signed-core-1767AF70/result.json`。此候选待提交 Apple 公证；正式整包安装、回退和窗口验收另记。
 
