@@ -344,6 +344,20 @@ impl Transcript {
     }
 }
 
+pub(crate) const CREW_APPROVAL_UNAVAILABLE: &str = "自动审批未完成，动作未执行。";
+
+/// The native failure explicitly establishes non-execution. Keep the review
+/// transport body out of the transcript and the Human-channel notice.
+pub(crate) fn crew_approval_unavailable(item: &Value) -> bool {
+    item["type"] == "mcpToolCall"
+        && item["server"] == proto::CREW_MCP_SERVER
+        && item["status"] == "failed"
+        && item.pointer("/error/message").and_then(Value::as_str).is_some_and(|error| {
+            error.starts_with("Automatic approval review failed:")
+                && error.contains("The action was not executed because automatic approval review could not be completed.")
+        })
+}
+
 /// 一个条目的文本形状。认不出的类型给一行 `[类型]`（codex 加了新条目也不至于看不见）。
 pub fn render_item(item: &Value) -> Vec<String> {
     let s = |k: &str| item.get(k).and_then(Value::as_str).unwrap_or_default();
@@ -391,12 +405,14 @@ pub fn render_item(item: &Value) -> Vec<String> {
                 .collect();
             vec![format!("✎ {}", paths.join(", "))]
         }
-        "mcpToolCall" => vec![format!(
-            "⚙ {}.{}（{}）",
-            s("server"),
-            s("tool"),
-            s("status")
-        )],
+        "mcpToolCall" => {
+            let mut row = format!("⚙ {}.{}（{}）", s("server"), s("tool"), s("status"));
+            if crew_approval_unavailable(item) {
+                row.push('：');
+                row.push_str(CREW_APPROVAL_UNAVAILABLE);
+            }
+            vec![row]
+        }
         "contextCompaction" => vec!["（上下文已压缩）".to_string()],
         "" => vec!["[?]".to_string()],
         other => vec![format!("[{other}]")],
@@ -663,6 +679,27 @@ mod tests {
             ),
             vec!["⚙ crew.post_to_crew（completed）"]
         );
+    }
+
+    #[test]
+    fn crew_tool_approval_unavailable_is_visible_without_raw_review_body() {
+        let mut item = json!({
+            "type": "mcpToolCall", "server": "crew", "tool": "crew_structure", "status": "failed",
+            "error": {"message":"Automatic approval review failed: <html>SYNTHETIC_PRIVATE_REVIEW_BODY</html>\n\nThe action was not executed because automatic approval review could not be completed."}
+        });
+        assert_eq!(
+            render_item(&item),
+            vec!["⚙ crew.crew_structure（failed）：自动审批未完成，动作未执行。"]
+        );
+        item["server"] = json!("foreign");
+        assert_eq!(
+            render_item(&item),
+            vec!["⚙ foreign.crew_structure（failed）"]
+        );
+        item["server"] = json!("crew");
+        item["error"]["message"] =
+            json!("Automatic approval review failed: arbitrary unsupported message");
+        assert_eq!(render_item(&item), vec!["⚙ crew.crew_structure（failed）"]);
     }
 
     #[test]

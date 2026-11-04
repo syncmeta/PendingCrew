@@ -26,7 +26,9 @@ use crate::codex::rpc::{
     Incoming, ParseError, RequestId, Rpc, RpcFailure, error_line, notification_line, parse_line,
     response_line,
 };
-use crate::codex::turns::{Signals, Transcript, TurnTracker};
+use crate::codex::turns::{
+    CREW_APPROVAL_UNAVAILABLE, Signals, Transcript, TurnTracker, crew_approval_unavailable,
+};
 use crate::delivery::Subject;
 use crate::driver::{Control, ControlOutcome, UntrustedContext};
 use crate::health::{Health, HealthKind, LaunchVerdict};
@@ -1363,6 +1365,12 @@ impl CodexCore {
         if let Some((turn_id, item)) = s.item {
             if method == "item/completed" {
                 self.transcript.push(turn_id.clone(), item.clone());
+                if self.tracker.active_turn() == Some(turn_id.as_str())
+                    && crew_approval_unavailable(&item)
+                    && self.notified.insert("crew-approval-unavailable".into())
+                {
+                    self.event(SessionEvent::Notice(CREW_APPROVAL_UNAVAILABLE.into()));
+                }
             }
             self.event(SessionEvent::Item { turn_id, item });
         }
@@ -1712,6 +1720,44 @@ mod tests {
                 |e| matches!(e,SessionEvent::Notice(n) if n.contains("Usage evidence not recorded"))
             ));
         }
+    }
+
+    #[test]
+    fn native_guardian_failure_reports_once_without_a_human_approval_request() {
+        let mut t = T::ready(None);
+        t.notify(
+            "turn/started",
+            json!({"threadId":"thr-1","turn":{"id":"current"}}),
+        );
+        let item = json!({"id":"call_1","type":"mcpToolCall","server":"crew",
+            "tool":"crew_structure","status":"failed","error":{"message":
+            "Automatic approval review failed: <html>SECRET</html>\n\nThe action was not executed because automatic approval review could not be completed."}});
+        t.notify(
+            "item/completed",
+            json!({"threadId":"thr-1","turnId":"older","item":item}),
+        );
+        assert!(
+            !t.take_events()
+                .iter()
+                .any(|event| matches!(event, SessionEvent::Notice(_)))
+        );
+        for _ in 0..2 {
+            t.notify(
+                "item/completed",
+                json!({"threadId":"thr-1","turnId":"current","item":item}),
+            );
+        }
+        let events = t.take_events();
+        let notices = events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Notice(message) => Some(message.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(notices, ["自动审批未完成，动作未执行。"]);
+        assert!(t.core.pending_decision().is_none());
+        assert!(t.core.runner_request().is_none());
     }
 
     #[test]

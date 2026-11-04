@@ -23,6 +23,7 @@ import Foundation
 struct CodexThreadItem: Decodable, Identifiable, Equatable {
     let id: String
     let kind: Kind
+    let crewToolFailure: CodexCrewToolFailure?
 
     enum Kind: Equatable {
         case userMessage(text: String)
@@ -66,7 +67,7 @@ struct CodexThreadItem: Decodable, Identifiable, Equatable {
     private enum Keys: String, CodingKey {
         case id, type, text, phase, summary, content, command, cwd, status
         case aggregatedOutput, exitCode, name, query, commandActions
-        case server, tool, namespace, changes
+        case server, tool, namespace, changes, error
     }
 
     /// One `content` entry of a `userMessage` (the `UserInput` union); we only
@@ -74,6 +75,7 @@ struct CodexThreadItem: Decodable, Identifiable, Equatable {
     private struct UserInputLite: Decodable { let type: String?; let text: String? }
     /// One `changes` entry of a `fileChange` (`FileUpdateChange`); path is what we render.
     private struct FileChangeLite: Decodable { let path: String? }
+    private struct ToolError: Decodable { let message: String? }
     private struct CommandActionLite: Decodable {
         let type: String
         let command: String?
@@ -90,6 +92,10 @@ struct CodexThreadItem: Decodable, Identifiable, Equatable {
             let v = try? c.decode(String.self, forKey: k)
             return (v?.isEmpty == true) ? nil : v
         }
+        crewToolFailure = CodexCrewToolFailure.observed(
+            type: type, server: s(.server), status: s(.status),
+            error: (try? c.decode(ToolError.self, forKey: .error))?.message
+        )
         // real schema is array-of-strings; tolerate a bare string for fwd/back-compat
         func joinedStrings(_ k: Keys) -> String? {
             if let arr = try? c.decode([String].self, forKey: k) {
@@ -157,7 +163,23 @@ struct CodexThreadItem: Decodable, Identifiable, Equatable {
     init(id: String, kind: Kind) {
         self.id = id
         self.kind = kind
+        self.crewToolFailure = nil
     }
+}
+
+/// A display-only finding from a failed native MCP item, never an approval prompt.
+enum CodexCrewToolFailure: Equatable {
+    case automaticApprovalUnavailable
+
+    static func observed(type: String?, server: String?, status: String?, error: String?) -> Self? {
+        guard type == "mcpToolCall", server == "crew", status == "failed", let error,
+              error.hasPrefix("Automatic approval review failed:"),
+              error.contains("The action was not executed because automatic approval review could not be completed.")
+        else { return nil }
+        return .automaticApprovalUnavailable
+    }
+
+    var detail: String { "自动审批未完成，动作未执行。" }
 }
 
 /// Human-facing collapsed copy plus the exact, selectable facts shown after expansion.
@@ -242,7 +264,12 @@ struct CodexActivityPresentation: Equatable {
             details: details, bad: failed)
     }
 
-    static func tool(name: String, status: String?, knowledgeCall: CodexKnowledgeCall? = nil) -> Self {
+    static func tool(name: String, status: String?, knowledgeCall: CodexKnowledgeCall? = nil,
+                     crewToolFailure: CodexCrewToolFailure? = nil) -> Self {
+        if let crewToolFailure {
+            return .init(icon: "exclamationmark.triangle", headline: headline("自动审批未完成", name),
+                         details: [.init(label: "结果", value: crewToolFailure.detail)], bad: true)
+        }
         if let call = knowledgeCall {
             var details = [Detail(label: "工具", value: name),
                            Detail(label: "原输入", value: call.arguments ?? "后台未返回原输入详情。"),

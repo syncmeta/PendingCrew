@@ -32,7 +32,9 @@ enum CodexTranscriptText {
             return "[命令] \(command.command.prefix(160))"
                 + (command.exitCode.map { " → exit \($0)" } ?? "")
         case let .fileChange(change): return "[改文件] \(change.summary ?? change.status ?? "?")"
-        case let .toolCall(name, status): return "[工具] \(name) \(status ?? "")"
+        case let .toolCall(name, status):
+            let failure = item.crewToolFailure.map { " · " + $0.detail } ?? ""
+            return "[工具] \(name) \(status ?? "")" + failure
         case let .webSearch(query): return "[搜索] \(query ?? "")"
         case let .unknown(type): return "[\(type)]"
         }

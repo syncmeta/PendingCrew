@@ -232,7 +232,8 @@ struct CodexTranscriptRows: View {
         case let .fileChange(change):
             expandableActivityRow(CodexActivityPresentation.fileChange(change))
         case let .toolCall(name, status):
-            expandableActivityRow(CodexActivityPresentation.tool(name: name, status: status, knowledgeCall: transcript.knowledgeCalls[item.id]))
+            expandableActivityRow(CodexActivityPresentation.tool(name: name, status: status,
+                knowledgeCall: transcript.knowledgeCalls[item.id], crewToolFailure: item.crewToolFailure))
         case let .webSearch(query):
             expandableActivityRow(CodexActivityPresentation.webSearch(query: query))
         case .unknown:

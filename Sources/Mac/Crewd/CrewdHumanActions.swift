@@ -355,7 +355,12 @@ struct CrewdRunnerItemView: View {
             case "commandExecution":
                 Text(item["command"].string ?? "命令").font(.system(.body, design: .monospaced)).textSelection(.enabled)
                 DisclosureGroup("命令输出 · \(item["status"].string ?? "")") { Text(item["aggregatedOutput"].string ?? "").font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-            case "mcpToolCall": Text("工具：\(item["server"].string ?? "") / \(item["tool"].string ?? "") · \(item["status"].string ?? "")")
+            case "mcpToolCall":
+                Text("工具：\(item["server"].string ?? "") / \(item["tool"].string ?? "") · \(item["status"].string ?? "")")
+                if let failure = CodexCrewToolFailure.observed(type: item["type"].string,
+                    server: item["server"].string, status: item["status"].string, error: item["error"]["message"].string) {
+                    Text(failure.detail).font(.caption).foregroundStyle(.orange)
+                }
             case "fileChange": DisclosureGroup("文件改动") { Text(item["changes"].pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
             default: DisclosureGroup(item["type"].string ?? "会话事件") { Text(item.pretty).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
             }

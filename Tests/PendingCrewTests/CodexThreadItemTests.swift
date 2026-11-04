@@ -109,6 +109,19 @@ final class CodexThreadItemTests: XCTestCase {
         XCTAssertEqual(status, "completed")
     }
 
+    func testCrewToolGuardianFailureShowsBoundedObservationInTranscript() throws {
+        let failed = try decode(#"{"id":"pcw_root_1","type":"mcpToolCall","server":"crew","tool":"crew_structure","status":"failed","error":{"message":"Automatic approval review failed: <html>SYNTHETIC_PRIVATE_REVIEW_BODY</html>\n\nThe action was not executed because automatic approval review could not be completed."}}"#)
+        let line = CodexTranscriptText.line(of: failed)
+        XCTAssertTrue(line.contains("自动审批未完成，动作未执行。"))
+        XCTAssertFalse(line.contains("SYNTHETIC_PRIVATE_REVIEW_BODY"))
+        let activity = CodexActivityPresentation.tool(name: "crew.crew_structure", status: "failed",
+            crewToolFailure: failed.crewToolFailure)
+        XCTAssertEqual(activity.headline, "自动审批未完成 · crew.crew_structure")
+        XCTAssertEqual(activity.details.map(\.value), ["自动审批未完成，动作未执行。"])
+        let ordinary = try decode(#"{"id":"other","type":"mcpToolCall","server":"crew","tool":"crew_structure","status":"failed","error":{"message":"Automatic approval review failed: arbitrary unsupported message"}}"#)
+        XCTAssertFalse(CodexTranscriptText.line(of: ordinary).contains("动作未执行"))
+    }
+
     func testUnknownArmDegradesNotCrashes() throws {
         let item = try decode(#"{"id":"item_9","type":"someFutureType","blob":42}"#)
         guard case let .unknown(type) = item.kind else { return XCTFail("expected unknown") }
