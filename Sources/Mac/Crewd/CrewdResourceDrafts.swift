@@ -15,10 +15,21 @@ struct CrewdResourceDrafts {
     private var unknown:[Key:[Snapshot]]=[:]
     func exists(_ key:Key)->Bool {entries[key] != nil}
     func fields(_ key:Key)->Fields {entries[key]?.fields ?? Fields()}
+    func snapshot(_ key:Key)->Snapshot? {entries[key]}
+    mutating func renew(_ key:Key, request:UUID) {
+        guard let original = entries[key], original.request == request else { return }
+        entries[key] = Snapshot(key:key,fields:original.fields,request:UUID(),version:UUID())
+    }
     func busy(_ key:Key)->Bool {pending[key] != nil}
     func uncertain(_ key:Key)->[Snapshot] {unknown[key] ?? []}
     var allUnknownSnapshots:[Snapshot] {unknown.values.flatMap{$0}.sorted{$0.version.uuidString < $1.version.uuidString}}
-    mutating func edit(_ key:Key,_ fields:Fields){guard entries[key]?.fields != fields else{return};entries[key]=Snapshot(key:key,fields:fields,request:UUID(),version:UUID())}
+    mutating func edit(_ key:Key,_ fields:Fields,preserveTextBytes:Bool=false){
+        if let original = entries[key]?.fields, original == fields,
+           !preserveTextBytes || (original.title.utf8.elementsEqual(fields.title.utf8) && original.body.utf8.elementsEqual(fields.body.utf8)) {
+            return
+        }
+        entries[key]=Snapshot(key:key,fields:fields,request:UUID(),version:UUID())
+    }
     mutating func begin(_ key:Key)->Snapshot? {guard !busy(key),let snapshot=entries[key] else{return nil};pending[key]=snapshot.version;return snapshot}
     mutating func confirm(_ snapshot:Snapshot)->Bool {guard !busy(snapshot.key),uncertain(snapshot.key).contains(snapshot) else{return false};pending[snapshot.key]=snapshot.version;return true}
     mutating func finish(_ snapshot:Snapshot,accepted:Bool,uncertain:Bool=false){

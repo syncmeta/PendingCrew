@@ -23,7 +23,7 @@ struct CrewdKnowledgeDocumentsEntry: View {
             .padding(.horizontal,16).padding(.vertical,10)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
             if library {
-                CrewdKnowledgeWorkspaceView(store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection,
+                CrewdKnowledgeWorkspaceView(workspace:workspace,store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection,
                     workStore:workspace.client.capabilities.contains("data.documentWorkLinks") ? workspace.workStore : nil)
                     .id(workspace.crewID + "/" + collection.rawValue)
             }else{CrewdGroupKnowledgeView(workspace:workspace,collection:collection)}
@@ -55,6 +55,7 @@ enum CrewdKnowledgeCollection: String {
 }
 
 struct CrewdKnowledgeWorkspaceView: View {
+    @ObservedObject var workspace: CrewdWorkspace
     @ObservedObject var store: CrewdKnowledgeStore
     let available: Bool
     var returnToMessages: (() -> Void)? = nil
@@ -89,15 +90,16 @@ struct CrewdKnowledgeWorkspaceView: View {
     @State private var historyTarget: CrewdDataObjectDetail?
     @State private var compositionTarget: CrewdDataObjectDetail?
     @State private var documentWorkTarget: CrewdDataObjectDetail?
+    @State private var creationTarget: CrewdNativeDocumentCreationTarget?
     @State private var previewToken = ""
     @State private var confirmingPreview = false
     var body: some View {
         VStack(spacing: 0) {
             ViewThatFits(in: .horizontal) {
-                HStack { titleSearch; pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; recycleBinButton; reloadButton; systemButton }
+                HStack { titleSearch; pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; createDocumentButton; recycleBinButton; reloadButton; systemButton }
                 VStack(alignment: .leading, spacing: 8) {
                     titleSearch
-                    HStack { pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; recycleBinButton; reloadButton; systemButton }
+                    HStack { pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; createDocumentButton; recycleBinButton; reloadButton; systemButton }
                 }
             }.font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Theme.Palette.canvas)
@@ -156,6 +158,18 @@ struct CrewdKnowledgeWorkspaceView: View {
             if store.detail == nil, !store.busy, available, documentWorkTarget == nil {
                 Task { await reload() }
             }
+        }
+        .sheet(item:$creationTarget) { target in
+            CrewdNativeDocumentCreation(workspace:workspace,target:target,
+                presentationCurrent:{ creationTarget?.id == target.id && collection == .documents && !showArchived },
+                openSaved:{ source in
+                    guard creationTarget?.id == target.id, target.isCurrent(workspace) else { return false }
+                    await reload(restorePreferred:false)
+                    guard creationTarget?.id == target.id, target.isCurrent(workspace), let context = catalog?.context,
+                          CrewdChannelKnowledgeReference(context:context,reference:source.reference).identity == source.identity else { return false }
+                    await open(source.reference.id,kind:.document,previouslyOpenedDocument:true)
+                    return creationTarget?.id == target.id && target.isCurrent(workspace) && visibleDetail?.object.identity == source.reference.id
+                })
         }
         .sheet(isPresented: $showSystem) {
             #if os(macOS)
@@ -255,6 +269,12 @@ struct CrewdKnowledgeWorkspaceView: View {
             showArchived.toggle(); selected=""; query=""; lifecycleFeedback=nil; confirmArchive=nil
             Task { await reload() }
         }.disabled(store.busy)
+    }
+    @ViewBuilder private var createDocumentButton: some View {
+        if collection == .documents && !showArchived {
+            Button("新建文档",systemImage:"plus") { creationTarget = .init(workspace:workspace,channel:nil) }
+                .disabled(!available || !workspace.client.readyForWork || workspace.presentationScope == nil)
+        }
     }
     private var systemButton: some View {
         Button { showSystem = true } label: { Image(systemName: "ellipsis") }
@@ -457,7 +477,7 @@ private struct CrewdGroupKnowledgeView:View {
     @State private var selected:String?
     @State private var query=""
     @State private var linking=false
-    @State private var creating=false
+    @State private var creationTarget: CrewdNativeDocumentCreationTarget?
     @State private var reading=false
     @State private var failure:String?
     @State private var retry=UUID()
@@ -542,7 +562,11 @@ private struct CrewdGroupKnowledgeView:View {
         .task(id:group.crew+collection.rawValue+group.activationEpoch.uuidString){if collection == .documents {library.synchronizePending()}}
         .task(id:readKey){guard documentWorkTarget == nil else{return};guard let chosen,chosen.isReadableActiveView else{content.renderer.revoke();return};reading=true;defer{reading=false};do{try await workspace.openLinkedKnowledge(chosen);failure=nil}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
         .sheet(isPresented:$linking,onDismiss:{retry=UUID()}){CrewdKnowledgeLinkPicker(workspace:workspace,collection:collection)}
-        .sheet(isPresented:$creating){CrewdNativeDocumentCreation(workspace:workspace)}
+        .sheet(item:$creationTarget) { target in
+            CrewdNativeDocumentCreation(workspace:workspace,target:target,presentationCurrent:{
+                creationTarget?.id == target.id && collection == .documents && group.crew == target.crew && group.channel == target.channel
+            })
+        }
         .sheet(item:$editTarget){ target in
             CrewdNativeDocumentEditor(store:content,parent:target.parent,scopeCurrent:{
                 editTarget?.id == target.id && isCurrent(target)
@@ -561,8 +585,8 @@ private struct CrewdGroupKnowledgeView:View {
         }
         .onChange(of:content.pending){_,_ in if collection == .documents {library.synchronizePending()}}
         .onChange(of:library.pending){_,pending in if collection == .documents && pending.isEmpty {library.synchronizePending()}}
-        .onChange(of:group.crew+group.channel){_,_ in selected=nil;query="";linking=false;creating=false;editTarget=nil;historyTarget=nil;compositionTarget=nil;documentWorkTarget=nil;failure=nil}
-        .onChange(of:collection){_,_ in selected=nil;query="";editTarget=nil;historyTarget=nil;compositionTarget=nil;documentWorkTarget=nil;content.renderer.revoke()}
+        .onChange(of:group.crew+group.channel){_,_ in selected=nil;query="";linking=false;creationTarget=nil;editTarget=nil;historyTarget=nil;compositionTarget=nil;documentWorkTarget=nil;failure=nil}
+        .onChange(of:collection){_,_ in selected=nil;query="";creationTarget=nil;editTarget=nil;historyTarget=nil;compositionTarget=nil;documentWorkTarget=nil;content.renderer.revoke()}
         .onChange(of:chosen?.id){_,id in if id == nil{content.renderer.revoke()}}
         .controlSize(.small).tint(.gray)
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
@@ -572,7 +596,10 @@ private struct CrewdGroupKnowledgeView:View {
     private var documentActions:some View {
         HStack(spacing:8){
             Button("引用已有资料",systemImage:"link"){linking=true}
-            if collection == .documents{Button("新建文档",systemImage:"plus"){creating=true}}
+            if collection == .documents {
+                Button("新建文档",systemImage:"plus") { creationTarget = .init(workspace:workspace,channel:group.channel) }
+                    .disabled(!workspace.client.readyForWork || workspace.presentationScope == nil || group.channel.isEmpty)
+            }
             Button {Task{try? await group.refresh();retry=UUID()}} label: {Image(systemName:"arrow.clockwise")}
                 .buttonStyle(CrewdToolButtonStyle()).help("刷新").accessibilityLabel("刷新")
         }.fixedSize(horizontal:true,vertical:false)
@@ -1651,122 +1678,243 @@ private struct CrewdKnowledgeLinkPicker:View {
     }
 }
 
+private struct CrewdNativeDocumentCreationTarget: Identifiable {
+    let id = UUID()
+    let crew: String
+    let channel: String?
+    let scope: CrewdPresentationJournal.Scope
+    let connection: UUID
+
+    @MainActor init?(workspace:CrewdWorkspace,channel:String?) {
+        guard !workspace.crewID.isEmpty, let scope = workspace.presentationScope, workspace.client.readyForWork,
+              channel == nil || (!workspace.channelID.isEmpty && workspace.channelID == channel) else { return nil }
+        crew = workspace.crewID; self.channel = channel; self.scope = scope; connection = workspace.client.connectionEpoch
+    }
+    @MainActor func isCurrent(_ workspace:CrewdWorkspace) -> Bool {
+        !workspace.isRetired && workspace.client.readyForWork && workspace.crewID == crew &&
+        workspace.presentationScope == scope && workspace.client.connectionEpoch == connection &&
+        (channel == nil || workspace.channelID == channel)
+    }
+}
+
 private struct CrewdNativeDocumentCreation:View {
     @ObservedObject var workspace:CrewdWorkspace
     @ObservedObject var store:CrewdKnowledgeStore
     @ObservedObject var group:CrewdChannelKnowledgeStore
     @Environment(\.dismiss) private var dismiss
-    @State private var crew=""
-    @State private var channel=""
+    let target: CrewdNativeDocumentCreationTarget
+    let presentationCurrent: @MainActor () -> Bool
+    var openSaved: (@MainActor (CrewdChannelKnowledgeReference) async -> Bool)?
     @State private var saved:CrewdChannelKnowledgeReference?
-    @State private var submission:UUID?
     @State private var stage:CrewdPresentationJournal.DocumentStage?
+    @State private var expectedContext:CrewdDataContext?
     @State private var failure:String?
     @State private var refused=false
-    init(workspace:CrewdWorkspace){self.workspace=workspace;self.store=workspace.knowledge;self.group=workspace.channelKnowledge}
-    private var key:CrewdResourceDrafts.Key{.init(crew:crew,view:.documents,object:"",operation:"knowledge.create",domain:.document,channel:channel)}
+    @State private var attempted:Bool?
+    @State private var working=true
+    @State private var visible=true
+
+    init(workspace:CrewdWorkspace,target:CrewdNativeDocumentCreationTarget,presentationCurrent:@escaping @MainActor () -> Bool,
+         openSaved:(@MainActor (CrewdChannelKnowledgeReference) async -> Bool)? = nil) {
+        self.workspace=workspace; store=workspace.knowledge; group=workspace.channelKnowledge
+        self.target=target;self.presentationCurrent=presentationCurrent;self.openSaved=openSaved
+    }
+
+    private var crew:String { target.crew }
+    private var channel:String? { target.channel }
+    private var key:CrewdResourceDrafts.Key {
+        let libraryScope = expectedContext.map { context in
+            [context.authorityId,context.dbId,context.namespace,context.restoreEpoch].map { "\($0.utf8.count):\($0)" }.joined()
+        }
+        return .init(crew:crew,view:.documents,object:channel == nil ? libraryScope ?? "":"",operation:channel == nil ? "knowledge.libraryCreate":"knowledge.create",
+                     domain:.document,channel:channel ?? "")
+    }
     private var fields:CrewdResourceDrafts.Fields{workspace.resourceDrafts.fields(key)}
-    private var current:Bool{workspace.crewID == crew && workspace.channelID == channel && !workspace.isRetired}
+    private var current:Bool{visible && presentationCurrent() && target.isCurrent(workspace)}
     private var linkPending:Bool {
-        guard let saved else { return false }
-        return CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:workspace.presentationScope,crew:crew,channel:channel)
+        guard let saved,let channel else { return false }
+        return CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:target.scope,crew:crew,channel:channel)
             .contains { $0.source.identity == saved.identity }
     }
     private var alreadyLinked:Bool {
-        guard let saved, group.loaded, group.crew == crew, group.channel == channel else { return false }
+        guard let saved, let channel, group.loaded, group.crew == crew, group.channel == channel else { return false }
         return group.items.contains { $0.source.identity == saved.identity && $0.state == "ready" }
     }
-    private func field(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,String>)->Binding<String>{Binding(get:{if let stage{return path == \CrewdResourceDrafts.Fields.title ? stage.title:stage.body};return fields[keyPath:path]},set:{value in var f=fields;f[keyPath:path]=value;workspace.resourceDrafts.edit(key,f)})}
+    private func field(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,String>)->Binding<String>{
+        Binding(get:{if let stage{return path == \CrewdResourceDrafts.Fields.title ? stage.title:stage.body};return fields[keyPath:path]},
+                set:{value in guard current, stage == nil, !working else { return };var f=fields;f[keyPath:path]=value;workspace.resourceDrafts.edit(key,f,preserveTextBytes:channel == nil)})
+    }
     var body:some View {
         VStack(alignment:.leading,spacing:0){
-            CrewdPanelHeader(title:"新建文档").padding(20)
+            CrewdPanelHeader(title:channel == nil ? "新建资料库文档":"新建文档").padding(20)
             Divider()
-            ScrollView{VStack(alignment:.leading,spacing:16){
-            VStack(alignment:.leading,spacing:16){
-                CrewdFormField(title:"标题"){TextField("给文档起一个名字",text:field(\.title)).disabled(stage != nil || store.busy || submission != nil)}
-                CrewdFormField(title:"正文"){
-                    TextEditor(text:field(\.body)).font(CrewdType.body).frame(minHeight:200).padding(8)
-                        .background(Theme.Palette.canvas,in:RoundedRectangle(cornerRadius:8))
-                        .overlay(RoundedRectangle(cornerRadius:8).strokeBorder(Theme.Palette.hairline,lineWidth:0.7))
-                        .disabled(stage != nil || store.busy || submission != nil)
-                }
+            if current {
+                ScrollView { VStack(alignment:.leading,spacing:16) {
+                    CrewdFormField(title:"标题"){TextField("给文档起一个名字",text:field(\.title)).disabled(stage != nil || working || store.busy)}
+                    CrewdFormField(title:"正文"){
+                        TextEditor(text:field(\.body)).font(CrewdType.body).frame(minHeight:200).padding(8)
+                            .background(Theme.Palette.canvas,in:RoundedRectangle(cornerRadius:8))
+                            .overlay(RoundedRectangle(cornerRadius:8).strokeBorder(Theme.Palette.hairline,lineWidth:0.7))
+                            .disabled(stage != nil || working || store.busy)
+                    }
+                    evidence
+                }.padding(20)}
+            } else {
+                Text("当前机组、群或连接已变化，请从当前页面重新打开。").padding(20).foregroundStyle(.secondary)
             }
-            if saved != nil {
-                Text(alreadyLinked ? "已核对当前群引用，可结束本次新建。" : "原文已保存，加入本群后即可在此阅读。")
-                    .font(CrewdType.label).foregroundStyle(.secondary)
-            }
-            if store.hasBlockingPending || (stage != nil && saved == nil) { Text(store.status).font(CrewdType.caption).foregroundStyle(.orange).textSelection(.enabled) }
-            if saved != nil{Button("重新核对已保存原文"){Task{await store.refresh();guard current,let original=saved,let context=store.workspace?.context else{return};let refreshed=CrewdChannelKnowledgeReference(context:context,reference:original.reference);guard refreshed.identity == original.identity else{failure="知识来源已换代，原文引用保留，不自动重新绑定。";return};await store.open(original.reference);if store.detail?.object.identity == original.reference.id{saved=refreshed;failure=nil}}}.disabled(store.busy)}
-            if let failure{CrewdInlineNotice(title:"需要核对保存状态",detail:failure,warning:true)}
-            if let stage,saved == nil{Button("查询原保存结果"){Task{_ = await store.lookupNativeDocument(stage);restoreStage()}}.disabled(store.busy)}
-            if let saved {
-                CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:crew,channel:channel,originalSource:saved) { attempt in
-                    if current, attempt.linked, attempt.source.identity == self.saved?.identity { finishDraft() }
-                }
-            }
-            if refused{Button("原保存已明确拒绝，修改后另存"){reviseRefusedDraft()}}
-            if saved != nil,!alreadyLinked{Button("仅保留已保存原文，结束本次新建"){finishDraft()}.disabled(group.writing || linkPending)}
-            }.padding(20)}
             Divider()
             HStack {
-                Button("关闭"){dismiss()};Spacer()
-                if saved == nil {
-                    Button(store.busy ? "正在保存…":"保存原文"){save()}.buttonStyle(CrewdPrimaryButtonStyle())
-                        .disabled(!current || store.busy || store.hasBlockingPending || !store.canSaveNativeDocument || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || submission != nil)
-                } else {
-                    Button(alreadyLinked ? "完成" : group.writing ? "正在加入…" : "加入本群") {
-                        if alreadyLinked { finishDraft() } else { join() }
-                    }.buttonStyle(CrewdPrimaryButtonStyle())
-                        .disabled(!current || group.writing || group.loading || !group.loaded || store.busy || linkPending)
-                }
+                Button("关闭"){visible=false;dismiss()}.disabled(working)
+                Spacer()
+                if current { primaryAction }
             }.padding(16)
         }.modifier(CrewdAdaptiveFormFrame(width:600,height:680,scrolls:false))
-        .task{crew=workspace.crewID;channel=workspace.channelID;await store.refresh();restoreStage();try? await group.refresh()}
+        .task { await reloadStage(refreshGroup:channel != nil);working=false }
+        .onDisappear { visible=false }
     }
-    private func restoreStage(){
-        guard current else{return}
-        do {
-            stage=try store.nativeDocumentStage(channel:channel)
-            submission=stage?.id
-            if let stage,let result=try store.nativeDocumentResult(stage) {
-                refused=[.rejected,.conflicted].contains(result.phase)
-                if result.phase == .committed,case .object(let view)?=result.created["document"]{saved = .init(context:result.context,reference:view.reference);failure=nil}
-                else if refused{failure="原保存已明确拒绝："+(result.reason ?? "数据或权限已变化；原文保留，未自动重发。")}
+
+    @ViewBuilder private var evidence: some View {
+        if saved != nil {
+            Text(channel == nil ? "原文已保存到机组资料库。" :
+                    alreadyLinked ? "已核对当前群引用，可结束本次新建。" : "原文已保存，加入本群后即可在此阅读。")
+                .font(CrewdType.label).foregroundStyle(.secondary)
+        }
+        if let failure { CrewdInlineNotice(title:"需要核对保存状态",detail:failure,warning:true) }
+        if let stage, saved == nil, attempted == true, !refused {
+            Text("原保存结果待核对。").font(CrewdType.caption).foregroundStyle(.orange)
+            Button("查询原保存结果"){run{
+                let result=await store.lookupNativeDocument(stage)
+                guard current else { return }
+                if result == nil {failure=store.status}
+                await reloadStage()
+            }}.disabled(working || store.busy)
+        }
+        if let stage, attempted == false {
+            Text("原保存尚未送交。可以继续保存，或保留草稿重新准备。").foregroundStyle(.secondary)
+            Button("保留草稿重新准备"){revise(stage,discardUnsent:true)}.disabled(working || store.busy)
+        }
+        if let stage, refused { Button("原保存已明确拒绝，修改后另存"){revise(stage)}.disabled(working || store.busy) }
+        if let saved, let channel {
+            Button("重新核对已保存原文"){run{await reloadStage()}}.disabled(working || store.busy)
+            CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:crew,channel:channel,originalSource:saved) { attempt in
+                if current, attempt.linked, attempt.source.identity == self.saved?.identity { _ = finishDraft() }
             }
-        }catch{failure="原文档保存阶段尚未可靠读取，不能再创建正文："+error.localizedDescription;submission=UUID()}
-    }
-    private func save(){
-        let title=fields.title,body=fields.body,origin=workspace.presentationScope
-        Task{
-            _ = await store.submitNativeDocument(title:title,body:body,channel:channel)
-            guard current,workspace.presentationScope == origin else{return}
-            // data.changed can invalidate the read model before the original
-            // commit reply. Restore that model, then read the same durable stage.
-            await store.refresh()
-            guard current,workspace.presentationScope == origin else{return}
-            restoreStage()
+            if !alreadyLinked {
+                Button("仅保留已保存原文，结束本次新建"){_ = finishDraft()}.disabled(working || group.writing || linkPending)
+            }
+        }
+        if saved != nil, channel == nil, failure != nil {
+            Button("完成并返回资料库"){_ = finishDraft()}.disabled(working || store.busy)
         }
     }
-    private func reviseRefusedDraft(){
-        guard current,refused,let stage else{return}
+
+    @ViewBuilder private var primaryAction: some View {
+        if let saved {
+            if channel == nil {
+                Button("打开已保存文档"){run{await openDocument(saved)}}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(working || store.busy)
+            } else {
+                Button(alreadyLinked ? "完成":"加入本群"){if alreadyLinked {_ = finishDraft()} else {join()}}
+                    .buttonStyle(CrewdPrimaryButtonStyle()).disabled(working || group.writing || group.loading || !group.loaded || store.busy || linkPending)
+            }
+        } else if stage == nil || attempted == false {
+            Button(working ? "正在处理…" : stage == nil ? "保存原文" : "继续保存原文"){save()}
+                .buttonStyle(CrewdPrimaryButtonStyle())
+                .disabled(working || store.busy || store.hasBlockingPending || !store.canSaveNativeDocument ||
+                          (stage?.title ?? fields.title).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || expectedContext == nil)
+        }
+    }
+
+    private func run(_ action:@escaping @MainActor () async -> Void) {
+        guard current, !working else { return }
+        working=true
+        Task { @MainActor in
+            defer {working=false}
+            guard current, !Task.isCancelled else { return }
+            await action()
+        }
+    }
+    private func reloadStage(refreshGroup:Bool = false) async {
+        guard current else { return }
+        await store.refresh()
+        guard current, !Task.isCancelled else { return }
+        expectedContext=store.workspace?.context
+        do {
+            stage=try store.nativeDocumentStage(channel:channel)
+            saved=nil;refused=false;attempted=nil
+            if let stage {
+                attempted=try store.nativeDocumentWasAttempted(stage)
+                refused=try store.nativeDocumentWasRefused(stage)
+                if let result=try store.nativeDocumentResult(stage) {
+                    refused=[.rejected,.conflicted].contains(result.phase)
+                    if result.phase == .committed,case .object(let view)?=result.created["document"] {
+                        saved = .init(context:result.context,reference:view.reference);failure=nil
+                    } else if refused { failure=result.reason ?? "后台已明确拒绝此次保存。" }
+                } else if refused { failure="后台已明确拒绝此次保存，请重新核对。" }
+            }
+        } catch {
+            expectedContext=nil;saved=nil;attempted=nil;refused=false
+            failure="未能核对原文档保存记录。原草稿已保留。"
+        }
+        if refreshGroup, current { try? await group.refresh() }
+    }
+
+    private func save(){
+        let existing=stage
+        let draft=workspace.resourceDrafts.snapshot(key)
+        let title=existing?.title ?? fields.title,body=existing?.body ?? fields.body
+        guard let expectedContext,channel != nil || existing != nil || draft != nil else { return }
+        let requestID=channel == nil ? existing?.id ?? draft?.request:nil
+        run {
+            _ = await store.submitNativeDocument(title:title,body:body,channel:channel,requestID:requestID,expectedContext:expectedContext)
+            guard current else { return }
+            if store.status.contains("原输入保留") { failure=store.status }
+            await reloadStage()
+        }
+    }
+    private func revise(_ stage:CrewdPresentationJournal.DocumentStage,discardUnsent:Bool = false){
+        guard current else{return}
         do{
-            try store.finishNativeDocument(stage)
-            if !workspace.resourceDrafts.exists(key){var original=CrewdResourceDrafts.Fields();original.title=stage.title;original.body=stage.body;workspace.resourceDrafts.edit(key,original)}
-            self.stage=nil;submission=nil;saved=nil;refused=false;failure=nil
-            Task{await store.refresh()}
+            try store.finishNativeDocument(stage,discardUnsent:discardUnsent)
+            if !workspace.resourceDrafts.exists(key){
+                var original=CrewdResourceDrafts.Fields();original.title=stage.title;original.body=stage.body;workspace.resourceDrafts.edit(key,original,preserveTextBytes:channel == nil)
+            } else {
+                workspace.resourceDrafts.renew(key,request:stage.id)
+            }
+            self.stage=nil;saved=nil;refused=false;attempted=nil;failure=nil
+            run { await reloadStage() }
         }catch{failure=error.localizedDescription}
     }
-    private func finishDraft(){
-        guard current,let stage else{return}
+    private func finishDraft() -> Bool {
+        guard current,let stage else{return false}
         do {
             try store.finishNativeDocument(stage)
-            if fields.title == stage.title,fields.body == stage.body{workspace.resourceDrafts.edit(key,.init())}
-            dismiss()
-        }catch{failure=error.localizedDescription}
+            if let draft=workspace.resourceDrafts.snapshot(key),
+               draft.fields.title.utf8.elementsEqual(stage.title.utf8), draft.fields.body.utf8.elementsEqual(stage.body.utf8),
+               channel != nil || draft.request == stage.id {
+                workspace.resourceDrafts.finish(draft,accepted:true)
+            }
+            visible=false;dismiss();return true
+        }catch{failure=error.localizedDescription;return false}
+    }
+    private func openDocument(_ saved:CrewdChannelKnowledgeReference) async {
+        guard current,let openSaved else { return }
+        let opened=await openSaved(saved)
+        guard current else { return }
+        if opened {_ = finishDraft()}
+        else {failure="原保存已确认，当前无法打开同一文档。"}
     }
     private func join(){
-        guard current,!alreadyLinked,!linkPending,group.loaded,!group.loading,let saved,let revision=group.linkRevision,
+        guard current,let channel,!alreadyLinked,!linkPending,group.loaded,!group.loading,let saved,let revision=group.linkRevision,
               let snapshot=workspace.knowledgeLinkDrafts.begin(crew:crew,channel:channel,source:saved,revision:revision,linked:true) else{return}
-        Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if current{finishDraft()}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure="原文已保存，未加入本群："+error.localizedDescription}}
+        run {
+            do {
+                _ = try await group.submit(snapshot)
+                workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true)
+                if current {_ = finishDraft()}
+            } catch {
+                workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error))
+                if current { failure="原文已保存，未加入本群："+error.localizedDescription }
+            }
+        }
     }
 }

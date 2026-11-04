@@ -28,9 +28,19 @@ enum CrewdKnowledgeTitleSearch {
         let method: String? // operation identity only; never a replay payload
         let changeDigest: String // no replay payload or view code in the observation journal
         var documentEdit: NativeDocumentEditReceipt? = nil
+        var documentCreation: NativeDocumentCreationWitness? = nil
         var viewArchive: NativeViewArchiveReceipt? = nil
         var documentWorkLink: DocumentWorkLinkReceipt? = nil
         var composition: DocumentCompositionReceipt? = nil
+    }
+    struct NativeDocumentCreationWitness: Codable, Equatable {
+        let titleDigest: String
+        let bodyDigest: String
+
+        init(title:String,body:String) throws {
+            titleDigest = try CrewdKnowledgeStore.compositionDigest(title)
+            bodyDigest = try CrewdKnowledgeStore.compositionDigest(body)
+        }
     }
     struct NativeDocumentEdit: Equatable {
         let title: String
@@ -574,7 +584,7 @@ enum CrewdKnowledgeTitleSearch {
             applyObservation(response,intent:intent)
         } catch { if current(o,token) { renderer.revoke(); status = "结果未确认；只可核对原请求，不自动重试。" } }
     }
-    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil, composition: DocumentCompositionReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
+    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil, documentCreation: NativeDocumentCreationWitness? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil, composition: DocumentCompositionReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
         guard let o = active, origin() == o else { throw Failure.stale }
         try checked(context, o)
         // The library, group detail and renderer can hold distinct live stores.
@@ -584,7 +594,7 @@ enum CrewdKnowledgeTitleSearch {
         let bytes = try JSONEncoder().encode(change)
         guard bytes.count <= 8_388_608 else { throw Failure.invalid }
         let intent = Intent(id:id,context:context,method:"data.submit",changeDigest:SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined(),
-                            documentEdit:documentEdit,viewArchive:viewArchive,documentWorkLink:documentWorkLink,composition:composition)
+                            documentEdit:documentEdit,documentCreation:documentCreation,viewArchive:viewArchive,documentWorkLink:documentWorkLink,composition:composition)
         let record = try journal().prepare(method: "data.submit.observation", params: Self.encode(intent), crew: o.crew)
         records[id] = record; pending.append(intent)
         return (intent, record)
@@ -664,6 +674,43 @@ enum CrewdKnowledgeTitleSearch {
             }
         }
     }
+    private func nativeDocumentCreationIDs(_ response: CrewdDataChangeResult, context: CrewdDataContext) throws -> (view:CrewdDataObjectVersion,body:CrewdDataObjectVersion,placement:String) {
+        func isNew(_ version: CrewdDataObjectVersion, kind:String) -> Bool {
+            version.reference.kind == kind && version.reference.namespace == context.namespace && version.revision == "1" &&
+            UUID(uuidString:version.reference.id)?.uuidString.lowercased() == version.reference.id
+        }
+        guard sameAuthority(response.context,context),
+              response.created.count == 3, case .object(let view)? = response.created["document"], isNew(view,kind:"view"),
+              case .object(let body)? = response.created["body"], isNew(body,kind:"block"),
+              case .placement(let placementID,let parent)? = response.created["bodyPlacement"], parent == view,
+              UUID(uuidString:placementID)?.uuidString.lowercased() == placementID,
+              Set([view.reference.id,body.reference.id,placementID]).count == 3,
+              response.changed.count == 2, response.changed.contains(view), response.changed.contains(body) else { throw Failure.invalid }
+        return (view,body,placementID)
+    }
+
+    private func verifyNativeDocumentCreation(_ response: CrewdDataChangeResult, witness: NativeDocumentCreationWitness, context: CrewdDataContext, origin o: Origin) async throws {
+        guard response.phase == .committed else { return }
+        guard origin() == o else { throw Failure.stale }
+        let (view,body,placementID) = try nativeDocumentCreationIDs(response,context:context)
+        let viewDetail: CrewdDataObjectDetail = try await call("data.object.get",
+            CrewdDataObjectGetParams(context:context,reference:view.reference,atRevision:view.revision),preservingPresentation:true)
+        guard origin() == o, viewDetail.context == context, viewDetail.resolvedContext == context, viewDetail.generation == context.generation,
+              case .view(let viewID,let viewRevision,let title,.document(let positions,let layout),false,let provenance) = viewDetail.object,
+              viewID == view.reference.id, viewRevision == view.revision, try Self.compositionDigest(title) == witness.titleDigest,
+              provenance.createdBy["kind"] == .string("human"), layout == .object([:]), positions.count == 1,
+              let position = positions.first, position.id == placementID, position.layout == .object([:]),
+              position.block == .visible(reference:body.reference), position.atRevision == body.revision,
+              viewDetail.references.count == 1, let capture = viewDetail.references.first,
+              capture.anchor == "placement:" + placementID, capture.target == position.block,
+              capture.revision == body.revision, capture.complete, !capture.live else { throw Failure.invalid }
+        let bodyDetail: CrewdDataObjectDetail = try await call("data.object.get",
+            CrewdDataObjectGetParams(context:context,reference:body.reference,atRevision:body.revision),preservingPresentation:true)
+        guard origin() == o, bodyDetail.context == context, bodyDetail.resolvedContext == context, bodyDetail.generation == context.generation,
+              case .block(let bodyID,let revision,"text/plain",.string(let text),false,let provenance) = bodyDetail.object,
+              bodyID == body.reference.id, revision == body.revision, try Self.compositionDigest(text) == witness.bodyDigest,
+              provenance.createdBy["kind"] == .string("human"), provenance.sources.isEmpty else { throw Failure.invalid }
+    }
     private func verifyArchiveReadback(_ response: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext, origin o: Origin) async throws {
         guard let archive = intent.viewArchive, response.phase == .committed else { return }
         try checkObservation(response,intent:intent)
@@ -697,22 +744,27 @@ enum CrewdKnowledgeTitleSearch {
     @discardableResult func submitFromNativeHost(_ change: CrewdDataChange, requestID:UUID?=nil) async -> CrewdDataChangeResult? {
         try? await submitNativeChange(change, requestID: requestID)
     }
-    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil, composition: DocumentCompositionReceipt? = nil) async throws -> CrewdDataChangeResult? {
+    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil, documentCreation: NativeDocumentCreationWitness? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil, composition: DocumentCompositionReceipt? = nil) async throws -> CrewdDataChangeResult? {
         let (o, token) = try begin()
         defer { finish(o, token) }
         guard !hasBlockingPending else { throw Failure.unresolved }
         do {
             guard let info = workspace else { throw Failure.unavailable }
             let ledger = try journal()
-            let (intent, record) = try stage(change,id:requestID ?? UUID(),context:info.context,documentEdit:documentEdit,viewArchive:viewArchive,documentWorkLink:documentWorkLink,composition:composition)
+            let (intent, record) = try stage(change,id:requestID ?? UUID(),context:info.context,documentEdit:documentEdit,documentCreation:documentCreation,viewArchive:viewArchive,documentWorkLink:documentWorkLink,composition:composition)
             let response: CrewdDataChangeResult
             do {
                 response = try await call("data.submit", CrewdDataSubmitParams(requestId:intent.id.uuidString.lowercased(), context:intent.context, change:change))
-            } catch let error as CrewdClientError where (documentEdit != nil || viewArchive != nil || documentWorkLink != nil || composition != nil) &&
+            } catch let error as CrewdClientError where (documentEdit != nil || documentCreation != nil || viewArchive != nil || documentWorkLink != nil || composition != nil) &&
                 (Self.definiteNativeRefusal(error) || (documentWorkLink != nil && error.code == -32009 && error.refusal == "data.document_work_link_refused")) {
                 try ledger.finish(record, state:"refused")
                 if current(o, token) { pending.removeAll { $0.id == intent.id }; records.removeValue(forKey: intent.id) }
                 throw NativeSubmissionRefusal(original:error)
+            }
+            if let creation = intent.documentCreation {
+                try checkObservation(response,intent:intent)
+                try await verifyNativeDocumentCreation(response,witness:creation,context:response.context,origin:o)
+                guard origin() == o else { return nil }
             }
             if intent.documentEdit?.selected != nil {
                 try await verifySelectedPlacementReadback(response,intent:intent,context:response.context,origin:o)
@@ -1076,7 +1128,7 @@ enum CrewdKnowledgeTitleSearch {
         return try await submitDocumentComposition(composition.target,desired:desired,restoring:true)
     }
 
-    private static func compositionDigest<T: Encodable>(_ value: T) throws -> String {
+    nonisolated private static func compositionDigest<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         return SHA256.hash(data:try encoder.encode(value)).map { String(format:"%02x",$0) }.joined()
     }
@@ -1288,38 +1340,76 @@ enum CrewdKnowledgeTitleSearch {
         }
         return try await submitNativeChange(.apply(message:snapshot == nil ? "编辑文档" : "恢复文档版本",edits:edits),documentEdit:witness)
     }
-    func nativeDocumentStage(channel:String)throws->CrewdPresentationJournal.DocumentStage? {
+    func nativeDocumentStage(channel:String?)throws->CrewdPresentationJournal.DocumentStage? {
         guard let o=active,origin() == o else{throw Failure.stale}
-        return try journal().currentDocumentStage(crew:o.crew,channel:channel)
+        let authority: CrewdValue?
+        if channel == nil {
+            guard let context = workspace?.context else { throw Failure.stale }
+            authority = try Self.encode(context)
+        } else { authority = nil }
+        return try journal().currentDocumentStage(crew:o.crew,channel:channel,authorityContext:authority)
+    }
+    private func documentStageOrigin(_ stage:CrewdPresentationJournal.DocumentStage) throws -> Origin {
+        guard let o=active,o.scope == stage.scope,o.crew == stage.crew,origin() == o else{throw Failure.stale}
+        if stage.channel == nil {
+            guard let current = workspace?.context,
+                  sameAuthority(try Self.decode(stage.context,CrewdDataContext.self),current) else { throw Failure.stale }
+        }
+        return o
     }
     func nativeDocumentResult(_ stage:CrewdPresentationJournal.DocumentStage)throws->CrewdDataChangeResult? {
-        guard let o=active,o.scope == stage.scope,o.crew == stage.crew,origin() == o else{throw Failure.stale}
+        _ = try documentStageOrigin(stage)
         guard let value=try journal().documentStageResult(stage) else{return nil}
-        return try Self.decode(value,CrewdDataChangeResult.self)
+        let result = try Self.decode(value,CrewdDataChangeResult.self)
+        if stage.channel == nil, result.phase == .committed {
+            guard let context = workspace?.context else { throw Failure.stale }
+            _ = try nativeDocumentCreationIDs(result,context:context)
+        }
+        return result
     }
-    func finishNativeDocument(_ stage:CrewdPresentationJournal.DocumentStage)throws {
-        guard let o=active,o.scope == stage.scope,o.crew == stage.crew,origin() == o else{throw Failure.stale}
-        try journal().finishDocumentStage(stage)
+    func nativeDocumentWasAttempted(_ stage:CrewdPresentationJournal.DocumentStage) throws -> Bool {
+        _ = try documentStageOrigin(stage)
+        return try journal().documentStageAttempted(stage)
     }
-    /// The original two-stage input lives in the existing journal, beyond a sheet
-    /// or process lifetime. Reopening can only adopt/lookup the same save UUID.
-    func submitNativeDocument(title:String,body:String,channel:String)async->CrewdDataChangeResult? {
+    func nativeDocumentWasRefused(_ stage:CrewdPresentationJournal.DocumentStage) throws -> Bool {
+        _ = try documentStageOrigin(stage)
+        return try journal().documentStageWasRefused(stage)
+    }
+    func finishNativeDocument(_ stage:CrewdPresentationJournal.DocumentStage, discardUnsent:Bool = false)throws {
+        _ = try documentStageOrigin(stage)
+        try journal().finishDocumentStage(stage,discardUnsent:discardUnsent)
+    }
+    /// Only the explicit save button can claim the original attempt.
+    func submitNativeDocument(title:String,body:String,channel:String?,requestID:UUID? = nil,expectedContext:CrewdDataContext? = nil)async->CrewdDataChangeResult? {
         do {
             guard canSaveNativeDocument, !busy else { throw Failure.unavailable }
-            guard let o=active,origin() == o,let context=workspace?.context else{throw Failure.stale}
+            guard let o=active,origin() == o,let context=workspace?.context,
+                  expectedContext == nil || expectedContext == context else{throw Failure.stale}
+            if channel == nil {
+                guard requestID != nil, expectedContext != nil, !title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,
+                      title.utf8.count <= 512, body.utf8.count <= 1_048_576 else { throw Failure.invalid }
+            }
+            let witness = try channel == nil ? NativeDocumentCreationWitness(title:title,body:body) : nil
             try reconcilePending(o)
             guard !hasBlockingPending else { throw Failure.unresolved }
             let ledger=try journal()
-            let stage=try ledger.prepareDocumentStage(crew:o.crew,channel:channel,title:title,body:body,context:Self.encode(context))
-            if try ledger.documentStageAttempted(stage){status="原文档已送交保存；仅核对原请求或加入已保存原文。";return try nativeDocumentResult(stage)}
-            guard try Self.decode(stage.context,CrewdDataContext.self) == context else{throw Failure.stale}
-            try ledger.markDocumentStageAttempted(stage)
+            let claim=try ledger.claimDocumentStage(crew:o.crew,channel:channel,title:title,body:body,context:Self.encode(context),requestID:requestID)
+            let stage=claim.stage
+            if !claim.maySubmit { status="原文档保存仅可核对，不会重发。";return try nativeDocumentResult(stage) }
             let change=CrewdDataChange.apply(message:"创建文档",edits:[
                 .createBlock(alias:"body",contentType:"text/plain",content:.string(stage.body),sources:[],attributes:.object([:])),
                 .createView(alias:"document",title:stage.title,definition:.document(placements:[.set(id:nil,alias:"bodyPlacement",block:.created(alias:"body"),atRevision:nil,layout:.object([:]))],layout:.object([:])),sources:[],attributes:.object([:]))])
-            let response=await submitFromNativeHost(change,requestID:stage.id)
-            if let response,[.committed,.rejected,.conflicted].contains(response.phase){try ledger.recordDocumentStageResult(Self.encode(response),stage:stage)}
-            return response
+            do {
+                let response = try await submitNativeChange(change,requestID:stage.id,documentCreation:witness)
+                guard origin() == o else { return nil }
+                if let response,[.committed,.rejected,.conflicted].contains(response.phase) {
+                    try ledger.recordDocumentStageResult(Self.encode(response),stage:stage)
+                }
+                return response
+            } catch let error as CrewdClientError where witness != nil && Self.definiteNativeRefusal(error) {
+                try ledger.recordDocumentStageRefusal(stage)
+                throw error
+            }
         }catch{status="文档保存阶段尚未确认，原输入保留："+error.localizedDescription;return nil}
     }
     func lookupNativeDocument(_ stage:CrewdPresentationJournal.DocumentStage)async->CrewdDataChangeResult? {
@@ -1327,15 +1417,25 @@ enum CrewdKnowledgeTitleSearch {
         do{(o,token)=try begin()}catch{return nil}
         defer{finish(o,token)}
         do {
-            guard o.scope == stage.scope,o.crew == stage.crew else{throw Failure.stale}
+            _ = try documentStageOrigin(stage)
             if let saved=try nativeDocumentResult(stage){return saved}
             let context=try Self.decode(stage.context,CrewdDataContext.self)
             let response:CrewdDataRequestGetResult=try await call("data.request.get",CrewdDataRequestGetParams(requestId:stage.id.uuidString.lowercased(),context:context))
             try checked(response.workspace.context,o)
             guard origin() == o else{throw Failure.stale}
             guard case .known(let result)=response.lookup,[.committed,.rejected,.conflicted].contains(result.phase) else{status="原保存请求尚无已确认结果；保留原文与UUID，不会重发。";return nil}
+            if stage.channel == nil {
+                guard sameAuthority(context,response.workspace.context), UUID(uuidString:result.requestId) == stage.id,
+                      sameAuthority(context,result.context), result.phase != .committed ||
+                        (result.beforeGeneration == context.generation && result.afterGeneration == result.context.generation) else { throw Failure.stale }
+                let witness = try NativeDocumentCreationWitness(title:stage.title,body:stage.body)
+                try await verifyNativeDocumentCreation(result,witness:witness,context:response.workspace.context,origin:o)
+            }
             let ledger=try journal();try ledger.recordDocumentStageResult(Self.encode(result),stage:stage)
-            if let intent=pending.first(where:{$0.id == stage.id}),let record=records[stage.id]{try observe(result,intent:intent,record:record,ledger:ledger);applyObservation(result,intent:intent)}
+            if let intent=pending.first(where:{$0.id == stage.id}),let record=records[stage.id] {
+                try observe(result,intent:intent,record:record,ledger:ledger)
+                if current(o,token) { applyObservation(result,intent:intent) }
+            }
             return result
         }catch{status="原文档结果未确认；仅保留原UUID核对。";return nil}
     }
@@ -1353,6 +1453,16 @@ enum CrewdKnowledgeTitleSearch {
             workspace = response.workspace
             switch response.lookup {
             case .known(let original):
+                if let creation = intent.documentCreation {
+                    try checkObservation(original,intent:intent)
+                    try await verifyNativeDocumentCreation(original,witness:creation,context:response.workspace.context,origin:o)
+                    guard current(o,token) else { return }
+                    if [.committed,.rejected,.conflicted].contains(original.phase) {
+                        guard let stage = try ledger.currentDocumentStage(crew:o.crew,channel:nil,authorityContext:Self.encode(response.workspace.context)),
+                              stage.id == intent.id else { throw Failure.stale }
+                        try ledger.recordDocumentStageResult(Self.encode(original),stage:stage)
+                    }
+                }
                 if intent.documentEdit?.selected != nil { try await verifySelectedPlacementReadback(original,intent:intent,context:response.workspace.context,origin:o) }
                 if intent.viewArchive != nil { try await verifyArchiveReadback(original,intent:intent,context:response.workspace.context,origin:o) }
                 if intent.documentWorkLink != nil { try await verifyDocumentWorkLinkReadback(original,intent:intent,context:response.workspace.context,origin:o) }

@@ -94,10 +94,14 @@ final class CrewdPresentationJournal {
     // One stable per-namespace lock coordinates independent windows/processes.
     // It covers only synchronous scan-and-prepare or verified acknowledgment.
     private func withRequirementCreateLock<T>(_ body: () throws -> T) throws -> T {
+        try withPrivateLock("requirement-create.lock",message:"原需求提交记录正在核对或锁不安全，请稍后再试。",body)
+    }
+
+    private func withPrivateLock<T>(_ name: String, message: String, _ body: () throws -> T) throws -> T {
         try Self.privateDirectory(directory)
-        let path = directory.appendingPathComponent("requirement-create.lock").path
+        let path = directory.appendingPathComponent(name).path
         let fd = open(path,O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,mode_t(0o600))
-        let unavailable = StorageError.refused("原需求提交记录正在核对或锁不安全，请稍后再试。")
+        let unavailable = StorageError.refused(message)
         guard fd >= 0 else { throw unavailable }
         defer { close(fd) }
         var opened = stat(), named = stat()
@@ -132,7 +136,7 @@ final class CrewdPresentationJournal {
             try Self.privateDirectory(directory)
         }else{
             try Self.privateDirectory(directory)
-            for name in ["prepared","outcomes","reconciled","document-stage-inputs","document-stage-attempts","document-stage-results","document-stage-finished","codex-input-results","codex-input-originals","codex-input-choices"]{try Self.privateDirectory(directory.appendingPathComponent(name))}
+            for name in ["prepared","outcomes","reconciled","document-stage-inputs","document-stage-attempts","document-stage-results","document-stage-refusals","document-stage-finished","codex-input-results","codex-input-originals","codex-input-choices"]{try Self.privateDirectory(directory.appendingPathComponent(name))}
         }
     }
     static func localNamespace(directory: URL) throws -> UUID {
@@ -251,7 +255,7 @@ final class CrewdPresentationJournal {
         let id:UUID
         let scope:Scope
         let crew:String
-        let channel:String
+        let channel:String? // nil is an explicit crew-library save; legacy group records carry their channel.
         let title:String
         let body:String
         let context:CrewdValue
@@ -260,26 +264,62 @@ final class CrewdPresentationJournal {
     private func checkStage(_ stage:DocumentStage)throws {
         guard stage.scope == scope else{throw StorageError.refused("文档保存阶段的来源身份不符。")}
         let file=stageFile("inputs",stage.id);try Self.privateFile(file)
-        guard try decoder.decode(DocumentStage.self,from:Data(contentsOf:file)) == stage else{throw StorageError.refused("原文档保存阶段不符。")}
+        let stored = try decoder.decode(DocumentStage.self,from:Data(contentsOf:file))
+        guard stored == stage, stored.title.utf8.elementsEqual(stage.title.utf8), stored.body.utf8.elementsEqual(stage.body.utf8)
+        else { throw StorageError.refused("原文档保存阶段不符。") }
     }
-    func currentDocumentStage(crew:String,channel:String)throws->DocumentStage? {
+    func currentDocumentStage(crew:String,channel:String?,authorityContext:CrewdValue? = nil)throws->DocumentStage? {
         var stages:[DocumentStage]=[]
         for file in try FileManager.default.contentsOfDirectory(at:directory.appendingPathComponent("document-stage-inputs"),includingPropertiesForKeys:nil){
             try Self.privateFile(file)
             let stage=try decoder.decode(DocumentStage.self,from:Data(contentsOf:file));guard stage.scope == scope else{continue};try checkStage(stage)
-            if stage.crew == crew,stage.channel == channel {
+            let sameAuthority = authorityContext.map { current in
+                ["authorityId","dbId","restoreEpoch","crewId","namespace"].allSatisfy { stage.context[$0] == current[$0] }
+            } ?? true
+            if stage.crew == crew,stage.channel == channel,sameAuthority {
                 let finished=stageFile("finished",stage.id)
                 if FileManager.default.fileExists(atPath:finished.path){try Self.privateFile(finished);guard String(decoding:try Data(contentsOf:finished),as:UTF8.self) == stage.id.uuidString else{throw StorageError.refused("文档阶段结束记录不符。")}}
                 else{stages.append(stage)}
             }
         }
-        guard stages.count <= 1 else{throw StorageError.refused("本群有多份未结束文档保存记录，请保留并核对。")}
+        guard stages.count <= 1 else{throw StorageError.refused("此范围有多份未结束文档保存记录，请保留并核对。")}
         return stages.first
     }
-    func prepareDocumentStage(crew:String,channel:String,title:String,body:String,context:CrewdValue)throws->DocumentStage {
-        if let original=try currentDocumentStage(crew:crew,channel:channel){return original}
-        let stage=DocumentStage(id:UUID(),scope:scope,crew:crew,channel:channel,title:title,body:body,context:context)
-        try Self.immutableWrite(encoder.encode(stage),to:stageFile("inputs",stage.id));return stage
+    private func withDocumentStageLock<T>(_ body: () throws -> T) throws -> T {
+        try withPrivateLock("document-stage.lock",message:"文档保存记录正在核对或锁不安全，请稍后再试。",body)
+    }
+
+    /// One process owns the first attempt. The lock is released before any RPC.
+    /// A finished draft UUID remains occupied, even after its sheet is closed.
+    func claimDocumentStage(crew:String,channel:String?,title:String,body:String,context:CrewdValue,requestID:UUID?) throws -> (stage:DocumentStage,maySubmit:Bool) {
+        try withDocumentStageLock {
+            guard !crew.isEmpty, channel?.isEmpty != true else { throw StorageError.refused("文档保存范围不完整。") }
+            let active = try currentDocumentStage(crew:crew,channel:channel,authorityContext:channel == nil ? context:nil)
+            let stage: DocumentStage
+            if let requestID, FileManager.default.fileExists(atPath:stageFile("inputs",requestID).path) {
+                let file = stageFile("inputs",requestID)
+                try Self.privateFile(file)
+                stage = try decoder.decode(DocumentStage.self,from:Data(contentsOf:file))
+                try checkStage(stage)
+                guard stage.id == requestID, stage.crew == crew, stage.channel == channel,
+                      stage.title.utf8.elementsEqual(title.utf8), stage.body.utf8.elementsEqual(body.utf8) else {
+                    throw StorageError.refused("保存草稿身份已变化，未提交。")
+                }
+                guard active?.id == stage.id else { return (stage,false) }
+            } else if let active {
+                stage = active
+                if requestID != nil || !stage.title.utf8.elementsEqual(title.utf8) || !stage.body.utf8.elementsEqual(body.utf8) {
+                    return (stage,false)
+                }
+            } else {
+                stage = DocumentStage(id:requestID ?? UUID(),scope:scope,crew:crew,channel:channel,title:title,body:body,context:context)
+                try Self.immutableWrite(encoder.encode(stage),to:stageFile("inputs",stage.id))
+            }
+            guard try !documentStageAttempted(stage) else { return (stage,false) }
+            guard stage.context == context else { throw StorageError.refused("原保存尚未送交，但数据代次已变化。") }
+            try Self.immutableWrite(Data(stage.id.uuidString.utf8),to:stageFile("attempts",stage.id))
+            return (stage,true)
+        }
     }
     func documentStageAttempted(_ stage:DocumentStage)throws->Bool {
         try checkStage(stage);let file=stageFile("attempts",stage.id)
@@ -287,11 +327,6 @@ final class CrewdPresentationJournal {
         try Self.privateFile(file)
         guard String(decoding:try Data(contentsOf:file),as:UTF8.self) == stage.id.uuidString else{throw StorageError.refused("文档原保存请求身份不符。")}
         return true
-    }
-    func markDocumentStageAttempted(_ stage:DocumentStage)throws {
-        try checkStage(stage)
-        guard try !documentStageAttempted(stage) else{throw StorageError.refused("原保存请求已送交或未知，只能查询原UUID。")}
-        try Self.immutableWrite(Data(stage.id.uuidString.utf8),to:stageFile("attempts",stage.id))
     }
     func documentStageResult(_ stage:DocumentStage)throws->CrewdValue? {
         try checkStage(stage);let file=stageFile("results",stage.id)
@@ -308,15 +343,44 @@ final class CrewdPresentationJournal {
         }
     }
     func recordDocumentStageResult(_ result:CrewdValue,stage:DocumentStage)throws {
-        try checkStage(stage);try Self.validateDocumentStageResult(result,stage:stage)
-        if let old=try documentStageResult(stage){guard old == result else{throw StorageError.refused("原文档已有不同保存回执。")};return}
-        try Self.immutableWrite(encoder.encode(result),to:stageFile("results",stage.id))
+        try withDocumentStageLock {
+            try checkStage(stage);try Self.validateDocumentStageResult(result,stage:stage)
+            guard try !documentStageWasRefused(stage) else { throw StorageError.refused("原文档保存证据冲突。") }
+            if let old=try documentStageResult(stage){guard old == result else{throw StorageError.refused("原文档已有不同保存回执。")};return}
+            try Self.immutableWrite(encoder.encode(result),to:stageFile("results",stage.id))
+        }
     }
-    func finishDocumentStage(_ stage:DocumentStage)throws {
-        try checkStage(stage);guard try documentStageResult(stage) != nil else{throw StorageError.refused("原文档保存结果尚未确认。")}
-        let file=stageFile("finished",stage.id)
-        if FileManager.default.fileExists(atPath:file.path){try Self.privateFile(file);return}
-        try Self.immutableWrite(Data(stage.id.uuidString.utf8),to:file)
+    func documentStageWasRefused(_ stage:DocumentStage) throws -> Bool {
+        try checkStage(stage)
+        let file = stageFile("refusals",stage.id)
+        guard FileManager.default.fileExists(atPath:file.path) else { return false }
+        try Self.privateFile(file)
+        guard String(decoding:try Data(contentsOf:file),as:UTF8.self) == stage.id.uuidString,
+              try documentStageResult(stage) == nil else { throw StorageError.refused("原文档保存拒绝记录不符。") }
+        return true
+    }
+    func recordDocumentStageRefusal(_ stage:DocumentStage) throws {
+        try withDocumentStageLock {
+            guard try documentStageAttempted(stage), try documentStageResult(stage) == nil else {
+                throw StorageError.refused("原文档保存证据冲突。")
+            }
+            if try documentStageWasRefused(stage) { return }
+            try Self.immutableWrite(Data(stage.id.uuidString.utf8),to:stageFile("refusals",stage.id))
+        }
+    }
+    func finishDocumentStage(_ stage:DocumentStage, discardUnsent:Bool = false)throws {
+        try withDocumentStageLock {
+            try checkStage(stage)
+            let canFinish = try discardUnsent ? !documentStageAttempted(stage) : documentStageResult(stage) != nil || documentStageWasRefused(stage)
+            guard canFinish else{throw StorageError.refused("原文档保存结果尚未确认。")}
+            let file=stageFile("finished",stage.id)
+            if FileManager.default.fileExists(atPath:file.path){
+                try Self.privateFile(file)
+                guard String(decoding:try Data(contentsOf:file),as:UTF8.self) == stage.id.uuidString else { throw StorageError.refused("文档阶段结束记录不符。") }
+                return
+            }
+            try Self.immutableWrite(Data(stage.id.uuidString.utf8),to:stageFile("finished",stage.id))
+        }
     }
     static let resourceMutationMethods:Set<String>=["todo.assign","todo.setState","humanTask.create","channel.workTagsSet","channel.knowledgeLink","channel.knowledgeUnlink"]
     private static func resourceObject(_ params:CrewdValue)->String? {
