@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub const SIMILAR_REQUIREMENTS: &str = "adminCase.similarRequirements";
 pub const REQUIREMENT_REVIEWS: &str = "adminCase.requirementReviews";
 pub const REQUIREMENT_REVIEW: &str = "adminCase.requirementReview";
+pub const WORK_DUPLICATES: &str = "adminCase.workDuplicates";
+pub const WORK_DUPLICATE_CLOSE: &str = "adminCase.workDuplicateClose";
+pub const WORK_DUPLICATE_HISTORY: &str = "adminCase.workDuplicateHistory";
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

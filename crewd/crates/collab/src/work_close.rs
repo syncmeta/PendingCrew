@@ -128,6 +128,14 @@ pub fn close(tx: &mut Tx<'_>, by: &Sender, p: WorkCloseParams) -> Result<WorkPla
     work::get(tx.conn(), &p.id)
 }
 pub fn history(c: &Connection, p: WorkClosureHistoryParams) -> Result<WorkClosureHistoryPage> {
+    history_scoped(c, p, None)
+}
+
+pub(crate) fn history_scoped(
+    c: &Connection,
+    p: WorkClosureHistoryParams,
+    review_scope: Option<&str>,
+) -> Result<WorkClosureHistoryPage> {
     let limit = p.limit.unwrap_or(20);
     if limit == 0 || limit > 200 {
         return Err(CollabError::Invalid(Refusal::new(Code::WorkBadLimit)));
@@ -143,6 +151,9 @@ pub fn history(c: &Connection, p: WorkClosureHistoryParams) -> Result<WorkClosur
         .transpose()?;
     let r = object_refs::get(c, ObjectKind::Plan, work::number(&p.id)?)?
         .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", &p.id)))?;
+    if review_scope.is_some_and(|crew| crew != r.crew_id) {
+        return Err(crate::resource_acl::invalid("crewId"));
+    }
     let core = work::core_plan(c, &r)?;
     let _ = work::get(c, &p.id)?;
     let mut q=c.prepare("SELECT seq,body FROM organization_work_events WHERE crew_id=?1 AND json_extract(body,'$.kind.id')=?2 AND (json_extract(body,'$.kind.type')='done' OR (json_extract(body,'$.kind.type')='dropped' AND json_extract(body,'$.kind.reason.kind') IN ('duplicate','superseded'))) AND (?3 IS NULL OR seq<?3) ORDER BY seq DESC LIMIT ?4")?;
@@ -160,6 +171,11 @@ pub fn history(c: &Connection, p: WorkClosureHistoryParams) -> Result<WorkClosur
         if seq <= 0 || e.seq != seq as u64 {
             return Err(invalid());
         }
+        let duplicate_review = if review_scope.is_some() {
+            crate::work_duplicate_review::history(c, &r.crew_id, &p.id, core, &e)?
+        } else {
+            None
+        };
         let closure = match e.kind {
             crewd_work::EventKind::Done {
                 id,
@@ -195,6 +211,7 @@ pub fn history(c: &Connection, p: WorkClosureHistoryParams) -> Result<WorkClosur
             at: crewd_store::ts_from_ms(e.at.0),
             actor,
             closure,
+            duplicate_review,
         });
     }
     let next_before_seq = more.then(|| items.last().map(|i| i.seq.clone())).flatten();

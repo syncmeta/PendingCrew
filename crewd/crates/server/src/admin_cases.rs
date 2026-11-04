@@ -21,6 +21,22 @@ async fn route(
     let owner = state.clone();
     let by = actor.clone();
     match req.method.as_str() {
+        WORK_DUPLICATE_HISTORY => {
+            let p: crewd_proto::WorkDuplicateHistoryParams = crewd_proto::parse_params(req.params)?;
+            let page = state.db.call_result(move |store| {
+                by.authorize_tx(&owner, store.conn(), WORK_DUPLICATE_HISTORY)?;
+                crewd_collab::work_duplicate_review::reviewed_history(store.conn(), p)
+            }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)?;
+            serde_json::to_value(page).map_err(dispatch::internal)
+        }
+        WORK_DUPLICATES => {
+            let p: crewd_proto::WorkDuplicatesParams = crewd_proto::parse_params(req.params)?;
+            let page = state.db.call_result(move |store| {
+                by.authorize_tx(&owner, store.conn(), WORK_DUPLICATES)?;
+                crewd_collab::work_duplicate_review::list(store.conn(), &p)
+            }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)?;
+            serde_json::to_value(page).map_err(dispatch::internal)
+        }
         REQUIREMENT_REVIEWS => {
             let p: RequirementReviewsParams = crewd_proto::parse_params(req.params)?;
             let page = state.db.call_result(move |store| {

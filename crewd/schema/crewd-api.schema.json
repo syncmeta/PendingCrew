@@ -13229,6 +13229,23 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "adminCase.workDuplicateClose",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/WorkDuplicateCloseParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "session.start",
               "type": "string"
             },
@@ -16960,6 +16977,16 @@
         "closure": {
           "$ref": "#/$defs/WorkClosure"
         },
+        "duplicateReview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkDuplicateClosure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "seq": {
           "type": "string"
         }
@@ -17198,6 +17225,211 @@
       "required": [
         "crewId",
         "title"
+      ],
+      "type": "object"
+    },
+    "WorkDuplicateCandidate": {
+      "properties": {
+        "duplicateId": {
+          "type": "string"
+        },
+        "duplicateRevision": {
+          "type": "string"
+        },
+        "sourceIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "survivorId": {
+          "type": "string"
+        },
+        "survivorRevision": {
+          "type": "string"
+        },
+        "witness": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "duplicateId",
+        "duplicateRevision",
+        "survivorId",
+        "survivorRevision",
+        "sourceIds",
+        "witness"
+      ],
+      "type": "object"
+    },
+    "WorkDuplicateCloseParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "duplicateId": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/WorkEvidenceParam"
+        },
+        "expectedDuplicateRevision": {
+          "type": "string"
+        },
+        "expectedSurvivorRevision": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "survivorId": {
+          "type": "string"
+        },
+        "witness": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "duplicateId",
+        "expectedDuplicateRevision",
+        "survivorId",
+        "expectedSurvivorRevision",
+        "witness",
+        "evidence",
+        "note"
+      ],
+      "type": "object"
+    },
+    "WorkDuplicateClosure": {
+      "additionalProperties": false,
+      "properties": {
+        "closedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "duplicateId": {
+          "type": "string"
+        },
+        "duplicateRevision": {
+          "type": "string"
+        },
+        "eventSeq": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/WorkEvidenceParam"
+        },
+        "note": {
+          "type": "string"
+        },
+        "previousDuplicateRevision": {
+          "type": "string"
+        },
+        "survivorId": {
+          "type": "string"
+        },
+        "survivorRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "duplicateId",
+        "previousDuplicateRevision",
+        "duplicateRevision",
+        "survivorId",
+        "survivorRevision",
+        "eventSeq",
+        "closedAtMs",
+        "evidence",
+        "note"
+      ],
+      "type": "object"
+    },
+    "WorkDuplicateHistoryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "beforeSeq": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "WorkDuplicatesPage": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/WorkDuplicateCandidate"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "WorkDuplicatesParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId"
       ],
       "type": "object"
     },
@@ -18366,6 +18598,22 @@
       },
       "result": {
         "$ref": "#/$defs/SimilarRequirementsPage"
+      }
+    },
+    "adminCase.workDuplicateHistory": {
+      "params": {
+        "$ref": "#/$defs/WorkDuplicateHistoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkClosureHistoryPage"
+      }
+    },
+    "adminCase.workDuplicates": {
+      "params": {
+        "$ref": "#/$defs/WorkDuplicatesParams"
+      },
+      "result": {
+        "$ref": "#/$defs/WorkDuplicatesPage"
       }
     },
     "ask.answer": {

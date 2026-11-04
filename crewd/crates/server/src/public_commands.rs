@@ -336,6 +336,7 @@ fn sql_effect(
         ),
         PublicCommand::PatrolStart(p) => serde_json::to_value(collab::patrol_manual::start(tx, &p.crew_id)?),
         PublicCommand::RequirementReview(p) => serde_json::to_value(collab::requirement_review::apply(tx, p)?),
+        PublicCommand::WorkDuplicateClose(p) => serde_json::to_value(collab::work_duplicate_review::close(tx, p)?),
         _ => {
             return Err(crewd_store::StoreError::Invalid(
                 "external command requires production scheduler".into(),
@@ -366,6 +367,7 @@ async fn submit(
         | PublicCommand::CrewCreateFirstMessage(_)
         | PublicCommand::PatrolStart(_)
         | PublicCommand::RequirementReview(_)
+        | PublicCommand::WorkDuplicateClose(_)
         | PublicCommand::MessagePost(_) => submit_sql(state, actor, p).await,
         PublicCommand::CodexConfigure(_)
         | PublicCommand::CodexCompact(_)
@@ -445,6 +447,7 @@ async fn submit_sql_with_home(
             | PublicCommand::CrewCreateFirstMessage(_)
             | PublicCommand::PatrolStart(_)
             | PublicCommand::RequirementReview(_)
+            | PublicCommand::WorkDuplicateClose(_)
             | PublicCommand::MessagePost(_)
     ) {
         return Err(RpcError::new(

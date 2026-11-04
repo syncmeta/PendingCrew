@@ -149,6 +149,8 @@ pub enum PublicCommand {
     PatrolStart(crate::PatrolStartParams),
     #[serde(rename = "adminCase.requirementReview")]
     RequirementReview(crate::admin_cases::RequirementReviewParams),
+    #[serde(rename = "adminCase.workDuplicateClose")]
+    WorkDuplicateClose(crate::WorkDuplicateCloseParams),
     #[serde(rename = "session.start")]
     SessionStart(orchestra::SessionStartParams),
     #[serde(rename = "session.codex.configure")]
@@ -233,6 +235,7 @@ impl PublicCommand {
             Self::MessagePost(_) => &["message.post"],
             Self::PatrolStart(_) => &[crate::PATROL_START],
             Self::RequirementReview(_) => &[crate::admin_cases::REQUIREMENT_REVIEW],
+            Self::WorkDuplicateClose(_) => &[crate::admin_cases::WORK_DUPLICATE_CLOSE],
             Self::SessionStart(_) => &["session.start"],
             Self::CodexConfigure(_) => &["session.codex.configure"],
             Self::CodexCompact(_) => &["session.codex.compact"],
@@ -271,6 +274,7 @@ impl PublicCommand {
             Self::MessagePost(_) => "message.post",
             Self::PatrolStart(_) => crate::PATROL_START,
             Self::RequirementReview(_) => crate::admin_cases::REQUIREMENT_REVIEW,
+            Self::WorkDuplicateClose(_) => crate::admin_cases::WORK_DUPLICATE_CLOSE,
             Self::SessionStart(_) => "session.start",
             Self::CodexConfigure(_) => "session.codex.configure",
             Self::CodexCompact(_) => "session.codex.compact",

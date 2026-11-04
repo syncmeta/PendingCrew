@@ -40,6 +40,10 @@ struct CrewdWorkCloseView: View {
                 VStack(alignment:.leading) {
                     Text((event["at"].string ?? "") + " · " + label(event["closure"]["kind"].string ?? ""))
                     Text("操作者：" + actor(event["actor"]))
+                    if let survivor = event["duplicateReview"]["survivorId"].string,
+                       let revision = event["duplicateReview"]["survivorRevision"].string {
+                        Text("复核保留项 " + survivor + " · 当时版本 " + revision).textSelection(.enabled)
+                    }
                     if let note=event["closure"]["note"].string {Text(note)}
                     if let evidence=event["closure"]["evidence"]["value"].string {Text("凭据："+evidence).textSelection(.enabled)}
                 }
@@ -59,12 +63,13 @@ struct CrewdWorkCloseView: View {
     }
     private func readHistory(reset:Bool) {
         let request=UUID(),target=id,cursor=reset ? nil:historyNext
+        let crew = detail["crewId"].string
         historyToken=request;historyBusy=true;failure=nil
         if reset {history=[];historyNext=nil;historyLoaded=false}
         Task { @MainActor in
             defer {if historyToken == request {historyBusy=false}}
             do {
-                let page=try await store.closureHistory(target,beforeSeq:cursor)
+                let page=try await store.closureHistory(target,beforeSeq:cursor,duplicateReviewCrew:crew)
                 guard historyToken == request,id == target else{return}
                 history += page["items"].array;historyNext=page["nextBeforeSeq"].string;historyLoaded=true
             } catch is CancellationError {return}

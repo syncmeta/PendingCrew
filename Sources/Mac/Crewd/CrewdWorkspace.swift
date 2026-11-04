@@ -1184,7 +1184,8 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     private func isReadOnly(_ method: String) -> Bool {
-        if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements", "adminCase.requirementReviews"].contains(method) { return true }
+        if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements", "adminCase.requirementReviews",
+            "adminCase.workDuplicates", "adminCase.workDuplicateHistory"].contains(method) { return true }
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
         return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet", "session.claude.recoveryInspect"].contains(method)
     }
@@ -1344,7 +1345,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID(), validateReceipt:((CrewdPublicReceipt)throws->Void)?=nil) async throws -> CrewdPublicReceipt {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
-        if operation == .patrolStart {
+        if operation == .patrolStart || operation == .workDuplicateClose {
             guard client.capabilities.contains(operation.rawValue), client.readyForWork,
                   !crew.isEmpty, crew == crewID, params["crewId"] == .string(crew),
                   !hasOriginalUnknown(method: operation.rawValue, crew: crew),
@@ -1352,7 +1353,8 @@ final class CrewdWorkspace: ObservableObject {
                       publicCommands.pending.contains($0.id) && $0.envelope.operation == operation &&
                           $0.envelope.params["crewId"] == .string(crew)
                   }) else {
-                throw CrewdClientError(message: "当前机组无法启动手动巡检，或已有原请求待核对。", kind: .notSubmitted)
+                let action = operation == .patrolStart ? "启动手动巡检" : "确认重复工作关闭"
+                throw CrewdClientError(message: "当前机组无法" + action + "，或已有原请求待核对。", kind: .notSubmitted)
             }
         }
         if operation.isCodex {
@@ -1583,7 +1585,8 @@ final class CrewdWorkspace: ObservableObject {
         // Current patrol and review state have their own reads.
         let operation = record.params["command"]["operation"].string
         let historicalRecordedRequest = receipt.historical &&
-            [CrewdPublicOperation.patrolStart.rawValue, CrewdPublicOperation.requirementReview.rawValue].contains(operation ?? "") &&
+            [CrewdPublicOperation.patrolStart.rawValue, CrewdPublicOperation.requirementReview.rawValue,
+             CrewdPublicOperation.workDuplicateClose.rawValue].contains(operation ?? "") &&
             [.committed, .rejected, .suppressed].contains(receipt.phase)
         guard record.scope == presentationScope, !receipt.historical || historicalRecordedRequest,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,

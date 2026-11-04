@@ -228,6 +228,72 @@ async fn exact_requirement_review_uses_the_original_human_command_receipt() {
 }
 
 #[tokio::test]
+async fn human_factual_duplicate_close_has_one_exact_receipt_and_kept_work() {
+    let f = Fixture::new().await;
+    f.enable_public_command_identity().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let hello = call(&mut human, "system.hello", json!({})).await.unwrap();
+    for method in ["adminCase.workDuplicates","adminCase.workDuplicateClose","adminCase.workDuplicateHistory"] {
+        assert!(hello["capabilities"].as_array().unwrap().iter().any(|item| item == method));
+    }
+    let requirement = call(&mut human, "todo.create", json!({
+        "requestId":uuid::Uuid::new_v4().to_string(),"crewId":f.crew,"text":"original request"
+    })).await.unwrap();
+    let mut definition = json!({
+        "crewId":f.crew,"title":"same work","goal":"same goal","acceptance":"same proof",
+        "sources":[requirement["requirementId"]],"owner":f.worker,
+    });
+    let kept = call(&mut human, "work.create", definition.clone()).await.unwrap();
+    definition["owner"] = Value::Null;
+    let duplicate = call(&mut human, "work.create", definition).await.unwrap();
+    let page = call(&mut human, "adminCase.workDuplicates", json!({"crewId":f.crew})).await.unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    let candidate = &page["items"][0];
+    assert_eq!(candidate["duplicateId"], duplicate["id"]);
+    assert_eq!(candidate["survivorId"], kept["id"]);
+    let packet = json!({
+        "requestId":uuid::Uuid::new_v4().to_string(),
+        "dbId":hello["runtimeIdentity"]["dbId"],"runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],
+        "command":{"operation":"adminCase.workDuplicateClose","params":{
+            "crewId":f.crew,"duplicateId":candidate["duplicateId"],"expectedDuplicateRevision":candidate["duplicateRevision"],
+            "survivorId":candidate["survivorId"],"expectedSurvivorRevision":candidate["survivorRevision"],
+            "witness":candidate["witness"],"note":"preserve original assigned plan",
+            "evidence":{"kind":"text","value":"exact original plan and acceptance confirmed"}
+        }}
+    });
+    let history = json!({"crewId":f.crew,"id":duplicate["id"]});
+    let mut agent = RpcClient::connect(&socket).await;
+    call(&mut agent, "agent.attach", json!({"sessionId":f.worker,"token":f.token(&f.worker)})).await.unwrap();
+    for (method, p) in [
+        ("adminCase.workDuplicates", json!({"crewId":f.crew})),
+        ("adminCase.workDuplicateHistory", history.clone()),
+        ("command.submit", packet.clone()),
+    ] {
+        assert_eq!(call(&mut agent, method, p).await.unwrap_err().0, crewd_proto::RpcError::FORBIDDEN);
+    }
+    let committed = call(&mut human, "command.submit", packet.clone()).await.unwrap();
+    assert_eq!(committed["phase"], "committed");
+    assert_eq!(committed["result"]["survivorId"], kept["id"]);
+    assert_eq!(call(&mut human, "command.submit", packet.clone()).await.unwrap(), committed);
+    let recovered = call(&mut human, "command.lookup", json!({
+        "requestId":packet["requestId"],"dbId":packet["dbId"],
+    })).await.unwrap();
+    assert_eq!(recovered, committed);
+    assert_eq!(call(&mut human, "work.get", json!({"id":kept["id"]})).await.unwrap(), kept);
+    assert_eq!(call(&mut human, "work.get", json!({"id":duplicate["id"]})).await.unwrap()["status"], "dropped");
+    let reviewed = call(&mut human, "adminCase.workDuplicateHistory", history).await.unwrap();
+    assert_eq!(reviewed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(reviewed["items"][0]["duplicateReview"], committed["result"]);
+    let ordinary = call(&mut human, "work.closureHistory", json!({"id":duplicate["id"]})).await.unwrap();
+    assert!(ordinary["items"][0].get("duplicateReview").is_none());
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), task).await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn human_brief_socket_reads_the_original_question_without_mutating_it() {
     use crewd_collab::asks;
     let f = Fixture::new().await;

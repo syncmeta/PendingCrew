@@ -833,6 +833,14 @@ pub fn api_schema() -> Value {
             m(sub::<RequirementReviewsParams>(g), sub::<RequirementReviewsPage>(g)),
         ),
         (
+            admin_cases::WORK_DUPLICATES,
+            m(sub::<WorkDuplicatesParams>(g), sub::<WorkDuplicatesPage>(g)),
+        ),
+        (
+            admin_cases::WORK_DUPLICATE_HISTORY,
+            m(sub::<WorkDuplicateHistoryParams>(g), sub::<WorkClosureHistoryPage>(g)),
+        ),
+        (
             admin_cases::LEGACY_LIST,
             m(
                 sub::<AdminCaseLegacyListParams>(g),

@@ -439,6 +439,181 @@ async fn approved(
 }
 
 #[tokio::test]
+async fn paired_human_factual_duplicate_close_keeps_receipt_scope_and_revocation() {
+    use crewd_proto::admin_cases::{WORK_DUPLICATE_CLOSE, WORK_DUPLICATE_HISTORY, WORK_DUPLICATES};
+
+    fn close_packet(hello: &Value, crew: &Value, row: &Value) -> Value {
+        draft_packet(
+            hello,
+            WORK_DUPLICATE_CLOSE,
+            json!({
+                "crewId":crew,"duplicateId":row["duplicateId"],
+                "expectedDuplicateRevision":row["duplicateRevision"],
+                "survivorId":row["survivorId"],"expectedSurvivorRevision":row["survivorRevision"],
+                "witness":row["witness"],"note":"preserve the earlier original plan",
+                "evidence":{"kind":"text","value":"fixture requirements and plans match exactly"}
+            }),
+        )
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert_eq!(hello["remoteBinding"]["grantId"], accepted.grant.id);
+    for method in [
+        WORK_DUPLICATES,
+        WORK_DUPLICATE_CLOSE,
+        WORK_DUPLICATE_HISTORY,
+    ] {
+        assert!(
+            hello["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item == method)
+        );
+    }
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"Paired duplicate archive fixture","workingDirectory":dir.path()
+            }),
+        )
+        .await["id"]
+        .clone();
+    let foreign = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"Separate duplicate archive scope","workingDirectory":dir.path()
+            }),
+        )
+        .await["id"]
+        .clone();
+    let source = remote.call("todo.create", json!({
+        "requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew,"text":"Original duplicate archive requirement"
+    })).await;
+    let definition = json!({
+        "crewId":crew,"title":"Identical work fixture","goal":"Record the original results",
+        "acceptance":"Review results against the original input","sources":[source["requirementId"]]
+    });
+    let kept = remote.call("work.create", definition.clone()).await;
+    let duplicate = remote.call("work.create", definition.clone()).await;
+    let next = remote.call("work.create", definition).await;
+    let scope = json!({"crewId":crew});
+    let page = remote.call(WORK_DUPLICATES, scope.clone()).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 2);
+    let candidate = &page["items"][0];
+    assert_eq!(candidate["duplicateId"], duplicate["id"]);
+    assert_eq!(candidate["survivorId"], kept["id"]);
+    assert_eq!(candidate["sourceIds"], json!([source["requirementId"]]));
+    assert_eq!(
+        remote
+            .call(WORK_DUPLICATES, json!({"crewId":foreign}))
+            .await["items"],
+        json!([])
+    );
+
+    let packet = close_packet(&hello, &crew, candidate);
+    let lookup = json!({"dbId":packet["dbId"],"requestId":packet["requestId"]});
+    let committed = remote.call("command.submit", packet.clone()).await;
+    let receipt = &committed["result"];
+    assert_eq!(committed["phase"], "committed");
+    assert_eq!(receipt["duplicateId"], duplicate["id"]);
+    assert_eq!(receipt["survivorId"], kept["id"]);
+    assert_eq!(receipt["survivorRevision"], kept["revision"]);
+    assert_eq!(remote.call("command.submit", packet).await, committed);
+
+    drop(remote);
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert_eq!(hello["remoteBinding"]["grantId"], accepted.grant.id);
+    assert_eq!(
+        remote.call("command.lookup", lookup.clone()).await,
+        committed
+    );
+    let history_params = json!({"crewId":crew,"id":duplicate["id"]});
+    let history = remote
+        .call(WORK_DUPLICATE_HISTORY, history_params.clone())
+        .await;
+    assert_eq!(history["items"].as_array().unwrap().len(), 1);
+    assert_eq!(history["items"][0]["seq"], receipt["eventSeq"]);
+    assert_eq!(history["items"][0]["duplicateReview"], *receipt);
+    let refused = tokio::time::timeout(
+        LIMIT,
+        remote.frame(
+            WORK_DUPLICATE_HISTORY,
+            json!({"crewId":foreign,"id":duplicate["id"]}),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        refused["error"]["code"],
+        crewd_proto::RpcError::INVALID_PARAMS
+    );
+    let ordinary = remote
+        .call("work.closureHistory", json!({"id":duplicate["id"]}))
+        .await;
+    assert!(ordinary["items"][0].get("duplicateReview").is_none());
+    assert_eq!(
+        remote.call("work.get", json!({"id":kept["id"]})).await,
+        kept
+    );
+    assert_eq!(
+        remote.call("work.get", json!({"id":duplicate["id"]})).await["status"],
+        "dropped"
+    );
+
+    let next_page = remote.call(WORK_DUPLICATES, scope).await;
+    assert_eq!(next_page["items"].as_array().unwrap().len(), 1);
+    let pending = &next_page["items"][0];
+    assert_eq!(pending["duplicateId"], next["id"]);
+    let revoked_packet = close_packet(&hello, &crew, pending);
+    let revoked_request = revoked_packet["requestId"].as_str().unwrap().to_owned();
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"revoke duplicate archive fixture"
+    })).await;
+    for (method, params) in [
+        ("command.submit", revoked_packet),
+        (WORK_DUPLICATE_HISTORY, history_params),
+        ("command.lookup", lookup),
+    ] {
+        if let Ok(frame) = tokio::time::timeout(LIMIT, remote.frame(method, params))
+            .await
+            .unwrap()
+        {
+            assert_eq!(
+                frame["error"]["code"],
+                crewd_proto::RpcError::FORBIDDEN,
+                "revoked TLS used {method}"
+            );
+        }
+    }
+    assert_eq!(
+        local(&mut running.owner, "work.get", json!({"id":next["id"]})).await,
+        next
+    );
+    drop(remote);
+    stopped(running).await;
+    let store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
+    let receipts: i64 = store
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM public_command_receipts WHERE request_id=?1",
+            [revoked_request],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(receipts, 0);
+}
+
+#[tokio::test]
 async fn paired_human_requirement_review_recovers_exact_receipts_and_stops_after_revoke() {
     use crewd_collab::{Sender, judgments, requirement_similarity as similarity};
     use crewd_proto::admin_cases::{REQUIREMENT_REVIEW, REQUIREMENT_REVIEWS, SIMILAR_REQUIREMENTS};

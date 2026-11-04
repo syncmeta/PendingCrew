@@ -540,3 +540,6 @@ This Todo's owner or manual state changed. Inspect its latest state before decid
 
 ## requirement.review_conflict
 The candidate or its review changed. Reload the original requirements and current review before deciding.
+
+## work.duplicate_candidate_changed
+The work items or their evidence changed. Reload both plans and verify which one should remain.

@@ -1023,6 +1023,9 @@ fn allowed_method(method: &str) -> bool {
             | "adminCase.similarRequirements"
             | crewd_proto::admin_cases::REQUIREMENT_REVIEWS
             | crewd_proto::admin_cases::REQUIREMENT_REVIEW
+            | crewd_proto::admin_cases::WORK_DUPLICATES
+            | crewd_proto::admin_cases::WORK_DUPLICATE_CLOSE
+            | crewd_proto::admin_cases::WORK_DUPLICATE_HISTORY
             | "executor.list"
             | "data.workspace.get"
             | "data.submit"

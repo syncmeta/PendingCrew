@@ -55,6 +55,7 @@ refusal_codes! {
     WorkOwnerUnchanged = "work.owner_unchanged" [],
     WorkDependentsActive = "work.dependents_active" [],
     WorkTerminal = "work.terminal" [],
+    WorkDuplicateCandidateChanged = "work.duplicate_candidate_changed" [],
     WorkBadId = "work.bad_id" ["input"],
     WorkNotFound = "work.not_found" ["id"],
     WorkBadLimit = "work.bad_limit" [],

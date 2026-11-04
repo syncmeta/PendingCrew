@@ -44,6 +44,33 @@ pub fn authorize(c: &Connection, by: &Sender, ch: &str, write: bool) -> Result<R
         Sender::System => Err(denied()),
     }
 }
+
+fn work_link_revision_key(id: &str) -> String {
+    format!("channel.work.object_revision.v1:{id}")
+}
+
+/// A Work link change survives removal of its channel and event history.
+/// Preexisting links without a stamp remain valid until their first change.
+pub(crate) fn work_link_revision(c: &Connection, id: &str) -> Result<Option<String>> {
+    let value = crewd_store::meta_get(c, &work_link_revision_key(id))?;
+    if value.as_ref().is_some_and(|raw| {
+        uuid::Uuid::parse_str(raw).ok().is_none_or(|id| id.to_string() != *raw)
+    }) {
+        return Err(StoreError::Invalid("invalid Work link revision witness".into()).into());
+    }
+    Ok(value)
+}
+
+fn note_work_link_revision(tx: &Tx<'_>, object: &ChannelWorkObject) -> Result<()> {
+    if object.kind == ChannelWorkKind::Work {
+        crewd_store::meta_set(
+            tx.conn(),
+            &work_link_revision_key(&object.id),
+            &uuid::Uuid::new_v4().to_string(),
+        )?;
+    }
+    Ok(())
+}
 fn identity(c: &Connection, o: &ChannelWorkObject) -> Result<ObjectReference> {
     let (k, prefix) = match o.kind {
         ChannelWorkKind::Requirement => (ObjectKind::Requirement, '#'),
@@ -123,6 +150,7 @@ pub fn link(
                 at: &tx.now_ts(),
             },
         )?;
+        note_work_link_revision(tx, &p.object)?;
         tx.note(Change::ChannelWorkChanged {
             channel_id: p.channel_id.clone(),
             link_revision: next.to_string(),

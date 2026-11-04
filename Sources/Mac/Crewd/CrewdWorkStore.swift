@@ -1017,19 +1017,57 @@ final class CrewdWorkStore: ObservableObject {
         guard value["ask"] == .string(id.raw),value["crewId"] == .string(crew),value["question"].string != nil,value["state"].string != nil else{throw CrewdClientError(message:"人类事项详情身份或原问题不符。")}
         return value
     }
-    func closureHistory(_ id:CrewdWorkID,beforeSeq:String?=nil) async throws -> CrewdValue {
+    func duplicateWorkPage(after: String? = nil) async throws -> CrewdWorkDuplicateWire.Page {
+        let token = generation, crew = selectedCrew, limit = 20
+        guard !crew.isEmpty, capabilities.contains("adminCase.workDuplicates") else { throw CrewdWorkDuplicateWire.invalid() }
+        var params: [String:CrewdValue] = ["crewId":.string(crew),"limit":.integer(Int64(limit))]
+        if let after { params["after"] = .string(after) }
+        let value = try await call("adminCase.workDuplicates",.object(params))
+        try check(token)
+        return try .init(value,crew:crew,after:after,limit:limit)
+    }
+
+    func inspectDuplicateWork(_ candidate: CrewdWorkDuplicateWire.Candidate) async throws -> (duplicate: CrewdPlan, survivor: CrewdPlan) {
+        let token = generation, crew = selectedCrew
+        guard !crew.isEmpty, capabilities.contains("adminCase.workDuplicates") else { throw CrewdWorkDuplicateWire.invalid() }
+        func read(_ id: String, revision: String) async throws -> CrewdPlan {
+            let raw = try await call("work.get",.object(["id":.string(id)]))
+            try check(token)
+            let plan = try parsePlan(raw,full:true)
+            guard plan.id.raw == id, plan.crew == crew, plan.revision == revision,
+                  !plan.frozen, Set(raw["sources"].array.compactMap(\.string)) == Set(candidate.sources) else {
+                throw CrewdClientError(message:"工作或来源已经变化，请重新读取候选。")
+            }
+            return plan
+        }
+        let duplicate = try await read(candidate.duplicate,revision:candidate.duplicateRevision)
+        let survivor = try await read(candidate.survivor,revision:candidate.survivorRevision)
+        guard duplicate.status == "open", duplicate.value["owner"] == .null,
+              ["open","active"].contains(survivor.status),
+              ["title","goal","acceptance","level"].allSatisfy({ key in
+                  duplicate.value[key].string?.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty == false &&
+                    duplicate.value[key] == survivor.value[key]
+              }) else { throw CrewdClientError(message:"两项当前定义已经不同，请重新读取候选。") }
+        return (duplicate,survivor)
+    }
+
+    func closureHistory(_ id:CrewdWorkID,beforeSeq:String?=nil,duplicateReviewCrew: String? = nil) async throws -> CrewdValue {
         func sequence(_ raw:String?) -> UInt64? { guard let raw,let n=UInt64(raw),String(n)==raw,n>0 else{return nil};return n }
         guard id.kind == .plan, beforeSeq == nil || sequence(beforeSeq) != nil else {throw CrewdClientError(message:"关闭历史查询身份或游标无效。")}
         let token=generation
         var params:[String:CrewdValue]=["id":.string(id.raw),"limit":.integer(20)]
         if let beforeSeq {params["beforeSeq"] = .string(beforeSeq)}
-        let value=try await call("work.closureHistory",.object(params));try check(token)
-        guard case .object(let fields)=value,case .array(let items)?=fields["items"],let next=fields["nextBeforeSeq"],next == .null || sequence(next.string) != nil else {throw CrewdClientError(message:"关闭历史分页格式无效。")}
+        let reviewCrew = duplicateReviewCrew == selectedCrew && capabilities.contains("adminCase.workDuplicateHistory") ? duplicateReviewCrew : nil
+        if let reviewCrew { params["crewId"] = .string(reviewCrew) }
+        let value=try await call(reviewCrew == nil ? "work.closureHistory" : "adminCase.workDuplicateHistory",.object(params));try check(token)
+        guard case .object(let fields)=value,case .array(let items)?=fields["items"],items.count <= 20,let next=fields["nextBeforeSeq"],next == .null || sequence(next.string) != nil else {throw CrewdClientError(message:"关闭历史分页格式无效。")}
         var previous=beforeSeq.flatMap {sequence($0)} ?? UInt64.max
         for item in items {
             guard let seq=sequence(item["seq"].string),seq<previous,item["at"].string != nil,
                   ["human","system","session"].contains(item["actor"]["kind"].string ?? ""),
                   ["done","duplicate","superseded"].contains(item["closure"]["kind"].string ?? "") else {throw CrewdClientError(message:"关闭历史事件或顺序无效。")}
+            if let reviewCrew { try CrewdWorkDuplicateWire.validateHistory(item,crew:reviewCrew,id:id.raw) }
+            else if item["duplicateReview"] != .null { throw CrewdWorkDuplicateWire.invalid() }
             previous=seq
         }
         if let next=next.string {guard sequence(next)==items.last.flatMap({sequence($0["seq"].string)}) else {throw CrewdClientError(message:"关闭历史游标不匹配。")}}

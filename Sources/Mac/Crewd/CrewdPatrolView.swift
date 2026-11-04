@@ -12,6 +12,7 @@ struct CrewdPatrolView: View {
     @State private var archiveTarget:String?
     @State private var casesPresented=false
     @State private var similarPresented = false
+    @State private var duplicatePresented = false
     @State private var archived:[CrewdValue]=[]
     @State private var archivedLoaded=false
     @State private var rows: [CrewdValue] = []
@@ -33,6 +34,9 @@ struct CrewdPatrolView: View {
             Button("行政处理记录") {casesPresented=true}
             if store.capabilities.contains("adminCase.similarRequirements") {
                 Button("审阅相近需求") { similarPresented = true }
+            }
+            if workspace != nil, store.capabilities.contains("adminCase.workDuplicates") {
+                Button("复核重复工作") { duplicatePresented = true }
             }
             Button("读取当前机组已归档群") {readArchived()}
             if archivedLoaded && archived.isEmpty {Text("当前机组没有已归档群。")}
@@ -77,8 +81,11 @@ struct CrewdPatrolView: View {
         }
         .sheet(isPresented:$casesPresented) {CrewdAdminCasesView(store:store)}
         .sheet(isPresented: $similarPresented) { CrewdSimilarRequirementsView(store: store, workspace: workspace) }
+        .sheet(isPresented: $duplicatePresented) {
+            if let workspace { CrewdWorkDuplicateReviewView(store:store,workspace:workspace) }
+        }
         .onChange(of: scan) { _, _ in reset() }
-        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; archived=[]; archivedLoaded=false; readStatus() }
+        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; duplicatePresented=false; archived=[]; archivedLoaded=false; readStatus() }
         .onAppear { readStatus() }
         .onDisappear { cancel(); clearStatus() }
         .task(id: activeManualRun) {
@@ -311,6 +318,248 @@ private struct CrewdManualPatrolControls: View {
             feedback = "原请求结果未确认，可以继续查询原回执。"
         }
         refresh()
+    }
+}
+
+private struct CrewdWorkDuplicateReviewView: View {
+    typealias Candidate = CrewdWorkDuplicateWire.Candidate
+
+    struct Inspection {
+        let candidate: Candidate
+        let duplicate: CrewdPlan
+        let survivor: CrewdPlan
+    }
+    struct Confirmation {
+        let candidate: Candidate
+        let params: CrewdValue
+    }
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: CrewdWorkStore
+    @ObservedObject var workspace: CrewdWorkspace
+    @State private var opened = false
+    @State private var crew = ""
+    @State private var scope = UUID()
+    @State private var rows: [Candidate] = []
+    @State private var next: String?
+    @State private var inspected: Inspection?
+    @State private var confirmation: Confirmation?
+    @State private var evidenceKind = "text"
+    @State private var evidence = ""
+    @State private var note = ""
+    @State private var loaded = false
+    @State private var writing = false
+    @State private var readTask: Task<Void,Never>?
+    @State private var readID = UUID()
+    @State private var failure: String?
+    @State private var feedback: String?
+
+    private var current: Bool {
+        opened && !crew.isEmpty && crew == store.selectedCrew && crew == workspace.crewID &&
+            store.readScope == scope && workspace.client.readyForWork && workspace.originalJournalReady
+    }
+    private var originals: [CrewdPresentationJournal.Prepared] {
+        workspace.durableUnknown.filter {
+            workspace.isCurrentOriginalObservation($0) && $0.method == "command.submit" &&
+                $0.params["command"]["operation"] == .string(CrewdPublicOperation.workDuplicateClose.rawValue) &&
+                $0.params["command"]["params"]["crewId"] == .string(crew)
+        }
+    }
+    private var canWrite: Bool {
+        current && !writing && readTask == nil && originals.isEmpty &&
+            store.capabilities.contains(CrewdPublicOperation.workDuplicateClose.rawValue) &&
+            CrewdWorkDuplicateWire.text(.string(evidence)) && CrewdWorkDuplicateWire.text(.string(note))
+    }
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            HStack {
+                Text("复核重复工作").font(.headline)
+                Spacer()
+                Button("关闭") { dismiss() }.disabled(writing)
+            }
+            Text("只复核同机组、定义和来源相同的候选。确认后关闭重复项，原需求、历史与保留项继续独立存在。")
+                .font(.caption).foregroundStyle(.secondary)
+            if let feedback { Text(feedback).font(.caption).foregroundStyle(.secondary) }
+            if let failure { Text(failure).font(.caption).foregroundStyle(.orange) }
+            if current {
+                HStack {
+                    Button("重新读取") { load() }
+                    if next != nil { Button("下一页") { load(after:next) } }
+                    if readTask != nil || writing { ProgressView().controlSize(.small) }
+                }.disabled(writing || readTask != nil)
+                ScrollView {
+                    VStack(alignment:.leading,spacing:10) {
+                        ForEach(originals) { row in
+                            let params = row.params["command"]["params"]
+                            HStack {
+                                VStack(alignment:.leading) {
+                                    Text("原关闭请求待核对 " + (params["duplicateId"].string ?? ""))
+                                    Text(row.params["requestId"].string ?? "").font(.caption).textSelection(.enabled)
+                                }
+                                Spacer()
+                                Button("核对原请求") { recover(row) }.disabled(writing || readTask != nil)
+                            }
+                        }
+                        if loaded && rows.isEmpty { Text("当前没有可复核的重复工作。").foregroundStyle(.secondary) }
+                        ForEach(rows) { candidate in
+                            Button(candidate.duplicate + " · 核对保留项 " + candidate.survivor) { inspect(candidate) }
+                                .disabled(writing || readTask != nil)
+                        }
+                        if let inspected { review(inspected) }
+                    }.frame(maxWidth:.infinity,alignment:.leading)
+                }
+            } else {
+                Text("当前机组连接已变化，请重新打开复核。").foregroundStyle(.secondary)
+            }
+        }
+        .padding().modifier(CrewdAdaptiveFormFrame(width:580,height:540,scrolls:false))
+        .interactiveDismissDisabled(writing)
+        .onAppear { crew = store.selectedCrew; scope = store.readScope; opened = true; load() }
+        .onChange(of:store.readScope) { _,_ in dismiss() }
+        .onDisappear { opened = false; cancelRead(); confirmation = nil }
+        .onReceive(workspace.authorityEvents) { event in invalidateFacts(event.0,event.1) }
+        .confirmationDialog("确认关闭重复工作？",isPresented:Binding(get:{confirmation != nil},set:{if !$0 {confirmation=nil}})) {
+            if let confirmation {
+                Button("关闭 " + confirmation.candidate.duplicate + "，保留 " + confirmation.candidate.survivor,role:.destructive) {
+                    self.confirmation = nil
+                    submit(confirmation)
+                }
+            }
+            Button("取消",role:.cancel) {}
+        } message: {
+            Text("关闭记录会保存两项当时的版本、复核理由和凭据。")
+        }
+    }
+
+    private func review(_ value: Inspection) -> some View {
+        VStack(alignment:.leading,spacing:8) {
+            Divider()
+            Text(value.duplicate.value["title"].string ?? "").font(.headline).textSelection(.enabled)
+            facts("拟关闭",plan:value.duplicate)
+            facts("继续保留",plan:value.survivor)
+            Text("共同来源 " + value.candidate.sources.joined(separator:"、")).font(.caption).textSelection(.enabled)
+            Text("共同目标").font(.caption).foregroundStyle(.secondary)
+            Text(verbatim:value.duplicate.value["goal"].string ?? "").textSelection(.enabled)
+            Text("共同验收条件").font(.caption).foregroundStyle(.secondary)
+            Text(verbatim:value.duplicate.value["acceptance"].string ?? "").textSelection(.enabled)
+            Picker("凭据类型",selection:$evidenceKind) { Text("文字").tag("text"); Text("提交").tag("commit"); Text("链接").tag("url") }
+            TextField("事实凭据（必填）",text:$evidence,axis:.vertical).lineLimit(2...4)
+            TextField("为什么关闭重复项（必填）",text:$note,axis:.vertical).lineLimit(2...4)
+            Button("复核并确认关闭…") {
+                guard canWrite else { return }
+                confirmation = .init(candidate:value.candidate,params:value.candidate.parameters(
+                    crew:crew,evidenceKind:evidenceKind,evidence:evidence,note:note))
+            }.disabled(!canWrite)
+        }
+    }
+
+    private func facts(_ label: String, plan: CrewdPlan) -> some View {
+        VStack(alignment:.leading,spacing:3) {
+            Text(label + " " + plan.id.raw + " · 版本 " + plan.revision).textSelection(.enabled)
+            Text(CrewdWorkStatusLabel.display(plan.status) + " · " + (plan.value["owner"].string ?? "尚无负责人"))
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+        }
+    }
+
+    private func cancelRead() { readID = UUID(); readTask?.cancel(); readTask = nil }
+
+    private func discardInspection() {
+        inspected = nil; confirmation = nil
+        evidenceKind = "text"; evidence = ""; note = ""
+    }
+
+    private func read(_ operation: @escaping @MainActor (UUID) async throws -> Void) {
+        cancelRead()
+        let id = readID
+        failure = nil
+        readTask = Task { @MainActor in
+            defer { if readID == id { readTask = nil } }
+            do { try await operation(id) }
+            catch is CancellationError {}
+            catch { if current && readID == id { failure = error.localizedDescription } }
+        }
+    }
+
+    private func load(after: String? = nil) {
+        guard current, !writing else { return }
+        discardInspection()
+        if after == nil { rows = []; next = nil; loaded = false }
+        read { id in
+            let page = try await store.duplicateWorkPage(after:after)
+            guard current && readID == id else { return }
+            rows.append(contentsOf:page.items); next = page.next; loaded = true
+        }
+    }
+
+    private func inspect(_ candidate: Candidate) {
+        guard current && !writing && rows.contains(candidate) else { return }
+        discardInspection()
+        read { id in
+            let plans = try await store.inspectDuplicateWork(candidate)
+            guard current && readID == id && rows.contains(candidate) else { return }
+            inspected = .init(candidate:candidate,duplicate:plans.duplicate,survivor:plans.survivor)
+        }
+    }
+
+    private func invalidateFacts(_ name: String, _ data: CrewdValue) {
+        guard current, name.hasPrefix("work.") || name.hasPrefix("todo.") || name == "channel.workChanged" ||
+                name == "crew.changed" || name == "events.lagged" else { return }
+        if let changedCrew = data["crewId"].string, changedCrew != crew { return }
+        if readTask != nil || loaded {
+            cancelRead(); discardInspection(); rows = []; next = nil; loaded = false
+            if !writing { feedback = "当前事实已变化，请重新读取候选。" }
+        }
+    }
+
+    private func submit(_ item: Confirmation) {
+        guard canWrite, inspected?.candidate == item.candidate else { return }
+        writing = true; failure = nil; feedback = nil
+        Task { @MainActor in
+            defer { writing = false }
+            guard current, inspected?.candidate == item.candidate, originals.isEmpty else { return }
+            do {
+                let receipt = try await workspace.submitPublicCommand(.workDuplicateClose,params:item.params,crew:crew)
+                writing = false
+                observe(receipt)
+            } catch {
+                if current { discardInspection(); rows = []; next = nil; loaded = false; failure = error.localizedDescription }
+            }
+        }
+    }
+
+    private func recover(_ original: CrewdPresentationJournal.Prepared) {
+        guard current && !writing && readTask == nil else { return }
+        writing = true; failure = nil; feedback = nil
+        Task { @MainActor in
+            defer { writing = false }
+            guard current, originals.contains(where:{ $0.id == original.id }) else { return }
+            do {
+                let receipt = try await workspace.lookupOriginalCommand(original)
+                guard current else { return }
+                if let receipt, [.committed,.rejected,.suppressed].contains(receipt.phase) {
+                    try workspace.acknowledgeOriginalCommand(original,receipt:receipt)
+                }
+                writing = false
+                observe(receipt)
+            } catch { if current { failure = error.localizedDescription } }
+        }
+    }
+
+    private func observe(_ receipt: CrewdPublicReceipt?) {
+        guard current else { return }
+        switch receipt?.phase {
+        case .committed:
+            let original = receipt?.value["result"]["duplicateId"].string ?? "重复项"
+            feedback = receipt?.historical == true ? "已核对 " + original + " 的历史关闭回执。请读取当前候选或关闭历史。"
+                : "已关闭 " + original + "。可在原工作项的关闭历史核对保留项。"
+            load()
+        case .rejected, .suppressed:
+            feedback = "后台未接受此次关闭。请重新读取候选。"
+            load()
+        default:
+            feedback = "结果待确认。请查询原请求。"
+            discardInspection()
+        }
     }
 }
 

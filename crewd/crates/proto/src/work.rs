@@ -360,6 +360,72 @@ pub struct WorkClosureEvent {
     pub at: String,
     pub actor: WorkHistoryActor,
     pub closure: WorkClosure,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_review: Option<WorkDuplicateClosure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkDuplicatesParams {
+    pub crew_id: String,
+    pub after: Option<String>,
+    pub limit: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkDuplicatesPage {
+    pub crew_id: String,
+    pub items: Vec<WorkDuplicateCandidate>,
+    pub next_after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkDuplicateCandidate {
+    pub duplicate_id: String,
+    pub duplicate_revision: String,
+    pub survivor_id: String,
+    pub survivor_revision: String,
+    pub source_ids: Vec<String>,
+    pub witness: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkDuplicateCloseParams {
+    pub crew_id: String,
+    pub duplicate_id: String,
+    pub expected_duplicate_revision: String,
+    pub survivor_id: String,
+    pub expected_survivor_revision: String,
+    pub witness: String,
+    pub evidence: WorkEvidenceParam,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkDuplicateClosure {
+    pub crew_id: String,
+    pub duplicate_id: String,
+    pub previous_duplicate_revision: String,
+    pub duplicate_revision: String,
+    pub survivor_id: String,
+    pub survivor_revision: String,
+    pub event_seq: String,
+    pub closed_at_ms: i64,
+    pub evidence: WorkEvidenceParam,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkDuplicateHistoryParams {
+    pub crew_id: String,
+    pub id: String,
+    pub before_seq: Option<String>,
+    pub limit: Option<u16>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

@@ -319,6 +319,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     admin_cases::SIMILAR_REQUIREMENTS,
                     admin_cases::REQUIREMENT_REVIEWS,
                     admin_cases::REQUIREMENT_REVIEW,
+                    admin_cases::WORK_DUPLICATES,
+                    admin_cases::WORK_DUPLICATE_CLOSE,
+                    admin_cases::WORK_DUPLICATE_HISTORY,
                 ]
                 .into_iter()
                 .map(str::to_owned),

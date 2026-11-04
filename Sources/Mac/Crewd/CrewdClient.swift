@@ -458,3 +458,133 @@ enum CrewdConversationProjection {
         return channels.first(where: { $0["kind"].string == "human" })?["id"].string ?? channels.first?["id"].string ?? ""
     }
 }
+
+enum CrewdWorkDuplicateWire {
+    struct Candidate: Equatable, Identifiable {
+        let duplicate: String
+        let duplicateRevision: String
+        let survivor: String
+        let survivorRevision: String
+        let sources: [String]
+        let witness: String
+        var id: String { duplicate }
+
+        init(_ value: CrewdValue) throws {
+            guard let duplicate = value["duplicateId"].string, let survivor = value["survivorId"].string,
+                  pair(duplicate,survivor), let duplicateRevision = value["duplicateRevision"].string,
+                  duplicateRevision == "1", let survivorRevision = value["survivorRevision"].string,
+                  revision(survivorRevision) != nil, let witness = value["witness"].string, digest(witness),
+                  case .array(let rawSources) = value["sourceIds"], (1...8).contains(rawSources.count) else { throw invalid() }
+            let sources = rawSources.compactMap(\.string)
+            let numbers = sources.compactMap { number($0,prefix:"#") }
+            guard numbers.count == rawSources.count, numbers.sorted() == numbers,
+                  Set(numbers).count == numbers.count else { throw invalid() }
+            self.duplicate = duplicate; self.duplicateRevision = duplicateRevision
+            self.survivor = survivor; self.survivorRevision = survivorRevision
+            self.sources = sources; self.witness = witness
+        }
+
+        func parameters(crew: String, evidenceKind: String, evidence: String, note: String) -> CrewdValue {
+            .object(["crewId":.string(crew),"duplicateId":.string(duplicate),"expectedDuplicateRevision":.string(duplicateRevision),
+                "survivorId":.string(survivor),"expectedSurvivorRevision":.string(survivorRevision),"witness":.string(witness),
+                "evidence":.object(["kind":.string(evidenceKind),"value":.string(evidence)]),"note":.string(note)])
+        }
+    }
+
+    struct Page {
+        let items: [Candidate]
+        let next: String?
+
+        init(_ value: CrewdValue, crew: String, after: String?, limit: Int) throws {
+            guard value["crewId"] == .string(crew), case .array(let rows) = value["items"],
+                  rows.count <= limit, value["nextAfter"] == .null || value["nextAfter"].string != nil else { throw invalid() }
+            let previous = try after.map { try cursor($0) }
+            items = try rows.map(Candidate.init)
+            let ids = items.compactMap { number($0.duplicate,prefix:"W") }
+            guard ids.count == items.count, ids.sorted() == ids, Set(ids).count == ids.count,
+                  previous.map({ marker in ids.allSatisfy { $0 > marker.number } }) ?? true else { throw invalid() }
+            next = value["nextAfter"].string
+            if let next {
+                let marker = try cursor(next)
+                guard items.count == limit, marker.number == ids.last,
+                      previous.map({ $0.scope == marker.scope }) ?? true else { throw invalid() }
+            }
+        }
+    }
+
+    static func canonical(_ params: CrewdValue) throws -> CrewdValue {
+        guard case .object(let fields) = params,
+              Set(fields.keys) == ["crewId","duplicateId","expectedDuplicateRevision","survivorId","expectedSurvivorRevision","witness","evidence","note"],
+              let duplicate = params["duplicateId"].string, let survivor = params["survivorId"].string, pair(duplicate,survivor),
+              params["expectedDuplicateRevision"] == .string("1"),
+              let survivorRevision = params["expectedSurvivorRevision"].string, revision(survivorRevision) != nil,
+              let witness = params["witness"].string, digest(witness),
+              evidence(params["evidence"]), text(params["note"]) else { throw invalid() }
+        guard let crew = params["crewId"].string, !crew.isEmpty, crew.utf8.count <= 4_096 else { throw invalid() }
+        return params
+    }
+
+    static func validateResult(_ value: CrewdValue, params: CrewdValue) throws {
+        _ = try canonical(params)
+        try validateClosure(value,crew:params["crewId"],id:params["duplicateId"])
+        guard value["previousDuplicateRevision"] == params["expectedDuplicateRevision"],
+              value["survivorId"] == params["survivorId"], value["survivorRevision"] == params["expectedSurvivorRevision"],
+              value["evidence"] == params["evidence"], value["note"] == params["note"] else { throw invalid() }
+    }
+
+    static func validateHistory(_ event: CrewdValue, crew: String, id: String) throws {
+        let value = event["duplicateReview"]
+        guard value != .null else { return }
+        try validateClosure(value,crew:.string(crew),id:.string(id))
+        guard value["eventSeq"] == event["seq"], event["actor"]["kind"] == .string("human"),
+              event["closure"]["kind"] == .string("duplicate"),
+              value["note"] == event["closure"]["note"], value["evidence"] == event["closure"]["evidence"] else {
+            throw invalid()
+        }
+    }
+
+    private static func validateClosure(_ value: CrewdValue, crew: CrewdValue, id: CrewdValue) throws {
+        guard case .object(let fields) = value,
+              Set(fields.keys) == ["crewId","duplicateId","previousDuplicateRevision","duplicateRevision","survivorId","survivorRevision","eventSeq","closedAtMs","evidence","note"],
+              value["crewId"] == crew, value["duplicateId"] == id,
+              let duplicate = id.string, let survivor = value["survivorId"].string, pair(duplicate,survivor),
+              value["previousDuplicateRevision"] == .string("1"), value["duplicateRevision"] == .string("2"),
+              value["survivorRevision"].string.flatMap({ revision($0) }) != nil,
+              value["eventSeq"].string.flatMap({ revision($0) }) != nil, (value["closedAtMs"].int ?? -1) >= 0,
+              evidence(value["evidence"]), text(value["note"]) else { throw invalid() }
+    }
+
+    private static func evidence(_ value: CrewdValue) -> Bool {
+        guard case .object(let fields) = value, Set(fields.keys) == ["kind","value"],
+              ["commit","url","text"].contains(value["kind"].string ?? "") else { return false }
+        return text(value["value"])
+    }
+    static func text(_ value: CrewdValue) -> Bool {
+        guard let text = value.string else { return false }
+        return !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && text.utf8.count <= 4_096
+    }
+    static func invalid() -> CrewdClientError {
+        .init(message:"重复工作复核的身份、版本或凭据不完整；请读取当前记录核对。")
+    }
+    private static func revision(_ raw: String) -> UInt64? {
+        guard let number = UInt64(raw), number > 0, String(number) == raw else { return nil }
+        return number
+    }
+    private static func number(_ raw: String, prefix: Character) -> Int64? {
+        guard raw.first == prefix, let number = Int64(raw.dropFirst()), number > 0, raw == "\(prefix)\(number)" else { return nil }
+        return number
+    }
+    private static func pair(_ duplicate: String, _ survivor: String) -> Bool {
+        guard let duplicate = number(duplicate,prefix:"W"), let survivor = number(survivor,prefix:"W") else { return false }
+        return survivor < duplicate
+    }
+    private static func digest(_ raw: String) -> Bool {
+        raw.utf8.count == 64 && raw.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+    private static func cursor(_ raw: String) throws -> (scope: String, number: Int64) {
+        let parts = raw.split(separator:":",omittingEmptySubsequences:false)
+        guard parts.count == 2, digest(String(parts[0])), let number = Int64(parts[1]), number > 0,
+              String(number) == parts[1] else { throw invalid() }
+        return (String(parts[0]),number)
+    }
+}

@@ -540,3 +540,6 @@ expectedStatus 必须是原始需求状态。
 
 ## requirement.review_conflict
 候选或审阅记录已有变化。请重新读取原始需求和当前审阅记录，再作决定。
+
+## work.duplicate_candidate_changed
+工作项或相关事实已有变化。请重新读取两个计划，核实应保留哪一项。

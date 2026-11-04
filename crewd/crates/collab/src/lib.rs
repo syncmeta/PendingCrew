@@ -41,6 +41,7 @@ pub mod render;
 pub mod requirements;
 pub mod requirement_similarity;
 pub mod requirement_review;
+pub mod work_duplicate_review;
 pub(crate) mod resource_acl;
 pub mod restart;
 pub mod session_retirement;
