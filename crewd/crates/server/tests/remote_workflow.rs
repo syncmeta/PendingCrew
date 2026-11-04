@@ -439,6 +439,248 @@ async fn approved(
 }
 
 #[tokio::test]
+async fn paired_human_requirement_review_recovers_exact_receipts_and_stops_after_revoke() {
+    use crewd_collab::{Sender, judgments, requirement_similarity as similarity};
+    use crewd_proto::admin_cases::{REQUIREMENT_REVIEW, REQUIREMENT_REVIEWS, SIMILAR_REQUIREMENTS};
+    use crewd_proto::judgments::{JudgmentConfig, JudgmentSettingsSet};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert_eq!(hello["remoteBinding"]["grantId"], accepted.grant.id);
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"Paired requirement fixture","workingDirectory":dir.path()
+            }),
+        )
+        .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let foreign = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"Other paired requirement fixture","workingDirectory":dir.path()
+            }),
+        )
+        .await["id"]
+        .clone();
+    let channel = format!("{crew}/lobby");
+    let mut originals = Vec::new();
+    for text in ["Original paired fixture A", "Original paired fixture B"] {
+        let source = remote
+            .call(
+                "todo.create",
+                json!({
+                    "requestId":uuid::Uuid::new_v4().to_string(),"crewId":crew,
+                    "channelId":channel,"text":text
+                }),
+            )
+            .await;
+        originals.push(
+            remote
+                .call("todo.get", json!({"id":source["requirementId"]}))
+                .await,
+        );
+    }
+    drop(remote);
+    stopped(running).await;
+
+    // Seed one typed judgment through its actual prepare/dispatch/settle path
+    // while the daemon is stopped. Pairing and every review use live TLS.
+    {
+        let mut store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
+        let (snapshot, _) = crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+            let previous = judgments::configuration(tx.conn())?;
+            judgments::set_configuration(
+                tx,
+                &Sender::Human,
+                JudgmentSettingsSet {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    credential_update: Default::default(),
+                    expected_revision: previous.revision,
+                    config: Some(JudgmentConfig {
+                        enabled: true,
+                        provider: "typesafe".into(),
+                        base_url: "http://127.0.0.1:1".into(),
+                        model: "synthetic".into(),
+                        choice_min: 0.5,
+                        wake_yes: 0.5,
+                        credential_source: "file".into(),
+                        similar_requirements: Some(true),
+                    }),
+                },
+            )?;
+            similarity::observe_page(tx)?;
+            let (pending, next) = similarity::pending_page(tx, None)?;
+            assert_eq!(pending.len(), 1);
+            assert!(next.is_none());
+            Ok(similarity::dispatch(tx, &pending[0])?.unwrap())
+        })
+        .unwrap();
+        crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+            similarity::settle(
+                tx,
+                &snapshot,
+                similarity::Outcome::Answered {
+                    probability: 0.97,
+                    suggested: true,
+                },
+            )
+        })
+        .unwrap();
+    }
+
+    let mut running = service(dir.path()).await;
+    assert_eq!(
+        local(&mut running.owner, "remote.status", json!({})).await["listening"],
+        true
+    );
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert_eq!(hello["remoteBinding"]["grantId"], accepted.grant.id);
+    let scope = json!({"crewId":crew});
+    let candidates = remote.call(SIMILAR_REQUIREMENTS, scope.clone()).await;
+    let candidate = &candidates["items"][0];
+    assert_eq!(candidate["firstId"], originals[0]["requirementId"]);
+    assert_eq!(candidate["secondId"], originals[1]["requirementId"]);
+    assert_eq!(candidate["channelId"], channel);
+    let params = json!({
+        "crewId":crew,"firstId":candidate["firstId"],"secondId":candidate["secondId"],
+        "expectedReviewRevision":candidate["reviewRevision"],"candidateRevision":candidate["candidateRevision"],
+        "disposition":"group","note":"preserve both paired originals"
+    });
+    let mut wrong_scope = params.clone();
+    wrong_scope["crewId"] = foreign.clone();
+    let rejected = draft_packet(&hello, REQUIREMENT_REVIEW, wrong_scope);
+    let refused = tokio::time::timeout(LIMIT, remote.frame("command.submit", rejected.clone()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refused["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    let rejected_lookup = json!({"dbId":rejected["dbId"],"requestId":rejected["requestId"]});
+    assert!(
+        remote
+            .call("command.lookup", rejected_lookup)
+            .await
+            .is_null()
+    );
+    assert_eq!(
+        remote
+            .call(REQUIREMENT_REVIEWS, json!({"crewId":foreign}))
+            .await["items"],
+        json!([])
+    );
+
+    let packet = draft_packet(&hello, REQUIREMENT_REVIEW, params.clone());
+    let receipt = remote.call("command.submit", packet.clone()).await;
+    assert_eq!(receipt["phase"], "committed");
+    assert_eq!(receipt["result"]["revision"], "1");
+    let lookup = json!({"dbId":packet["dbId"],"requestId":packet["requestId"]});
+    assert_eq!(remote.call("command.lookup", lookup.clone()).await, receipt);
+    assert_eq!(remote.call("command.submit", packet.clone()).await, receipt);
+    let mut changed = packet;
+    changed["command"]["params"]["note"] = json!("different replay");
+    let refused = tokio::time::timeout(LIMIT, remote.frame("command.submit", changed))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refused["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    assert_eq!(
+        remote.call(REQUIREMENT_REVIEWS, scope.clone()).await["items"],
+        json!([{"review":receipt["result"],"effective":true}])
+    );
+    assert_eq!(
+        remote.call(SIMILAR_REQUIREMENTS, scope.clone()).await["items"],
+        json!([])
+    );
+
+    drop(remote);
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert_eq!(remote.call("command.lookup", lookup.clone()).await, receipt);
+    let clear = draft_packet(
+        &hello,
+        REQUIREMENT_REVIEW,
+        json!({
+            "crewId":crew,"firstId":candidate["firstId"],"secondId":candidate["secondId"],
+            "expectedReviewRevision":"1","disposition":"clear","note":"clear only the annotation"
+        }),
+    );
+    let cleared = remote.call("command.submit", clear.clone()).await;
+    let clear_lookup = json!({"dbId":clear["dbId"],"requestId":clear["requestId"]});
+    assert_eq!(remote.call("command.lookup", clear_lookup).await, cleared);
+    assert_eq!(cleared["result"]["revision"], "2");
+    assert_eq!(
+        remote.call(REQUIREMENT_REVIEWS, scope.clone()).await["items"],
+        json!([{"review":cleared["result"],"effective":false}])
+    );
+    let visible_again = remote.call(SIMILAR_REQUIREMENTS, scope.clone()).await;
+    assert_eq!(
+        visible_again["items"][0]["candidateRevision"],
+        candidate["candidateRevision"]
+    );
+    assert_eq!(visible_again["items"][0]["reviewRevision"], "2");
+    for original in originals {
+        assert_eq!(
+            remote
+                .call("todo.get", json!({"id":original["requirementId"]}))
+                .await,
+            original
+        );
+    }
+
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"revoke test grant"
+    })).await;
+    let mut revoked = params;
+    revoked["expectedReviewRevision"] = json!("2");
+    let rejected_after_revoke = draft_packet(&hello, REQUIREMENT_REVIEW, revoked);
+    let revoked_request = rejected_after_revoke["requestId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (method, payload) in [
+        (REQUIREMENT_REVIEWS, scope.clone()),
+        ("command.lookup", lookup),
+        ("command.submit", rejected_after_revoke),
+    ] {
+        let denied = tokio::time::timeout(LIMIT, remote.frame(method, payload))
+            .await
+            .unwrap();
+        if let Ok(frame) = denied {
+            assert_eq!(
+                frame["error"]["code"],
+                crewd_proto::RpcError::FORBIDDEN,
+                "revoked TLS used {method}"
+            );
+        }
+    }
+    assert_eq!(
+        local(&mut running.owner, REQUIREMENT_REVIEWS, scope).await["items"],
+        json!([{"review":cleared["result"],"effective":false}])
+    );
+    drop(remote);
+    stopped(running).await;
+    let store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
+    let receipts: i64 = store
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM public_command_receipts WHERE request_id=?1",
+            [revoked_request],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(receipts, 0);
+}
+
+#[tokio::test]
 async fn paired_and_local_manual_patrol_refuse_fresh_intent_without_scheduler() {
     let dir = tempfile::tempdir().unwrap();
     let mut running = service(dir.path()).await;
