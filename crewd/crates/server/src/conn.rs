@@ -865,6 +865,8 @@ async fn request_step(
                         | methods::CHANNEL_WORK_TAGS_SET
                         | methods::RESOURCE_REQUEST_LOOKUP
                         | methods::ASK_GET
+                        | methods::ASK_ANSWER
+                        | methods::ASK_WITHDRAW
                         | methods::CHANNEL_WORK_LIST
                         | methods::CHANNEL_WORK_LINK
                         | methods::CHANNEL_WORK_UNLINK

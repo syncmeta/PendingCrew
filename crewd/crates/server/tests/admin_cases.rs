@@ -136,6 +136,150 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
 }
 
 #[tokio::test]
+async fn external_human_lineage_socket_cannot_use_raw_ask_after_agent_attach() {
+    use crewd_collab::asks;
+    let f = Fixture::new().await;
+    let captain = f.captain.clone();
+    let worker = f.worker.clone();
+    let (other_question, own_question) = f
+        .state
+        .collab(move |tx| {
+            let make = |tx: &mut crewd_collab::Tx<'_>, who: &str, question: &str| {
+                asks::open(
+                    tx,
+                    who,
+                    asks::OpenAsk {
+                        question: question.into(),
+                        default: None,
+                        resume_note: None,
+                    },
+                )
+            };
+            Ok((
+                make(tx, &captain, "question opened by the captain")?,
+                make(tx, &worker, "question opened by the worker")?,
+            ))
+        })
+        .await
+        .unwrap();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let work = call(
+        &mut human,
+        "work.create",
+        json!({
+            "crewId":f.crew,"owner":f.captain,"title":"fixture work waiting for a Human answer"
+        }),
+    )
+    .await
+    .unwrap();
+    let blocked = call(
+        &mut human,
+        "work.block",
+        json!({
+            "id":work["id"],"expectedRevision":work["revision"],
+            "on":[{"type":"new_human","question":"block exactly this work"}],
+            "canContinue":{"type":"nothing"}
+        }),
+    )
+    .await
+    .unwrap();
+    let answer = json!({
+        "crewId":f.crew,"ask":blocked["humanTasks"][0],"text":"fixture Human answer"
+    });
+    let withdraw = json!({
+        "crewId":f.crew,"ask":other_question.ask,"reason":"fixture Human withdrawal"
+    });
+    // Both Unix peers are this external same-UID test process. Managed
+    // executor lineages are denied by the independent kernel peer gate.
+    let mut attached = RpcClient::connect(&socket).await;
+    let agent = call(
+        &mut attached,
+        "agent.attach",
+        json!({"sessionId":f.worker,"token":f.token(&f.worker)}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(agent["role"], "worker");
+    let before = f.state.db.call(|s| s.conn().total_changes()).await.unwrap();
+    for (method, params) in [
+        ("ask.answer", answer.clone()),
+        ("ask.withdraw", withdraw.clone()),
+    ] {
+        assert_eq!(
+            call(&mut attached, method, params).await.unwrap_err().0,
+            crewd_proto::RpcError::FORBIDDEN
+        );
+    }
+    assert_eq!(
+        f.state.db.call(|s| s.conn().total_changes()).await.unwrap(),
+        before
+    );
+    assert_eq!(
+        call(&mut human, "work.get", json!({"id":work["id"]}))
+            .await
+            .unwrap()["status"],
+        "blocked"
+    );
+    assert_eq!(
+        call(
+            &mut human,
+            "ask.get",
+            json!({"crewId":f.crew,"ask":other_question.ask})
+        )
+        .await
+        .unwrap()["state"],
+        "open"
+    );
+
+    let denied_tool = call(&mut attached, "agent.call", json!({
+        "tool":"withdraw_ask","args":{"ask":other_question.ask,"reason":"fixture foreign withdrawal"}
+    })).await.unwrap();
+    assert_eq!(denied_tool["isError"], true);
+    let own_tool = call(
+        &mut attached,
+        "agent.call",
+        json!({
+            "tool":"withdraw_ask","args":{"ask":own_question.ask,"reason":"fixture own withdrawal"}
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(own_tool["isError"], false);
+    assert_eq!(
+        call(
+            &mut human,
+            "ask.get",
+            json!({"crewId":f.crew,"ask":own_question.ask})
+        )
+        .await
+        .unwrap()["state"],
+        "withdrawn"
+    );
+    assert_eq!(
+        call(&mut human, "ask.answer", answer).await.unwrap()["state"],
+        "answered"
+    );
+    assert_eq!(
+        call(&mut human, "work.get", json!({"id":work["id"]}))
+            .await
+            .unwrap()["status"],
+        "active"
+    );
+    assert_eq!(
+        call(&mut human, "ask.withdraw", withdraw).await.unwrap()["state"],
+        "withdrawn"
+    );
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), task)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn exact_requirement_review_uses_the_original_human_command_receipt() {
     use crewd_collab::{Sender, judgments, requirement_similarity as similarity, requirements};
     use crewd_proto::{TodoCreateParams, judgments::{JudgmentConfig, JudgmentSettingsSet}};
