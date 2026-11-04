@@ -185,6 +185,7 @@ struct CrewdWorkPanels: View {
     @State private var failure:String?
     @State private var actionTarget: CrewdPlanTarget?
     @State private var humanTarget:CrewdHumanTarget?
+    @State private var documentTarget: CrewdWorkDocumentTarget?
     @State private var selectedRequirement: CrewdWorkID?
     @State private var openingPlan = false
     @State private var closing:Set<CrewdWorkID>=[]
@@ -280,6 +281,9 @@ struct CrewdWorkPanels: View {
         }
         .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
+        .sheet(item: $documentTarget) { target in
+            if let workspace = patrolWorkspace { CrewdWorkDocumentSheet(workspace: workspace, work: store, target: target) }
+        }
     }
     private var pageBackground:Color {
         #if os(macOS)
@@ -413,6 +417,7 @@ struct CrewdWorkPanels: View {
                         CrewdReassignmentView(store:store,crew:plan.value["crewId"].string ?? store.selectedCrew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
                         CrewdWorkCloseView(store:store,id:id,detail:detail)
                         CrewdHandoffView(store:store,id:id,members:members).id(store.selectedCrew+":"+id.raw)
+                        documentLinksButton(id, crew: plan.crew)
                         HStack {
                             Button("更新计划") {
                                 actionTarget = CrewdPlanTarget(key: .init(crew: store.selectedCrew, object: id.raw, source: ""),
@@ -497,6 +502,7 @@ struct CrewdWorkPanels: View {
         CrewdJudgmentInspectionView(store: store, crew: store.requirements[id]?["crewId"].string ?? store.selectedCrew, kind: "requirement", sourceID: id.raw, members: members)
         let raw=store.requirements[id] ?? .null
         let status=raw["status"].string ?? "", note=closeNotes[id] ?? ""
+        documentLinksButton(id, crew: raw["crewId"].string)
         if raw["closure"] != .null {
             Text("关闭理由：" + (raw["closure"]["note"].string ?? "")).textSelection(.enabled)
         }
@@ -517,7 +523,157 @@ struct CrewdWorkPanels: View {
         }
     }
 
+    @ViewBuilder private func documentLinksButton(_ id: CrewdWorkID, crew: String?) -> some View {
+        if let crew, !crew.isEmpty, crew == store.selectedCrew, let workspace = patrolWorkspace,
+           workspace.crewID == crew, store.capabilities.contains("data.documentWorkLinks") {
+            Button("关联文档", systemImage: "doc.text") {
+                documentTarget = .init(workID: id, crew: crew, scope: store.readScope)
+            }.font(.caption)
+        }
+    }
 }
+
+private struct CrewdWorkDocumentTarget: Identifiable {
+    let workID: CrewdWorkID
+    let crew: String
+    let scope: UUID
+    var id: String { scope.uuidString + "/" + workID.raw }
+}
+
+private struct CrewdWorkDocumentSheet: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    @ObservedObject var work: CrewdWorkStore
+    @StateObject private var reader: CrewdKnowledgeStore
+    let target: CrewdWorkDocumentTarget
+    @Environment(\.dismiss) private var dismiss
+    @State private var anchor: CrewdKnowledgeStore.DocumentWorkLinkAnchor?
+    @State private var rows: [CrewdKnowledgeStore.DocumentWorkLink] = []
+    @State private var next: String?
+    @State private var loaded = false
+    @State private var busy = false
+    @State private var opened: CrewdDataObjectDetail?
+    @State private var failure: String?
+
+    init(workspace: CrewdWorkspace, work: CrewdWorkStore, target: CrewdWorkDocumentTarget) {
+        self.workspace = workspace
+        self.work = work
+        self.target = target
+        _reader = StateObject(wrappedValue: workspace.makeWorkDocumentReader(crew: target.crew))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(target.workID.raw + " 的关联文档").font(.headline)
+                Spacer()
+                if opened != nil { Button("返回关联列表") { opened = nil } }
+                else { Button("重新读取") { Task { await load(reset: true) } }.disabled(busy) }
+                Button("关闭") { dismiss() }
+            }
+            if busy { ProgressView().controlSize(.small) }
+            if let failure { Text(failure).font(.caption).foregroundStyle(.orange) }
+            if let opened, let anchor, reader.documentWorkLinkScopeIsCurrent(anchor), opened == reader.detail {
+                Text(opened.object.displayTitle).font(.subheadline)
+                CrewdKnowledgeObjectSurface(store: reader, detail: opened)
+            } else {
+                if loaded, rows.isEmpty {
+                    Text(next == nil ? "当前没有关联文档。" : "这部分资料没有匹配项，可继续查找。")
+                }
+                if !rows.isEmpty {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(rows, id: \.reference.id) { link in
+                                HStack {
+                                    if !link.archived, let reference = link.document {
+                                        Button("打开文档") { Task { await open(link) } }.disabled(busy)
+                                        Text(verbatim: reference.id).lineLimit(1).truncationMode(.middle)
+                                    } else {
+                                        Text(link.archived ? "已归档的关联" : "原文档暂不可读")
+                                    }
+                                }.font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                if next != nil { Button("继续查找") { Task { await load(reset: false) } }.disabled(busy) }
+            }
+        }
+        .padding().modifier(CrewdAdaptiveFormFrame(width: 550, height: 480, scrolls: false))
+        .task { await load(reset: true) }
+        .onChange(of: work.readScope) { _, _ in dismiss() }
+        .onReceive(workspace.authorityEvents) { event in
+            reader.handleEvent(event.0, event.1)
+            if ["work.changed", "todo.changed"].contains(event.0),
+               event.1["crewId"].string == target.crew { reader.invalidate() }
+            if let anchor, !reader.documentWorkLinkScopeIsCurrent(anchor) {
+                self.anchor = nil
+                opened = nil
+                rows = []
+                loaded = false
+                next = nil
+                failure = "关联资料的当前状态已变化，请重新读取。"
+            }
+        }
+        .onDisappear { reader.invalidate() }
+    }
+
+    private func load(reset: Bool) async {
+        guard !busy, work.readScope == target.scope else { return }
+        busy = true
+        failure = nil
+        defer { busy = false }
+        do {
+            if reset {
+                opened = nil
+                rows = []
+                next = nil
+                loaded = false
+                anchor = nil
+                await reader.refresh(loadViews: false)
+                guard let context = reader.workspace?.context, context.crewId == target.crew else {
+                    throw CrewdKnowledgeStore.Failure.unavailable
+                }
+                let reference = CrewdDataRef(namespace: context.namespace,
+                    kind: target.workID.kind == .plan ? "plan" : "requirement", id: target.workID.raw)
+                anchor = try reader.documentWorkLinkAnchor(work: reference)
+            }
+            guard let anchor else { return }
+            let page = try await reader.loadDocumentWorkLinkPage(anchor, after: next)
+            guard !Task.isCancelled, work.readScope == target.scope,
+                  reader.documentWorkLinkScopeIsCurrent(anchor) else { return }
+            let ids = Set(rows.map(\.reference.id))
+            guard page.items.allSatisfy({ !ids.contains($0.reference.id) }) else {
+                throw CrewdKnowledgeStore.Failure.invalid
+            }
+            rows += page.items
+            next = page.next
+            loaded = true
+        } catch is CancellationError {
+        } catch {
+            if !Task.isCancelled, work.readScope == target.scope {
+                failure = "无法核对关联文档，请重新读取。"
+                next = nil
+            }
+        }
+    }
+
+    private func open(_ link: CrewdKnowledgeStore.DocumentWorkLink) async {
+        guard !busy, let anchor, work.readScope == target.scope else { return }
+        busy = true
+        failure = nil
+        defer { busy = false }
+        do {
+            try await reader.openDocumentWorkLinkDocument(anchor, link: link)
+            guard !Task.isCancelled, work.readScope == target.scope,
+                  reader.documentWorkLinkScopeIsCurrent(anchor) else { return }
+            opened = reader.detail
+        } catch is CancellationError {
+        } catch {
+            if !Task.isCancelled, work.readScope == target.scope { failure = "文档已变化或暂不可读。请重新读取。"}
+        }
+    }
+}
+
 struct CrewdMemberAvatar:View {
     let seed:String
     let colorSeed:String

@@ -372,6 +372,22 @@ fn route_sync(
                     let allocations = compile::allocations(&p.context, edits).map_err(error)?;
                     let created = knowledge.allocate(&allocations).map_err(error)?;
                     let port = Port::new(&knowledge, core, &context);
+                    let document_work_link = match edits.as_slice() {
+                        [DataEdit::CreateRelation { predicate, .. }] => {
+                            predicate == compile::DOCUMENT_WORK_PREDICATE
+                        }
+                        [DataEdit::ArchiveRelation { id, .. }] => knowledge
+                            .get(
+                                &DataRef {
+                                    namespace: context.namespace.clone(),
+                                    kind: "relation".into(),
+                                    id: id.clone(),
+                                },
+                                None,
+                            )
+                            .is_ok_and(|stored| is_document_work_link(&stored.object)),
+                        _ => false,
+                    };
                     let mutations = compile::compile(
                         &p.context,
                         &created,
@@ -380,7 +396,15 @@ fn route_sync(
                         edits,
                         &port,
                     )
-                    .map_err(error)?;
+                    .map_err(|failure| {
+                        if document_work_link {
+                            RpcError::new(RpcError::CONFLICT, "document work link rejected before commit")
+                                .with_refusal("data.document_work_link_refused")
+                                .into()
+                        } else {
+                            error(failure)
+                        }
+                    })?;
                     encode(
                         knowledge
                             .apply(
@@ -1511,6 +1535,8 @@ mod tests {
         let rt = runtime(&f).await;
         let socket = f.spawn_socket().await;
         let mut client = crate::agent::testkit::RpcClient::connect(&socket).await;
+        let hello = client.call("system.hello", json!({})).await.unwrap();
+        assert!(hello["capabilities"].as_array().unwrap().contains(&json!("data.documentWorkLinks")));
         let request = |context: &Value, edit: Value| {
             json!({"context":context,"requestId":uuid::Uuid::new_v4().to_string(),
                    "change":{"kind":"apply","message":"document work link fixture","edits":[edit]}})
@@ -1554,11 +1580,14 @@ mod tests {
         let req_ref = work_ref("requirement", &requirement["requirementId"]);
         let plan_ref = work_ref("plan", &plan["id"]);
         let foreign_ref = work_ref("requirement", &foreign["requirementId"]);
-        assert!(
-            client
-                .call("data.submit", request(&base, link_edit(&foreign_ref)))
-                .await
-                .is_err()
+        let refused = request(&base, link_edit(&foreign_ref));
+        assert_eq!(
+            client.call("data.submit", refused.clone()).await.unwrap_err(),
+            (RpcError::CONFLICT, "document work link rejected before commit".into())
+        );
+        assert_eq!(
+            client.call("data.request.get", json!({"context":base,"requestId":refused["requestId"]})).await.unwrap()["lookup"]["status"],
+            json!("notFound"),
         );
         let mut wrong_namespace = plan_ref.clone();
         wrong_namespace["namespace"] = json!("other-namespace");

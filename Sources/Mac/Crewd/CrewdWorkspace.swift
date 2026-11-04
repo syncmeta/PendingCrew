@@ -258,6 +258,34 @@ final class CrewdWorkspace: ObservableObject {
         guard let self,self.originalJournalReady,let journal=self.originalJournal else { throw CrewdKnowledgeStore.Failure.unavailable }
         return journal
     })
+    func makeWorkDocumentReader(crew: String) -> CrewdKnowledgeStore {
+        let epoch = observationGeneration
+        let connection = client.connectionEpoch
+        let readScope = workStore.readScope
+        let scope = presentationScope
+        func current(_ workspace: CrewdWorkspace) -> Bool {
+            workspace.acceptsObservation(epoch) && workspace.client.connectionEpoch == connection &&
+                workspace.crewID == crew && workspace.workStore.readScope == readScope &&
+                workspace.presentationScope == scope && workspace.originalJournalReady &&
+                workspace.client.capabilities.contains("data.documentWorkLinks")
+        }
+        return CrewdKnowledgeStore(origin: { [weak self] in
+            guard let self, let scope, current(self) else { return nil }
+            return .init(scope: scope, observation: epoch, connection: connection, crew: crew)
+        }, rpc: { [weak self] method, params in
+            guard let self, current(self),
+                  ["data.workspace.get", "data.object.list", "data.object.get"].contains(method),
+                  (method == "data.workspace.get" ? params["crewId"] : params["context"]["crewId"]) == .string(crew) else {
+                throw CrewdKnowledgeStore.Failure.unavailable
+            }
+            return try await self.client.call(method, params)
+        }, journal: { [weak self] in
+            guard let self, current(self), let journal = self.originalJournal else {
+                throw CrewdKnowledgeStore.Failure.unavailable
+            }
+            return journal
+        })
+    }
     @Published private(set) var knowledgeNavigation = UUID()
     lazy var resources=CrewdResources { [weak self] method,params in
         guard let self, !self.retired else {throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)}

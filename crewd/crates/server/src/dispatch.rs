@@ -273,6 +273,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             }
             if state.data_runtime.get().is_some() {
                 capabilities.push("data".into());
+                capabilities.push("data.documentWorkLinks".into());
             }
             if state.management.get().is_some() {
                 capabilities.push("lifecycle.management".into());

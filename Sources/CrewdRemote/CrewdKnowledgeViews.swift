@@ -23,7 +23,8 @@ struct CrewdKnowledgeDocumentsEntry: View {
             .padding(.horizontal,16).padding(.vertical,10)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
             if library {
-                CrewdKnowledgeWorkspaceView(store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection)
+                CrewdKnowledgeWorkspaceView(store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection,
+                    workStore:workspace.client.capabilities.contains("data.documentWorkLinks") ? workspace.workStore : nil)
                     .id(workspace.crewID + "/" + collection.rawValue)
             }else{CrewdGroupKnowledgeView(workspace:workspace,collection:collection)}
         }
@@ -58,6 +59,7 @@ struct CrewdKnowledgeWorkspaceView: View {
     let available: Bool
     var returnToMessages: (() -> Void)? = nil
     var collection: CrewdKnowledgeCollection = .all
+    var workStore: CrewdWorkStore? = nil
     private var catalog: CrewdKnowledgeStore.ViewCatalog? {
         guard let catalog = store.viewCatalog, catalog.includeArchived == showArchived,
               store.workspace?.context == catalog.context else { return nil }
@@ -81,6 +83,7 @@ struct CrewdKnowledgeWorkspaceView: View {
     @State private var lifecycleFeedback: String?
     @State private var editTarget: CrewdDataObjectDetail?
     @State private var historyTarget: CrewdDataObjectDetail?
+    @State private var documentWorkTarget: CrewdDataObjectDetail?
     @State private var previewToken = ""
     @State private var confirmingPreview = false
     var body: some View {
@@ -134,10 +137,16 @@ struct CrewdKnowledgeWorkspaceView: View {
                     self.historyTarget = nil
                 }
             }
+            if let current, let target = documentWorkTarget,
+               target.context.authorityId != current.authorityId || target.context.dbId != current.dbId ||
+                target.context.crewId != current.crewId || target.context.namespace != current.namespace ||
+                target.context.restoreEpoch != current.restoreEpoch {
+                documentWorkTarget = nil
+            }
             // Native confirmations bind the state the user actually reviewed.
             confirmArchive = nil; restoreTarget = nil; confirmingPreview = false
             // A new generation/authority invalidates code grants. The page is re-read only.
-            if store.detail == nil, !store.busy, available {
+            if store.detail == nil, !store.busy, available, documentWorkTarget == nil {
                 Task { await reload() }
             }
         }
@@ -156,6 +165,12 @@ struct CrewdKnowledgeWorkspaceView: View {
         .sheet(isPresented: Binding(get:{historyTarget != nil},set:{if !$0 {historyTarget=nil}})) {
             if let historyTarget {
                 CrewdNativeDocumentHistory(store:store,parent:historyTarget,scopeCurrent:{ true },onRestored:{ await reload() })
+            }
+        }
+        .sheet(isPresented: Binding(get:{documentWorkTarget != nil},set:{if !$0 {documentWorkTarget=nil}}),onDismiss:{ Task { await reload() } }) {
+            if let documentWorkTarget, let workStore {
+                CrewdDocumentWorkLinksView(store:store,workStore:workStore,parent:documentWorkTarget,
+                    scopeCurrent:{ self.documentWorkTarget == documentWorkTarget && collection == .documents })
             }
         }
         .confirmationDialog(confirmArchive?.archived == true ? "恢复这份资料？" : "把这份资料移入回收站？",
@@ -255,6 +270,9 @@ struct CrewdKnowledgeWorkspaceView: View {
             HStack {
                 Text(detail.object.displayTitle).font(CrewdType.title)
                 Spacer()
+                if collection == .documents, workStore != nil, (try? store.documentWorkLinkAnchor(document:detail)) != nil {
+                    Button("关联待办",systemImage:"link") { documentWorkTarget = detail }.disabled(store.busy)
+                }
                 if collection == .documents, store.canPrepareNativeDocumentEdit(detail) {
                     Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = detail }.disabled(store.busy)
                     Button("编辑文档",systemImage:"pencil") { editTarget = detail }.disabled(store.busy || store.hasBlockingPending)
@@ -379,7 +397,7 @@ extension CrewdDataObject {
     }
 }
 
-private struct CrewdKnowledgeObjectSurface:View {
+struct CrewdKnowledgeObjectSurface:View {
     @ObservedObject var store:CrewdKnowledgeStore
     let detail:CrewdDataObjectDetail
     var body:some View {
@@ -429,6 +447,7 @@ private struct CrewdGroupKnowledgeView:View {
     }
     @State private var editTarget: DocumentTarget?
     @State private var historyTarget: DocumentTarget?
+    @State private var documentWorkTarget: DocumentTarget?
     init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){self.workspace=workspace;self.group=workspace.channelKnowledge;self.resources=workspace.channelResources;self.content=workspace.linkedKnowledge;self.library=workspace.knowledge;self.collection=collection}
     private var folder:Binding<String>{Binding(get:{workspace.resourceDrafts.selection(resources.crew,.documents,channel:resources.channel)},set:{workspace.resourceDrafts.select(resources.crew,.documents,$0,channel:resources.channel)})}
     private func folderObject(_ source:CrewdChannelKnowledgeReference)->CrewdValue {
@@ -494,7 +513,7 @@ private struct CrewdGroupKnowledgeView:View {
         .onAppear{group.setActive(true,owner:owner)}.onDisappear{group.setActive(false,owner:owner);content.renderer.revoke()}
         .task(id:group.crew+group.channel+group.activationEpoch.uuidString){do{try await group.refresh()}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
         .task(id:group.crew+collection.rawValue+group.activationEpoch.uuidString){if collection == .documents {library.synchronizePending()}}
-        .task(id:readKey){guard let chosen,chosen.isReadableActiveView else{content.renderer.revoke();return};reading=true;defer{reading=false};do{try await workspace.openLinkedKnowledge(chosen);failure=nil}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
+        .task(id:readKey){guard documentWorkTarget == nil else{return};guard let chosen,chosen.isReadableActiveView else{content.renderer.revoke();return};reading=true;defer{reading=false};do{try await workspace.openLinkedKnowledge(chosen);failure=nil}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
         .sheet(isPresented:$linking,onDismiss:{retry=UUID()}){CrewdKnowledgeLinkPicker(workspace:workspace,collection:collection)}
         .sheet(isPresented:$creating){CrewdNativeDocumentCreation(workspace:workspace)}
         .sheet(item:$editTarget){ target in
@@ -503,10 +522,14 @@ private struct CrewdGroupKnowledgeView:View {
         .sheet(item:$historyTarget){ target in
             CrewdNativeDocumentHistory(store:content,parent:target.parent,scopeCurrent:{ isCurrent(target) },onRestored:{await refreshAfterEdit()})
         }
+        .sheet(item:$documentWorkTarget,onDismiss:{ Task { await refreshAfterEdit() } }){ target in
+            CrewdDocumentWorkLinksView(store:content,workStore:workspace.workStore,parent:target.parent,
+                scopeCurrent:{ isCurrent(target) && workspace.client.capabilities.contains("data.documentWorkLinks") })
+        }
         .onChange(of:content.pending){_,_ in if collection == .documents {library.synchronizePending()}}
         .onChange(of:library.pending){_,pending in if collection == .documents && pending.isEmpty {library.synchronizePending()}}
-        .onChange(of:group.crew+group.channel){_,_ in selected=nil;query="";linking=false;creating=false;editTarget=nil;historyTarget=nil;failure=nil}
-        .onChange(of:collection){_,_ in selected=nil;query="";editTarget=nil;historyTarget=nil;content.renderer.revoke()}
+        .onChange(of:group.crew+group.channel){_,_ in selected=nil;query="";linking=false;creating=false;editTarget=nil;historyTarget=nil;documentWorkTarget=nil;failure=nil}
+        .onChange(of:collection){_,_ in selected=nil;query="";editTarget=nil;historyTarget=nil;documentWorkTarget=nil;content.renderer.revoke()}
         .onChange(of:chosen?.id){_,id in if id == nil{content.renderer.revoke()}}
         .controlSize(.small).tint(.gray)
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
@@ -565,12 +588,19 @@ private struct CrewdGroupKnowledgeView:View {
                     CrewdEmptySurface(title:"原资料已归档",detail:"本群引用仍保留。可从原机组的资料库回收站恢复原资料。",symbol:"archivebox")
                 } else if chosen.isReadableActiveView,let detail=content.detail,detail.object.identity == chosen.source.reference.id,
                    detail.resolvedContext.crewId == chosen.source.context.crewId {
-                    if collection == .documents, group.crew == chosen.source.context.crewId, content.canPrepareNativeDocumentEdit(detail) {
+                    if collection == .documents, group.crew == chosen.source.context.crewId {
                         HStack {
-                            Button("编辑原文",systemImage:"pencil") { editTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
-                                .disabled(content.busy || content.hasBlockingPending)
-                            Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
-                                .disabled(content.busy)
+                            if workspace.client.capabilities.contains("data.documentWorkLinks"),
+                               (try? content.documentWorkLinkAnchor(document:detail)) != nil {
+                                Button("关联待办",systemImage:"link") { documentWorkTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
+                                    .disabled(content.busy)
+                            }
+                            if content.canPrepareNativeDocumentEdit(detail) {
+                                Button("编辑原文",systemImage:"pencil") { editTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
+                                    .disabled(content.busy || content.hasBlockingPending)
+                                Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
+                                    .disabled(content.busy)
+                            }
                         }.padding(.horizontal,24)
                     }
                     CrewdKnowledgeObjectSurface(store:content,detail:detail)
@@ -591,6 +621,239 @@ private struct CrewdGroupKnowledgeView:View {
         guard !pendingLinks.contains(where: { $0.source.identity == item.id }),
               let revision=group.linkRevision,let snapshot=workspace.knowledgeLinkDrafts.begin(crew:group.crew,channel:group.channel,source:item.source,revision:revision,linked:false) else{return}
         Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if selected == item.id{selected=nil}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure=error.localizedDescription}}
+    }
+}
+
+private struct CrewdDocumentWorkLinksView: View {
+    typealias Anchor = CrewdKnowledgeStore.DocumentWorkLinkAnchor
+    typealias Link = CrewdKnowledgeStore.DocumentWorkLink
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: CrewdKnowledgeStore
+    @ObservedObject var workStore: CrewdWorkStore
+    let parent: CrewdDataObjectDetail
+    let scopeCurrent: @MainActor () -> Bool
+
+    private struct Choice: Identifiable {
+        let reference: CrewdDataRef
+        let title: String
+        var id: String { reference.id }
+    }
+    @State private var anchor: Anchor?
+    @State private var links: [Link] = []
+    @State private var next: String?
+    @State private var loaded = false
+    @State private var working = false
+    @State private var query = ""
+    @State private var selection: String?
+    @State private var confirmation: Link?
+    @State private var feedback: String?
+
+    private var isCurrent: Bool {
+        guard scopeCurrent(), let anchor else { return false }
+        return store.documentWorkLinkScopeIsCurrent(anchor)
+    }
+    private var candidates: [Choice] {
+        guard let anchor, isCurrent, workStore.selectedCrew == anchor.crew, workStore.hasLoaded,
+              workStore.lastFailure == nil else { return [] }
+        let plans: [Choice] = workStore.planIDs.compactMap { id in
+            guard id.kind == .plan, let plan = workStore.plans[id], plan.crew == anchor.crew, plan.id == id else { return nil }
+            return .init(reference:.init(namespace:anchor.endpoint.namespace,kind:"plan",id:id.raw),
+                         title:plan.value["title"].string ?? "")
+        }
+        let requirements: [Choice] = workStore.requirementIDs.compactMap { id in
+            guard id.kind == .requirement, let row = workStore.requirements[id], row["crewId"].string == anchor.crew,
+                  row["requirementId"].string == id.raw, row["deletedAt"].string == nil else { return nil }
+            return .init(reference:.init(namespace:anchor.endpoint.namespace,kind:"requirement",id:id.raw),
+                         title:row["text"].string ?? "")
+        }
+        return requirements + plans
+    }
+    private var canWrite: Bool { isCurrent && loaded && !working && !store.busy && !store.hasBlockingPending }
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            HStack {
+                Text("关联待办").font(.headline)
+                Spacer()
+                Button("完成") { dismiss() }.disabled(working)
+            }
+            Text(parent.object.displayTitle).font(CrewdType.label).lineLimit(2)
+            if let feedback { Text(feedback).font(CrewdType.caption).foregroundStyle(.secondary) }
+            if let anchor, scopeCurrent() {
+                HStack {
+                    Button("重新读取") { Task { await reload() } }.disabled(working || store.busy)
+                    if working { ProgressView().controlSize(.small) }
+                }
+                ScrollView {
+                    VStack(alignment:.leading,spacing:12) {
+                        ForEach(store.pendingDocumentWorkLinks(anchor)) { intent in
+                            HStack {
+                                VStack(alignment:.leading) {
+                                    Text("有原请求待核对").foregroundStyle(.orange)
+                                    Text(intent.id.uuidString).font(CrewdType.caption).textSelection(.enabled)
+                                }
+                                Spacer()
+                                Button("查询原结果") { Task { await recover(intent.id) } }.disabled(working || store.busy)
+                            }
+                        }
+                        if isCurrent {
+                            existingLinks
+                            Divider()
+                            workPicker
+                        } else {
+                            Text("文档状态已变化，请重新读取。").foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else if !working {
+                Text("当前文档已不可用。请返回后重新打开。").foregroundStyle(.secondary)
+            }
+        }
+        .padding(20)
+        #if os(macOS)
+        .frame(minWidth:480,minHeight:420)
+        #endif
+        .interactiveDismissDisabled(working)
+        .task {
+            guard scopeCurrent(), let initial = try? store.documentWorkLinkAnchor(document:parent) else { return }
+            anchor = initial
+            store.synchronizePending()
+            await readPage()
+        }
+        .task(id:workStore.readScope) { if scopeCurrent() { await workStore.ensureLoaded() } }
+        .confirmationDialog(confirmation?.archived == true ? "恢复这条关联？" : "归档这条关联？",
+                            isPresented:Binding(get:{confirmation != nil},set:{if !$0 {confirmation=nil}})) {
+            if let link = confirmation {
+                Button(link.archived ? "恢复关联" : "归档关联",role:link.archived ? nil : .destructive) {
+                    confirmation = nil
+                    Task { await changeArchive(link) }
+                }
+            }
+            Button("取消",role:.cancel) {}
+        } message: {
+            Text("只修改这条关联。文档和待办的内容、状态都保留。")
+        }
+    }
+    private var existingLinks: some View {
+        let choices = candidates
+        return VStack(alignment:.leading,spacing:8) {
+            Text("现有关联").font(.headline)
+            ForEach(links) { link in
+                HStack {
+                    VStack(alignment:.leading,spacing:3) {
+                        let title = choices.first { $0.reference == link.work }?.title
+                        Text(link.work.map { work in
+                            title.map { $0.isEmpty ? work.id : "\(work.id)  \($0)" } ?? work.id
+                        } ?? "原待办不可用").lineLimit(2)
+                        Text(link.archived ? "已归档" : "有效").font(CrewdType.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(link.archived ? "恢复…" : "归档…") { confirmation = link }
+                        .disabled(!canWrite || (link.archived && link.work == nil))
+                }
+            }
+            if next != nil {
+                Text("当前只显示已读取的关联。").font(CrewdType.caption).foregroundStyle(.secondary)
+                Button("读取后续关联") { Task { await readPage(after:next) } }.disabled(working || store.busy)
+            } else if loaded && links.isEmpty {
+                Text("这份文档还没有待办关联。").foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth:.infinity,alignment:.leading)
+    }
+    private var workPicker: some View {
+        let candidates = candidates
+        let choices = candidates.filter {
+            CrewdKnowledgeTitleSearch.matches($0.reference.id + " " + $0.title,query:query)
+        }
+        let selected = candidates.first { $0.id == selection }
+        let existing = selected.map { choice in links.contains { $0.work == choice.reference } } ?? false
+        return VStack(alignment:.leading,spacing:8) {
+            Text("关联本机组的待办").font(.headline)
+            if workStore.loading {
+                Text("正在读取本机组需求与工作项…").foregroundStyle(.secondary)
+            } else if workStore.lastFailure != nil || !workStore.hasLoaded {
+                Button("读取本机组需求与工作项") { Task { try? await workStore.refresh() } }
+            } else if candidates.isEmpty {
+                Text("没有可关联的本机组需求或工作项。").foregroundStyle(.secondary)
+            } else {
+                TextField("搜索编号或标题",text:$query).textFieldStyle(.roundedBorder)
+                ForEach(choices.prefix(20)) { choice in
+                    Button {
+                        selection = choice.id
+                    } label: {
+                        Label(choice.id + "  " + choice.title,systemImage:selection == choice.id ? "largecircle.fill.circle" : "circle")
+                            .lineLimit(2)
+                    }.buttonStyle(.plain)
+                }
+                if choices.isEmpty { Text("没有匹配的待办。").foregroundStyle(.secondary) }
+                if choices.count > 20 { Text("显示前 20 项，可用编号或标题缩小范围。").font(CrewdType.caption).foregroundStyle(.secondary) }
+                if let selected {
+                    Button(existing ? "已有这条关联" : "关联 \(selected.id)") { Task { await create(selected) } }
+                        .disabled(!canWrite || existing)
+                }
+            }
+        }
+    }
+    private func readPage(after: String? = nil) async {
+        guard let anchor, isCurrent, !working else { return }
+        working = true
+        defer { working = false }
+        do { try await adoptPage(anchor,after:after) }
+        catch { feedback = "未能读取关联。请重新读取后再操作。" }
+    }
+    private func adoptPage(_ anchor: Anchor, after: String? = nil) async throws {
+        let page = try await store.loadDocumentWorkLinkPage(anchor,after:after)
+        guard scopeCurrent(), store.documentWorkLinkScopeIsCurrent(anchor), !Task.isCancelled else { throw CancellationError() }
+        if after == nil { links = page.items }
+        else { links.append(contentsOf:page.items) }
+        next = page.next; loaded = true
+    }
+    private func reread(_ original: Anchor) async throws {
+        loaded = false; links = []; next = nil
+        let fresh = try await store.reloadDocumentWorkLinkAnchor(original)
+        guard scopeCurrent(), !Task.isCancelled else { throw CancellationError() }
+        anchor = fresh
+        store.synchronizePending()
+        try await adoptPage(fresh)
+    }
+    private func reload() async {
+        guard let anchor, scopeCurrent(), !working else { return }
+        working = true; feedback = nil
+        defer { working = false }
+        do { try await reread(anchor) }
+        catch { feedback = "未能重新读取当前文档的关联。" }
+    }
+    private func create(_ choice: Choice) async {
+        guard candidates.contains(where:{ $0.reference == choice.reference }), !links.contains(where:{ $0.work == choice.reference }) else { return }
+        await mutate(success:"已建立关联。") { try await store.createDocumentWorkLink($0,work:choice.reference) }
+    }
+    private func changeArchive(_ link: Link) async {
+        guard links.contains(link) else { return }
+        await mutate(success:link.archived ? "已恢复关联。" : "已归档关联。") {
+            try await store.setDocumentWorkLinkArchived($0,link:link,archived:!link.archived)
+        }
+    }
+    private func mutate(success: String, operation: @MainActor (Anchor) async throws -> CrewdDataChangeResult?) async {
+        guard let anchor, canWrite else { return }
+        working = true
+        defer { working = false }
+        do {
+            if let result = try await operation(anchor), result.phase == .committed {
+                feedback = success; selection = nil
+            } else { feedback = store.status }
+        } catch { feedback = "当前关联已变化，无法提交这项修改。" }
+        do { try await reread(anchor) }
+        catch { feedback = (feedback ?? "") + " 当前关联列表尚未重新读取。" }
+    }
+    private func recover(_ id: UUID) async {
+        guard let anchor, scopeCurrent(), !working else { return }
+        working = true
+        defer { working = false }
+        await store.lookup(id)
+        feedback = store.status
+        do { try await reread(anchor) }
+        catch { feedback = (feedback ?? "") + " 当前关联列表尚未重新读取。" }
     }
 }
 

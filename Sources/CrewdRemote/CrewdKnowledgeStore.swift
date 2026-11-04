@@ -29,6 +29,7 @@ enum CrewdKnowledgeTitleSearch {
         let changeDigest: String // no replay payload or view code in the observation journal
         var documentEdit: NativeDocumentEditReceipt? = nil
         var viewArchive: NativeViewArchiveReceipt? = nil
+        var documentWorkLink: DocumentWorkLinkReceipt? = nil
     }
     struct NativeDocumentEdit: Equatable {
         let title: String
@@ -77,6 +78,41 @@ enum CrewdKnowledgeTitleSearch {
     struct NativeViewArchiveReceipt: Codable, Equatable {
         fileprivate let view: CrewdDataObjectVersion
         let archived: Bool
+    }
+    static let documentWorkPredicate = "pendingcrew.document-supports-work.v1"
+    struct DocumentWorkLinkAnchor: Equatable {
+        let endpoint: CrewdDataRef
+        var crew: String { context.crewId }
+        fileprivate let context: CrewdDataContext
+        fileprivate let origin: Origin
+        fileprivate let document: CrewdDataObjectDetail?
+    }
+    struct DocumentWorkLink: Identifiable, Equatable {
+        var id: String { reference.id }
+        let reference: CrewdDataRef
+        let revision: String
+        let document: CrewdDataRef?
+        let work: CrewdDataRef?
+        let archived: Bool
+    }
+    struct DocumentWorkLinkPage {
+        let items: [DocumentWorkLink]
+        let next: String?
+    }
+    struct DocumentWorkLinkReceipt: Codable, Equatable {
+        let document: CrewdDataRef
+        let work: CrewdDataRef?
+        let archived: Bool
+        fileprivate let next: CrewdDataObjectVersion?
+
+        fileprivate func version(in result: CrewdDataChangeResult) -> CrewdDataObjectVersion? {
+            if let next { return result.created.isEmpty && result.changed == [next] ? next:nil }
+            guard result.created.count == 1, case .object(let value)? = result.created["documentWorkLink"],
+                  value.reference.namespace == document.namespace, value.reference.kind == "relation",
+                  UUID(uuidString:value.reference.id)?.uuidString.lowercased() == value.reference.id,
+                  value.revision == "1", result.changed == [value] else { return nil }
+            return value
+        }
     }
     private struct NativeSubmissionRefusal: Error { let original: CrewdClientError }
     struct NativeDocumentHistoryTarget: Equatable {
@@ -461,7 +497,7 @@ enum CrewdKnowledgeTitleSearch {
             applyObservation(response,intent:intent)
         } catch { if current(o,token) { renderer.revoke(); status = "结果未确认；只可核对原请求，不自动重试。" } }
     }
-    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
+    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
         guard let o = active, origin() == o else { throw Failure.stale }
         try checked(context, o)
         // The library, group detail and renderer can hold distinct live stores.
@@ -470,7 +506,8 @@ enum CrewdKnowledgeTitleSearch {
         guard !hasBlockingPending else { throw Failure.unresolved }
         let bytes = try JSONEncoder().encode(change)
         guard bytes.count <= 8_388_608 else { throw Failure.invalid }
-        let intent = Intent(id: id, context: context, method: "data.submit", changeDigest: SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined(), documentEdit: documentEdit, viewArchive:viewArchive)
+        let intent = Intent(id:id,context:context,method:"data.submit",changeDigest:SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined(),
+                            documentEdit:documentEdit,viewArchive:viewArchive,documentWorkLink:documentWorkLink)
         let record = try journal().prepare(method: "data.submit.observation", params: Self.encode(intent), crew: o.crew)
         records[id] = record; pending.append(intent)
         return (intent, record)
@@ -483,7 +520,31 @@ enum CrewdKnowledgeTitleSearch {
             guard response.beforeGeneration == intent.context.generation, response.afterGeneration == response.context.generation else { throw Failure.invalid }
             if let edit = intent.documentEdit, !edit.matches(response) { throw Failure.invalid }
             if let archive = intent.viewArchive, !response.created.isEmpty || response.changed != [archive.view] { throw Failure.invalid }
+            if let link = intent.documentWorkLink, link.version(in:response) == nil { throw Failure.invalid }
         }
+    }
+    private func verifyDocumentWorkLinkReadback(_ response: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext, origin o: Origin) async throws {
+        guard let witness = intent.documentWorkLink, response.phase == .committed else { return }
+        try checkObservation(response,intent:intent)
+        guard origin() == o, sameAuthority(intent.context,context),
+              let expected = witness.version(in:response) else { throw Failure.stale }
+        let pinned = try await readDocumentWorkLinkVersion(expected.reference,revision:expected.revision,context:context,origin:o)
+        guard pinned.revision == expected.revision, pinned.document == witness.document,
+              pinned.archived == witness.archived else { throw Failure.invalid }
+        // A historical projection deliberately redacts Work. Endpoints of the
+        // typed relation are immutable, so verify a required W/# on the live ref.
+        if let work = witness.work, !witness.archived {
+            let live = try await readDocumentWorkLinkVersion(expected.reference,revision:nil,context:context,origin:o)
+            guard live.work == work else { throw Failure.invalid }
+        }
+    }
+    private func readDocumentWorkLinkVersion(_ reference: CrewdDataRef, revision: String?, context: CrewdDataContext, origin o: Origin) async throws -> DocumentWorkLink {
+        let params = CrewdDataObjectGetParams(context:context,reference:reference,atRevision:revision)
+        let detail: CrewdDataObjectDetail = try await call("data.object.get",params,preservingPresentation:true)
+        guard origin() == o, detail.context == context, detail.resolvedContext == context,
+              detail.generation == context.generation,
+              let link = Self.documentWorkLink(detail.object,namespace:context.namespace), link.reference == reference else { throw Failure.invalid }
+        return link
     }
     private func verifyArchiveReadback(_ response: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext, origin o: Origin) async throws {
         guard let archive = intent.viewArchive, response.phase == .committed else { return }
@@ -518,23 +579,25 @@ enum CrewdKnowledgeTitleSearch {
     @discardableResult func submitFromNativeHost(_ change: CrewdDataChange, requestID:UUID?=nil) async -> CrewdDataChangeResult? {
         try? await submitNativeChange(change, requestID: requestID)
     }
-    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil) async throws -> CrewdDataChangeResult? {
+    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil, documentWorkLink: DocumentWorkLinkReceipt? = nil) async throws -> CrewdDataChangeResult? {
         let (o, token) = try begin()
         defer { finish(o, token) }
         guard !hasBlockingPending else { throw Failure.unresolved }
         do {
             guard let info = workspace else { throw Failure.unavailable }
             let ledger = try journal()
-            let (intent, record) = try stage(change, id: requestID ?? UUID(), context: info.context, documentEdit: documentEdit, viewArchive:viewArchive)
+            let (intent, record) = try stage(change,id:requestID ?? UUID(),context:info.context,documentEdit:documentEdit,viewArchive:viewArchive,documentWorkLink:documentWorkLink)
             let response: CrewdDataChangeResult
             do {
                 response = try await call("data.submit", CrewdDataSubmitParams(requestId:intent.id.uuidString.lowercased(), context:intent.context, change:change))
-            } catch let error as CrewdClientError where (documentEdit != nil || viewArchive != nil) && Self.definiteNativeRefusal(error) {
+            } catch let error as CrewdClientError where (documentEdit != nil || viewArchive != nil || documentWorkLink != nil) &&
+                (Self.definiteNativeRefusal(error) || (documentWorkLink != nil && error.code == -32009 && error.refusal == "data.document_work_link_refused")) {
                 try ledger.finish(record, state:"refused")
                 if current(o, token) { pending.removeAll { $0.id == intent.id }; records.removeValue(forKey: intent.id) }
                 throw NativeSubmissionRefusal(original:error)
             }
             if intent.viewArchive != nil { try await verifyArchiveReadback(response,intent:intent,context:response.context,origin:o) }
+            if intent.documentWorkLink != nil { try await verifyDocumentWorkLinkReadback(response,intent:intent,context:response.context,origin:o) }
             try observe(response, intent:intent, record:record, ledger:ledger)
             guard current(o, token) else { return origin() == o ? response:nil }
             applyObservation(response, intent:intent)
@@ -550,6 +613,136 @@ enum CrewdKnowledgeTitleSearch {
         // An untyped conflict can also report a storage fault at commit time.
         return error.code == -32602 || error.code == -32003 ||
             (error.code == -32009 && error.refusal == "data.context_conflict")
+    }
+    private static func isWorkLinkReference(_ reference: CrewdDataRef, namespace: String) -> Bool {
+        guard reference.namespace == namespace else { return false }
+        let prefix: Character
+        switch reference.kind {
+        case "plan": prefix = "W"
+        case "requirement": prefix = "#"
+        default: return false
+        }
+        return reference.id.first == prefix && positiveRevision(String(reference.id.dropFirst())) != nil
+    }
+    private static func documentWorkLink(_ object: CrewdDataObject, namespace: String) -> DocumentWorkLink? {
+        guard case .relation(let id,let revision,let subject,let predicate,let target,let attributes,let archived,_) = object,
+              predicate == documentWorkPredicate, attributes == .object([:]),
+              UUID(uuidString:id)?.uuidString.lowercased() == id, positiveRevision(revision) != nil else { return nil }
+        let document: CrewdDataRef?
+        switch subject {
+        case .unavailable: document = nil
+        case .visible(let ref):
+            guard ref.namespace == namespace, ref.kind == "view", UUID(uuidString:ref.id)?.uuidString.lowercased() == ref.id else { return nil }
+            document = ref
+        }
+        let work: CrewdDataRef?
+        switch target {
+        case .unavailable: work = nil
+        case .visible(let ref):
+            guard isWorkLinkReference(ref,namespace:namespace) else { return nil }
+            work = ref
+        }
+        return .init(reference:.init(namespace:namespace,kind:"relation",id:id),revision:revision,document:document,work:work,archived:archived)
+    }
+    func documentWorkLinkAnchor(document parent: CrewdDataObjectDetail) throws -> DocumentWorkLinkAnchor {
+        guard let o = active, origin() == o, let context = workspace?.context, workspace?.state == "ready",
+              detail == parent, !detailIsSnapshot, parent.context == context, parent.resolvedContext == context,
+              parent.generation == context.generation, case .view(let id,_,_,.document,false,_) = parent.object,
+              let reference = detailReference, reference == .init(namespace:context.namespace,kind:"view",id:id) else { throw Failure.stale }
+        return .init(endpoint:reference,context:context,origin:o,document:parent)
+    }
+    func documentWorkLinkAnchor(work: CrewdDataRef) throws -> DocumentWorkLinkAnchor {
+        guard let o = active, origin() == o, let context = workspace?.context, workspace?.state == "ready",
+              Self.isWorkLinkReference(work,namespace:context.namespace) else { throw Failure.stale }
+        return .init(endpoint:work,context:context,origin:o,document:nil)
+    }
+    func documentWorkLinkScopeIsCurrent(_ anchor: DocumentWorkLinkAnchor) -> Bool {
+        guard active == anchor.origin, origin() == anchor.origin,
+              workspace?.state == "ready", workspace?.context == anchor.context else { return false }
+        if let document = anchor.document { return (try? documentWorkLinkAnchor(document:document)) == anchor }
+        return true
+    }
+    func reloadDocumentWorkLinkAnchor(_ anchor: DocumentWorkLinkAnchor) async throws -> DocumentWorkLinkAnchor {
+        guard origin() == anchor.origin else { throw Failure.stale }
+        await refresh(loadViews:false)
+        guard origin() == anchor.origin, let context = workspace?.context, sameAuthority(anchor.context,context) else { throw Failure.stale }
+        if anchor.document == nil { return try documentWorkLinkAnchor(work:anchor.endpoint) }
+        let (o,token) = try begin()
+        defer { finish(o,token) }
+        let fresh = try await readActiveNativeDocument(anchor.endpoint,context:context,origin:o)
+        guard current(o,token), !Task.isCancelled else { throw Failure.stale }
+        showActiveNativeDocument(fresh,reference:anchor.endpoint)
+        return try documentWorkLinkAnchor(document:fresh)
+    }
+    func loadDocumentWorkLinkPage(_ anchor: DocumentWorkLinkAnchor, after: String? = nil) async throws -> DocumentWorkLinkPage {
+        guard documentWorkLinkScopeIsCurrent(anchor),
+              after == nil || after.flatMap({UUID(uuidString:$0)?.uuidString.lowercased()}) == after else { throw Failure.stale }
+        let (o, token) = try begin()
+        defer { finish(o,token) }
+        let params = CrewdDataObjectListParams(context:anchor.context,objectType:"relation",after:after,limit:12,atRevision:nil,includeArchived:true)
+        let page: CrewdDataObjectPage = try await call("data.object.list",params,preservingPresentation:true)
+        guard current(o,token), documentWorkLinkScopeIsCurrent(anchor), !Task.isCancelled,
+              page.context == anchor.context, page.generation == anchor.context.generation,
+              page.items.count <= Int(params.limit), after == nil || !page.items.isEmpty else { throw Failure.stale }
+        var previous = after ?? ""
+        for object in page.items {
+            guard case .relation(let id,_,_,_,_,_,_,_) = object, id > previous,
+                  UUID(uuidString:id)?.uuidString.lowercased() == id else { throw Failure.invalid }
+            previous = id
+        }
+        if let next = page.next {
+            guard page.items.count == Int(params.limit), next == previous else { throw Failure.invalid }
+        }
+        let items = page.items.compactMap { Self.documentWorkLink($0,namespace:anchor.context.namespace) }.filter {
+            anchor.document == nil ? $0.work == anchor.endpoint : $0.document == anchor.endpoint
+        }
+        return .init(items:items,next:page.next)
+    }
+    func createDocumentWorkLink(_ anchor: DocumentWorkLinkAnchor, work: CrewdDataRef) async throws -> CrewdDataChangeResult? {
+        guard anchor.document != nil, documentWorkLinkScopeIsCurrent(anchor),
+              Self.isWorkLinkReference(work,namespace:anchor.context.namespace) else { throw Failure.stale }
+        let edit = CrewdDataEdit.createRelation(alias:"documentWorkLink",subject:.existing(reference:anchor.endpoint),
+            predicate:Self.documentWorkPredicate,object:.existing(reference:work),attributes:.object([:]))
+        return try await submitNativeChange(.apply(message:"关联原文档和待办",edits:[edit]),
+            documentWorkLink:.init(document:anchor.endpoint,work:work,archived:false,next:nil))
+    }
+    func setDocumentWorkLinkArchived(_ anchor: DocumentWorkLinkAnchor, link: DocumentWorkLink, archived: Bool) async throws -> CrewdDataChangeResult? {
+        guard anchor.document != nil, documentWorkLinkScopeIsCurrent(anchor), link.document == anchor.endpoint,
+              link.reference.namespace == anchor.context.namespace, link.archived != archived,
+              archived || link.work != nil, let revision = Self.positiveRevision(link.revision), revision < Int64.max else { throw Failure.stale }
+        let next = CrewdDataObjectVersion(reference:link.reference,revision:String(revision + 1))
+        let edit = CrewdDataEdit.archiveRelation(id:link.id,expectedRevision:link.revision,archived:archived)
+        return try await submitNativeChange(.apply(message:archived ? "归档资料待办关联":"恢复资料待办关联",edits:[edit]),
+            documentWorkLink:.init(document:anchor.endpoint,work:link.work,archived:archived,next:next))
+    }
+    func pendingDocumentWorkLinks(_ anchor: DocumentWorkLinkAnchor) -> [Intent] {
+        guard origin() == anchor.origin else { return [] }
+        return pending.filter { intent in
+            guard sameAuthority(intent.context,anchor.context),let relation = intent.documentWorkLink else { return false }
+            return anchor.document == nil ? relation.work == anchor.endpoint : relation.document == anchor.endpoint
+        }
+    }
+    private func readActiveNativeDocument(_ reference: CrewdDataRef, context: CrewdDataContext, origin o: Origin) async throws -> CrewdDataObjectDetail {
+        guard reference.kind == "view", reference.namespace == context.namespace else { throw Failure.stale }
+        let params = CrewdDataObjectGetParams(context:context,reference:reference,atRevision:nil)
+        let view: CrewdDataObjectDetail = try await call("data.object.get",params,preservingPresentation:true)
+        guard origin() == o, view.context == context, view.resolvedContext == context, view.generation == context.generation,
+              case .view(let id,_,_,.document,false,_) = view.object, id == reference.id else { throw Failure.unavailable }
+        return view
+    }
+    private func showActiveNativeDocument(_ value: CrewdDataObjectDetail, reference: CrewdDataRef) {
+        renderer.revoke(); detail = value; detailReference = reference; detailIsSnapshot = false
+    }
+    func openDocumentWorkLinkDocument(_ anchor: DocumentWorkLinkAnchor, link: DocumentWorkLink) async throws {
+        guard anchor.document == nil, documentWorkLinkScopeIsCurrent(anchor), !link.archived,
+              link.work == anchor.endpoint, let document = link.document else { throw Failure.stale }
+        let (o,token) = try begin()
+        defer { finish(o,token) }
+        let fresh = try await readDocumentWorkLinkVersion(link.reference,revision:nil,context:anchor.context,origin:o)
+        guard fresh == link, current(o,token), !Task.isCancelled else { throw Failure.stale }
+        let value = try await readActiveNativeDocument(document,context:anchor.context,origin:o)
+        guard current(o,token), documentWorkLinkScopeIsCurrent(anchor), !Task.isCancelled else { throw Failure.stale }
+        showActiveNativeDocument(value,reference:document)
     }
     func prepareNativeViewArchive(_ parent: CrewdDataObjectDetail) throws -> NativeViewArchiveTarget {
         guard let o = active, origin() == o, let context = workspace?.context, workspace?.state == "ready",
@@ -790,6 +983,7 @@ enum CrewdKnowledgeTitleSearch {
             switch response.lookup {
             case .known(let original):
                 if intent.viewArchive != nil { try await verifyArchiveReadback(original,intent:intent,context:response.workspace.context,origin:o) }
+                if intent.documentWorkLink != nil { try await verifyDocumentWorkLinkReadback(original,intent:intent,context:response.workspace.context,origin:o) }
                 guard current(o,token) else { return }
                 try observe(original,intent:intent,record:record,ledger:ledger)
                 applyObservation(original,intent:intent)
