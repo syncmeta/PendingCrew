@@ -59,16 +59,17 @@ struct CrewdKnowledgeWorkspaceView: View {
     var returnToMessages: (() -> Void)? = nil
     var collection: CrewdKnowledgeCollection = .all
     private var catalog: CrewdKnowledgeStore.ViewCatalog? {
-        guard let catalog = store.viewCatalog, catalog.includeArchived == showArchived else { return nil }
+        guard let catalog = store.viewCatalog, catalog.includeArchived == showArchived,
+              store.workspace?.context == catalog.context else { return nil }
         return catalog
     }
     private var visibleObjects: [CrewdKnowledgeStore.ViewCatalogItem] {
-        catalog?.items.filter { collection.includes($0.kind) && CrewdKnowledgeTitleSearch.matches($0.title,query:query) } ?? []
+        catalog?.items.filter { $0.archived == showArchived && collection.includes($0.kind) && CrewdKnowledgeTitleSearch.matches($0.title,query:query) } ?? []
     }
     private var visibleDetail: CrewdDataObjectDetail? {
         guard let catalog, let detail = store.detail, detail.context == catalog.context,
               selected == detail.object.identity, collection.includes(detail.object),
-              showArchived || !detail.object.isArchived else { return nil }
+              detail.object.isArchived == showArchived else { return nil }
         return detail
     }
     @Environment(\.colorScheme) private var scheme
@@ -76,7 +77,8 @@ struct CrewdKnowledgeWorkspaceView: View {
     @State private var query = ""
     @State private var showSystem = false
     @State private var showArchived = false
-    @State private var confirmArchive: CrewdDataObject?
+    @State private var confirmArchive: CrewdKnowledgeStore.NativeViewArchiveTarget?
+    @State private var lifecycleFeedback: String?
     @State private var editTarget: CrewdDataObjectDetail?
     @State private var historyTarget: CrewdDataObjectDetail?
     @State private var previewToken = ""
@@ -84,14 +86,18 @@ struct CrewdKnowledgeWorkspaceView: View {
     var body: some View {
         VStack(spacing: 0) {
             ViewThatFits(in: .horizontal) {
-                HStack { titleSearch; pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; reloadButton; systemButton }
+                HStack { titleSearch; pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; recycleBinButton; reloadButton; systemButton }
                 VStack(alignment: .leading, spacing: 8) {
                     titleSearch
-                    HStack { pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; reloadButton; systemButton }
+                    HStack { pagePicker; Spacer(); if store.busy { ProgressView().controlSize(.small) }; recycleBinButton; reloadButton; systemButton }
                 }
             }.font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 10)
                 .background(Theme.Palette.canvas)
             if available { catalogProgress }
+            if let lifecycleFeedback {
+                Text(lifecycleFeedback).font(CrewdType.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,16).padding(.bottom,8)
+            }
             Divider().overlay(CrewdChatStyle.line(scheme))
             if !available {
                 CrewdEmptySurface(title: "知识数据尚不可用", detail: "连接具备知识权限的后台后，可读取已保存的页面。", symbol: "externaldrive.badge.questionmark")
@@ -152,10 +158,22 @@ struct CrewdKnowledgeWorkspaceView: View {
                 CrewdNativeDocumentHistory(store:store,parent:historyTarget,scopeCurrent:{ true },onRestored:{ await reload() })
             }
         }
+        .confirmationDialog(confirmArchive?.archived == true ? "恢复这份资料？" : "把这份资料移入回收站？",
+                            isPresented:Binding(get:{confirmArchive != nil},set:{if !$0 {confirmArchive=nil}})) {
+            if let target = confirmArchive {
+                Button(target.archived ? "恢复资料" : "移入回收站",role:target.archived ? nil:.destructive) {
+                    confirmArchive=nil; changeArchive(target)
+                }
+            }
+            Button("取消",role:.cancel) {}
+        } message: {
+            if let target = confirmArchive {
+                Text(target.title + (target.archived ? "。原有群引用会继续指向这份资料。" : "。正文和历史版本保留，原有群引用会标记已归档。"))
+            }
+        }
     }
     private var titleSearch: some View {
-        TextField("按标题搜索机组资料库",text:$query).textFieldStyle(.roundedBorder).frame(idealWidth:200)
-            .accessibilityLabel("按标题搜索机组资料库")
+        TextField(showArchived ? "按标题搜索回收站" : "按标题搜索机组资料库",text:$query).textFieldStyle(.roundedBorder).frame(idealWidth:200)
     }
     private var pagePicker: some View {
         Menu {
@@ -202,16 +220,22 @@ struct CrewdKnowledgeWorkspaceView: View {
             .buttonStyle(CrewdToolButtonStyle()).help("刷新资料").accessibilityLabel("刷新资料")
             .disabled(store.busy)
     }
+    private var recycleBinButton: some View {
+        Button(showArchived ? "返回资料库" : "回收站",systemImage:showArchived ? "arrow.left" : "trash") {
+            showArchived.toggle(); selected=""; query=""; lifecycleFeedback=nil; confirmArchive=nil
+            Task { await reload() }
+        }.disabled(store.busy)
+    }
     private var systemButton: some View {
         Button { showSystem = true } label: { Image(systemName: "ellipsis") }
             .buttonStyle(CrewdToolButtonStyle()).accessibilityLabel("页面管理")
             .help("页面权限、回收站、原请求与恢复控制")
     }
-    private func reload() async {
+    private func reload(restorePreferred: Bool = true) async {
         await store.refreshViewCatalog(includeArchived:showArchived)
         // Only an explicitly opened native document is eligible for read-only
         // reopening. Browsing catalog pages never opens an Agent-authored page.
-        guard collection == .documents, visibleDetail == nil, let context = catalog?.context,
+        guard restorePreferred, !showArchived, collection == .documents, visibleDetail == nil, let context = catalog?.context,
               let preferred = UserDefaults.standard.string(forKey:pagePreference(context)) else { return }
         await open(preferred,kind:.document,previouslyOpenedDocument:true)
     }
@@ -219,9 +243,9 @@ struct CrewdKnowledgeWorkspaceView: View {
         guard let context = catalog?.context else { return }
         await store.openViewCatalogItem(id,kind:kind,previouslyOpenedDocument:previouslyOpenedDocument)
         guard let detail = store.detail, detail.context == context, detail.object.identity == id, catalog?.context == context,
-              collection.includes(detail.object), showArchived || !detail.object.isArchived else { return }
+              collection.includes(detail.object), detail.object.isArchived == showArchived else { return }
         selected = id
-        UserDefaults.standard.set(id,forKey:pagePreference(context))
+        if !showArchived { UserDefaults.standard.set(id,forKey:pagePreference(context)) }
     }
     private func pagePreference(_ context: CrewdDataContext) -> String {
         "pendingcrew.page." + context.authorityId + "." + context.crewId + "." + context.namespace + (collection == .all ? "" : "." + collection.rawValue)
@@ -235,6 +259,9 @@ struct CrewdKnowledgeWorkspaceView: View {
                     Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = detail }.disabled(store.busy)
                     Button("编辑文档",systemImage:"pencil") { editTarget = detail }.disabled(store.busy || store.hasBlockingPending)
                 }
+                Button(detail.object.isArchived ? "恢复资料…" : "移入回收站…",systemImage:detail.object.isArchived ? "arrow.uturn.backward" : "archivebox") {
+                    confirmArchive = try? store.prepareNativeViewArchive(detail)
+                }.disabled(store.busy || store.hasBlockingPending)
             }.padding(.horizontal,24).padding(.top,20).padding(.bottom,8)
             CrewdKnowledgeObjectSurface(store:store,detail:detail)
         }.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
@@ -244,16 +271,11 @@ struct CrewdKnowledgeWorkspaceView: View {
             HStack { Text("页面与数据系统控制").font(.headline); Spacer(); Button("完成") { showSystem = false } }
             Text("作者页面不能代替这里的权限、原请求核对与恢复控制。").font(.caption)
             Button("停止页面并撤回写入权限") { store.renderer.revoke() }
-            Toggle("显示回收站", isOn: $showArchived)
-                .disabled(store.busy)
-                .onChange(of: showArchived) { _, _ in Task { await reload() } }
-            if let object = visibleDetail?.object, case .view = object {
-                Button(object.isArchived ? "恢复当前页面…" : "移入回收站…") { confirmArchive = object }
-            }
             ForEach(store.pending) { intent in
                 HStack {
-                    Text("待核对操作 " + intent.id.uuidString).font(.caption).textSelection(.enabled)
-                    Button("查询原结果") { Task { await store.lookup(intent.id) } }.disabled(store.busy)
+                    let label = intent.viewArchive.map{$0.archived ? "原归档" : "原恢复"} ?? "待核对操作"
+                    Text(label + " " + intent.id.uuidString).font(.caption).textSelection(.enabled)
+                    Button("查询原结果") { Task { await lookup(intent) } }.disabled(store.busy)
                 }
             }
             DisclosureGroup("审阅 Agent 提交的危险数据变更") {
@@ -288,18 +310,6 @@ struct CrewdKnowledgeWorkspaceView: View {
             Button("明确执行", role: .destructive) { Task { await store.confirmPreview(); await reload() } }
             Button("取消", role: .cancel) {}
         }
-        .confirmationDialog("更改当前页面的回收状态？", isPresented: Binding(get: { confirmArchive != nil }, set: { if !$0 { confirmArchive = nil } })) {
-            if let object = confirmArchive {
-                Button("确认") {
-                    confirmArchive = nil
-                    Task {
-                        await store.submitFromNativeHost(.apply(message: object.isArchived ? "Restore page" : "Archive page", edits: [.archiveView(id: object.identity, expectedRevision: object.revision, archived: !object.isArchived)]))
-                        await reload()
-                    }
-                }
-            }
-            Button("取消", role: .cancel) { confirmArchive = nil }
-        }
         .confirmationDialog("恢复知识快照？当前数据会先保留恢复副本，旧请求不会重放。", isPresented: Binding(get: { restoreTarget != nil }, set: { if !$0 { restoreTarget = nil } })) {
             Button("明确恢复", role: .destructive) {
                 guard let target = restoreTarget else { return }; restoreTarget = nil
@@ -307,6 +317,37 @@ struct CrewdKnowledgeWorkspaceView: View {
             }
             Button("取消", role: .cancel) { restoreTarget = nil }
         }
+    }
+    private func changeArchive(_ target: CrewdKnowledgeStore.NativeViewArchiveTarget) {
+        guard let context = catalog?.context else { return }
+        Task {
+            do {
+                let result = try await store.submitNativeViewArchive(target)
+                if result?.phase == .committed {
+                    await finishedArchive(id:target.id,archived:!target.archived,context:context)
+                } else {
+                    await reload(restorePreferred:false)
+                    lifecycleFeedback = store.hasBlockingPending ? "原请求结果待核对。请查询原结果。" : "资料状态未确认，请刷新核对。"
+                }
+            } catch let error as CrewdClientError { lifecycleFeedback = error.localizedDescription }
+            catch { lifecycleFeedback = "当前资料已变化，请重新读取后再确认。" }
+        }
+    }
+    private func lookup(_ intent: CrewdKnowledgeStore.Intent) async {
+        await store.lookup(intent.id)
+        if let archive = intent.viewArchive, store.result?.phase == .committed,
+           store.result.flatMap({UUID(uuidString:$0.requestId)}) == intent.id {
+            lifecycleFeedback = archive.archived ? "原归档请求已确认。当前状态以资料库和回收站为准。" : "原恢复请求已确认。当前状态以资料库和回收站为准。"
+            await reload(restorePreferred:false)
+        }
+    }
+    private func finishedArchive(id: String, archived: Bool, context: CrewdDataContext) async {
+        if archived, UserDefaults.standard.string(forKey:pagePreference(context)) == id {
+            UserDefaults.standard.removeObject(forKey:pagePreference(context))
+        }
+        selected=""
+        lifecycleFeedback = archived ? "已移入回收站，群引用保留。" : "已恢复到资料库，原有群引用继续有效。"
+        await reload(restorePreferred:false)
     }
     @State private var restoreTarget: String?
 }
@@ -406,7 +447,7 @@ private struct CrewdGroupKnowledgeView:View {
     private var pendingLinks: [CrewdPendingKnowledgeLink] {
         CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:workspace.presentationScope,crew:group.crew,channel:group.channel)
     }
-    private var readKey:String{(chosen?.id ?? "")+"/"+(chosen?.source.context.generation ?? "")+"/"+(chosen?.revision ?? "")+"/"+retry.uuidString}
+    private var readKey:String{(chosen?.id ?? "")+"/"+(chosen?.source.context.generation ?? "")+"/"+(chosen?.revision ?? "")+"/"+String(chosen?.isReadableActiveView == true)+"/"+retry.uuidString}
     var body:some View {
         VStack(spacing:0){
             ViewThatFits(in:.horizontal){
@@ -453,7 +494,7 @@ private struct CrewdGroupKnowledgeView:View {
         .onAppear{group.setActive(true,owner:owner)}.onDisappear{group.setActive(false,owner:owner);content.renderer.revoke()}
         .task(id:group.crew+group.channel+group.activationEpoch.uuidString){do{try await group.refresh()}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
         .task(id:group.crew+collection.rawValue+group.activationEpoch.uuidString){if collection == .documents {library.synchronizePending()}}
-        .task(id:readKey){guard let chosen,chosen.state == "ready" else{return};reading=true;defer{reading=false};do{try await workspace.openLinkedKnowledge(chosen);failure=nil}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
+        .task(id:readKey){guard let chosen,chosen.isReadableActiveView else{content.renderer.revoke();return};reading=true;defer{reading=false};do{try await workspace.openLinkedKnowledge(chosen);failure=nil}catch{if !(error is CancellationError){failure=error.localizedDescription}}}
         .sheet(isPresented:$linking,onDismiss:{retry=UUID()}){CrewdKnowledgeLinkPicker(workspace:workspace,collection:collection)}
         .sheet(isPresented:$creating){CrewdNativeDocumentCreation(workspace:workspace)}
         .sheet(item:$editTarget){ target in
@@ -500,7 +541,9 @@ private struct CrewdGroupKnowledgeView:View {
                             Image(systemName:collection == .agentPages ? "rectangle.on.rectangle":"doc.text").foregroundStyle(.secondary).frame(width:16)
                             VStack(alignment:.leading,spacing:4) {
                                 Text(item.title ?? "未命名资料").font(CrewdType.body.weight(selected == item.id ? .semibold:.regular)).multilineTextAlignment(.leading)
-                                if item.state != "ready" {
+                                if item.isArchivedReference {
+                                    Text("已归档 · 引用保留").font(CrewdType.caption).foregroundStyle(.secondary)
+                                } else if item.state != "ready" {
                                     Text(item.state == "contextChanged" ? "来源已变化":"内容不可用").font(CrewdType.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -518,7 +561,9 @@ private struct CrewdGroupKnowledgeView:View {
             VStack(alignment:.leading,spacing:8){
                 HStack{Text(chosen.title ?? "未命名资料").font(CrewdType.title);Spacer();CrewdFolderAssignmentButton(store:resources,drafts:$workspace.resourceDrafts,view:.documents,object:folderObject(chosen.source))}.padding(.horizontal,24).padding(.top,16)
                 DisclosureGroup("来源信息"){Text("原机组："+chosen.source.context.crewId).textSelection(.enabled);Text(chosen.source.reference.id).textSelection(.enabled)}.font(CrewdType.caption).foregroundStyle(.secondary).padding(.horizontal,24)
-                if chosen.state == "ready",let detail=content.detail,detail.object.identity == chosen.source.reference.id,
+                if chosen.isArchivedReference {
+                    CrewdEmptySurface(title:"原资料已归档",detail:"本群引用仍保留。可从原机组的资料库回收站恢复原资料。",symbol:"archivebox")
+                } else if chosen.isReadableActiveView,let detail=content.detail,detail.object.identity == chosen.source.reference.id,
                    detail.resolvedContext.crewId == chosen.source.context.crewId {
                     if collection == .documents, group.crew == chosen.source.context.crewId, content.canPrepareNativeDocumentEdit(detail) {
                         HStack {
@@ -540,7 +585,7 @@ private struct CrewdGroupKnowledgeView:View {
     }
     private func isCurrent(_ target: DocumentTarget) -> Bool {
         group.crew == target.parent.context.crewId && group.channel == target.channel &&
-            chosen?.id == target.link && chosen?.state == "ready"
+            chosen?.id == target.link && chosen?.isReadableActiveView == true
     }
     private func unlink(_ item:CrewdChannelKnowledgeItem){
         guard !pendingLinks.contains(where: { $0.source.identity == item.id }),

@@ -28,6 +28,7 @@ enum CrewdKnowledgeTitleSearch {
         let method: String? // operation identity only; never a replay payload
         let changeDigest: String // no replay payload or view code in the observation journal
         var documentEdit: NativeDocumentEditReceipt? = nil
+        var viewArchive: NativeViewArchiveReceipt? = nil
     }
     struct NativeDocumentEdit: Equatable {
         let title: String
@@ -65,6 +66,19 @@ enum CrewdKnowledgeTitleSearch {
             return result.created.isEmpty && result.changed == [view]
         }
     }
+    struct NativeViewArchiveTarget: Equatable {
+        var id: String { reference.id }
+        let title: String
+        let archived: Bool
+        fileprivate let origin: Origin
+        fileprivate let parent: CrewdDataObjectDetail
+        fileprivate let reference: CrewdDataRef
+    }
+    struct NativeViewArchiveReceipt: Codable, Equatable {
+        fileprivate let view: CrewdDataObjectVersion
+        let archived: Bool
+    }
+    private struct NativeSubmissionRefusal: Error { let original: CrewdClientError }
     struct NativeDocumentHistoryTarget: Equatable {
         var head: String { parent.object.revision }
         fileprivate let origin: Origin
@@ -450,7 +464,7 @@ enum CrewdKnowledgeTitleSearch {
             applyObservation(response,intent:intent)
         } catch { if current(o,token) { renderer.revoke(); status = "结果未确认；只可核对原请求，不自动重试。" } }
     }
-    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
+    private func stage(_ change: CrewdDataChange, id: UUID, context: CrewdDataContext, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil) throws -> (Intent, CrewdPresentationJournal.Prepared) {
         guard let o = active, origin() == o else { throw Failure.stale }
         try checked(context, o)
         // The library, group detail and renderer can hold distinct live stores.
@@ -459,19 +473,33 @@ enum CrewdKnowledgeTitleSearch {
         guard !hasBlockingPending else { throw Failure.unresolved }
         let bytes = try JSONEncoder().encode(change)
         guard bytes.count <= 8_388_608 else { throw Failure.invalid }
-        let intent = Intent(id: id, context: context, method: "data.submit", changeDigest: SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined(), documentEdit: documentEdit)
+        let intent = Intent(id: id, context: context, method: "data.submit", changeDigest: SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined(), documentEdit: documentEdit, viewArchive:viewArchive)
         let record = try journal().prepare(method: "data.submit.observation", params: Self.encode(intent), crew: o.crew)
         records[id] = record; pending.append(intent)
         return (intent, record)
     }
-    private func observe(_ response: CrewdDataChangeResult, intent: Intent, record: CrewdPresentationJournal.Prepared, ledger: CrewdPresentationJournal) throws {
+    private func checkObservation(_ response: CrewdDataChangeResult, intent: Intent) throws {
         let sameScope = response.context.dbId == intent.context.dbId && response.context.authorityId == intent.context.authorityId && response.context.crewId == intent.context.crewId && response.context.namespace == intent.context.namespace
         guard UUID(uuidString:response.requestId) == intent.id, sameScope,
               intent.method == "data.restore" || response.context.restoreEpoch == intent.context.restoreEpoch else { throw Failure.invalid }
         if response.phase == .committed {
             guard response.beforeGeneration == intent.context.generation, response.afterGeneration == response.context.generation else { throw Failure.invalid }
             if let edit = intent.documentEdit, !edit.matches(response) { throw Failure.invalid }
+            if let archive = intent.viewArchive, !response.created.isEmpty || response.changed != [archive.view] { throw Failure.invalid }
         }
+    }
+    private func verifyArchiveReadback(_ response: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext, origin o: Origin) async throws {
+        guard let archive = intent.viewArchive, response.phase == .committed else { return }
+        try checkObservation(response,intent:intent)
+        guard origin() == o, sameAuthority(intent.context,context) else { throw Failure.stale }
+        let params = CrewdDataObjectGetParams(context:context,reference:archive.view.reference,atRevision:archive.view.revision)
+        let detail: CrewdDataObjectDetail = try await call("data.object.get",params,preservingPresentation:true)
+        guard origin() == o, detail.context == context, detail.resolvedContext == context, detail.generation == context.generation,
+              case .view(let id,let revision,_,_,let archived,_) = detail.object,
+              id == archive.view.reference.id, revision == archive.view.revision, archived == archive.archived else { throw Failure.invalid }
+    }
+    private func observe(_ response: CrewdDataChangeResult, intent: Intent, record: CrewdPresentationJournal.Prepared, ledger: CrewdPresentationJournal) throws {
+        try checkObservation(response,intent:intent)
         // Unknown/historical stays durable. A lookup can never replay the mutation.
         switch response.phase {
         case .committed, .rejected, .conflicted:
@@ -493,37 +521,56 @@ enum CrewdKnowledgeTitleSearch {
     @discardableResult func submitFromNativeHost(_ change: CrewdDataChange, requestID:UUID?=nil) async -> CrewdDataChangeResult? {
         try? await submitNativeChange(change, requestID: requestID)
     }
-    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil) async throws -> CrewdDataChangeResult? {
+    private func submitNativeChange(_ change: CrewdDataChange, requestID: UUID? = nil, documentEdit: NativeDocumentEditReceipt? = nil, viewArchive: NativeViewArchiveReceipt? = nil) async throws -> CrewdDataChangeResult? {
         let (o, token) = try begin()
         defer { finish(o, token) }
         guard !hasBlockingPending else { throw Failure.unresolved }
         do {
             guard let info = workspace else { throw Failure.unavailable }
             let ledger = try journal()
-            let (intent, record) = try stage(change, id: requestID ?? UUID(), context: info.context, documentEdit: documentEdit)
+            let (intent, record) = try stage(change, id: requestID ?? UUID(), context: info.context, documentEdit: documentEdit, viewArchive:viewArchive)
             let response: CrewdDataChangeResult
             do {
                 response = try await call("data.submit", CrewdDataSubmitParams(requestId:intent.id.uuidString.lowercased(), context:intent.context, change:change))
-            } catch let error as CrewdClientError where documentEdit != nil && Self.definiteEditRefusal(error) {
+            } catch let error as CrewdClientError where (documentEdit != nil || viewArchive != nil) && Self.definiteNativeRefusal(error) {
                 try ledger.finish(record, state:"refused")
                 if current(o, token) { pending.removeAll { $0.id == intent.id }; records.removeValue(forKey: intent.id) }
-                throw error
+                throw NativeSubmissionRefusal(original:error)
             }
+            if intent.viewArchive != nil { try await verifyArchiveReadback(response,intent:intent,context:response.context,origin:o) }
             try observe(response, intent:intent, record:record, ledger:ledger)
             guard current(o, token) else { return origin() == o ? response:nil }
             applyObservation(response, intent:intent)
             return response
-        } catch let error as CrewdClientError where documentEdit != nil && Self.definiteEditRefusal(error) {
-            if current(o,token) { status = "后台拒绝保存。重新读取原文后再处理此次编辑。" }
-            throw error
+        } catch let refusal as NativeSubmissionRefusal {
+            if current(o,token) { status = "后台已拒绝此次更改，请重新读取当前资料。" }
+            throw refusal.original
         } catch { if current(o,token) { renderer.revoke(); status = "未获得完整提交结果；保留原 UUID，不自动重试。" } }
         return nil
     }
-    private static func definiteEditRefusal(_ error: CrewdClientError) -> Bool {
+    private static func definiteNativeRefusal(_ error: CrewdClientError) -> Bool {
         if case .notSubmitted = error.kind { return true }
         // An untyped conflict can also report a storage fault at commit time.
         return error.code == -32602 || error.code == -32003 ||
             (error.code == -32009 && error.refusal == "data.context_conflict")
+    }
+    func prepareNativeViewArchive(_ parent: CrewdDataObjectDetail) throws -> NativeViewArchiveTarget {
+        guard let o = active, origin() == o, let context = workspace?.context, workspace?.state == "ready",
+              !detailIsSnapshot, detail == parent, parent.context == context, parent.resolvedContext == context,
+              parent.generation == context.generation,
+              case .view(let id,let revision,let title,_,let archived,_) = parent.object,
+              let number = Self.positiveRevision(revision), number < Int64.max,
+              let reference = detailReference, reference == .init(namespace:context.namespace,kind:"view",id:id) else { throw Failure.stale }
+        return .init(title:title,archived:archived,origin:o,parent:parent,reference:reference)
+    }
+    func submitNativeViewArchive(_ target: NativeViewArchiveTarget) async throws -> CrewdDataChangeResult? {
+        guard !busy, try prepareNativeViewArchive(target.parent) == target,
+              let revision = Self.positiveRevision(target.parent.object.revision), revision < Int64.max else { throw Failure.stale }
+        let next = CrewdDataObjectVersion(reference:target.reference,revision:String(revision + 1))
+        let archived = !target.archived
+        let change = CrewdDataChange.apply(message:archived ? "归档资料" : "从回收站恢复资料",
+            edits:[.archiveView(id:target.reference.id,expectedRevision:target.parent.object.revision,archived:archived)])
+        return try await submitNativeChange(change,viewArchive:.init(view:next,archived:archived))
     }
     func canPrepareNativeDocumentEdit(_ parent: CrewdDataObjectDetail) -> Bool {
         guard let context = workspace?.context, workspace?.state == "ready", let active, origin() == active,
@@ -741,9 +788,14 @@ enum CrewdKnowledgeTitleSearch {
             let response: CrewdDataRequestGetResult = try await call("data.request.get", CrewdDataRequestGetParams(requestId:id.uuidString.lowercased(), context:intent.context))
             try checked(response.workspace.context,o)
             guard current(o,token) else { return }
+            if workspace?.context != response.workspace.context { clearPresentation() }
             workspace = response.workspace
             switch response.lookup {
-            case .known(let original): try observe(original,intent:intent,record:record,ledger:ledger); applyObservation(original,intent:intent)
+            case .known(let original):
+                if intent.viewArchive != nil { try await verifyArchiveReadback(original,intent:intent,context:response.workspace.context,origin:o) }
+                guard current(o,token) else { return }
+                try observe(original,intent:intent,record:record,ledger:ledger)
+                applyObservation(original,intent:intent)
             case .notFound: status = "原 UUID 未找到；没有重发。"
             case .historical: status = "原请求属于历史状态；未恢复为当前成功。"
             }
@@ -892,6 +944,11 @@ extension CrewdDataObject {
 
 /// A read projection of Core's real channel placements. The content store is
 /// unchanged; linking a view never copies blocks or submits content again.
+extension CrewdChannelKnowledgeItem {
+    var isReadableActiveView: Bool { state == "ready" && archived == false }
+    var isArchivedReference: Bool { state == "ready" && archived == true }
+}
+
 @MainActor final class CrewdChannelKnowledgeStore:ObservableObject {
     typealias Call=(String,CrewdValue)async throws->CrewdValue
     @Published private(set) var crew=""
