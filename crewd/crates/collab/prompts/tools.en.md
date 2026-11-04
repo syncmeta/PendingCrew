@@ -991,6 +991,10 @@ Optional completion evidence: {kind:"commit"|"url"|"text", value:"nonblank text"
 Original recorded assignment for this coordination request:
 {result}
 
+## r.work_coordination_split
+Original recorded split for this coordination request.
+{result}
+
 ## my_work_items.include_removed
 true also reads work in removed crews, default false. Objects with frozen:true are read-only; do not repeatedly try to advance them.
 
@@ -1011,6 +1015,21 @@ Nonempty assignment or claim reason.
 
 ## work_item_assign.coordination_decision_id
 Current captain only. Use the delivered coordination request ID from the same crew to link the actual owner change to that request. Review the original work and current revision, and ensure no transfer awaits acceptance. An exact repeat returns the original receipt.
+
+## work_item_coordination_split
+Create two to eight open children of the original work in response to a delivered coordination request. The current captain keeps the parent's fields and direct requirement links intact. Choose this action or a linked owner change once per request. An exact repeat returns the original child creation receipt.
+
+## work_item_coordination_split.id
+Global W ID of the original parent work.
+
+## work_item_coordination_split.expected_revision
+Observed current revision of the original parent as a string.
+
+## work_item_coordination_split.coordination_decision_id
+Exact request ID from the delivered coordination notice.
+
+## work_item_coordination_split.children
+Two to eight scoped children with title, goal, acceptance and an explicit owner. Use a same-crew session ID or null for intentionally unowned work. List any prerequisites as existing work IDs in the same crew.
 
 ## work_item_reassign_lost
 Reassign only after the daemon verifies the current owner cannot recover, or real delivered checkpoints exceed the existing silence threshold and are due. A caller cannot declare loss. Healthy, merely stopped or unknown owners refuse; ordinary workers cannot take another owner's work. The current revision and actual target session are required. Success records lost-owner history and a guarded compact notification; human stopping still applies.

@@ -108,7 +108,7 @@ crewd 重启打断了你上一轮的工作。先核对当前状态（工作区�
 用户提议你接管一项尚未解决的行政责任。case_id={case} crew_id={crew} request_id={request}；原工作范围（最多显示50项）：{targets}。原因：{reason}。用 admin_case_custody_get 查看完整事实及 pending.revision，再用 admin_case_custody_accept 明确接受。送达不等于承接，承接不等于业务完成；原工作owner不变。
 
 ## notice.work.coordination
-请核实并协调 {work} 的进展，协调请求 ID 为 {decision}。请先读取当前工作和报告。若核实后决定换人，请在 work_item_assign 中附上 coordination_decision_id 和当前修订，以记录该请求的实际调整。模型建议不代表任务卡死或已经完成协调。
+请核实并协调 {work} 的进展，协调请求 ID 为 {decision}。请先读取当前工作和报告。决定换人时，在 work_item_assign 中附上 coordination_decision_id 和当前修订。决定拆出可独立推进的子项时，用 work_item_coordination_split，原工作照旧。每条请求最多记录一种实际操作。模型建议不代表任务卡死或已经完成协调。
 
 ## notice.work.reassignment
 {work} 的原负责人已核实失联，调度已将同一项工作重派给 {owner}。请查看当前负责人和进展；重派与通知不代表工作完成。

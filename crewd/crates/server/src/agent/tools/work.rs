@@ -201,6 +201,18 @@ pub async fn assign(cx: &Ctx<'_>, v: Value) -> CallResult {
     )
 }
 
+pub async fn split_coordination(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let p = match parse_args(cx, v) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    receipt_with(
+        cx,
+        "r.work_coordination_split",
+        port::work_split_coordination(cx.st, cx.me, p).await,
+    )
+}
+
 pub async fn reassign_lost(cx: &Ctx<'_>, v: Value) -> CallResult {
     let a: Assign = match parse_args(cx, v) {
         Ok(a) => a,

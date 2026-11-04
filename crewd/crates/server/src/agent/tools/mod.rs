@@ -211,6 +211,7 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         | "view_folder_delete"
         | "view_folder_assign" => resources::call(&cx, tool, args).await,
         "work_item_assign" => work::assign(&cx, args).await,
+        crewd_collab::work_coordination::SPLIT_TOOL => work::split_coordination(&cx, args).await,
         "work_item_reassign_lost" => work::reassign_lost(&cx, args).await,
         "post" => messaging::post(&cx, args).await,
         "read_channel" => messaging::read_channel(&cx, args).await,

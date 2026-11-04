@@ -29,6 +29,7 @@ pub enum Ty {
     ChannelWorkObject,
     DocumentEdits,
     WorkContinuation,
+    CoordinationChildren,
     /// `[{text, category?}]`
     Messages,
 }
@@ -442,6 +443,15 @@ pub const CATALOG: &[ToolSpec] = &[
             p("coordination_decision_id", Str, false),
         ],
     )),
+    idempotent(cap(
+        crewd_collab::work_coordination::SPLIT_TOOL,
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            p("coordination_decision_id", Str, true),
+            p("children", CoordinationChildren, true),
+        ],
+    )),
     idempotent(all(
         "work_item_reassign_lost",
         &[
@@ -783,6 +793,18 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
             }
             WorkBlockers => work_blockers_schema(),
             WorkContinuation => work_continuation_schema(loc),
+            CoordinationChildren => json!({"type":"array","minItems":2,"maxItems":8,"items":{
+                "type":"object",
+                "properties":{
+                    "title":{"type":"string","maxLength":200},
+                    "goal":{"type":"string","maxLength":2000},
+                    "acceptance":{"type":"string","maxLength":2000},
+                    "owner":{"type":["string","null"]},
+                    "depends_on":{"type":"array","maxItems":16,"items":{"type":"string"}}
+                },
+                "required":["title","goal","acceptance","owner"],
+                "additionalProperties":false
+            }}),
             Mentions => json!({"type": "array", "items": {
                 "type": "object",
                 "properties": {
@@ -918,6 +940,8 @@ mod tests {
         }
         assert!(!worker.contains(&"admin_case_custody_accept".to_string()));
         assert!(captain.contains(&"admin_case_custody_accept".to_string()));
+        assert!(!worker.iter().any(|name| name == crewd_collab::work_coordination::SPLIT_TOOL));
+        assert!(captain.iter().any(|name| name == crewd_collab::work_coordination::SPLIT_TOOL));
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -1010,6 +1034,7 @@ mod tests {
                 "work_item_update",
                 "work_item_block",
                 "work_item_assign",
+                crewd_collab::work_coordination::SPLIT_TOOL,
                 "work_item_reassign_lost",
                 "channel_listen",
                 "set_session_profile",

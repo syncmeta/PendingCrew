@@ -255,6 +255,7 @@ async fn route(
             if matches!(
                 p.tool.as_str(),
                 "channel_archive_check" | "channel_archive_verified" | "channel_restore_verified"
+                    | crewd_collab::work_coordination::SPLIT_TOOL
             ) || (p.tool == "work_item_assign" && p.args.get("coordination_decision_id").is_some()) {
                 let token = conn.data_token.clone().ok_or_else(invalid)?;
                 return to_value(

@@ -2045,6 +2045,22 @@ pub(crate) async fn work_assign_coordination(
     })
     .await
 }
+pub(crate) async fn work_split_coordination(
+    st: &AppState,
+    by: &Identity,
+    p: crewd_collab::work_coordination::SplitParams,
+) -> PortResult<crewd_proto::CoordinationSplit> {
+    let authority = scoped_actor(st, by)?;
+    let by = by.clone();
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &authority, &by)?;
+        if !authority.state.admission.contains(&by.session_id) {
+            return Err(scoped_actor_denied());
+        }
+        crewd_collab::work_coordination::apply_split(tx, &by.session_id, p)
+    })
+    .await
+}
 pub async fn work_close(
     st: &AppState,
     session: &str,

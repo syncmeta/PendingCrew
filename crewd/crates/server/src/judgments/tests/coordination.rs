@@ -124,6 +124,128 @@ async fn unconfigured_runtime_does_not_create_coordination_wake() {
     assert!(!view.adopted && view.wake_id.is_none());
     f.close().await;
 }
+
+#[tokio::test]
+async fn coordination_split_socket_issues_children_and_recovers_original_receipt() {
+    use super::admin_execution::Socket;
+    use crewd_collab::wakes;
+    let mut f = Fixture::new().await;
+    let id = reports(&f).await;
+    let work_id = id.clone();
+    let (parent, view) = f
+        .state
+        .collab(move |tx| {
+            let snapshot = work_coordination::prepare(tx, &work_id)?.unwrap();
+            assert!(work_coordination::dispatch(tx, &snapshot)?);
+            work_coordination::settle(
+                tx,
+                &snapshot,
+                Some(0.1),
+                Some(0.9),
+                true,
+                CoordinationReason::Answered,
+            )?;
+            let view = work_coordination::status(tx.conn(), &snapshot.crew, &work_id, None)?
+                .record
+                .unwrap();
+            let wake = view.wake_id.unwrap();
+            wakes::claim(tx, &[wake])?;
+            wakes::ack_delivered(
+                tx,
+                &snapshot.captain,
+                &[wake],
+                wakes::Riders::Release,
+                &[],
+                &[],
+            )?;
+            Ok((work::get(tx.conn(), &work_id)?, view))
+        })
+        .await
+        .unwrap();
+    let captain = view.recipient.unwrap();
+    let p = json!({
+        "id": id,
+        "expected_revision": parent.revision,
+        "coordination_decision_id": view.decision_id,
+        "children": [
+            {"title":"separate first child", "goal":"implement first scope", "acceptance":"verify first scope", "owner":f.worker},
+            {"title":"separate second child", "goal":"implement second scope", "acceptance":"verify second scope", "owner":null}
+        ]
+    });
+    let call = |args| json!({"tool":work_coordination::SPLIT_TOOL,"args":args});
+    let mut worker_socket = Socket::attach(f.state.clone(), &f.worker).await;
+    let worker = worker_socket
+        .call("agent.call", call(p.clone()))
+        .await
+        .unwrap();
+    assert_eq!(worker["isError"], true, "{worker}");
+    worker_socket.close().await;
+    let mut captain_socket = Socket::attach(f.state.clone(), &captain).await;
+    let mut missing = p.clone();
+    missing["children"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("owner");
+    let missing = captain_socket
+        .call("agent.call", call(missing))
+        .await
+        .unwrap();
+    assert_eq!(missing["isError"], true, "{missing}");
+    let first = captain_socket
+        .call("agent.call", call(p.clone()))
+        .await
+        .unwrap();
+    assert_eq!(first["isError"], false, "{first}");
+    let (_, body) = first["text"].as_str().unwrap().split_once('\n').unwrap();
+    let receipt: crewd_proto::CoordinationSplit = serde_json::from_str(body).unwrap();
+    assert_eq!(receipt.children.len(), 2);
+    assert_eq!(
+        receipt.children[0].owner.as_deref(),
+        Some(f.worker.as_str())
+    );
+    assert!(receipt.children[1].owner.is_none());
+    let same_decision = captain_socket.call("agent.call", json!({"tool":"work_item_assign","args":{
+        "id":id,"expected_revision":parent.revision,"owner":captain,
+        "coordination_decision_id":view.decision_id,"note":"same decision is already consumed"
+    }})).await.unwrap();
+    assert_eq!(same_decision["isError"], true, "{same_decision}");
+    captain_socket.close().await;
+    f.reopen().await;
+    let mut human = Socket::owned(f.state.clone());
+    let query = json!({"crewId":f.crew,"id":id,"decisionId":view.decision_id});
+    let result = human.call("work.coordinationStatus", query).await.unwrap();
+    assert_eq!(result["lastSplit"], json!(receipt));
+    assert_eq!(result["requestedSplit"], json!(receipt));
+    assert!(result.get("requestedAssignment").is_none());
+    assert_eq!(
+        human.call("work.get", json!({"id":id})).await.unwrap(),
+        json!(parent)
+    );
+    for child in &receipt.children {
+        let work = human
+            .call("work.get", json!({"id":child.id}))
+            .await
+            .unwrap();
+        assert_eq!(work["parent"], id);
+        assert_eq!(work["owner"], json!(child.owner));
+        assert_eq!(work["status"], "open");
+        assert_eq!(work["sources"], json!([]));
+    }
+    f.state.admission.allow(&captain);
+    let mut captain_socket = Socket::attach(f.state.clone(), &captain).await;
+    assert_eq!(
+        captain_socket.call("agent.call", call(p)).await.unwrap(),
+        first
+    );
+    let work = human
+        .call("work.list", json!({"crewId":f.crew}))
+        .await
+        .unwrap();
+    assert_eq!(work["items"].as_array().unwrap().len(), 3);
+    captain_socket.close().await;
+    human.close().await;
+    f.close().await;
+}
 #[tokio::test]
 async fn stopped_owner_never_calls_configured_provider() {
     let fake = FakeJev::start(vec![]).await;

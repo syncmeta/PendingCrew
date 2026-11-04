@@ -398,6 +398,42 @@ impl WorkBook {
         })
     }
 
+    /// Create independently scoped child work while preserving the live parent exactly.
+    pub fn create_coordination_children(
+        &mut self,
+        by: &Actor,
+        now: Ts,
+        parent: WorkId,
+        mut children: Vec<NewItem>,
+    ) -> Result<Applied<Vec<WorkId>>, Rejected> {
+        self.transact(by, now, |d| {
+            d.permit_on(Action::CreateChild, parent)?;
+            let level = d.live(parent)?.body.level;
+            let crew =
+                d.s.item_crew(parent)
+                    .cloned()
+                    .ok_or(Rejected::Invalid("coordination parent lacks crew"))?;
+            if !(2..=8).contains(&children.len())
+                || children.iter().any(|child| {
+                    child.crew_id.as_ref() != Some(&crew)
+                        || child.parent.is_some()
+                        || child.channel.is_some()
+                        || !child.sources.is_empty()
+                        || child.depends_on.iter().any(|dep| {
+                            !matches!(dep, ItemRef::Id(id)
+                        if *id != parent && d.s.item_crew(*id) == Some(&crew))
+                        })
+                })
+            {
+                return Err(Rejected::Invalid("invalid coordination child batch"));
+            }
+            for child in &mut children {
+                child.body.level = level;
+            }
+            d.insert_batch(children, Some(parent), None, None)
+        })
+    }
+
     /// 把一个群关联到工作项（spec §17：工作项不自动建群，负责人自己建、自己关联）；`None` = 解除。
     pub fn link_channel(
         &mut self,

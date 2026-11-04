@@ -1562,6 +1562,83 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
+      "description": "Create two to eight open children of the original work in response to a delivered coordination request. The current captain keeps the parent's fields and direct requirement links intact. Choose this action or a linked owner change once per request. An exact repeat returns the original child creation receipt.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "children": {
+            "description": "Two to eight scoped children with title, goal, acceptance and an explicit owner. Use a same-crew session ID or null for intentionally unowned work. List any prerequisites as existing work IDs in the same crew.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "acceptance": {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                "depends_on": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 16,
+                  "type": "array"
+                },
+                "goal": {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                "owner": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "maxLength": 200,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "goal",
+                "acceptance",
+                "owner"
+              ],
+              "type": "object"
+            },
+            "maxItems": 8,
+            "minItems": 2,
+            "type": "array"
+          },
+          "coordination_decision_id": {
+            "description": "Exact request ID from the delivered coordination notice.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "Observed current revision of the original parent as a string.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Global W ID of the original parent work.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "coordination_decision_id",
+          "children"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_coordination_split"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
       "description": "Reassign only after the daemon verifies the current owner cannot recover, or real delivered checkpoints exceed the existing silence threshold and are due. A caller cannot declare loss. Healthy, merely stopped or unknown owners refuse; ordinary workers cannot take another owner's work. The current revision and actual target session are required. Success records lost-owner history and a guarded compact notification; human stopping still applies.",
       "inputSchema": {
         "additionalProperties": false,

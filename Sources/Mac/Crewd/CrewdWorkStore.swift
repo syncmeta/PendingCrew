@@ -140,34 +140,86 @@ struct CrewdCoordinationStatus {
             let invalid = CrewdClientError(message:"机长分派回执的计划、人员或事件不符。")
             guard case .object = value, value["crewId"] == .string(crew), value["id"] == .string(id),
                   let decision = value["decisionId"].string, UUID(uuidString:decision)?.uuidString.lowercased() == decision,
-                  let captain = Self.session(value["captain"]), let previousOwner = Self.session(value["previousOwner"]),
-                  let owner = Self.session(value["owner"]), owner != previousOwner,
+                  let captain = session(value["captain"]), let previousOwner = session(value["previousOwner"]),
+                  let owner = session(value["owner"]), owner != previousOwner,
                   let previous = value["previousRevision"].string, let current = value["revision"].string,
                   let before = UInt64(previous), before > 0, String(before) == previous, before < UInt64.max,
                   current == String(before + 1),
                   let event = value["eventSeq"].string, let sequence = Int64(event), sequence > 0, String(sequence) == event else {
                 throw invalid
             }
-            let milliseconds: Int64?
-            switch value["assignedAtMs"] {
-            case .integer(let number): milliseconds = number
-            case .unsigned(let number): milliseconds = Int64(exactly:number)
-            default: milliseconds = nil
-            }
-            guard let milliseconds, milliseconds >= 0 else { throw invalid }
+            guard let milliseconds = milliseconds(value["assignedAtMs"]) else { throw invalid }
             decisionID = decision; self.captain = captain; self.previousOwner = previousOwner; self.owner = owner
             previousRevision = previous; revision = current; eventSequence = event; assignedAtMs = milliseconds
         }
+    }
 
-        private static func session(_ value: CrewdValue) -> String? {
-            guard let id = value.string, !id.isEmpty, id.trimmingCharacters(in:.whitespacesAndNewlines) == id else { return nil }
-            return id
+    struct Split: Equatable {
+        struct Child: Equatable, Identifiable {
+            let id: CrewdWorkID
+            let owner: String?
+            let eventSequence: String
         }
+        let decisionID: String
+        let captain: String
+        let parentRevision: String
+        let splitAtMs: Int64
+        let children: [Child]
+
+        init(_ value: CrewdValue, crew: String, id: String) throws {
+            let invalid = CrewdClientError(message:"机长拆分回执的计划、人员或子工作不符。")
+            guard case .object = value, value["crewId"] == .string(crew), value["id"] == .string(id),
+                  let decision = value["decisionId"].string, UUID(uuidString:decision)?.uuidString.lowercased() == decision,
+                  let captain = session(value["captain"]), let revision = value["parentRevision"].string,
+                  let number = UInt64(revision), number > 0, String(number) == revision,
+                  let time = milliseconds(value["splitAtMs"]),
+                  case .array(let rows) = value["children"], (2...8).contains(rows.count) else { throw invalid }
+            var children: [Child] = []
+            var ids = Set<CrewdWorkID>()
+            var previous: Int64 = 0
+            for row in rows {
+                guard case .object(let fields) = row, let raw = row["id"].string, raw != id,
+                      let child = CrewdWorkID(raw,kind:.plan), Int64(raw.dropFirst()) != nil, ids.insert(child).inserted,
+                      let owner = fields["owner"], owner == .null || session(owner) != nil,
+                      row["revision"] == .string("1"),
+                      let event = row["eventSeq"].string, let sequence = Int64(event), sequence > previous,
+                      String(sequence) == event else { throw invalid }
+                children.append(.init(id:child,owner:owner.string,eventSequence:event))
+                previous = sequence
+            }
+            decisionID = decision; self.captain = captain; parentRevision = revision; splitAtMs = time
+            self.children = children
+        }
+    }
+
+    enum Outcome {
+        case assignment(Assignment)
+        case split(Split)
     }
 
     let record: CrewdValue
     let lastAssignment: Assignment?
     let requestedAssignment: Assignment?
+    let lastSplit: Split?
+    let requestedSplit: Split?
+
+    var requestedOutcome: Outcome? {
+        if let requestedAssignment { return .assignment(requestedAssignment) }
+        if let requestedSplit { return .split(requestedSplit) }
+        return nil
+    }
+
+    private static func session(_ value: CrewdValue) -> String? {
+        guard let id = value.string, !id.isEmpty, id.trimmingCharacters(in:.whitespacesAndNewlines) == id else { return nil }
+        return id
+    }
+    private static func milliseconds(_ value: CrewdValue) -> Int64? {
+        switch value {
+        case .integer(let number): return number >= 0 ? number : nil
+        case .unsigned(let number): return Int64(exactly:number)
+        default: return nil
+        }
+    }
 }
 
 /// One backend-owned organization snapshot. Todo and progress contain references to these
@@ -279,11 +331,39 @@ final class CrewdWorkStore: ObservableObject {
             guard let value = fields[key], value != .null else { return nil }
             return try .init(value,crew:crew,id:id)
         }
-        let requested = try assignment("requestedAssignment")
-        if let requested, requested.decisionID != decisionID {
-            throw CrewdClientError(message:"原分派回执与查询的判断编号不符。")
+        func split(_ key: String) throws -> CrewdCoordinationStatus.Split? {
+            guard let value = fields[key], value != .null else { return nil }
+            return try .init(value,crew:crew,id:id)
         }
-        return .init(record:record,lastAssignment:try assignment("lastAssignment"),requestedAssignment:requested)
+        let lastAssignment = try assignment("lastAssignment"), requestedAssignment = try assignment("requestedAssignment")
+        let lastSplit = try split("lastSplit"), requestedSplit = try split("requestedSplit")
+        let assignments = [lastAssignment,requestedAssignment].compactMap { $0 }
+        let splits = [lastSplit,requestedSplit].compactMap { $0 }
+        let assignmentIDs = Set(assignments.map(\.decisionID))
+        guard requestedAssignment.map({ $0.decisionID == decisionID }) ?? true,
+              requestedSplit.map({ $0.decisionID == decisionID }) ?? true,
+              assignmentIDs.isDisjoint(with:splits.map(\.decisionID)),
+              lastAssignment?.decisionID != requestedAssignment?.decisionID || lastAssignment == requestedAssignment,
+              lastSplit?.decisionID != requestedSplit?.decisionID || lastSplit == requestedSplit else {
+            throw CrewdClientError(message:"协调回执与原判断或查询范围不符。")
+        }
+        return .init(record:record,lastAssignment:lastAssignment,requestedAssignment:requestedAssignment,
+                     lastSplit:lastSplit,requestedSplit:requestedSplit)
+    }
+
+    func coordinationChildDetail(_ child: CrewdWorkID, crew: String, parent: String) async throws -> CrewdPlan {
+        let token = generation
+        guard child.kind == .plan, child.raw != parent, CrewdWorkID(parent,kind:.plan) != nil, !crew.isEmpty else {
+            throw CrewdClientError(message:"子工作身份无效。",kind:.notSubmitted)
+        }
+        let value = try await call("work.get",.object(["id":.string(child.raw)]))
+        try check(token)
+        let plan = try parsePlan(value,full:true)
+        guard plan.id == child, plan.crew == crew, value["parent"] == .string(parent),
+              UInt64(plan.revision) != nil, value["title"].string?.isEmpty == false else {
+            throw CrewdClientError(message:"子工作详情的机组或上级计划与原回执不符。")
+        }
+        return plan
     }
     func reassignmentStatus(crew: String, id: String) async throws -> CrewdValue {
         let token = generation

@@ -1,12 +1,13 @@
-use super::{invalid, matches_wake, paused, record, snapshot};
-use crate::{CollabError, Result, Sender, Tx, asks, crews, judgments, sessions, wakes, work};
-use crewd_proto::{CoordinationAssignment, CoordinationPhase, Role, WorkAssignParams};
-use crewd_store::{
-    StoreError, meta_get, meta_set,
-    object_refs::{self, ObjectKind},
+use super::{
+    invalid,
+    outcome::{self, Delivery, canonical_decision, core, denied, event},
+    split,
 };
+use crate::{Result, Sender, Tx, asks, judgments, sessions, work};
+use crewd_proto::{CoordinationAssignment, WorkAssignParams};
+use crewd_store::{StoreError, meta_get, meta_set};
 use crewd_work::{Event, EventKind, HowChanged, WorkId};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
@@ -24,39 +25,12 @@ impl Saved {
     }
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Delivery {
-    wake_id: i64,
-    attempts: u32,
-    settled_at: String,
-    decision_fingerprint: String,
-}
-impl Delivery {
-    fn valid(&self) -> bool {
-        self.wake_id > 0
-            && self.attempts > 0
-            && self.decision_fingerprint.len() == 64
-            && self
-                .decision_fingerprint
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            && chrono::DateTime::parse_from_rfc3339(&self.settled_at)
-                .is_ok_and(|at| self.settled_at == crewd_store::ts_from_ms(at.timestamp_millis()))
-    }
-}
-
-fn denied() -> CollabError {
-    use crate::refusal::{Code, Refusal};
-    CollabError::Forbidden(Refusal::new(Code::ResourceForbidden))
-}
-
-fn canonical_decision(decision: &str) -> bool {
-    uuid::Uuid::parse_str(decision).is_ok_and(|uuid| uuid.to_string() == decision)
-}
-
 fn key(id: &str, decision: &str) -> String {
     format!("work.coordination.assignment.v1:{id}:{decision}")
+}
+
+pub(super) fn exists(c: &Connection, id: &str, decision: &str) -> Result<bool> {
+    Ok(meta_get(c, &key(id, decision))?.is_some())
 }
 
 fn latest_key(id: &str) -> String {
@@ -70,35 +44,6 @@ fn exact_next(before: &str, after: &str) -> bool {
             && n.checked_add(1)
                 .is_some_and(|next| after == next.to_string())
     })
-}
-
-fn core(c: &Connection, crew: &str, id: &str) -> Result<WorkId> {
-    let reference = object_refs::get(c, ObjectKind::Plan, work::number(id)?)?
-        .filter(|r| r.crew_id == crew)
-        .ok_or_else(denied)?;
-    work::core_plan(c, &reference)
-}
-
-fn event(c: &Connection, crew: &str, seq: &str) -> Result<Event> {
-    let seq: i64 = seq
-        .parse()
-        .ok()
-        .filter(|n: &i64| *n > 0 && n.to_string() == seq)
-        .ok_or_else(invalid)?;
-    let raw: String = c
-        .query_row(
-            "SELECT body FROM organization_work_events WHERE seq=?1 AND crew_id=?2",
-            (seq, crew),
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(StoreError::from)?
-        .ok_or_else(invalid)?;
-    let event: Event = serde_json::from_str(&raw).map_err(StoreError::from)?;
-    if event.seq != seq as u64 {
-        return Err(invalid());
-    }
-    Ok(event)
 }
 
 fn verify(receipt: &CoordinationAssignment, event: &Event, core: WorkId) -> Result<()> {
@@ -135,6 +80,9 @@ fn read(c: &Connection, crew: &str, id: &str, decision: &str) -> Result<Option<S
         || !saved.delivery.valid()
         || saved.seal()? != saved.seal
     {
+        return Err(invalid());
+    }
+    if split::exists(c, id, decision)? {
         return Err(invalid());
     }
     let event = event(c, crew, &r.event_seq)?;
@@ -177,16 +125,11 @@ pub fn assign(
     decision: &str,
     p: WorkAssignParams,
 ) -> Result<CoordinationAssignment> {
-    if !canonical_decision(decision) {
+    let (crew, core) = outcome::actor(tx.conn(), captain, &p.id, decision)?;
+    let crew = &crew;
+    if split::exists(tx.conn(), &p.id, decision)? {
         return Err(denied());
     }
-    let session = sessions::get(tx.conn(), captain)?;
-    let crew = &session.crew_id;
-    crews::refuse_archived(tx.conn(), crew)?;
-    if sessions::role_of(tx.conn(), captain)? != Role::Captain {
-        return Err(denied());
-    }
-    let core = core(tx.conn(), crew, &p.id)?;
     let intent = judgments::fingerprint(&(captain, &p.expected_revision, &p.owner, &p.note))?;
     if let Some(saved) = read(tx.conn(), crew, &p.id, decision)? {
         return if saved.intent == intent {
@@ -195,34 +138,15 @@ pub fn assign(
             Err(denied())
         };
     }
-    let r = record(tx.conn(), &p.id)?.ok_or_else(denied)?;
-    let current = work::get(tx.conn(), &p.id)?;
-    if r.snapshot.crew != *crew
-        || r.snapshot.captain != captain
-        || r.view.recipient.as_deref() != Some(captain)
-        || r.view.decision_id != decision
-        || !r.view.adopted
-        || !matches!(r.view.phase, CoordinationPhase::Settled)
-        || current.revision != p.expected_revision
-        || paused(tx.conn(), &r.snapshot)?
-        || snapshot(tx.conn(), &p.id)?.is_none_or(|s| s.fingerprint != r.snapshot.fingerprint)
-        || sessions::get(tx.conn(), &p.owner)?.crew_id != *crew
-    {
-        return Err(denied());
-    }
-    let wake_id = r.view.wake_id.ok_or_else(denied)?;
-    let wake = wakes::by_ids(tx.conn(), &[wake_id])?
-        .into_iter()
-        .next()
-        .filter(|wake| matches_wake(&r, wake) && wake.state == wakes::WakeState::Delivered)
-        .ok_or_else(denied)?;
-    let delivery = Delivery {
-        wake_id,
-        attempts: wake.attempts,
-        settled_at: wake.settled_at.ok_or_else(denied)?,
-        decision_fingerprint: r.snapshot.fingerprint,
-    };
-    if !delivery.valid() {
+    let (previous_owner, delivery) = outcome::fresh(
+        tx.conn(),
+        crew,
+        captain,
+        &p.id,
+        decision,
+        &p.expected_revision,
+    )?;
+    if sessions::get(tx.conn(), &p.owner)?.crew_id != *crew {
         return Err(denied());
     }
     let book = asks::load_org(tx.conn())?;
@@ -249,7 +173,7 @@ pub fn assign(
         id: plan.id,
         decision_id: decision.into(),
         captain: captain.into(),
-        previous_owner: r.snapshot.owner,
+        previous_owner,
         owner,
         previous_revision,
         revision: plan.revision,

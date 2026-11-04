@@ -5,7 +5,10 @@ use crewd_store::{StoreError, meta_get, meta_set, object_refs::ObjectKind};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 mod assignment;
+mod outcome;
+mod split;
 pub use assignment::assign;
+pub use split::{SplitChild, SplitParams, TOOL as SPLIT_TOOL, apply as apply_split};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -361,6 +364,11 @@ pub fn status(
             .map(|decision| assignment::lookup(c, crew, id, decision))
             .transpose()?
             .flatten(),
+        last_split: split::latest(c, crew, id)?,
+        requested_split: decision
+            .map(|decision| split::lookup(c, crew, id, decision))
+            .transpose()?
+            .flatten(),
     })
 }
 pub fn settle(
@@ -521,6 +529,141 @@ mod tests {
             expected_revision: work::get(s.conn(), id).unwrap().revision,
             note: "coordination assignment reason".into(),
         }
+    }
+
+    fn split_params(s: &crewd_store::Store, id: &str, decision: &str) -> SplitParams {
+        let child = |title: &str, owner: Option<&str>| SplitChild {
+            title: title.into(),
+            goal: "isolate independently executable work".into(),
+            acceptance: "verify the child's distinct result".into(),
+            owner: owner.map(str::to_owned),
+            depends_on: Vec::new(),
+        };
+        SplitParams {
+            id: id.into(),
+            expected_revision: work::get(s.conn(), id).unwrap().revision,
+            coordination_decision_id: decision.into(),
+            children: vec![
+                child("Independent first part", Some("w-a2")),
+                child("Independent second part", None),
+            ],
+        }
+    }
+
+    #[test]
+    fn split_preserves_parent_and_requirements_and_rolls_back_whole_batch() {
+        let mut s = store();
+        let source = ok(&mut s, |tx| {
+            crate::requirements::create(
+                tx,
+                &Sender::Human,
+                crewd_proto::TodoCreateParams {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    crew_id: "crew-a".into(),
+                    text: "Original requirement for coordination".into(),
+                    channel_id: None,
+                },
+            )
+        })
+        .todo
+        .requirement_id
+        .unwrap();
+        let parent = ok(&mut s, |tx| {
+            work::create(
+                tx,
+                &Sender::Session("w-a1".into()),
+                WorkCreateParams {
+                    crew_id: "crew-a".into(),
+                    title: "Original plan".into(),
+                    level: crewd_proto::WorkLevel::Production,
+                    sources: vec![source.clone()],
+                    ..Default::default()
+                },
+            )
+        })
+        .id;
+        let dependency = work(&mut s);
+        let view = adopt(&mut s, &parent);
+        let mut p = split_params(&s, &parent, &view.decision_id);
+        p.children[0].depends_on.push(dependency.clone());
+        let before = work::get(s.conn(), &parent).unwrap();
+        let requirement = crate::requirements::get(s.conn(), &source).unwrap();
+        let count = |s: &crewd_store::Store| {
+            let work = crate::asks::load_org(s.conn()).unwrap();
+            let wakes = wakes::list(s.conn(), None, 100).unwrap().len();
+            (work.state().last_item, work.state().last_seq, wakes)
+        };
+        let initial = count(&s);
+        assert!(crate::run(&mut s, NOW, |tx| apply_split(tx, "cap-a", p.clone())).is_err());
+        deliver(&mut s, view.wake_id.unwrap());
+        let mut invalid = p.clone();
+        invalid.children[1].owner = Some("w-b1".into());
+        assert!(crate::run(&mut s, NOW, |tx| apply_split(tx, "cap-a", invalid)).is_err());
+        let mut invalid = p.clone();
+        invalid.children[1].depends_on = vec![parent.clone()];
+        assert!(crate::run(&mut s, NOW, |tx| apply_split(tx, "cap-a", invalid)).is_err());
+        s.conn().execute_batch("CREATE TRIGGER deny_split_receipt BEFORE INSERT ON meta WHEN NEW.key LIKE 'work.coordination.split.latest.v1:%' BEGIN SELECT RAISE(ABORT,'split receipt failure'); END;").unwrap();
+        assert!(crate::run(&mut s, NOW, |tx| apply_split(tx, "cap-a", p.clone())).is_err());
+        assert_eq!(count(&s), initial);
+        s.conn()
+            .execute_batch("DROP TRIGGER deny_split_receipt")
+            .unwrap();
+        let result = ok(&mut s, |tx| apply_split(tx, "cap-a", p.clone()));
+        assert_eq!(work::get(s.conn(), &parent).unwrap(), before);
+        assert_eq!(
+            crate::requirements::get(s.conn(), &source).unwrap(),
+            requirement
+        );
+        for (index, row) in result.children.iter().enumerate() {
+            let child = work::get(s.conn(), &row.id).unwrap();
+            assert_eq!(child.parent.as_deref(), Some(parent.as_str()));
+            assert_eq!(child.level, before.level);
+            assert_eq!(child.status, "open");
+            assert!(child.sources.is_empty());
+            assert_eq!(child.owner, p.children[index].owner);
+            assert_eq!(child.depends_on, p.children[index].depends_on);
+        }
+        assert_eq!(count(&s), (initial.0 + 2, initial.1 + 2, initial.2));
+        let other = assignment(&s, &parent, "w-a2");
+        assert!(
+            crate::run(&mut s, NOW, |tx| assign(
+                tx,
+                "cap-a",
+                &view.decision_id,
+                other
+            ))
+            .is_err()
+        );
+        let read = status(s.conn(), "crew-a", &parent, Some(&view.decision_id)).unwrap();
+        assert_eq!(read.last_split, Some(result.clone()));
+        assert_eq!(read.requested_split, Some(result.clone()));
+        assert!(read.requested_assignment.is_none());
+        crewd_store::judgment_state::restored(s.conn()).unwrap();
+        assert_eq!(ok(&mut s, |tx| apply_split(tx, "cap-a", p.clone())), result);
+        p.children[1].title.push_str(" changed");
+        assert!(crate::run(&mut s, NOW, |tx| apply_split(tx, "cap-a", p)).is_err());
+        assert_eq!(count(&s), (initial.0 + 2, initial.1 + 2, initial.2));
+    }
+
+    #[test]
+    fn old_assignment_receipt_precludes_split_and_dual_history_is_refused() {
+        let mut s = store();
+        let id = work(&mut s);
+        let view = adopt(&mut s, &id);
+        deliver(&mut s, view.wake_id.unwrap());
+        let split = split_params(&s, &id, &view.decision_id);
+        let p = assignment(&s, &id, "w-a2");
+        let receipt = ok(&mut s, |tx| {
+            assign(tx, "cap-a", &view.decision_id, p.clone())
+        });
+        assert!(crate::run(&mut s, NOW, |tx| apply_split(tx, "cap-a", split)).is_err());
+        assert_eq!(
+            ok(&mut s, |tx| assign(tx, "cap-a", &view.decision_id, p)),
+            receipt
+        );
+        let key = format!("work.coordination.split.v1:{id}:{}", view.decision_id);
+        meta_set(s.conn(), &key, "{}").unwrap();
+        assert!(status(s.conn(), "crew-a", &id, Some(&view.decision_id)).is_err());
     }
 
     #[test]

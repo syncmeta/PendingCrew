@@ -42,6 +42,10 @@ pub struct CoordinationStatus {
     pub last_assignment: Option<CoordinationAssignment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_assignment: Option<CoordinationAssignment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_split: Option<CoordinationSplit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_split: Option<CoordinationSplit>,
 }
 /// A verified owner change made in response to one specific coordination request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -57,6 +61,28 @@ pub struct CoordinationAssignment {
     pub revision: String,
     pub event_seq: String,
     pub assigned_at_ms: i64,
+}
+
+/// An atomic set of children created in response to one coordination decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CoordinationSplit {
+    pub crew_id: String,
+    pub id: String,
+    pub decision_id: String,
+    pub captain: String,
+    pub parent_revision: String,
+    pub split_at_ms: i64,
+    pub children: Vec<CoordinationSplitChild>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CoordinationSplitChild {
+    pub id: String,
+    pub owner: Option<String>,
+    pub revision: String,
+    pub event_seq: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

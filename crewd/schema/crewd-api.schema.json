@@ -5725,6 +5725,73 @@
       ],
       "type": "string"
     },
+    "CoordinationSplit": {
+      "additionalProperties": false,
+      "description": "An atomic set of children created in response to one coordination decision.",
+      "properties": {
+        "captain": {
+          "type": "string"
+        },
+        "children": {
+          "items": {
+            "$ref": "#/$defs/CoordinationSplitChild"
+          },
+          "type": "array"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "parentRevision": {
+          "type": "string"
+        },
+        "splitAtMs": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "crewId",
+        "id",
+        "decisionId",
+        "captain",
+        "parentRevision",
+        "splitAtMs",
+        "children"
+      ],
+      "type": "object"
+    },
+    "CoordinationSplitChild": {
+      "additionalProperties": false,
+      "properties": {
+        "eventSeq": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "eventSeq"
+      ],
+      "type": "object"
+    },
     "CoordinationStatus": {
       "properties": {
         "crewId": {
@@ -5737,6 +5804,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/CoordinationAssignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastSplit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordinationSplit"
             },
             {
               "type": "null"
@@ -5757,6 +5834,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/CoordinationAssignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestedSplit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordinationSplit"
             },
             {
               "type": "null"
