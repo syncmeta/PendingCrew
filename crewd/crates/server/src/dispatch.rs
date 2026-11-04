@@ -307,6 +307,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     methods::ADMIN_CASE_CUSTODY_TRANSFER_GET,
                     methods::ADMIN_CASE_CUSTODY_PROPOSE,
                     "adminCase.automaticExecution",
+                    admin_cases::EFFECTS,
                     "adminCase.legacyRecovery",
                     admin_cases::LEGACY_LIST,
                     admin_cases::LEGACY_GET,

@@ -575,6 +575,65 @@ final class CrewdWorkStore: ObservableObject {
         guard row["id"] == .string(id) else {throw CrewdClientError(message:"行政详情返回了其他案件。")}
         return row
     }
+    func adminCaseEffects(id: String, after: String? = nil) async throws -> CrewdValue {
+        let crew = selectedCrew, token = generation
+        let error = CrewdClientError(message: "行政动作记录的案件、分页或字段不符。")
+        guard capabilities.contains("adminCase.effects"), !crew.isEmpty, !id.isEmpty else { throw error }
+        var params: [String: CrewdValue] = ["crewId": .string(crew), "id": .string(id), "limit": .integer(20)]
+        if let after { params["after"] = .string(after) }
+        let page = try await call("adminCase.effects", .object(params))
+        try check(token)
+        guard page["crewId"] == .string(crew), page["id"] == .string(id),
+              case .array(let rows) = page["items"], rows.count <= 20,
+              page["nextAfter"] == .null ||
+                (page["nextAfter"].string?.isEmpty == false && page["nextAfter"].string != after && !rows.isEmpty) else {
+            throw error
+        }
+        func number(_ value: CrewdValue) -> UInt64? {
+            guard let text = value.string, let number = UInt64(text), number > 0, String(number) == text else { return nil }
+            return number
+        }
+        var previous: UInt64?
+        var previousEvent: UInt64 = 0
+        for row in rows {
+            guard let ordinal = number(row["ordinal"]),
+                  previous.map({ ordinal > $0 && ordinal - $0 == 1 }) ?? (after != nil || ordinal == 1),
+                  CrewdWorkID(row["workId"].string ?? "", kind: .plan) != nil,
+                  row["actorSessionId"].string?.isEmpty == false, (row["occurredAtMs"].int ?? -1) >= 0,
+                  case .bool = row["detailsTruncated"],
+                  let first = number(row["firstEventSeq"]), let last = number(row["lastEventSeq"]),
+                  first > previousEvent, first <= last,
+                  let kind = row["kind"].string, ["closed", "reassigned", "unlinked"].contains(kind) else { throw error }
+            for key in ["note", "previousOwner", "newOwner"] {
+                guard row[key] == .null || row[key].string?.isEmpty == false else { throw error }
+            }
+            if row["resultRevision"] != .null, number(row["resultRevision"]) == nil { throw error }
+            if row["evidence"] != .null {
+                guard ["commit", "url", "text"].contains(row["evidence"]["kind"].string ?? ""),
+                      row["evidence"]["value"].string?.isEmpty == false else { throw error }
+            }
+            if row["wakeId"] != .null, number(row["wakeId"]) == nil { throw error }
+            if row["requestId"] != .null, row["requestId"].string.flatMap(UUID.init(uuidString:)) == nil { throw error }
+            switch kind {
+            case "closed":
+                guard ["done", "duplicate", "superseded"].contains(row["closureKind"].string ?? ""),
+                      row["evidence"] != .null, row["note"] != .null else { throw error }
+            case "reassigned":
+                guard row["newOwner"] != .null, row["note"] != .null else { throw error }
+            default:
+                let proofFields = ["relatedWorkId", "edge", "requestId", "evidence", "note"]
+                if proofFields.contains(where: { row[$0] != .null }) {
+                    guard proofFields.allSatisfy({ row[$0] != .null }),
+                          CrewdWorkID(row["relatedWorkId"].string ?? "", kind: .plan) != nil,
+                          row["relatedWorkId"] != row["workId"],
+                          ["parent", "dependency"].contains(row["edge"].string ?? "") else { throw error }
+                }
+            }
+            previous = ordinal
+            previousEvent = last
+        }
+        return page
+    }
     private func legacyError()->CrewdClientError {CrewdClientError(message:"历史核验身份、范围或字段不完整。")}
     private func validateLegacy(_ row:CrewdValue)throws {
         guard row["messageId"].string?.isEmpty == false,row["messageSeq"].int != nil,row["historicalText"].string != nil,row["createdAt"].string != nil,row["revision"].string?.isEmpty == false,

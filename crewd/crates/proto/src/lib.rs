@@ -814,6 +814,10 @@ pub fn api_schema() -> Value {
             m(sub::<AdminCaseGetParams>(g), sub::<AdminCaseView>(g)),
         ),
         (
+            admin_cases::EFFECTS,
+            m(sub::<AdminCaseEffectsParams>(g), sub::<AdminCaseEffectsPage>(g)),
+        ),
+        (
             admin_cases::SIMILAR_REQUIREMENTS,
             m(
                 sub::<admin_cases::SimilarRequirementsParams>(g),

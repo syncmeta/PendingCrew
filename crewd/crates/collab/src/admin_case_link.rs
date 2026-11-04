@@ -4,7 +4,7 @@ use crate::{Result, Tx, judgments, work};
 use crewd_proto::WorkEvidenceParam;
 use crewd_store::{StoreError, meta_get, meta_set};
 use crewd_work::{WorkBook, WorkId, WorkItem};
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 pub const UNLINK_TOOL: &str = "admin_case_work_unlink";
@@ -130,14 +130,7 @@ fn load_receipt(
     let Some(raw) = meta_get(c, &key(witness, request))? else {
         return Ok(None);
     };
-    let saved: Stored = serde_json::from_str(&raw).map_err(StoreError::from)?;
-    if saved.receipt.case_id != witness.case_id()
-        || saved.receipt.session_id != witness.session_id()
-        || saved.receipt.request_id != request
-        || saved.checksum != judgments::fingerprint(&(&saved.digest, &saved.receipt))?
-    {
-        return Err(invalid_receipt());
-    }
+    let saved = decode_receipt(&raw, witness, request)?;
     if saved.digest != digest {
         return Err(crate::CollabError::Conflict(
             crate::refusal::Refusal::new(crate::refusal::Code::ResourceRequestConflict)
@@ -145,6 +138,55 @@ fn load_receipt(
         ));
     }
     Ok(Some(saved.receipt))
+}
+
+fn decode_receipt(raw: &str, witness: &ExecutionWitness, request: &str) -> Result<Stored> {
+    let saved: Stored = serde_json::from_str(raw).map_err(StoreError::from)?;
+    if saved.receipt.case_id != witness.case_id()
+        || saved.receipt.session_id != witness.session_id()
+        || saved.receipt.request_id != request
+        || saved.checksum != judgments::fingerprint(&(&saved.digest, &saved.receipt))?
+    {
+        return Err(invalid_receipt());
+    }
+    Ok(saved)
+}
+
+pub(crate) fn report_receipt(
+    c: &Connection,
+    witness: &ExecutionWitness,
+    effect: &execution::EffectReceipt,
+) -> Result<Option<UnlinkReceipt>> {
+    let event_seq = effect.first_event.to_string();
+    if let Some(request) = &effect.link_request_id {
+        let raw = meta_get(c, &key(witness, request))?.ok_or_else(invalid_receipt)?;
+        let receipt = decode_receipt(&raw, witness, request)?.receipt;
+        if receipt.event_seq != event_seq {
+            return Err(invalid_receipt());
+        }
+        return Ok(Some(receipt));
+    }
+    // Pre-index receipts can be recovered only when the whole case-specific
+    // range fits the bounded read and provides a unique event match.
+    let prefix = key(witness, "");
+    let mut stmt = c.prepare(
+        "SELECT key,value FROM meta WHERE key>=?1 AND key<?2 ORDER BY key LIMIT 51",
+    )?;
+    let rows = stmt.query_map(params![prefix, format!("{prefix}\u{10ffff}")], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?.collect::<rusqlite::Result<Vec<_>>>()?;
+    if rows.len() > 50 {
+        return Ok(None);
+    }
+    let mut found = None;
+    for (key, raw) in rows {
+        let request = key.strip_prefix(&prefix).ok_or_else(invalid_receipt)?;
+        let receipt = decode_receipt(&raw, witness, request)?.receipt;
+        if receipt.event_seq == event_seq && found.replace(receipt).is_some() {
+            return Err(invalid_receipt());
+        }
+    }
+    Ok(found)
 }
 
 pub fn require_committed(

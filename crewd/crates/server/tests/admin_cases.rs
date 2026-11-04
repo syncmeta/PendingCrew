@@ -23,6 +23,7 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
         "adminCase.custodyTransferGet",
         "adminCase.custodyPropose",
         "adminCase.automaticExecution",
+        "adminCase.effects",
         "adminCase.legacyRecovery",
         "adminCase.legacyList",
         "adminCase.legacyGet",
@@ -79,6 +80,10 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
             ("adminCase.list", json!({"crewId":f.crew})),
             (
                 "adminCase.get",
+                json!({"crewId":f.crew,"id":"AC00000000000000000001"}),
+            ),
+            (
+                "adminCase.effects",
                 json!({"crewId":f.crew,"id":"AC00000000000000000001"}),
             ),
             (

@@ -146,6 +146,62 @@ import Foundation
   let transferPayload:CrewdValue = .object(transferred),transferStore=CrewdWorkStore {_,_ in .object(transferred)};transferStore.selectCrew("a")
   let transferResult=try await transferStore.adminCase(id:"AC00000000000000000001")
   precondition(transferResult == transferPayload && transferResult["outcomeRecord"]["phase"] == .string("unresolved") && transferResult["retirement"] == .string("parked"))
+  try await effectReport()
   print("admin cases opaque pagination, detail, malformed/foreign, crew and connection stale rejection passed")
+ }
+
+ @MainActor private static func effectReport() async throws {
+  let id = "AC00000000000000000001"
+  let first: [String: CrewdValue] = [
+   "ordinal": .string("1"), "workId": .string("W1"), "actorSessionId": .string("admin"),
+   "occurredAtMs": .integer(25), "firstEventSeq": .string("70"), "lastEventSeq": .string("72"),
+   "resultRevision": .string("3"), "kind": .string("closed"), "closureKind": .string("done"),
+   "detailsTruncated": .bool(true), "evidence": .object(["kind": .string("text"), "value": .string("原证据")]),
+   "note": .string("关闭原因")
+  ]
+  var legacy = first
+  legacy["ordinal"] = .string("2")
+  legacy["firstEventSeq"] = .string("75")
+  legacy["lastEventSeq"] = .string("75")
+  legacy["kind"] = .string("unlinked")
+  legacy["closureKind"] = nil
+  legacy["evidence"] = nil
+  legacy["note"] = nil
+  legacy["detailsTruncated"] = .bool(false)
+  var page: CrewdValue = .object(["crewId": .string("a"), "id": .string(id), "items": .array([.object(first)]), "nextAfter": .string("opaque")])
+  var calls: [CrewdValue] = []
+  var hold = false
+  var continuation: CheckedContinuation<CrewdValue, Error>?
+  let store = CrewdWorkStore { method, params in
+   precondition(method == "adminCase.effects" && params["crewId"] == .string("a") && params["id"] == .string(id))
+   precondition(params["limit"] == .integer(20))
+   calls.append(params)
+   if hold { return try await withCheckedThrowingContinuation { continuation = $0 } }
+   return page
+  }
+  store.selectCrew("a")
+  do { _ = try await store.adminCaseEffects(id: id); fatalError("capability ignored") } catch {}
+  precondition(calls.isEmpty)
+  store.configureCapabilities(["adminCase.effects"])
+  let firstPage = try await store.adminCaseEffects(id: id)
+  precondition(firstPage["items"].array.first?["detailsTruncated"] == .bool(true))
+  page = .object(["crewId": .string("a"), "id": .string(id), "items": .array([.object(legacy)])])
+  let secondPage = try await store.adminCaseEffects(id: id, after: firstPage["nextAfter"].string)
+  precondition(calls.last?["after"] == .string("opaque"))
+  precondition(secondPage["items"].array.first?["relatedWorkId"] == .null)
+  for (field, value) in [("detailsTruncated", CrewdValue.null), ("lastEventSeq", .string("69")), ("evidence", .null)] {
+   var bad = first
+   bad[field] = value
+   page = .object(["crewId": .string("a"), "id": .string(id), "items": .array([.object(bad)])])
+   do { _ = try await store.adminCaseEffects(id: id); fatalError("malformed effect accepted") } catch {}
+  }
+  page = .object(["crewId": .string("b"), "id": .string(id), "items": .array([])])
+  do { _ = try await store.adminCaseEffects(id: id); fatalError("foreign page accepted") } catch {}
+  hold = true
+  let stale = Task { try await store.adminCaseEffects(id: id) }
+  while continuation == nil { await Task.yield() }
+  store.selectCrew("b")
+  continuation!.resume(returning: firstPage)
+  do { _ = try await stale.value; fatalError("old report accepted") } catch is CancellationError {}
  }
 }

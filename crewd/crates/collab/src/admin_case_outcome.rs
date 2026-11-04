@@ -45,48 +45,24 @@ fn latest_event(c: &Connection, crew: &str, id: WorkId) -> Result<Option<Event>>
  }).transpose()
 }
 fn verified_receipt<'a>(
-    c: &Connection,
     receipts: &'a [execution::EffectReceipt],
-    w: &execution::ExecutionWitness,
     id: &str,
     event: &Event,
-) -> Result<Option<&'a execution::EffectReceipt>> {
-    for receipt in receipts
-        .iter()
-        .filter(|r| r.work_id == id && r.first_event <= event.seq && r.last_event >= event.seq)
-    {
-        let mut q = c.prepare(
-            "SELECT seq,body FROM organization_work_events WHERE seq>=?1 AND seq<=?2 ORDER BY seq",
-        )?;
-        let rows = q
-            .query_map(
-                params![
-                    i64::try_from(receipt.first_event).map_err(|_| invalid())?,
-                    i64::try_from(receipt.last_event).map_err(|_| invalid())?
-                ],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        if rows.len() as u64 != receipt.last_event - receipt.first_event + 1 {
-            continue;
-        }
-        let mut valid = true;
-        for (offset, (seq, raw)) in rows.iter().enumerate() {
-            let actual: Event = serde_json::from_str(raw).map_err(StoreError::from)?;
-            if *seq <= 0
-                || actual.seq != *seq as u64
-                || actual.seq != receipt.first_event + offset as u64
-                || actual.by.session().map(|s| s.as_str()) != Some(w.session_id())
-            {
-                valid = false;
-                break;
+) -> Option<&'a execution::EffectReceipt> {
+    // latest_event has already verified the source crew, subject and row
+    // identity. Factual closure emits its primary before auxiliary releases.
+    // Reassignment emits only the primary. Another crew may purge its releases.
+    receipts.iter().find(|r| {
+        r.work_id == id
+            && r.first_event == event.seq
+            && r.link_request_id.is_none()
+            && event.by.session().map(|s| s.as_str()) == Some(r.session_id.as_str())
+            && match &event.kind {
+                EventKind::Done { .. } | EventKind::Dropped { .. } => r.wake_id.is_none(),
+                EventKind::OwnerChanged { .. } => r.last_event == event.seq,
+                _ => false,
             }
-        }
-        if valid {
-            return Ok(Some(receipt));
-        }
-    }
-    Ok(None)
+    })
 }
 fn matches_kind(kind: &AdminCaseTargetKind, value: crewd_work::StopKind) -> bool {
     matches!(
@@ -152,7 +128,7 @@ fn target(
     result.event_seq = Some(event.seq.to_string());
     let by_admin = result.actor_session_id.as_deref() == Some(w.session_id());
     let receipt = if by_admin {
-        verified_receipt(c, receipts, w, id, &event)?
+        verified_receipt(receipts, id, &event)
     } else {
         None
     };

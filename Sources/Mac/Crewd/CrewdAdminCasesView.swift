@@ -15,6 +15,7 @@ struct CrewdAdminCasesView:View {
     @State private var failure:String?
     @State private var token=UUID()
     @State private var showLegacy=false
+    @State private var showEffects=false
     var body:some View {
         VStack(alignment:.leading,spacing:12) {
             Text("行政处理记录").font(.headline)
@@ -66,6 +67,9 @@ struct CrewdAdminCasesView:View {
                             Text("执行成员："+(detail["executionRecord"]["sessionId"].string ?? "")).textSelection(.enabled)
                             Text("执行原因："+executionReason(detail["executionRecord"]["reason"].string ?? ""))
                             Text("已核实协作效果："+String(detail["executionRecord"]["effectsCount"].int ?? 0)+"；效果数不代表案件已解决。")
+                            if store.capabilities.contains("adminCase.effects"), detail["id"].string != nil {
+                                Button("查看已核实动作") { showEffects = true }
+                            }
                             if let generation=detail["executionRecord"]["generation"].string {Text("确认执行代次："+generation)}
                         }
                         if detail["outcomeRecord"] == .null {Text("结果：尚无核验记录")}
@@ -103,6 +107,9 @@ struct CrewdAdminCasesView:View {
             }.frame(maxHeight:460)
         }.padding().frame(width:560)
         .sheet(isPresented:$showLegacy) {CrewdAdminLegacyView(store:store)}
+        .sheet(isPresented: $showEffects) {
+            if let id = detail?["id"].string { CrewdAdminCaseEffectsView(store: store, caseID: id) }
+        }
         .task {load(reset:true)}
         .onChange(of:store.readScope) {_,_ in token=UUID();rows=[];detail=nil;next=nil;dismiss()}
         .onDisappear {token=UUID()}
@@ -265,6 +272,119 @@ struct CrewdAdminCasesView:View {
     }
 }
 
+private struct CrewdAdminCaseEffectsView: View {
+    @ObservedObject var store: CrewdWorkStore
+    let caseID: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var rows: [CrewdValue] = []
+    @State private var next: String?
+    @State private var failure: String?
+    @State private var loaded = false
+    @State private var busy = false
+    @State private var token = UUID()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("已核实行政动作").font(.headline)
+                Spacer()
+                Button("关闭") { dismiss() }
+            }
+            Text("每项动作附有工作事件序号。案件结果在详情中单独核验。").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("重新读取") { load(reset: true) }.disabled(busy)
+                if next != nil { Button("加载下一页") { load(reset: false) }.disabled(busy) }
+                if busy { ProgressView().controlSize(.small) }
+            }
+            if let failure { Text(failure).foregroundStyle(.orange) }
+            if loaded && rows.isEmpty { Text("当前案件没有已核实的动作。") }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        effect(row)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(maxHeight: 380)
+        }
+        .padding().frame(width: 520)
+        .task { load(reset: true) }
+        .onChange(of: store.readScope) { _, _ in token = UUID(); rows = []; dismiss() }
+        .onDisappear { token = UUID() }
+    }
+
+    private func effect(_ row: CrewdValue) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("#" + (row["ordinal"].string ?? "") + " · " + (row["workId"].string ?? "") + " · " + title(row))
+                .font(.subheadline.weight(.medium))
+            if let ms = row["occurredAtMs"].int {
+                Text(Date(timeIntervalSince1970: Double(ms) / 1_000).formatted(date: .abbreviated, time: .standard))
+            }
+            Text("执行成员  " + (row["actorSessionId"].string ?? ""))
+            Text("事件序号  " + (row["firstEventSeq"].string ?? "") + " – " + (row["lastEventSeq"].string ?? ""))
+            if let revision = row["resultRevision"].string { Text("动作后工作版本  " + revision) }
+            if let newOwner = row["newOwner"].string {
+                Text("负责人  " + (row["previousOwner"].string ?? "无") + " → " + newOwner)
+            }
+            if let peer = row["relatedWorkId"].string {
+                Text((row["edge"] == .string("parent") ? "移除上级工作  " : "移除依赖工作  ") + peer)
+            } else if row["kind"] == .string("unlinked") {
+                Text("历史记录可核实链接移除事件，缺少可展示的原请求证据。").foregroundStyle(.secondary)
+            }
+            if let request = row["requestId"].string { Text("原请求  " + request) }
+            if let wake = row["wakeId"].string { Text("通知入队编号  " + wake + " · 送达状态须另行核实") }
+            if let note = row["note"].string { Text("说明  " + note) }
+            if let evidence = row["evidence"]["value"].string {
+                let kind = ["commit": "提交", "url": "链接", "text": "文本"][row["evidence"]["kind"].string ?? ""] ?? "证据"
+                Text(kind + "证据  " + evidence)
+            }
+            if row["detailsTruncated"] == .bool(true) { Text("说明或证据仅显示开头。").foregroundStyle(.secondary) }
+        }.font(.caption).textSelection(.enabled)
+    }
+
+    private func title(_ row: CrewdValue) -> String {
+        switch row["kind"].string {
+        case "closed":
+            return ["done": "完成关闭", "duplicate": "重复关闭", "superseded": "被替代关闭"][row["closureKind"].string ?? ""] ?? "关闭工作"
+        case "reassigned": return "重新指派"
+        default: return "纠正工作链接"
+        }
+    }
+
+    private func load(reset: Bool) {
+        let request = UUID(), cursor = reset ? nil : next
+        token = request
+        busy = true
+        failure = nil
+        if reset { rows = []; next = nil; loaded = false }
+        Task { @MainActor in
+            defer { if token == request { busy = false } }
+            do {
+                let page = try await store.adminCaseEffects(id: caseID, after: cursor)
+                guard token == request else { return }
+                let batch = page["items"].array
+                if let previous = rows.last {
+                    guard let first = batch.first,
+                          let ordinal = first["ordinal"].string.flatMap({ UInt64($0) }),
+                          let lastOrdinal = previous["ordinal"].string.flatMap({ UInt64($0) }),
+                          ordinal > lastOrdinal, ordinal - lastOrdinal == 1,
+                          let event = first["firstEventSeq"].string.flatMap({ UInt64($0) }),
+                          let lastEvent = previous["lastEventSeq"].string.flatMap({ UInt64($0) }),
+                          event > lastEvent else {
+                        throw CrewdClientError(message: "分页未能接续原记录，请重新读取。")
+                    }
+                }
+                rows += batch
+                next = page["nextAfter"].string
+                loaded = true
+            } catch {
+                if token == request {
+                    next = nil
+                    failure = error.localizedDescription
+                }
+            }
+        }
+    }
+}
 
 private struct CrewdAdminLegacyView:View {
     @ObservedObject var store:CrewdWorkStore

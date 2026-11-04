@@ -410,17 +410,20 @@ struct Socket {
     task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
 impl Socket {
-    async fn attach(state: Arc<AppState>, sid: &str) -> Self {
-        let token = state.tokens.mint(sid);
+    fn owned(state: Arc<AppState>) -> Self {
         let (client, server) = tokio::net::UnixStream::pair().unwrap();
         let task = tokio::spawn(crate::conn::run(state, server));
         let (rd, wr) = client.into_split();
-        let mut s = Self {
+        Self {
             rd: tokio::io::BufReader::new(rd),
             wr,
             id: 0,
             task,
-        };
+        }
+    }
+    async fn attach(state: Arc<AppState>, sid: &str) -> Self {
+        let token = state.tokens.mint(sid);
+        let mut s = Self::owned(state);
         s.call("agent.attach", json!({"sessionId":sid,"token":token}))
             .await
             .unwrap();
@@ -592,6 +595,24 @@ async fn bound_native_catalog_unlink_has_exact_receipt_and_does_not_resolve_case
     assert_eq!(after.status, child.status);
     assert_eq!(current_work(&r.f, &parent.id).await, parent);
     assert_eq!(view(&r.f, &source.id).await["executionRecord"]["effectsCount"], 1);
+    let mut human = Socket::owned(r.f.state.clone());
+    let report_params = json!({"crewId":r.f.crew,"id":source.id,"limit":1});
+    let before = r.f.state.db.call(|s| s.conn().total_changes()).await.unwrap();
+    let report = human.call(crewd_proto::admin_cases::EFFECTS, report_params.clone()).await.unwrap();
+    assert_eq!(report["items"].as_array().unwrap().len(), 1);
+    assert_eq!(report["items"][0]["kind"], "unlinked");
+    assert_eq!(report["items"][0]["workId"], child.id);
+    assert_eq!(report["items"][0]["relatedWorkId"], parent.id);
+    assert_eq!(report["items"][0]["requestId"], params["args"]["request_id"]);
+    assert_eq!(report["items"][0]["evidence"], params["args"]["evidence"]);
+    assert_eq!(report["items"][0]["resultRevision"], after.revision);
+    assert!(report["nextAfter"].is_null());
+    assert_eq!(r.f.state.db.call(|s| s.conn().total_changes()).await.unwrap(), before);
+    assert_eq!(
+        admin.call(crewd_proto::admin_cases::EFFECTS, report_params).await.unwrap_err().code,
+        crewd_proto::RpcError::FORBIDDEN
+    );
+    human.close().await;
     let crew = r.f.crew.clone();
     let case = source.id.clone();
     let outcome = r.f.state.collab(move |tx| crewd_collab::admin_case_outcome::verify(tx, &crew, &case)).await.unwrap();

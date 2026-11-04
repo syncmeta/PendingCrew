@@ -813,7 +813,7 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
     if rows.is_empty() || rows.len() > 256 {
         return Err(invalid());
     }
-    let mut primary = 0;
+    let mut primary = None;
     let mut expected = permit.before_seq;
     for (seq, raw) in rows {
         let seq = u64::try_from(seq).map_err(|_| invalid())?;
@@ -838,25 +838,18 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
                     note: Some(_),
                     ..
                 },
-            ) if *id == permit.core => {
-                primary += 1;
-                true
-            }
+            ) if *id == permit.core => primary.replace(seq).is_none(),
             (ActionScope::WorkClose { kind, .. }, E::Dropped { id, reason })
                 if *id == permit.core && reason.evidence.is_some() =>
             {
-                let same = matches!(
+                matches!(
                     (kind, reason.kind),
                     (WorkClosureKind::Duplicate, crewd_work::DropKind::Duplicate)
                         | (
                             WorkClosureKind::Superseded,
                             crewd_work::DropKind::Superseded
                         )
-                );
-                if same {
-                    primary += 1;
-                }
-                same
+                ) && primary.replace(seq).is_none()
             }
             (
                 ActionScope::WorkClose { .. },
@@ -873,16 +866,11 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
                     how: crewd_work::HowChanged::Lost,
                     ..
                 },
-            ) if *id == permit.core && to.as_str() == new_owner => {
-                primary += 1;
-                true
-            }
+            ) if *id == permit.core && to.as_str() == new_owner => primary.replace(seq).is_none(),
             (ActionScope::WorkUnlink(_), E::Relinked { id, parent, depends_on })
                 if *id == permit.core && permit.link.as_ref().is_some_and(|link|
-                    *parent == link.after.parent && *depends_on == link.after.depends_on) => {
-                primary += 1;
-                true
-            }
+                    *parent == link.after.parent && *depends_on == link.after.depends_on) =>
+                primary.replace(seq).is_none(),
             _ => false,
         };
         if !valid {
@@ -890,7 +878,7 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
         }
     }
     let book = crate::asks::load_org(tx.conn())?;
-    if primary != 1 || book.state().last_seq != expected {
+    if primary != permit.before_seq.checked_add(1) || book.state().last_seq != expected {
         return Err(invalid());
     }
     let actual = crate::work::get(tx.conn(), permit.action.id())?;
@@ -939,13 +927,14 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
         checkpoint: r.checkpoint.clone(),
         result_revision: Some(actual.revision),
         wake_id,
+        link_request_id: match &permit.action {
+            ActionScope::WorkUnlink(p) => Some(crate::resource_acl::uuid(&p.request_id)?),
+            _ => None,
+        },
     };
     meta_set(
         tx.conn(),
-        &format!(
-            "admin.case.effect.v1:{}:{:020}",
-            r.view.attempt_id, r.view.effects_count
-        ),
+        &effect_key(&r.view.attempt_id, r.view.effects_count),
         &serde_json::to_string(&receipt).map_err(StoreError::from)?,
     )?;
     save(tx, &r)
@@ -1962,6 +1951,18 @@ pub(crate) mod tests {
             work::get(s.conn(), &id).unwrap().owner.as_deref(),
             Some("w-a2")
         );
+        let page = crate::admin_case_effect_report::list(s.conn(), &AdminCaseEffectsParams {
+            crew_id: "crew-a".into(), id: case.id.clone(), after: None, limit: None,
+        }).unwrap();
+        let [effect] = page.items.as_slice() else { panic!("one reassignment effect") };
+        assert_eq!(effect.work_id, id);
+        assert_eq!(effect.occurred_at_ms, now);
+        let AdminCaseEffectAction::Reassigned { previous_owner, new_owner, note, wake_id } = &effect.action
+        else { panic!("genuine lost owner change") };
+        assert_eq!(previous_owner.as_deref(), Some("w-a1"));
+        assert_eq!(new_owner, "w-a2");
+        assert_eq!(note, "verified silent owner");
+        assert!(wake_id.is_some());
         assert_eq!(
             record(s.conn(), &case.id)
                 .unwrap()
@@ -1986,6 +1987,70 @@ pub(crate) struct EffectReceipt {
     pub result_revision: Option<String>,
     #[serde(default)]
     pub wake_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_request_id: Option<String>,
+}
+
+pub(crate) struct EffectHistory {
+    pub witness: ExecutionWitness,
+    pub targets: Vec<String>,
+    pub count: u64,
+}
+
+fn effect_prefix(attempt: &str) -> String {
+    format!("admin.case.effect.v1:{attempt}:")
+}
+
+fn effect_key(attempt: &str, ordinal: u64) -> String {
+    format!("{}{ordinal:020}", effect_prefix(attempt))
+}
+
+impl EffectHistory {
+    pub fn receipt(&self, c: &Connection, ordinal: u64) -> Result<EffectReceipt> {
+        let key = effect_key(&self.witness.attempt, ordinal);
+        let raw = meta_get(c, &key)?.ok_or_else(invalid)?;
+        decode_effect(&raw, &self.witness, &self.targets)
+    }
+}
+
+pub(crate) fn effect_history(c: &Connection, crew: &str, id: &str) -> Result<Option<EffectHistory>> {
+    let Some(r) = record(c, id)? else {
+        return Ok(None);
+    };
+    if r.crew != crew {
+        return Err(invalid());
+    }
+    let prefix = effect_prefix(&r.view.attempt_id);
+    let last_key: Option<String> = c.query_row(
+        "SELECT key FROM meta WHERE key>=?1 AND key<?2 ORDER BY key DESC LIMIT 1",
+        params![prefix, format!("{prefix}\u{10ffff}")],
+        |row| row.get(0),
+    ).optional()?;
+    let expected = (r.view.effects_count > 0)
+        .then(|| effect_key(&r.view.attempt_id, r.view.effects_count));
+    if last_key != expected {
+        return Err(invalid());
+    }
+    Ok(Some(EffectHistory {
+        witness: witness(&r),
+        targets: r.targets,
+        count: r.view.effects_count,
+    }))
+}
+
+fn decode_effect(raw: &str, w: &ExecutionWitness, targets: &[String]) -> Result<EffectReceipt> {
+    let e: EffectReceipt = serde_json::from_str(raw).map_err(StoreError::from)?;
+    if e.case_id != w.case
+        || e.session_id != w.session
+        || !targets.contains(&e.work_id)
+        || e.first_event == 0
+        || e.last_event < e.first_event
+        || e.last_event > i64::MAX as u64
+        || e.last_event - e.first_event >= 256
+    {
+        return Err(invalid());
+    }
+    Ok(e)
 }
 pub(crate) struct OutcomeAuthority {
     pub actually_started: bool,
@@ -2011,7 +2076,7 @@ pub(crate) fn outcome_authority(c: &Connection, w: &ExecutionWitness) -> Result<
 }
 pub(crate) fn effect_receipts(c: &Connection, w: &ExecutionWitness) -> Result<Vec<EffectReceipt>> {
     let r = matching(c, w)?;
-    let prefix = format!("admin.case.effect.v1:{}:", r.view.attempt_id);
+    let prefix = effect_prefix(&r.view.attempt_id);
     let mut q = c.prepare("SELECT key,value FROM meta WHERE key>=?1 AND key<?2 ORDER BY key")?;
     let rows = q
         .query_map(params![prefix, format!("{prefix}\u{10ffff}")], |row| {
@@ -2025,20 +2090,10 @@ pub(crate) fn effect_receipts(c: &Connection, w: &ExecutionWitness) -> Result<Ve
             .and_then(|n| n.parse::<u64>().ok())
             .filter(|n| *n > 0 && *n <= r.view.effects_count)
             .ok_or_else(invalid)?;
-        if key != format!("{prefix}{ordinal:020}") {
+        if key != effect_key(&r.view.attempt_id, ordinal) {
             return Err(invalid());
         }
-        let e: EffectReceipt = serde_json::from_str(&raw).map_err(StoreError::from)?;
-        if e.case_id != r.case
-            || e.session_id != r.view.session_id
-            || !r.targets.contains(&e.work_id)
-            || e.first_event == 0
-            || e.last_event < e.first_event
-            || e.last_event - e.first_event >= 256
-        {
-            return Err(invalid());
-        }
-        out.push(e);
+        out.push(decode_effect(&raw, w, &r.targets)?);
     }
     Ok(out)
 }

@@ -247,6 +247,15 @@ async fn public_pairing_actual_tls_work_flow_and_online_revoke() {
     );
     let created = remote.call("crew.create",json!({"title":"Remote-owned synthetic crew","workingDirectory":root.join("work").to_str().unwrap()})).await;
     let crew = created["id"].as_str().unwrap();
+    let missing_effect_report = remote.frame(
+        crewd_proto::admin_cases::EFFECTS,
+        json!({"crewId":crew,"id":"AC00000000000000000001"}),
+    ).await.unwrap();
+    assert_eq!(
+        missing_effect_report["error"]["code"],
+        crewd_proto::RpcError::INVALID_PARAMS,
+        "paired Human reaches the case lookup through the current grant"
+    );
     // Paired Human access reaches the same passive lookup as the local UI.
     // A missing UUID must not become a new transfer or a remote permission error.
     let missing_custody = remote

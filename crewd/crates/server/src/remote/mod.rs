@@ -1010,6 +1010,7 @@ fn allowed_method(method: &str) -> bool {
             | "channel.archiveCheck"
             | "adminCase.list"
             | "adminCase.get"
+            | crewd_proto::admin_cases::EFFECTS
             | "adminCase.custodyGet"
             | "adminCase.custodyTransferGet"
             | "adminCase.custodyPropose"

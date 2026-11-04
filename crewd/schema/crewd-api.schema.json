@@ -358,6 +358,222 @@
       ],
       "type": "object"
     },
+    "AdminCaseEffect": {
+      "oneOf": [
+        {
+          "properties": {
+            "closureKind": {
+              "$ref": "#/$defs/WorkClosureKind"
+            },
+            "evidence": {
+              "$ref": "#/$defs/WorkEvidenceParam"
+            },
+            "kind": {
+              "const": "closed",
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "closureKind",
+            "evidence",
+            "note"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "reassigned",
+              "type": "string"
+            },
+            "newOwner": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "previousOwner": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "wakeId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "newOwner",
+            "note"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "edge": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AdminCaseEffectEdge"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkEvidenceParam"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "unlinked",
+              "type": "string"
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "relatedWorkId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "requestId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "actorSessionId": {
+          "type": "string"
+        },
+        "detailsTruncated": {
+          "type": "boolean"
+        },
+        "firstEventSeq": {
+          "type": "string"
+        },
+        "lastEventSeq": {
+          "type": "string"
+        },
+        "occurredAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "ordinal": {
+          "type": "string"
+        },
+        "resultRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ordinal",
+        "workId",
+        "actorSessionId",
+        "occurredAtMs",
+        "firstEventSeq",
+        "lastEventSeq",
+        "detailsTruncated"
+      ],
+      "type": "object"
+    },
+    "AdminCaseEffectEdge": {
+      "enum": [
+        "parent",
+        "dependency"
+      ],
+      "type": "string"
+    },
+    "AdminCaseEffectsPage": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/AdminCaseEffect"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "id",
+        "items"
+      ],
+      "type": "object"
+    },
+    "AdminCaseEffectsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
     "AdminCaseExecution": {
       "enum": [
         "not_started",
@@ -17628,6 +17844,14 @@
       },
       "result": {
         "$ref": "#/$defs/AdminCaseCustodyTransfer"
+      }
+    },
+    "adminCase.effects": {
+      "params": {
+        "$ref": "#/$defs/AdminCaseEffectsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminCaseEffectsPage"
       }
     },
     "adminCase.get": {

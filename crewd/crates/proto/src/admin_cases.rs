@@ -31,6 +31,70 @@ pub struct SimilarRequirement {
 }
 pub const LIST: &str = "adminCase.list";
 pub const GET: &str = "adminCase.get";
+pub const EFFECTS: &str = "adminCase.effects";
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminCaseEffectsParams {
+    pub crew_id: String,
+    pub id: String,
+    pub after: Option<String>,
+    pub limit: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminCaseEffectsPage {
+    pub crew_id: String,
+    pub id: String,
+    pub items: Vec<AdminCaseEffect>,
+    pub next_after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminCaseEffect {
+    pub ordinal: String,
+    pub work_id: String,
+    pub actor_session_id: String,
+    pub occurred_at_ms: i64,
+    pub first_event_seq: String,
+    pub last_event_seq: String,
+    pub result_revision: Option<String>,
+    pub details_truncated: bool,
+    #[serde(flatten)]
+    pub action: AdminCaseEffectAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "lowercase", rename_all_fields = "camelCase")]
+pub enum AdminCaseEffectAction {
+    Closed {
+        closure_kind: crate::WorkClosureKind,
+        evidence: crate::WorkEvidenceParam,
+        note: String,
+    },
+    Reassigned {
+        previous_owner: Option<String>,
+        new_owner: String,
+        note: String,
+        wake_id: Option<String>,
+    },
+    Unlinked {
+        related_work_id: Option<String>,
+        edge: Option<AdminCaseEffectEdge>,
+        request_id: Option<String>,
+        evidence: Option<crate::WorkEvidenceParam>,
+        note: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AdminCaseEffectEdge {
+    Parent,
+    Dependency,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdminCaseGetParams {
