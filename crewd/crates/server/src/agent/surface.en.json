@@ -7,6 +7,203 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read administrative custody, its accountable holder and any succession proposal you may access. Stale custody still requires explicit handling. Reading neither accepts nor discharges responsibility and does not rewrite the original case outcome.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "description": "The original administrative case identifier, copied from its receipt.",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "The original case crew identifier. Access is checked against your actual identity.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "case_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_custody_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Page through administrative custody transfers involving your actual identity. Historical participation grants audit access, not permission to accept new responsibility or broaden authority.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous page's nextAfter, passed unchanged. Do not construct a cursor.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Page size, 1–100, default 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_case_custody_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "As the actual current captain, explicitly accept a Human-proposed administrative coordination responsibility after its real delivery. Check the request and current revision first. The former responsibility remains until acceptance. Acceptance changes neither Work ownership nor business completion and never restores the original Admin's authority. Preserve the original UUID after an unknown result and inspect records before any further operation.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "The proposal receipt's complete current revision, not the case or Work revision.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Your explicit acceptance statement. Must be nonblank.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "The original, actually delivered Human proposal UUID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "expected_revision",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_custody_accept"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Request the actual captain of your bound administrative case's crew to take responsibility for unresolved coordination. The recipient is fixed by the system. Delivery is not acceptance or work completion. Retain the original request UUID; after an unknown outcome, query it instead of resending or substituting a new UUID.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "The unresolved problem, facts checked and reason captain coordination is required; nonblank.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "A unique UUID identifying this exact request and its unchanged contents.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_request"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a handoff request you are authorized to inspect and its current revision. Waiting, delivered, explicitly accepted and stale are distinct. Reading does not accept responsibility or complete work.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "The original UUID from the request receipt.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Page through administrative handoff responsibilities and history you are authorized to inspect. A stale record requires review and does not silently release responsibility.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous response's unchanged nextAfter cursor; never construct one yourself.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Page size from 1 to 100; default 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_case_handoff_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "As the actual current captain and fixed recipient, explicitly accept responsibility for coordinating this administrative case. First inspect the delivered request and current revision. Acceptance does not transfer original Work ownership or mark unresolved work complete.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "The complete current revision from the request lookup.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Your explicit acceptance statement; nonblank.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "The original UUID of the delivered request you inspected.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "expected_revision",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_accept"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read concise summaries of work you own across the organization; unfinished only by default. Use the returned id/revision to update progress. Fetch long goals and acceptance criteria with work_item_get only when needed.",
       "inputSchema": {
         "additionalProperties": false,
@@ -811,6 +1008,39 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read authoritative factual closure events for the original work, newest first. This is separate from owner-change history. A recorded evidence claim is not independent verification.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before_seq": {
+            "description": "The previous page's nextBeforeSeq, passed unchanged; omitted for the first page.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The global W work ID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Page size from 1 to 200.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_closure_history"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read details by global plan ID. Organization work is readable, including removed crews. Reading does not wake anyone.",
       "inputSchema": {
         "additionalProperties": false,
@@ -937,6 +1167,72 @@
         "type": "object"
       },
       "name": "work_item_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Close an existing work item on verified facts: done, duplicate, or superseded. Requires the current revision, nonblank evidence and an explanation. Uses your actual permission on the object; it grants no administrative scope or business cancellation authority. It does not submit a progress report. Read the returned closure and current dependencies; on revision conflict, reread and reassess rather than retrying blindly. Evidence is your recorded claim, not automatic independent verification.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "description": "Required nonblank evidence: {kind:\"commit\"|\"url\"|\"text\",value:\"...\"}. State the verifiable source supporting this specific closure.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "url",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "The unchanged current revision from work_item_get.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The original global W work ID; no replacement work is created.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "done for verified completion; duplicate or superseded for factual closure. Never use these to mean the work is not worth doing.",
+            "enum": [
+              "done",
+              "duplicate",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "note": {
+            "description": "Required explanation of what was verified and why this closure is justified.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "kind",
+          "evidence",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_close"
     },
     {
       "annotations": {
@@ -1608,6 +1904,100 @@
         "type": "object"
       },
       "name": "channel_archive"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read current topic-channel archive facts as canonical JSON: revision, canArchive/canRestore, blockers and last action. A check is not an automatic archive instruction and uses no default inactivity threshold. Verify work, requirements, unanswered questions, pending/inflight notifications and delivery windows. Incomplete or unknown facts block verified archive. Archived channels remain queryable by exact ID.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "Readable channel exact ID or unique name, including archived channels.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive_check"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Revalidate the latest channel_archive_check revision and your verified evidence atomically before archiving a topic channel. Related work must be terminal, with no unresolved facts or inflight delivery. Only the current owner or a legitimate captain may act; Admin role alone grants no authority. Returns canonical JSON and preserves messages, members and associations. The existing channel_archive remains the manual management entry; this tool adds evidence and version checks.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "Readable topic-channel exact ID or unique name.",
+            "type": "string"
+          },
+          "evidence": {
+            "description": "Concrete facts or evidence you actually verified; nonblank. Do not present model guesses as verification.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "The complete revision from the latest check. Recheck after conflicts; never reuse an old version.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Your explicit reason for this archive action; nonblank.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "expected_revision",
+          "evidence",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive_verified"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly restore an archived topic channel using its latest checked revision. Preserve messages, members and associations and allow new posts without replaying old wakes. Only the current owner or a legitimate captain may act. Returns canonical JSON; the owning crew must remain available.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "Archived topic-channel exact ID or unique name; prefer the ID from the earlier receipt.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "The complete revision returned by channel_archive_check before restoration.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Your explicit reason for this restore action; nonblank.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "expected_revision",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "channel_restore_verified"
     },
     {
       "annotations": {
@@ -2251,6 +2641,137 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read administrative custody, its accountable holder and any succession proposal you may access. Stale custody still requires explicit handling. Reading neither accepts nor discharges responsibility and does not rewrite the original case outcome.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "description": "The original administrative case identifier, copied from its receipt.",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "The original case crew identifier. Access is checked against your actual identity.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "case_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_custody_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Page through administrative custody transfers involving your actual identity. Historical participation grants audit access, not permission to accept new responsibility or broaden authority.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous page's nextAfter, passed unchanged. Do not construct a cursor.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Page size, 1–100, default 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_case_custody_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Request the actual captain of your bound administrative case's crew to take responsibility for unresolved coordination. The recipient is fixed by the system. Delivery is not acceptance or work completion. Retain the original request UUID; after an unknown outcome, query it instead of resending or substituting a new UUID.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "The unresolved problem, facts checked and reason captain coordination is required; nonblank.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "A unique UUID identifying this exact request and its unchanged contents.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_request"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a handoff request you are authorized to inspect and its current revision. Waiting, delivered, explicitly accepted and stale are distinct. Reading does not accept responsibility or complete work.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "The original UUID from the request receipt.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Page through administrative handoff responsibilities and history you are authorized to inspect. A stale record requires review and does not silently release responsibility.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous response's unchanged nextAfter cursor; never construct one yourself.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Page size from 1 to 100; default 50.",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_case_handoff_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read concise summaries of work you own across the organization; unfinished only by default. Use the returned id/revision to update progress. Fetch long goals and acceptance criteria with work_item_get only when needed.",
       "inputSchema": {
         "additionalProperties": false,
@@ -3055,6 +3576,39 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read authoritative factual closure events for the original work, newest first. This is separate from owner-change history. A recorded evidence claim is not independent verification.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before_seq": {
+            "description": "The previous page's nextBeforeSeq, passed unchanged; omitted for the first page.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The global W work ID.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Page size from 1 to 200.",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_closure_history"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read details by global plan ID. Organization work is readable, including removed crews. Reading does not wake anyone.",
       "inputSchema": {
         "additionalProperties": false,
@@ -3181,6 +3735,72 @@
         "type": "object"
       },
       "name": "work_item_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Close an existing work item on verified facts: done, duplicate, or superseded. Requires the current revision, nonblank evidence and an explanation. Uses your actual permission on the object; it grants no administrative scope or business cancellation authority. It does not submit a progress report. Read the returned closure and current dependencies; on revision conflict, reread and reassess rather than retrying blindly. Evidence is your recorded claim, not automatic independent verification.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "description": "Required nonblank evidence: {kind:\"commit\"|\"url\"|\"text\",value:\"...\"}. State the verifiable source supporting this specific closure.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "url",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "The unchanged current revision from work_item_get.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The original global W work ID; no replacement work is created.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "done for verified completion; duplicate or superseded for factual closure. Never use these to mean the work is not worth doing.",
+            "enum": [
+              "done",
+              "duplicate",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "note": {
+            "description": "Required explanation of what was verified and why this closure is justified.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "kind",
+          "evidence",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_close"
     },
     {
       "annotations": {
@@ -3852,6 +4472,100 @@
         "type": "object"
       },
       "name": "channel_archive"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read current topic-channel archive facts as canonical JSON: revision, canArchive/canRestore, blockers and last action. A check is not an automatic archive instruction and uses no default inactivity threshold. Verify work, requirements, unanswered questions, pending/inflight notifications and delivery windows. Incomplete or unknown facts block verified archive. Archived channels remain queryable by exact ID.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "Readable channel exact ID or unique name, including archived channels.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive_check"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Revalidate the latest channel_archive_check revision and your verified evidence atomically before archiving a topic channel. Related work must be terminal, with no unresolved facts or inflight delivery. Only the current owner or a legitimate captain may act; Admin role alone grants no authority. Returns canonical JSON and preserves messages, members and associations. The existing channel_archive remains the manual management entry; this tool adds evidence and version checks.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "Readable topic-channel exact ID or unique name.",
+            "type": "string"
+          },
+          "evidence": {
+            "description": "Concrete facts or evidence you actually verified; nonblank. Do not present model guesses as verification.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "The complete revision from the latest check. Recheck after conflicts; never reuse an old version.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Your explicit reason for this archive action; nonblank.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "expected_revision",
+          "evidence",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive_verified"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly restore an archived topic channel using its latest checked revision. Preserve messages, members and associations and allow new posts without replaying old wakes. Only the current owner or a legitimate captain may act. Returns canonical JSON; the owning crew must remain available.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "Archived topic-channel exact ID or unique name; prefer the ID from the earlier receipt.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "The complete revision returned by channel_archive_check before restoration.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Your explicit reason for this restore action; nonblank.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "expected_revision",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "channel_restore_verified"
     },
     {
       "annotations": {

@@ -7,6 +7,203 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "读取你有权查看的行政协调责任、当前承担者和接管提议。责任失效仍需明确处理；读取不接受接管、不解除责任，也不修改原案件结果。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "description": "原行政案件编号，原样使用回执中的值。",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "原行政案件所属机组编号；只能读取你实际有权查看的案件。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "case_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_custody_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "分页查看与你身份有关的行政责任接管记录。历史身份可用于审计，不能据此接受新的责任或扩大权限。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页回执中的 nextAfter，原样传递，不自行构造。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页数量，1–100，默认 50。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_case_custody_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "以当前真实机长身份明确接受 Human 发起并已实际送达的行政协调责任。核对请求及当前版本后接受；此前旧责任仍保留。接受不改变工作所有权、不恢复原行政成员权限，也不代表业务完成。结果未知时保留原 UUID 并先查询记录，不创建新请求或重发操作。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "接管请求回执中的完整当前版本；不是案件或工作的版本。",
+            "type": "string"
+          },
+          "note": {
+            "description": "你的明确接管说明，不能为空。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "已实际送达、由 Human 发起的原接管请求 UUID。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "expected_revision",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_custody_accept"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "为当前绑定的行政事项请求机长承接未解决问题。接收人由系统固定为本机组实际机长，不能指定他人。送达回执不等于机长接受，也不代表原工作完成。保留原请求编号；结果未知时用查询工具核对，不重发或更换编号。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "尚未解决的问题、已核查的事实及需要机长处理的原因，不能为空。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "本次请求的唯一 UUID；同一编号只对应同一请求内容。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_request"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取你有权访问的行政承接请求及其当前版本。区分待送达、已送达、机长明确接受和事实失效；读取不会接受请求或完成工作。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "原请求回执中的 UUID。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "分页查看你有权查看的行政承接责任及历史。失效记录仍需复核，不能据此认为责任已经消失。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上次回执的 nextAfter；原样传递，不自行拼接。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页数量，1–100，默认 50。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_case_handoff_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "以当前实际机长身份明确承接发给你的行政事项协调责任。必须先收到并核对请求及当前版本。承接不改变原工作的所有权，不把未解决工作标记完成。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "查询回执中待接受请求的完整当前版本。",
+            "type": "string"
+          },
+          "note": {
+            "description": "你的明确承接说明，不能为空。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "已送达并核对的原请求 UUID。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "expected_revision",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_accept"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "读取全组织中你负责的工作摘要，默认只列未完成项。使用返回的编号和修订号更新进展；长目标和验收标准按需用 work_item_get 读取。不必为了更新备注反复读整份详情。",
       "inputSchema": {
         "additionalProperties": false,
@@ -811,6 +1008,39 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "按原工作读取真实账本的事实性关闭事件，最新在前，与负责人变更历史分开。记录中的证据是当时提交的依据，不代表系统已经独立核实。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before_seq": {
+            "description": "上一页返回的 nextBeforeSeq，原样传入；首屏省略。",
+            "type": "string"
+          },
+          "id": {
+            "description": "全局 W 工作编号。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页 1 至 200 条。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_closure_history"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "按全局计划编号读取详情。工作对象全组织可读，包括已移除机组；读取不会唤醒成员。",
       "inputSchema": {
         "additionalProperties": false,
@@ -937,6 +1167,72 @@
         "type": "object"
       },
       "name": "work_item_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "依据核实的事实关闭原工作：完成、重复或被取代。必须提供当前修订、非空证据和说明。沿用你对该对象的实际权限，不授予新的行政管辖或业务放弃权，也不伪造进度回报。检查返回的关闭事实和依赖；修订冲突时重新读取并判断，不要盲目重试。填写证据仅记录你的依据，不代表系统已经独立核实。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "description": "必填非空证据：{kind:\"commit\"|\"url\"|\"text\",value:\"...\"}，写明支持本次关闭的可核查来源。",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "url",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "从 work_item_get 读取的当前修订字符串，原样传入。",
+            "type": "string"
+          },
+          "id": {
+            "description": "原有全局 W 工作编号；不会另建工作项。",
+            "type": "string"
+          },
+          "kind": {
+            "description": "done 表示核实完成，duplicate 表示重复，superseded 表示被取代。不得用事实性关闭表达“不值得做”。",
+            "enum": [
+              "done",
+              "duplicate",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "note": {
+            "description": "必填说明：核实了什么，以及为什么足以支持本次关闭。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "kind",
+          "evidence",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_close"
     },
     {
       "annotations": {
@@ -1608,6 +1904,100 @@
         "type": "object"
       },
       "name": "channel_archive"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "只读核查话题群的当前归档事实，返回原始 JSON、revision、canArchive/canRestore、阻碍与最近动作。结果不是自动归档指令，不采用默认闲置时长。工作、入口、未答问题、待投/在途通知与交付窗口都必须核实；超限或未知事实会阻止验证归档。群归档后仍可按精确 id 查询。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "可读群的精确 id 或唯一群名；包含已归档群。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive_check"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "依据最新 channel_archive_check 的 revision 和你实际核实的证据，原子重验后归档话题群。必须有已终结的关联工作，并且没有未结事实或在途交付。只有当前群主或合法机长可执行，行政角色本身不授予权限。返回规范 JSON，消息、成员和关联保留。原 channel_archive 仍是手动管理入口；本工具增加明确证据和版本核查。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "可读话题群的精确 id 或唯一群名。",
+            "type": "string"
+          },
+          "evidence": {
+            "description": "你已核实的具体事实或证据，不能为空；不要把模型猜测写成核验结果。",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "最新核查返回的完整 revision。冲突后重新核查，不复用旧版本。",
+            "type": "string"
+          },
+          "note": {
+            "description": "本次明确归档的理由，不能为空。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "expected_revision",
+          "evidence",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive_verified"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "以最新核查版本明确解档话题群，恢复正常发言能力；保留消息、成员与关联，不重投旧唤醒。仅当前群主或合法机长可执行，返回规范 JSON。原归属机组必须仍然可用。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "已归档话题群的精确 id 或唯一群名；建议用先前回执中的 id。",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "解档前 channel_archive_check 返回的完整 revision。",
+            "type": "string"
+          },
+          "note": {
+            "description": "本次明确解档的理由，不能为空。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "expected_revision",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "channel_restore_verified"
     },
     {
       "annotations": {
@@ -2251,6 +2641,137 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "读取你有权查看的行政协调责任、当前承担者和接管提议。责任失效仍需明确处理；读取不接受接管、不解除责任，也不修改原案件结果。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "description": "原行政案件编号，原样使用回执中的值。",
+            "type": "string"
+          },
+          "crew_id": {
+            "description": "原行政案件所属机组编号；只能读取你实际有权查看的案件。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crew_id",
+          "case_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_custody_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "分页查看与你身份有关的行政责任接管记录。历史身份可用于审计，不能据此接受新的责任或扩大权限。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页回执中的 nextAfter，原样传递，不自行构造。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页数量，1–100，默认 50。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_case_custody_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "为当前绑定的行政事项请求机长承接未解决问题。接收人由系统固定为本机组实际机长，不能指定他人。送达回执不等于机长接受，也不代表原工作完成。保留原请求编号；结果未知时用查询工具核对，不重发或更换编号。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "尚未解决的问题、已核查的事实及需要机长处理的原因，不能为空。",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "本次请求的唯一 UUID；同一编号只对应同一请求内容。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_request"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取你有权访问的行政承接请求及其当前版本。区分待送达、已送达、机长明确接受和事实失效；读取不会接受请求或完成工作。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "原请求回执中的 UUID。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "name": "admin_case_handoff_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "分页查看你有权查看的行政承接责任及历史。失效记录仍需复核，不能据此认为责任已经消失。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上次回执的 nextAfter；原样传递，不自行拼接。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页数量，1–100，默认 50。",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "admin_case_handoff_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "读取全组织中你负责的工作摘要，默认只列未完成项。使用返回的编号和修订号更新进展；长目标和验收标准按需用 work_item_get 读取。不必为了更新备注反复读整份详情。",
       "inputSchema": {
         "additionalProperties": false,
@@ -3055,6 +3576,39 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "按原工作读取真实账本的事实性关闭事件，最新在前，与负责人变更历史分开。记录中的证据是当时提交的依据，不代表系统已经独立核实。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "before_seq": {
+            "description": "上一页返回的 nextBeforeSeq，原样传入；首屏省略。",
+            "type": "string"
+          },
+          "id": {
+            "description": "全局 W 工作编号。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "每页 1 至 200 条。",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "work_closure_history"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "按全局计划编号读取详情。工作对象全组织可读，包括已移除机组；读取不会唤醒成员。",
       "inputSchema": {
         "additionalProperties": false,
@@ -3181,6 +3735,72 @@
         "type": "object"
       },
       "name": "work_item_create"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "依据核实的事实关闭原工作：完成、重复或被取代。必须提供当前修订、非空证据和说明。沿用你对该对象的实际权限，不授予新的行政管辖或业务放弃权，也不伪造进度回报。检查返回的关闭事实和依赖；修订冲突时重新读取并判断，不要盲目重试。填写证据仅记录你的依据，不代表系统已经独立核实。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "evidence": {
+            "additionalProperties": false,
+            "description": "必填非空证据：{kind:\"commit\"|\"url\"|\"text\",value:\"...\"}，写明支持本次关闭的可核查来源。",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "url",
+                  "text"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          },
+          "expected_revision": {
+            "description": "从 work_item_get 读取的当前修订字符串，原样传入。",
+            "type": "string"
+          },
+          "id": {
+            "description": "原有全局 W 工作编号；不会另建工作项。",
+            "type": "string"
+          },
+          "kind": {
+            "description": "done 表示核实完成，duplicate 表示重复，superseded 表示被取代。不得用事实性关闭表达“不值得做”。",
+            "enum": [
+              "done",
+              "duplicate",
+              "superseded"
+            ],
+            "type": "string"
+          },
+          "note": {
+            "description": "必填说明：核实了什么，以及为什么足以支持本次关闭。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "kind",
+          "evidence",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "work_item_close"
     },
     {
       "annotations": {
@@ -3852,6 +4472,100 @@
         "type": "object"
       },
       "name": "channel_archive"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "只读核查话题群的当前归档事实，返回原始 JSON、revision、canArchive/canRestore、阻碍与最近动作。结果不是自动归档指令，不采用默认闲置时长。工作、入口、未答问题、待投/在途通知与交付窗口都必须核实；超限或未知事实会阻止验证归档。群归档后仍可按精确 id 查询。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "可读群的精确 id 或唯一群名；包含已归档群。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive_check"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "依据最新 channel_archive_check 的 revision 和你实际核实的证据，原子重验后归档话题群。必须有已终结的关联工作，并且没有未结事实或在途交付。只有当前群主或合法机长可执行，行政角色本身不授予权限。返回规范 JSON，消息、成员和关联保留。原 channel_archive 仍是手动管理入口；本工具增加明确证据和版本核查。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "可读话题群的精确 id 或唯一群名。",
+            "type": "string"
+          },
+          "evidence": {
+            "description": "你已核实的具体事实或证据，不能为空；不要把模型猜测写成核验结果。",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "最新核查返回的完整 revision。冲突后重新核查，不复用旧版本。",
+            "type": "string"
+          },
+          "note": {
+            "description": "本次明确归档的理由，不能为空。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "expected_revision",
+          "evidence",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "channel_archive_verified"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "以最新核查版本明确解档话题群，恢复正常发言能力；保留消息、成员与关联，不重投旧唤醒。仅当前群主或合法机长可执行，返回规范 JSON。原归属机组必须仍然可用。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "description": "已归档话题群的精确 id 或唯一群名；建议用先前回执中的 id。",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "解档前 channel_archive_check 返回的完整 revision。",
+            "type": "string"
+          },
+          "note": {
+            "description": "本次明确解档的理由，不能为空。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "expected_revision",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "channel_restore_verified"
     },
     {
       "annotations": {
