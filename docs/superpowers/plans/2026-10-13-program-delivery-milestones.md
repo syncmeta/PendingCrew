@@ -11,6 +11,8 @@
 
 `46e6d630` 的私有 macOS Release 候选为 0.2.5，构建 `20761.84498`。Apple 回执 `c69d8e6f-311a-4af1-bdbc-b1e7a561367a` 为 Accepted，开发者日志与送审摘要一致，记录零问题。附票 ZIP 重新解包后通过严格签名、公证票据及 Gatekeeper 检查，SHA-256 为 `8cdbf7422a1680393c86345496d2048e51494e565be95db32f1ba576e75773e7`。同一签名后台两次启动并正常退出，读回全部 24 条人工归属纠正，原消息和判断保持一致。公证与后台复验分别见 `/private/tmp/pcw-025-notary.PyE84P9r/notarized-output/notarization-proof.json` 和 `/private/tmp/pcw-attr.g35xwl20/result.json`。此候选供手动安装，整包升级、正式窗口与公开交付分别验收。
 
+0.2.5 附票整包已通过私有环境的正式交换和回退。新建的隔离数据由准确的 Core 21 写入，再用签名整包启动 Core 22，并恢复升级前的整包和数据库。两版均读回原消息回执、待办、工作和知识内容，数据库身份一致。升级后新增的回执仅保留于封存的 Core 22 副本。三次错应用路径拒绝和两版票据、Gatekeeper 检查通过，见 `/private/tmp/pcw-025-official-swap.2hkx8rvd/result.json`。
+
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
 早先 `2ef0998d` 的隔离升级及回滚也通过，Apple 回执为 `09351a3b-b20d-40e9-91fe-00c5a40eeff2`。`945cd2c6`（0.2.3，构建 `20761.65326`）通过 Apple 公证、票据及 Gatekeeper 检查，回执为 `59254362-f660-49e3-ba3c-61f331ddfddc`。首条回复的后续修正在 `9a5a6a08`。
@@ -43,7 +45,11 @@ Mac 修正 `3931d202` 将裁决入口放到已完成的巡检简报分组中。�
 
 `46e6d630` 让用户从 Mac、iPad 和两套 iPhone 消息入口查看人工归属纠正历史。模型原判断、当前有效归属和人工设置、清除、重置分开展示。查询按原消息、群和机组校验，每页 20 条，最多展示 256 条并明确提示还有更早记录。普通 Core 实际退出并重开后查回 24 条，原消息、回复关系和判断状态一致，已解除群关联的工作隐藏编号。配对撤权、附着代理拒绝、旧分页失效和损坏记录的回归通过。见 `/private/tmp/pcw-attr.w0f26jop/result.json`、`/private/tmp/pcw-attribution-gate.m3vDtI/paired.log`。同源 Mac 私有预览封装和 iPhoneOS 完整构建均通过，见 `/private/tmp/pcw-attribution-gate.m3vDtI/mac-preview/candidate.json`、`/private/tmp/pcw-attribution-gate.m3vDtI/ios-debug-proof.json`。
 
-下一消息模块按原设计 §29.4 补充实际唤醒与投递说明，分别记录决策、实际入队原因和送达结果。历史记录没有可信理由或回执已清理时显示未知。后端和客户端已在独立检出并行实施。
+`8055279f` 按原设计 §29.4 接通逐消息的会话唤醒与投递说明。界面分别显示实际入队原因、队列状态、判断记录和真实回复。只在有完整零目标规划证据时显示零对象。历史理由或队列结果缺少证据时，对应字段显示未知。实际普通 Core 验证明确 `@` 只产生一条投递记录，人工停止后实际退出并重启，读回同一记录。也验证了真实零目标、旧数据、错机组或频道拒绝，以及只读查询前后原消息、队列和证据相同。见 `/private/tmp/pcw-delivery.jp1ydy62/result.json`。受控执行器投递确认、模拟判断服务选中对象、本机读取和配对撤权验收通过。普通后台打印的 API 与仓库定义逐字相同。
+
+该提交的 Mac 私有 Release 预览通过严格签名和独立动态库验证，iPhoneOS arm64 Debug 完整编译通过。见 `/private/tmp/pcw-delivery-gate.7DVpfTYo/mac-release-preview/candidate.json` 和 `/private/tmp/pcw-delivery-gate.7DVpfTYo/ios-debug-proof.json`。Mac Debug 预览在工具改写 `__LINKEDIT` 后被原严格封装检查拒绝，另行修复。正式窗口、真机和日用验收分别推进。
+
+`2d485b56` 纠正新机组的首条回复提示。实时消息和消息列表回读共用同一判断，原机长必须明确回复原群的首条消息才结束等待。旧实现用同机长的无关发言复现误判，改后两条入口均通过专项回归。见 `/private/tmp/pcw-delivery-gate.7DVpfTYo/first-reply-integrated.log`。既有 Tirkadavur 机组的原会话另行验收。
 
 `2cb8f0b3` 的私有 macOS Release 候选为 0.2.4，构建 `20761.71404`。应用与内嵌后台完成带安全时间戳的 Developer ID 签名，公证输入 ZIP 重新解包后通过严格签名检查。公证输入 SHA-256 为 `0c6b7b081615742004b36ca3e7e8c0a537c29ba3523cb941a759315b031af19f`。使用包中实际签名后台复测 Core 21→22 与整份旧数据回退也通过。候选及迁移记录见 `/private/tmp/pcw-split-ordinary.3WoYkW/notary-input-proof.json` 和 `/private/tmp/pcw-024-signed-core-1767AF70/result.json`。此候选待提交 Apple 公证；正式整包安装、回退和窗口验收另记。
 
