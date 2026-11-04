@@ -296,11 +296,13 @@ pub enum ReadScope {
 pub enum ActionScope {
     WorkClose { id: String, kind: WorkClosureKind },
     WorkReassignLost { id: String, new_owner: String },
+    WorkUnlink(Box<crate::admin_case_link::UnlinkParams>),
 }
 impl ActionScope {
     fn id(&self) -> &str {
         match self {
             Self::WorkClose { id, .. } | Self::WorkReassignLost { id, .. } => id,
+            Self::WorkUnlink(p) => &p.id,
         }
     }
 }
@@ -312,6 +314,20 @@ pub struct EffectPermit {
     before_revision: String,
     checkpoint: String,
     context: String,
+    link: Option<Box<crate::admin_case_link::ExpectedLink>>,
+}
+
+impl EffectPermit {
+    pub(crate) fn apply_unlink(&self, tx: &mut Tx<'_>) -> Result<u64> {
+        let link = self.link.as_ref().ok_or_else(invalid)?;
+        let by = crate::Sender::Session(self.witness.session_id().into());
+        let actor = crate::work::actor(tx.conn(), &by, self.witness.crew_id())?;
+        crate::asks::with_book(tx, self.witness.crew_id(), |book, now| {
+            book.relink(&actor, now, self.core, link.after.parent, link.after.depends_on.clone())
+        }).map_err(crate::work::command_refusal)?;
+        crate::work::changed(tx, &by, self.witness.crew_id(), self.action.id())?;
+        self.before_seq.checked_add(1).ok_or_else(invalid)
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -756,7 +772,14 @@ pub fn validate_effect(
     )?
     .ok_or_else(invalid)?;
     let core = crate::work::core_plan(tx.conn(), &reference)?;
-    let before_seq = crate::asks::load_org(tx.conn())?.state().last_seq;
+    let book = crate::asks::load_org(tx.conn())?;
+    let link = if let ActionScope::WorkUnlink(p) = &scope {
+        scope_work(tx.conn(), &r, &p.related_id)?;
+        Some(Box::new(crate::admin_case_link::expected(tx.conn(), &book, &r.crew, core, p)?))
+    } else {
+        None
+    };
+    let before_seq = book.state().last_seq;
     let before_revision = crate::work::get(tx.conn(), scope.id())?.revision;
     Ok(EffectPermit {
         witness: w.clone(),
@@ -766,6 +789,7 @@ pub fn validate_effect(
         before_revision,
         checkpoint: r.checkpoint,
         context: r.context,
+        link,
     })
 }
 pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
@@ -853,13 +877,20 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
                 primary += 1;
                 true
             }
+            (ActionScope::WorkUnlink(_), E::Relinked { id, parent, depends_on })
+                if *id == permit.core && permit.link.as_ref().is_some_and(|link|
+                    *parent == link.after.parent && *depends_on == link.after.depends_on) => {
+                primary += 1;
+                true
+            }
             _ => false,
         };
         if !valid {
             return Err(invalid());
         }
     }
-    if primary != 1 || crate::asks::load_org(tx.conn())?.state().last_seq != expected {
+    let book = crate::asks::load_org(tx.conn())?;
+    if primary != 1 || book.state().last_seq != expected {
         return Err(invalid());
     }
     let actual = crate::work::get(tx.conn(), permit.action.id())?;
@@ -879,6 +910,7 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
         ActionScope::WorkReassignLost { new_owner, .. } => {
             actual.owner.as_deref() == Some(new_owner.as_str())
         }
+        ActionScope::WorkUnlink(_) => permit.link.as_ref().is_some_and(|link| link.matches(&book)),
     };
     if !result_matches {
         return Err(invalid());
@@ -949,6 +981,9 @@ pub(crate) mod tests {
         work,
     };
     pub(crate) fn adopted(s: &mut crewd_store::Store) -> AdminCaseView {
+        adopted_with_edge(s, None)
+    }
+    fn adopted_with_edge(s: &mut crewd_store::Store, edge: Option<crate::admin_case_link::Edge>) -> AdminCaseView {
         let settings = crewd_proto::judgments::JudgmentSettings {
             revision: Some("synthetic".into()),
             config: Some(crewd_proto::judgments::JudgmentConfig {
@@ -971,8 +1006,18 @@ pub(crate) mod tests {
         s.conn()
             .execute("UPDATE sessions SET desired='running' WHERE id='w-a1'", [])
             .unwrap();
+        let mut previous = None;
         for _ in 0..2 {
-            ok(s, |tx| {
+            let parent = match edge {
+                Some(crate::admin_case_link::Edge::Parent) => previous.clone(),
+                _ => None,
+            };
+            let depends_on: Vec<String> = match edge {
+                Some(crate::admin_case_link::Edge::Dependency) => previous.clone().into_iter().collect(),
+                _ => Vec::new(),
+            };
+            let next_check_at = (!depends_on.is_empty()).then(|| crewd_store::ts_from_ms(NOW));
+            let row = ok(s, |tx| {
                 work::create(
                     tx,
                     &Sender::Human,
@@ -980,10 +1025,14 @@ pub(crate) mod tests {
                         crew_id: "crew-a".into(),
                         owner: Some("w-a1".into()),
                         title: "synthetic case work".into(),
+                        parent,
+                        depends_on,
+                        next_check_at,
                         ..Default::default()
                     },
                 )
             });
+            previous = Some(row.id);
         }
         for _ in 0..4 {
             s.conn()
@@ -1026,7 +1075,10 @@ pub(crate) mod tests {
         assert!(ok(&mut s, |tx| launch_permit(tx, "crew-a", &source.id)).is_some());
     }
     pub(crate) fn running_case(s: &mut crewd_store::Store) -> (AdminCaseView, Registration) {
-        let case = adopted(s);
+        running_case_with_edge(s, None)
+    }
+    pub(crate) fn running_case_with_edge(s: &mut crewd_store::Store, edge: Option<crate::admin_case_link::Edge>) -> (AdminCaseView, Registration) {
+        let case = adopted_with_edge(s, edge);
         let permit = ok(s, |tx| launch_permit(tx, "crew-a", &case.id)).unwrap();
         let registered = ok(s, |tx| register_and_bind(tx, &permit));
         assert!(ok(s, |tx| claim_launch(tx, &registered.witness)));

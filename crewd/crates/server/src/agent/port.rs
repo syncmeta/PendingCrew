@@ -2036,6 +2036,13 @@ pub async fn work_close(
     let by = Sender::Session(session.to_owned());
     write(st, move |tx| crewd_collab::work::close_factual(tx, &by, p)).await
 }
+pub(crate) async fn admin_work_unlink(
+    st: &AppState,
+    p: crewd_collab::admin_case_link::UnlinkParams,
+) -> PortResult<crewd_collab::admin_case_link::UnlinkReceipt> {
+    let authority = super::admin_case_scope::capture().ok_or_else(super::admin_case_scope::denied)?;
+    write(st, move |tx| authority.unlink(tx, p)).await
+}
 pub async fn admin_handoff_request(
     st: &AppState,
     session: &str,

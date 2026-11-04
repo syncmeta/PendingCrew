@@ -1454,3 +1454,30 @@ The proposal receipt's complete current revision, not the case or Work revision.
 
 ## admin_case_custody_accept.note
 Your explicit acceptance statement. Must be nonblank.
+
+## admin_case_work_unlink
+Remove one factually incorrect parent or dependency edge between two current targets of this administrative case. Requires both current revisions and evidence. Does not remove a blocker, close work, or grant access outside this case. Preserve request_id and the exact arguments when recovering a result.
+
+## admin_case_work_unlink.request_id
+One UUID for this correction. An exact repeat recovers its original receipt.
+
+## admin_case_work_unlink.id
+The W ID of the work item whose outgoing edge is incorrect.
+
+## admin_case_work_unlink.expected_revision
+The current revision of the work item, from work_item_get.
+
+## admin_case_work_unlink.related_id
+The W ID of its existing parent or dependency. It must also belong to this case.
+
+## admin_case_work_unlink.expected_related_revision
+The current revision of that parent or dependency, from work_item_get.
+
+## admin_case_work_unlink.edge
+The exact structural edge to remove. Use parent or dependency.
+
+## admin_case_work_unlink.evidence
+The factual basis for the correction, as a commit, URL, or text.
+
+## admin_case_work_unlink.note
+Why the existing edge is factually incorrect.

@@ -171,14 +171,13 @@ async fn route(
         methods::TOOLS => {
             let me = current(state, &session).await?;
             let loc = port::locale(state).await.unwrap_or_default();
-            let mut list = catalog::tools_for(&me, loc);
             if super::admin_case_scope::bound(state, &session)
                 .await
                 .map_err(|_| invalid())?
             {
-                list.retain(|tool| super::admin_case_scope::allowed_tool(&tool.name));
-                return to_value(list);
+                return to_value(catalog::case_tools_for(&me, loc));
             }
+            let mut list = catalog::tools_for(&me, loc);
             if state.data_runtime.get().is_some() {
                 list.retain(|tool| !tool.name.starts_with("document_"));
             }

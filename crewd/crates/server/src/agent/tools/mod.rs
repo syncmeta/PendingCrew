@@ -170,7 +170,9 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
     };
     // One gate (`catalog::visible`, the same rule the tool list uses): the role, re-read on
     // every call. The management crew has no special case (S68).
-    if !catalog::visible(spec, me) {
+    if !catalog::visible(spec, me)
+        && !(catalog::visible_in_case(spec, me) && super::admin_case_scope::capture().is_some())
+    {
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
@@ -188,6 +190,7 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "work_item_create" => work::create(&cx, args).await,
         "work_item_update" => work::update(&cx, args).await,
         "work_item_close" => work::close(&cx, args).await,
+        crewd_collab::admin_case_link::UNLINK_TOOL => work::case_unlink(&cx, args).await,
         "work_closure_history" => work::closure_history(&cx, args).await,
         "work_item_block" => work::block(&cx, args).await,
         "work_item_transfer_request" => work::transfer_request(&cx, args).await,

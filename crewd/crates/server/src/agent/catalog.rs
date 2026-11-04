@@ -9,6 +9,7 @@ use crewd_proto::agent::{ToolDef, ToolHints};
 pub enum Scope {
     All,
     Captain,
+    CaseAdmin,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,6 +399,19 @@ pub const CATALOG: &[ToolSpec] = &[
             p("note", Str, true),
         ],
     )),
+    idempotent(ToolSpec {
+        scope: Scope::CaseAdmin,
+        ..all(crewd_collab::admin_case_link::UNLINK_TOOL, &[
+            p("request_id", Str, true),
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            p("related_id", Str, true),
+            p("expected_related_revision", Str, true),
+            c("edge", true, &["parent", "dependency"]),
+            p("evidence", Evidence, true),
+            p("note", Str, true),
+        ])
+    }),
     idempotent(all(
         "work_item_update",
         &[
@@ -689,19 +703,34 @@ pub fn find(name: &str) -> Option<&'static ToolSpec> {
 /// 这个身份此刻能不能看见 / 调这个工具：只看角色。总机组没有特例（S68）：它的机长与任何机组的机长同一张表，
 /// 它的其他 session 与任何 worker 同一张表。
 pub fn visible(t: &ToolSpec, me: &Identity) -> bool {
-    t.scope == Scope::All || me.role == Role::Captain
+    t.scope == Scope::All || (t.scope == Scope::Captain && me.role == Role::Captain)
+}
+
+pub(crate) fn visible_in_case(t: &ToolSpec, me: &Identity) -> bool {
+    t.scope == Scope::CaseAdmin && me.role == Role::Admin
+}
+
+fn definition(t: &ToolSpec, loc: Locale) -> ToolDef {
+    ToolDef {
+        name: t.name.to_string(),
+        description: text::get(loc, t.name).to_string(),
+        input_schema: input_schema(t, loc),
+        annotations: Some(t.hints()),
+    }
+}
+
+pub(crate) fn case_tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
+    CATALOG.iter()
+        .filter(|t| (visible(t, me) || visible_in_case(t, me)) && super::admin_case_scope::allowed_tool(t.name))
+        .map(|t| definition(t, loc))
+        .collect()
 }
 
 pub fn tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
     CATALOG
         .iter()
         .filter(|t| visible(t, me))
-        .map(|t| ToolDef {
-            name: t.name.to_string(),
-            description: text::get(loc, t.name).to_string(),
-            input_schema: input_schema(t, loc),
-            annotations: Some(t.hints()),
-        })
+        .map(|t| definition(t, loc))
         .collect()
 }
 
@@ -894,7 +923,9 @@ mod tests {
     /// from them: read-only or talk.
     #[test]
     fn annotations_are_on_every_tool_and_passive_is_derived() {
-        let defs = tools_for(&who(Role::Captain), Locale::Zh);
+        let mut defs = tools_for(&who(Role::Captain), Locale::Zh);
+        defs.extend(case_tools_for(&who(Role::Admin), Locale::Zh).into_iter()
+            .filter(|tool| find(&tool.name).is_some_and(|spec| spec.scope == Scope::CaseAdmin)));
         assert_eq!(defs.len(), CATALOG.len());
         for d in &defs {
             let h = d
@@ -974,6 +1005,7 @@ mod tests {
                 "work_item_transfer_accept",
                 "work_item_transfer_withdraw",
                 "work_item_close",
+                "admin_case_work_unlink",
                 "work_item_update",
                 "work_item_block",
                 "work_item_assign",
@@ -1151,6 +1183,7 @@ mod tests {
             boss,
             CATALOG
                 .iter()
+                .filter(|t| t.scope != Scope::CaseAdmin)
                 .map(|t| t.name.to_string())
                 .collect::<Vec<_>>()
         );

@@ -33,6 +33,9 @@ async fn sources(f: &Fixture, n: usize) -> Vec<Source> {
     source_fixture(f, n, false).await
 }
 async fn source_fixture(f: &Fixture, n: usize, include_foreign: bool) -> Vec<Source> {
+    source_fixture_with_link(f, n, include_foreign, false).await
+}
+async fn source_fixture_with_link(f: &Fixture, n: usize, include_foreign: bool, link: bool) -> Vec<Source> {
     let crew = f.crew.clone();
     let worker = f.worker.clone();
     let (made, _changes) = f
@@ -84,6 +87,12 @@ async fn source_fixture(f: &Fixture, n: usize, include_foreign: bool) -> Vec<Sou
                             ..Default::default()
                         },
                     )?;
+                    if link {
+                        work::create(tx, &Sender::Human, WorkCreateParams {
+                            crew_id: crew.clone(), owner: Some(owner.clone()), title: "linked administrative source".into(),
+                            parent: Some(work.id.clone()), ..Default::default()
+                        })?;
+                    }
                     if include_foreign {
                         let foreign = crews::create(
                             tx,
@@ -530,6 +539,72 @@ async fn current_work(f: &Fixture, id: &str) -> crewd_proto::WorkPlan {
         .unwrap()
         .unwrap()
 }
+
+#[tokio::test]
+async fn bound_native_catalog_unlink_has_exact_receipt_and_does_not_resolve_case() {
+    let fake = FakeJev::start(vec![answer(0.99)]).await;
+    let f = Fixture::new().await;
+    f.configure(&fake.base_url).await;
+    let source = source_fixture_with_link(&f, 1, false, true).await.remove(0);
+    f.runtime.run_admin_case(f.crew.clone(), source.id.clone(), true).await.unwrap();
+    let original = view(&f, &source.id).await;
+    let child = original["targets"].as_array().unwrap().iter().filter_map(|t| t["id"].as_str())
+        .find(|id| *id != source.work).unwrap();
+    let child = current_work(&f, child).await;
+    assert_eq!(child.parent.as_deref(), Some(source.work.as_str()));
+    let parent = current_work(&f, &source.work).await;
+    let crew = f.crew.clone();
+    let id = source.id.clone();
+    let (permit, outside) = f.state.collab(move |tx| {
+        let outside = work::create(tx, &Sender::Human, WorkCreateParams {
+            crew_id: crew.clone(), title: "same crew outside the case".into(), ..Default::default()
+        })?;
+        Ok((execution::launch_permit(tx, &crew, &id)?.unwrap(), outside))
+    }).await.unwrap();
+    let r = Rig::new(f).await;
+    let sid = r.handle.start_admin_case(permit).await.unwrap().id;
+    wait_started(&r, &source.id, &sid).await;
+    assert_eq!(r.exec.launches(&sid)[0].native_policy, orchestra::exec::NativeExecutionPolicy::AdminCaseRestricted);
+    let mut admin = Socket::attach(r.f.state.clone(), &sid).await;
+    let mut worker = Socket::attach(r.f.state.clone(), &r.f.worker).await;
+    let tool = crewd_collab::admin_case_link::UNLINK_TOOL;
+    let bound_tools = admin.call("agent.tools", json!({})).await.unwrap();
+    assert!(bound_tools.as_array().unwrap().iter().any(|t| t["name"] == tool));
+    let ordinary = worker.call("agent.tools", json!({})).await.unwrap();
+    assert!(!ordinary.as_array().unwrap().iter().any(|t| t["name"] == tool));
+    let params = json!({"tool":tool,"args":{"request_id":uuid::Uuid::new_v4().to_string(),"id":child.id,
+        "expected_revision":child.revision,"related_id":parent.id,"expected_related_revision":parent.revision,
+        "edge":"parent","evidence":{"kind":"text","value":"fixture evidence"},"note":"incorrect parent"}});
+    let denied = worker.call("agent.call", params.clone()).await;
+    assert!(denied.is_err() || denied.unwrap()["isError"] == true);
+    let mut bad = params.clone();
+    bad["args"]["related_id"] = json!(outside.id);
+    bad["args"]["expected_related_revision"] = json!(outside.revision);
+    let denied = admin.call("agent.call", bad).await;
+    assert!(denied.is_err() || denied.unwrap()["isError"] == true);
+    assert_eq!(current_work(&r.f, &child.id).await, child);
+
+    let removed = admin.call("agent.call", params.clone()).await.unwrap();
+    assert_eq!(removed["isError"], false, "{removed}");
+    assert_eq!(admin.call("agent.call", params.clone()).await.unwrap(), removed);
+    let after = current_work(&r.f, &child.id).await;
+    assert!(after.parent.is_none());
+    assert_eq!(after.status, child.status);
+    assert_eq!(current_work(&r.f, &parent.id).await, parent);
+    assert_eq!(view(&r.f, &source.id).await["executionRecord"]["effectsCount"], 1);
+    let crew = r.f.crew.clone();
+    let case = source.id.clone();
+    let outcome = r.f.state.collab(move |tx| crewd_collab::admin_case_outcome::verify(tx, &crew, &case)).await.unwrap();
+    assert_ne!(outcome.phase, crewd_proto::AdminCaseOutcomePhase::Resolved);
+    assert_eq!(fake.requests().len(), 1, "correction must not dispatch a model");
+    r.f.state.admission.revoke(&source.owner);
+    let denied = admin.call("agent.call", params).await;
+    assert!(denied.is_err() || denied.unwrap()["isError"] == true);
+    admin.close().await;
+    worker.close().await;
+    r.close().await;
+}
+
 fn close_args(work: &crewd_proto::WorkPlan) -> serde_json::Value {
     json!({"tool":"work_item_close","args":{"id":work.id,"expected_revision":work.revision,"kind":"done","evidence":{"kind":"text","value":"independent fixture verified completion"},"note":"actual administrative resolution"}})
 }

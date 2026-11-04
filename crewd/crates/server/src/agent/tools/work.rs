@@ -453,6 +453,14 @@ pub async fn close(cx: &Ctx<'_>, v: Value) -> CallResult {
     )
 }
 
+pub(crate) async fn case_unlink(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let p = match parse_args(cx, v) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    receipt(cx, port::admin_work_unlink(cx.st, p).await)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ClosureHistory {

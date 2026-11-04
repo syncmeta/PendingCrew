@@ -1454,3 +1454,30 @@ messages、todo、documents、progress，与工作图父级独立。
 
 ## admin_case_custody_accept.note
 你的明确接管说明，不能为空。
+
+## admin_case_work_unlink
+移除本行政事项范围内两项工作的一个事实有误的父项或依赖链接。提供两项工作的当前版本及证据。此操作不会解除阻塞、关闭工作或扩大行政范围。结果未知时保留 request_id 和原始参数。
+
+## admin_case_work_unlink.request_id
+本次修正的 UUID。完全相同的请求可读取原回执。
+
+## admin_case_work_unlink.id
+需要移除其错误链接的工作项 W 编号。
+
+## admin_case_work_unlink.expected_revision
+通过 work_item_get 读取的该工作项当前版本。
+
+## admin_case_work_unlink.related_id
+现有父项或依赖项的 W 编号，也必须在本行政事项范围内。
+
+## admin_case_work_unlink.expected_related_revision
+通过 work_item_get 读取的该父项或依赖项当前版本。
+
+## admin_case_work_unlink.edge
+要移除的现有结构链接。parent 为父项，dependency 为依赖项。
+
+## admin_case_work_unlink.evidence
+修正所依据的事实证据，可用提交号、URL 或文本。
+
+## admin_case_work_unlink.note
+说明现有链接在事实上哪里有误。

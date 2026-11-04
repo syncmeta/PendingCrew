@@ -4,7 +4,7 @@ use super::Identity;
 use crate::{AppState, connection_scope::ConnectionScope};
 use crewd_collab::{
     CollabError, Result, Tx, admin_case_custody as custody, admin_case_execution as cases,
-    admin_case_handoff as handoff,
+    admin_case_handoff as handoff, admin_case_link as link,
 };
 use rusqlite::Connection;
 use serde_json::Value;
@@ -32,6 +32,7 @@ enum Scope {
 
 pub(crate) enum MutationPermit {
     Work(cases::EffectPermit),
+    Unlink(cases::ExecutionWitness, Box<link::UnlinkParams>),
     HandoffRequest(handoff::RequestPermit),
     HandoffAccept(handoff::AcceptPermit),
     CustodyAccept(custody::AcceptPermit),
@@ -40,6 +41,7 @@ impl MutationPermit {
     pub(crate) fn finish(self, tx: &mut Tx<'_>) -> Result<()> {
         match self {
             Self::Work(p) => cases::finish_effect(tx, p),
+            Self::Unlink(witness, params) => link::require_committed(tx.conn(), &witness, &params),
             Self::HandoffRequest(p) => handoff::finish_request(tx, p),
             Self::HandoffAccept(p) => handoff::finish_accept(tx, p),
             Self::CustodyAccept(p) => custody::finish_accept(tx, p),
@@ -138,6 +140,7 @@ pub(crate) fn allowed_tool(tool: &str) -> bool {
             | "work_item_reassign_lost"
             | "admin_case_handoff_request"
             | "admin_case_handoff_get"
+            | link::UNLINK_TOOL
     )
 }
 fn work(tool: &str, args: &Value) -> Result<String> {
@@ -151,6 +154,19 @@ fn work(tool: &str, args: &Value) -> Result<String> {
         .ok_or_else(denied)
 }
 impl Authority {
+    pub(crate) fn unlink(
+        &self,
+        tx: &mut Tx<'_>,
+        p: link::UnlinkParams,
+    ) -> Result<link::UnlinkReceipt> {
+        self.validate_actor(tx.conn())?;
+        match &self.scope {
+            Scope::Work { witness, id } if self.tool == link::UNLINK_TOOL && *id == p.id => {
+                link::unlink(tx, witness, p)
+            }
+            _ => Err(denied()),
+        }
+    }
     fn validate_actor(&self, c: &Connection) -> Result<()> {
         if !self.connection.is_live()
             || !self
@@ -287,6 +303,10 @@ impl Authority {
             }
             Scope::Work { witness, id } => {
                 let action = match self.tool.as_str() {
+                    link::UNLINK_TOOL => {
+                        let p = serde_json::from_value(self.args.clone()).map_err(|_| denied())?;
+                        return Ok(MutationPermit::Unlink(witness.clone(), Box::new(p)));
+                    }
                     "work_item_close" => cases::ActionScope::WorkClose {
                         id: id.clone(),
                         kind: serde_json::from_value(
@@ -355,6 +375,8 @@ pub(crate) async fn prepare(
             witness,
             id: work(tool, args)?,
         }
+    } else if tool == link::UNLINK_TOOL {
+        return Err(denied());
     } else {
         return Ok(None);
     };
@@ -394,7 +416,11 @@ pub(crate) async fn check_call(
         st.db
             .call_result(move |s| a.validate_read(s.conn()))
             .await??;
-    } else if handoff_tool(tool) || custody_tool(tool) || bound(st, &me.session_id).await? {
+    } else if handoff_tool(tool)
+        || custody_tool(tool)
+        || tool == link::UNLINK_TOOL
+        || bound(st, &me.session_id).await?
+    {
         return Err(denied());
     }
     Ok(())
