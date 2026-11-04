@@ -264,6 +264,11 @@ pub fn render(ctx: &WorldCtx) -> String {
     } else {
         String::new()
     };
+    let captain_tools = if ctx.role == Role::Captain && !ctx.management_crew {
+        f.get("captain.tool_entry")
+    } else {
+        ""
+    };
     let extension = ctx
         .extension
         .clone()
@@ -274,6 +279,7 @@ pub fn render(ctx: &WorldCtx) -> String {
         f.get("body"),
         &[
             ("roleBlock", &b.role),
+            ("captainToolsBlock", captain_tools),
             ("captainBlock", &b.captain),
             ("lineageBlock", &b.lineage),
             ("quotaBlock", &b.quota),
@@ -352,6 +358,33 @@ mod tests {
     }
 
     #[test]
+    fn captain_launch_names_the_tools_for_creating_a_crew_and_starting_a_member() {
+        let mut db = store();
+        let management = crate::testkit::org_captain(&mut db);
+        db.conn()
+            .execute("UPDATE sessions SET role='admin' WHERE id='w-a2'", [])
+            .unwrap();
+        for locale in [Locale::Zh, Locale::En] {
+            let captain = context_for(db.conn(), "cap-a", locale).unwrap();
+            let launch = render(&captain);
+            for entry in [
+                "mcp__crew__crew_structure",
+                "create_child",
+                "mcp__crew__start_session",
+                "isolation",
+            ] {
+                assert!(launch.contains(entry), "{locale:?} launch is missing {entry}");
+            }
+            for session in ["w-a1", "w-a2", management.as_str()] {
+                let other = render(&context_for(db.conn(), session, locale).unwrap());
+                assert!(!other.contains("mcp__crew__crew_structure"), "{session}");
+                assert!(!other.contains("mcp__crew__start_session"), "{session}");
+            }
+            assert!(!render_live(&captain).contains("mcp__crew__crew_structure"));
+        }
+    }
+
+    #[test]
     fn context_collects_crew_lineage_channels_and_where_to_find_the_human() {
         let s = store();
         let c = context_for(s.conn(), "w-b1", Locale::Zh).unwrap();
@@ -387,6 +420,7 @@ mod tests {
         "lobbyId",
         "humanChannelId",
         "roleBlock",
+        "captainToolsBlock",
         "captainBlock",
         "lineageBlock",
         "quotaBlock",
