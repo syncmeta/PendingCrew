@@ -5,7 +5,7 @@
 | 路线 | 已取得的证据 | 下一道关口 |
 |---|---|---|
 | Mac 日用与 Tirkadavur | `2ef0998d` 公证 Mac 整包通过隔离升级及回滚。早先两次真实机组首条群消息耗时 135 和 179 秒，原生记录显示 WebSocket 约 96 秒后回退 HTTP。Mac 客户端已接入默认关闭的 Codex 本机代理选项，只在下次启动本机后台时生效。使用实际原生参数和普通 Core 的隔离机组完成真实任务，机长读取需求、创建唯一关联工作并引用原消息回复，耗时 22.484 秒。该轮原生记录有七次 WebSocket 请求，未观察到 HTTP 回退，两进程均已退出。 | 正式窗口设置及日用验收。切换前核对现有 Core 与会话的安全停工条件。 |
-| 行政自动化 | 巡检、待人清单及案件动作报告已接线。相近需求和重复工作复核已通过本机、配对及原回执恢复验收。`cd8d439d` 接入人工答复和撤回的原请求回执，实测重启只查原 UUID，配对撤权后拒绝结案。进展协调现可将确切送达的原决定与原机长的实际指派一并入账。使用本地模拟判断服务和机长实际连接，验证未送达时拒绝、送达后只指派一次、数据库重开后查回原回执。Mac 主工程编译通过，工作详情可分别查看判断、送达和分派。 | 普通后台的 Jev HTTPS 链路与正式窗口验收。后续把拆项结果接入原决定链路。 |
+| 行政自动化 | 巡检、待人清单及案件动作报告已接线。相近需求和重复工作复核已通过本机、配对及原回执恢复验收。`cd8d439d` 接入人工答复和撤回的原请求回执，实测重启只查原 UUID，配对撤权后拒绝结案。`ae68d397` 将送达决定与机长指派一并入账。`2cb8f0b3` 接入协调拆项，原机长可一次创建两至八个直属子项，父项和原需求关系保持原样。本地模拟判断服务及实际机长连接验证送达、指派与拆项互斥、数据库重开后查回原结果且不重复建项。Mac Debug 嵌入同源普通 Core。 | 普通后台的 Jev HTTPS 链路、正式窗口与日用验收。 |
 | 文档数据 | 原文档编辑、搜索、恢复、回收站及待办双向链接已联调。原生端新增同机组内容块编排，可引用指定版本、排序、移除，并从历史恢复排列。实际普通 Core 与 Swift 数据层验证两份文档引用同一块，原块更新后引用仍固定在原版本。丢回执后，后台重启且文档已有后续编辑，客户端仍只查原请求及其确切版本。恢复保留后续标题和工作关联。组合 Mac Debug 编译通过。 | 从正式窗口验收文档编排和待办的双向操作，以及移动端共享入口。 |
 | iOS 与跨端 | `686f52d3` 普通 iPhoneOS arm64 构建通过，验证了本轮共享人工待确认入口的编译。早先 `09ac03f5` 已用 macOS 原生传输与 `0947711d` Core 验证短链接配对、原授权回执、重连查原巡检和撤权。最近一次读取手机 PendingCrew 版本时设备明确返回锁屏。 | 真机的应用配对、读取、答复及恢复待设备解锁后独立验收。 |
 
@@ -20,6 +20,8 @@ Mac 代理参数和真实 Tirkadavur 类验收的摘要见 `/private/tmp/pcw-tir
 人工待确认的重启联调见 `/private/tmp/pcw-ask-run.mzh1lyut/result.json`，真实配对见 `/private/tmp/pcw-ask-resolution-final-paired.log`。Mac 与 iPhoneOS Debug 的冻结客户端为 `686f52d3`，Mac 嵌入普通 Core `cd8d439d`，两提交的 Rust 源码完全一致。构建证据在 `/private/tmp/pcw-cd8d439d-normal.qfPk3F/`。
 
 协调指派的账本回归见 `/private/tmp/pcw-coordination-assignment-collab-sealed.log`，本机连接与相关后台回归见 `/private/tmp/pcw-coordination-gate.erGX0x/server-coordination-family.log`。Mac 编译使用已核验的 `cd8d439d` 普通后台作为嵌入输入。普通 Linux 的回环 HTTPS 隔离验收脚本已准备，等待适用运行环境和同源二进制。
+
+`2cb8f0b3` 的实际机长连接回归见 `/private/tmp/pcw-coordination-split-socket-runtime.log`。同源普通 Core 在未配置判断服务时拒绝指派和拆项，两次进程均正常退出。Core 21→22 隔离迁移和整份旧数据回退也通过，确认原回执、需求、工作和文档均可读回。普通后台、Mac Debug 和迁移证据分别见 `/private/tmp/pcw-coord-smoke._j3yyfjt/result.json`、`/private/tmp/pcw-split-ordinary.3WoYkW/mac-debug-proof.json`、`/private/tmp/pcw-2cb8f0b3-upgrade-E5703728/result.json`。迁移验收运行的是后台二进制，正式安装包的签名、安装和回退另行验收。
 
 ## 2026-10-31 执行基线：逐项接完整决策能力
 
