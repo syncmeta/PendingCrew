@@ -193,6 +193,7 @@ pub mod methods {
         crate::channel_archive::RESTORE,
         crate::message_attribution::GET,
         crate::message_attribution::SET,
+        crate::message_attribution::HISTORY,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
         crate::commands::COMMAND_SUBMIT,
         crate::commands::COMMAND_LOOKUP,
@@ -933,6 +934,13 @@ pub fn api_schema() -> Value {
             m(
                 sub::<message_attribution::MessageAttributionGet>(g),
                 sub::<message_attribution::MessageAttributionView>(g),
+            ),
+        ),
+        (
+            message_attribution::HISTORY,
+            m(
+                sub::<message_attribution::MessageAttributionHistoryParams>(g),
+                sub::<message_attribution::MessageAttributionHistoryPage>(g),
             ),
         ),
         (

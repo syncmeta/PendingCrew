@@ -327,6 +327,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     methods::TODO_RULING_CHECK,
                     methods::TODO_CREATE_LOOKUP,
                     methods::WORK_CHANNEL_RESPONSIBILITY,
+                    crewd_proto::message_attribution::HISTORY,
                     methods::TODO_RULING_RESULT,
                     crewd_proto::commands::TODO_RULE_CLOSE,
                 ]

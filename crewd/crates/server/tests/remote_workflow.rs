@@ -3386,3 +3386,68 @@ async fn paired_human_reads_exact_channel_responsibility_and_revocation_denies()
     drop(remote);
     stopped(running).await;
 }
+
+#[tokio::test]
+async fn paired_human_reads_message_correction_history_until_grant_is_revoked() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let crew = local(
+        &mut running.owner,
+        "crew.create",
+        json!({"title":"Synthetic correction history","workingDirectory":dir.path()}),
+    )
+    .await["id"]
+        .clone();
+    let channel = local(
+        &mut running.owner,
+        "channel.create",
+        json!({"crewId":crew,"kind":"topic","name":"Correction source","members":[]}),
+    )
+    .await["id"]
+        .clone();
+    let hello = local(&mut running.owner, "system.hello", json!({})).await;
+    let post = draft_packet(
+        &hello,
+        "message.post",
+        json!({"channelId":channel,"text":"Synthetic source remains immutable"}),
+    );
+    let receipt = local(&mut running.owner, "command.submit", post).await;
+    assert_eq!(receipt["phase"], "committed");
+    let message = &receipt["result"]["id"];
+    let current = local(
+        &mut running.owner,
+        "message.attribution.get",
+        json!({"crewId":crew,"messageId":message}),
+    )
+    .await;
+    let clear = json!({"crewId":crew,"messageId":message,"expectedRevision":current["revision"],"action":"clear"});
+    let cleared = local(&mut running.owner, "message.attribution.set", clear).await;
+    let query = json!({"crewId":crew,"channelId":channel,"messageId":message});
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let history = remote.call("message.attribution.history", query.clone()).await;
+    assert_eq!(history["crewId"], crew);
+    assert_eq!(history["channelId"], channel);
+    assert_eq!(&history["messageId"], message);
+    assert_eq!(history["items"].as_array().unwrap().len(), 1);
+    assert_eq!(history["items"][0]["action"], "clear");
+    assert_eq!(
+        history["items"][0]["after"],
+        json!({"action":"clear","targetUnavailable":false})
+    );
+    let reset = json!({"crewId":crew,"messageId":message,"expectedRevision":cleared["revision"],"action":"reset"});
+    let denied = remote.frame("message.attribution.set", reset).await.unwrap();
+    assert!(denied["error"].is_object());
+    assert_eq!(remote.call("message.attribution.history", query.clone()).await, history);
+
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"correction history fixture complete"
+    })).await;
+    let denied = tokio::time::timeout(LIMIT, remote.frame("message.attribution.history", query))
+        .await
+        .unwrap();
+    assert!(denied.is_err() || denied.unwrap()["error"].is_object());
+    drop(remote);
+    stopped(running).await;
+}

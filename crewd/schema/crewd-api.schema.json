@@ -11483,6 +11483,145 @@
       ],
       "type": "object"
     },
+    "MessageAttributionHistoryAction": {
+      "enum": [
+        "set",
+        "clear"
+      ],
+      "type": "string"
+    },
+    "MessageAttributionHistoryItem": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/AttributionAction"
+        },
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageAttributionHistoryValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "atMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageAttributionHistoryValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "historical": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action",
+        "atMs",
+        "historical"
+      ],
+      "type": "object"
+    },
+    "MessageAttributionHistoryPage": {
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/MessageAttributionHistoryItem"
+          },
+          "type": "array"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "olderUnavailable": {
+          "description": "The v1 chain continues beyond the bounded ancestry read.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "crewId",
+        "channelId",
+        "messageId",
+        "items",
+        "olderUnavailable"
+      ],
+      "type": "object"
+    },
+    "MessageAttributionHistoryParams": {
+      "additionalProperties": false,
+      "description": "Read the bounded Human correction chain for an exact message.",
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "channelId",
+        "messageId"
+      ],
+      "type": "object"
+    },
+    "MessageAttributionHistoryValue": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/MessageAttributionHistoryAction"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttributionTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetUnavailable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action",
+        "targetUnavailable"
+      ],
+      "type": "object"
+    },
     "MessageAttributionOverride": {
       "properties": {
         "action": {
@@ -20046,6 +20185,14 @@
       },
       "result": {
         "$ref": "#/$defs/MessageAttributionView"
+      }
+    },
+    "message.attribution.history": {
+      "params": {
+        "$ref": "#/$defs/MessageAttributionHistoryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MessageAttributionHistoryPage"
       }
     },
     "message.attribution.set": {

@@ -619,7 +619,9 @@ async fn request_step(
         Ok(req)
             if matches!(
                 req.method.as_str(),
-                crewd_proto::message_attribution::GET | crewd_proto::message_attribution::SET
+                crewd_proto::message_attribution::GET
+                    | crewd_proto::message_attribution::SET
+                    | crewd_proto::message_attribution::HISTORY
             ) =>
         {
             if agent.is_attached() {

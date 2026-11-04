@@ -1007,6 +1007,7 @@ fn allowed_method(method: &str) -> bool {
             | "notification.deliveryGet"
             | "judgment.inspect"
             | "message.attribution.get"
+            | crewd_proto::message_attribution::HISTORY
             | "channel.archiveCheck"
             | "adminCase.list"
             | "adminCase.get"

@@ -127,6 +127,24 @@ async fn human_override_clear_reset_cas_and_attached_denial_preserve_original_me
         "reset must not revive an old CAS token"
     );
     assert_eq!(reset["source"], "none");
+    let after_corrections = snapshot(&f).await;
+    let query = json!({"crewId":f.crew,"channelId":ch,"messageId":source.id});
+    let history = rpc(&mut human, "message.attribution.history", query.clone()).await;
+    let rows = history["items"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["action"], "reset");
+    assert!(rows[0].get("after").is_none());
+    assert_eq!(rows[0]["before"]["action"], "clear");
+    assert_eq!(rows[1]["before"]["target"], json!({"kind":"message","id":prior.id}));
+    assert_eq!(rows[2]["after"]["target"], rows[1]["before"]["target"]);
+    assert!(rows[2].get("before").is_none());
+    assert!(history.get("nextCursor").is_none() && history["olderUnavailable"] == false);
+    let denied = call(&mut worker, "message.attribution.history", query).await;
+    assert_eq!(denied.unwrap_err().0, crewd_proto::RpcError::FORBIDDEN);
+    let wrong_channel = call(&mut human, "message.attribution.history",
+        json!({"crewId":f.crew,"channelId":"different-channel","messageId":source.id})).await;
+    assert!(wrong_channel.is_err());
+    assert_eq!(snapshot(&f).await, after_corrections);
     let id = source.id.clone();
     let reread = f
         .state

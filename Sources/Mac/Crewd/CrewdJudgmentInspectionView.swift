@@ -8,6 +8,7 @@ struct CrewdJudgmentInspectionView: View {
     let sourceID: String
     var members: [CrewdValue] = []
     var automaticallyLoad = false
+    var scopeCurrent: @MainActor () -> Bool = { true }
     @State private var record: CrewdValue?
     @State private var error: String?
     @State private var busy = false
@@ -26,7 +27,7 @@ struct CrewdJudgmentInspectionView: View {
                     let recipients = record["recipients"].array.compactMap(\.string)
                     Text(recipients.isEmpty ? "记录中没有接收成员。" : "记录的接收成员：" + recipients.map(memberName).joined(separator: "、"))
                     if let id = record["attribution"]["id"].string {
-                        Text("关联对象：" + id)
+                        Text("原判断中的关联对象：" + id)
                     } else { Text("记录中没有关联对象。") }
                     Text("接收名单和关联是记录结果，不代表成员已经执行或任务已经完成。").font(.caption).foregroundStyle(.secondary)
                 }
@@ -39,16 +40,18 @@ struct CrewdJudgmentInspectionView: View {
     }
     private func invalidate() { request = UUID(); record = nil; error = nil; busy = false }
     private func read() {
+        guard scopeCurrent() else { return }
         let token = UUID(); request = token; busy = true; record = nil; error = nil
         let original = identity
         Task { @MainActor in
             defer { if request == token { busy = false } }
+            guard request == token, identity == original, scopeCurrent() else { return }
             do {
                 let value = try await store.inspectJudgment(crew: crew, kind: kind, id: sourceID)
-                guard request == token, identity == original else { return }
+                guard request == token, identity == original, scopeCurrent() else { return }
                 record = value
             } catch {
-                guard request == token, identity == original else { return }
+                guard request == token, identity == original, scopeCurrent() else { return }
                 self.error = error.localizedDescription
             }
         }

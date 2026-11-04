@@ -59,6 +59,82 @@ struct CrewdWorkID: Hashable, Sendable {
     }
 }
 
+/// Human corrections are separate from the model's judgment and effective link.
+struct CrewdMessageAttributionHistoryPage: Equatable {
+    static let method = "message.attribution.history"
+    static let limit = 256
+    static let cursorLimit = 70
+    struct Source: Equatable {
+        let crew: String
+        let channel: String
+        let message: String
+    }
+    enum Action: String { case set, clear, reset }
+    struct Override: Equatable {
+        struct Target: Equatable {
+            enum Kind: String { case message, requirement, work }
+            let kind: Kind
+            let id: String
+        }
+        let action: Action
+        let target: Target?
+        let targetUnavailable: Bool
+    }
+    struct Item: Equatable {
+        let action: Action
+        let atMs: Int64
+        let historical: Bool
+        let before: Override?
+        let after: Override?
+    }
+    let items: [Item]
+    let nextCursor: String?
+    let olderUnavailable: Bool
+
+    init(_ value: CrewdValue, source: Source, cursor: String?) throws {
+        let invalid = CrewdClientError(message:"人工纠正历史不完整或与当前消息不一致。")
+        func parseOverride(_ value: CrewdValue?) throws -> Override? {
+            guard let value else { return nil }
+            guard case .object(let fields) = value, let raw = fields["action"]?.string,
+                  let action = Action(rawValue:raw), action != .reset,
+                  case .bool(let unavailable)? = fields["targetUnavailable"] else { throw invalid }
+            let target: Override.Target?
+            if let wire = fields["target"] {
+                guard case .object = wire, let kindName = wire["kind"].string,
+                      let kind = Override.Target.Kind(rawValue:kindName),
+                      let id = wire["id"].string, !id.isEmpty, id.utf8.count <= 256 else { throw invalid }
+                target = .init(kind:kind,id:id)
+            } else { target = nil }
+            guard action == .set ? (target != nil) != unavailable : target == nil && !unavailable else { throw invalid }
+            return .init(action:action,target:target,targetUnavailable:unavailable)
+        }
+        func matches(_ wire: CrewdValue?, _ expected: String) -> Bool {
+            wire?.string?.utf8.elementsEqual(expected.utf8) == true
+        }
+        guard case .object(let fields) = value,
+              matches(fields["crewId"],source.crew), matches(fields["channelId"],source.channel),
+              matches(fields["messageId"],source.message), case .array(let rows)? = fields["items"], rows.count <= 20,
+              cursor == nil || !rows.isEmpty,
+              case .bool(let olderUnavailable)? = fields["olderUnavailable"],
+              !olderUnavailable || (cursor != nil && !rows.isEmpty) else { throw invalid }
+        if let next = fields["nextCursor"] {
+            guard let token = next.string, !token.isEmpty, token.utf8.count <= Self.cursorLimit, token != cursor,
+                  rows.count == 20, !olderUnavailable else { throw invalid }
+            nextCursor = token
+        } else { nextCursor = nil }
+        self.olderUnavailable = olderUnavailable
+        items = try rows.map { row in
+            guard case .object(let fields) = row, let raw = fields["action"]?.string,
+                  let action = Action(rawValue:raw), case .integer(let atMs)? = fields["atMs"],
+                  case .bool(let historical)? = fields["historical"] else { throw invalid }
+            let before = try parseOverride(fields["before"])
+            let after = try parseOverride(fields["after"])
+            guard action == .reset ? after == nil : after?.action == action else { throw invalid }
+            return .init(action:action,atMs:atMs,historical:historical,before:before,after:after)
+        }
+    }
+}
+
 /// Present the server's wait tiers without inferring them from the local clock.
 enum CrewdHumanWaitPresentation {
     static func summary(_ row: CrewdValue) -> String? {
@@ -725,6 +801,21 @@ final class CrewdWorkStore: ObservableObject {
         for candidate in candidates {guard validLink(candidate["link"]),candidate["summary"].string != nil else {throw CrewdClientError(message:"归属候选无效。")}}
         guard let resolved=row["resolvedCandidate"],resolved == .null || (validLink(resolved["link"]) && resolved["summary"].string != nil) else {throw CrewdClientError(message:"精确查找结果无效。")}
         return value
+    }
+    var supportsMessageAttributionHistory: Bool { capabilities.contains(CrewdMessageAttributionHistoryPage.method) }
+    func messageAttributionHistory(source: CrewdMessageAttributionHistoryPage.Source, cursor: String? = nil) async throws -> CrewdMessageAttributionHistoryPage {
+        let validCursor = cursor.map { !$0.isEmpty && $0.utf8.count <= CrewdMessageAttributionHistoryPage.cursorLimit } ?? true
+        guard supportsMessageAttributionHistory, selectedCrew == source.crew,
+              !source.crew.isEmpty, !source.channel.isEmpty, !source.message.isEmpty, validCursor else {
+            throw CrewdClientError(message:"当前连接无法读取这条消息的人工纠正历史。",kind:.notSubmitted)
+        }
+        let token = generation
+        var params: [String:CrewdValue] = ["crewId":.string(source.crew),"channelId":.string(source.channel),"messageId":.string(source.message)]
+        if let cursor { params["cursor"] = .string(cursor) }
+        let page = try await call(CrewdMessageAttributionHistoryPage.method,.object(params))
+        try check(token)
+        guard supportsMessageAttributionHistory, selectedCrew == source.crew else { throw CancellationError() }
+        return try .init(page,source:source,cursor:cursor)
     }
     func messageAttribution(crew:String,message:String,target:CrewdValue?=nil) async throws -> CrewdValue {
         let token=generation

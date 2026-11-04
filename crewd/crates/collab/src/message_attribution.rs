@@ -5,8 +5,12 @@ use crewd_proto::{
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+mod history;
+pub use history::read as read_history;
+
 const PREFIX: &str = "message.attribution.v1:";
-#[derive(Clone, Debug, Serialize, Deserialize)]
+const AUDIT_PREFIX: &str = "message.attribution.audit.v1:";
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Saved {
     version: u32,
@@ -363,7 +367,7 @@ pub fn set(
     };
     crewd_store::meta_set(
         tx.conn(),
-        &format!("message.attribution.audit.v1:{}:{}", m.id, after.revision),
+        &format!("{AUDIT_PREFIX}{}:{}", m.id, after.revision),
         &serde_json::to_string(&audit).map_err(crewd_store::StoreError::from)?,
     )?;
     crewd_store::meta_set(

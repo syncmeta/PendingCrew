@@ -90,7 +90,7 @@ private struct CrewdMobileCrewPane: View {
                     if workspace.sessions.isEmpty {
                         CrewdSessionStartView(workspace: workspace, drafts: $workspace.messageDrafts).padding()
                     }
-                    CrewdMobileMessages(workspace: workspace).id(workspace.crewID)
+                    CrewdMobileMessages(workspace:workspace,active:tab == .messages).id(workspace.crewID)
                 }.opacity(tab == .messages ? 1 : 0).allowsHitTesting(tab == .messages)
                     .disabled(tab != .messages).accessibilityHidden(tab != .messages)
                 if tab == .todo || tab == .progress {
@@ -111,9 +111,10 @@ private struct CrewdMobileCrewPane: View {
 
 private struct CrewdMobileMessages: View {
     @ObservedObject var workspace: CrewdWorkspace
+    let active: Bool
     var body: some View {
         VStack(spacing: 0) {
-            CrewdMobileConversation(workspace: workspace, expectedChannel: workspace.channelID).id(workspace.channelID)
+            CrewdMobileConversation(workspace:workspace,expectedChannel:workspace.channelID,active:active).id(workspace.channelID)
         }
     }
 
@@ -122,9 +123,11 @@ private struct CrewdMobileMessages: View {
 private struct CrewdMobileConversation: View {
     @ObservedObject var workspace: CrewdWorkspace
     let expectedChannel: String
+    let active: Bool
     @Environment(\.colorScheme) private var scheme
     @State private var showTodo = false
     @State private var showMembers = false
+    @State private var judgmentTarget: CrewdMessageInspectionTarget?
     private var context: CrewdDrafts.Context { .message(crew: workspace.crewID, channel: workspace.channelID, session: workspace.sessionID) }
     private var input: Binding<String> { Binding(get: { workspace.messageDrafts.text(for: context) }, set: { workspace.setPersonalInput($0,context:context) }) }
     var body: some View {
@@ -132,7 +135,14 @@ private struct CrewdMobileConversation: View {
             if expectedChannel.isEmpty { Text("选择一个会话").foregroundStyle(.secondary) }
             else if expectedChannel != workspace.channelID { Text("正在读取会话…").foregroundStyle(.secondary) }
             else { conversation }
-        }.task(id: expectedChannel) { if !expectedChannel.isEmpty, workspace.channelID != expectedChannel { workspace.selectConversation(expectedChannel) } }
+        }
+        .task(id:expectedChannel) { if !expectedChannel.isEmpty, workspace.channelID != expectedChannel { workspace.selectConversation(expectedChannel) } }
+        .sheet(item:$judgmentTarget) { target in
+            CrewdMessageInspectionSheet(workspace:workspace,target:target,presentationCurrent:{
+                active && judgmentTarget?.id == target.id && expectedChannel == target.source.channel
+            })
+        }
+        .onChange(of:active) { _,isActive in if !isActive { judgmentTarget = nil } }
     }
     private var conversation: some View {
         VStack(spacing: 8) {
@@ -195,8 +205,7 @@ private struct CrewdMobileConversation: View {
                             else if let sender = message["senderSessionId"].string { CrewdMemberAvatar(seed: sender, colorSeed: workspace.channelID) }
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(message["senderName"].string ?? (human ? "你" : "成员")).font(.caption).foregroundStyle(.secondary)
-                                Text(message["text"].string ?? "").textSelection(.enabled).padding(10)
-                                    .background(human ? CrewdChatStyle.selection(scheme) : CrewdChatStyle.bubble(scheme), in: RoundedRectangle(cornerRadius: 6))
+                                messageText(message,human:human)
                             }
                             if human { CrewdMemberAvatar(seed: "human", colorSeed: workspace.channelID) }
                             else { Spacer(minLength: 24) }
@@ -213,6 +222,20 @@ private struct CrewdMobileConversation: View {
             }.onChange(of: workspace.messages.last?["id"].string) { _, last in if let last { proxy.scrollTo(last, anchor: .bottom) } }
         }
     }
+    @ViewBuilder private func messageText(_ message: CrewdValue, human: Bool) -> some View {
+        let bubble = Text(message["text"].string ?? "").textSelection(.enabled).padding(10)
+            .background(human ? CrewdChatStyle.selection(scheme) : CrewdChatStyle.bubble(scheme),in:RoundedRectangle(cornerRadius:6))
+        let crew = workspace.crewID, channel = expectedChannel
+        if active, let id = message["id"].string, !id.isEmpty, message["channelId"] == .string(channel),
+           CrewdMessageInspectionTarget.canOpen(workspace,crew:crew,channel:channel) {
+            bubble.contextMenu {
+                Button("查看判断记录",systemImage:"list.bullet.rectangle") {
+                    judgmentTarget = .init(workspace:workspace,crew:crew,channel:channel,message:id)
+                }
+            }
+        } else { bubble }
+    }
+
     private var restart: some View {
         let prompt = workspace.restartPrompt
         return VStack(alignment: .leading, spacing: 8) {

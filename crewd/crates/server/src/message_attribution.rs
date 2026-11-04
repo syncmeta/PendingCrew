@@ -47,6 +47,24 @@ async fn route(
                 .map_err(dispatch::collab_err)?;
             serde_json::to_value(row).map_err(dispatch::internal)
         }
+        HISTORY => {
+            actor.authorize(state, HISTORY).await?;
+            let p: MessageAttributionHistoryParams = crewd_proto::parse_params(req.params)?;
+            let row = state
+                .db
+                .call_result(move |s| {
+                    by.authorize_tx(&owner, s.conn(), HISTORY)?;
+                    crewd_collab::message_attribution::read_history(
+                        s.conn(),
+                        &crewd_collab::Sender::Human,
+                        p,
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(row).map_err(dispatch::internal)
+        }
         SET => {
             anchor(actor)?;
             actor.authorize(state, "local.clientTrust").await?;
