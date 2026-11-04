@@ -380,6 +380,7 @@ struct CrewdHumanResolutionRecovery: View {
         lookupID = lookup
         checking = true; feedback = nil
         Task { @MainActor in
+            @MainActor
             func current() -> Bool {
                 lookupID == lookup && workspace.presentationScope == scope && workspace.acceptsObservation(epoch) &&
                     workspace.workStore.readScope == route && workspace.channelID == channel
