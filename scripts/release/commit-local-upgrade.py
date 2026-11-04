@@ -131,6 +131,7 @@ def start(args):
     plan = checked_record(plan_path, args.plan_sha, 'pendingcrew-local-upgrade-preparation')
     app = preparation.directory(args.app)
     data = preparation.directory(args.authority)
+    require(str(app) == plan.get('app'), 'active App path differs from preparation')
     require(str(data) == plan['authority'] and not (app.is_relative_to(data) or data.is_relative_to(app)),
             'cutover paths differ from the prepared authority')
     old = preparation.directory(plan_path.parent / 'Old.app')
@@ -150,7 +151,8 @@ def start(args):
         require(args.rollback and args.rollback_sha and not args.new_app, 'explicit rollback staging evidence required')
         rollback_path = Path(args.rollback)
         rollback = checked_record(rollback_path, args.rollback_sha, 'pendingcrew-local-rollback-staging')
-        require(rollback['planSHA256'] == args.plan_sha and rollback['dbId'] == plan['dbId']
+        require(rollback['planSHA256'] == args.plan_sha and rollback.get('app') == plan['app']
+                and rollback['dbId'] == plan['dbId']
                 and rollback['restore21'] == plan['before21'] and rollback['oldApp'] == plan['oldApp']
                 and rollback['upgradedApp'] == plan['newApp'], 'rollback staging has another generation')
         old = preparation.directory(rollback_path.parent / 'Old.app')

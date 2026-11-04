@@ -87,7 +87,18 @@ def exercise(root, fail_at):
                 '--old-digest', old_package['bundleDigest'], '--new-digest', new_package['bundleDigest'],
                 '--requirement', fixture.REQUIREMENT, '--out', setup)
     plan = setup / 'plan.json'
-    common = ('--plan', plan, '--plan-sha', fixture.sha(plan), '--app', old, '--authority', data)
+    identity_args = ('--plan', plan, '--plan-sha', fixture.sha(plan), '--authority', data)
+    common = (*identity_args, '--app', old)
+
+    def refuse_wrong_app_path(operation, *args):
+        alternate = root / (operation + '-alternate.app')
+        shutil.copytree(old, alternate, symlinks=True)
+        assert fixture.contents(alternate) == fixture.contents(old)
+        output = root / (operation + '-wrong-path')
+        current = fixture.contents(data)
+        run('start', operation, *identity_args, '--app', alternate, *args, '--out', output,
+            fail='active App path differs from preparation')
+        assert not output.exists() and fixture.contents(data) == current
 
     def check_transaction(operation, output, *args):
         run('start', operation, *common, *args, '--out', output, crash=fail_at)
@@ -118,6 +129,7 @@ def exercise(root, fail_at):
 
     upgrade = root / 'upgrade'
     if fail_at == 0:
+        refuse_wrong_app_path('upgrade', '--new-app', incoming)
         process = subprocess.Popen([str(probe), '30'])
         try:
             run('start', 'upgrade', *common, '--new-app', incoming, '--out', upgrade,
@@ -138,6 +150,8 @@ def exercise(root, fail_at):
                 '--plan', plan, '--plan-sha', fixture.sha(plan), '--out', rollback_stage)
     rollback_record = rollback_stage / 'rollback.json'
     rollback = root / 'rollback'
+    if fail_at == 0:
+        refuse_wrong_app_path('rollback', '--rollback', rollback_record, '--rollback-sha', fixture.sha(rollback_record))
     check_transaction('rollback', rollback, '--rollback', rollback_record, '--rollback-sha', fixture.sha(rollback_record))
     assert fixture.contents(data) == before
     assert fixture.contents(old) == app_before

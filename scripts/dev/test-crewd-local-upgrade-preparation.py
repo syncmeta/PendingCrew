@@ -161,12 +161,19 @@ def main():
         rollback = ('stage-rollback', '--authority', data, '--plan', plan, '--plan-sha', sha(plan))
         run(*rollback, '--upgraded-app', old, '--out', root / 'wrong-rollback-app',
             refusal='upgraded App differs from preparation')
-        rollback += ('--upgraded-app', new)
+        old.rename(root / 'FormerActive.app')
+        shutil.copytree(new, old, symlinks=True)
+        assert contents(old) == contents(new)
+        rollback += ('--upgraded-app', old)
         run(*rollback, '--out', root / 'old-only', refusal='unsupported Core database generation')
         sqlite(data / 'crewd.db', 'PRAGMA user_version=22', 'CREATE TABLE newer(text TEXT)')
         sqlite(data / 'knowledge/example.sqlite', "UPDATE content SET text='after cutoff'")
         (data / 'attachments/new').write_bytes(b'added after cutoff')
         upgraded = contents(data)
+        run('stage-rollback', '--authority', data, '--plan', plan, '--plan-sha', sha(plan),
+            '--upgraded-app', new, '--out', root / 'wrong-rollback-path',
+            refusal='upgraded App path differs from preparation')
+        assert not (root / 'wrong-rollback-path').exists()
         staged = root / 'staged-rollback'
         run(*rollback, '--out', staged)
         assert contents(staged / 'restore21') == before

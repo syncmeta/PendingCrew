@@ -216,7 +216,7 @@ def prepare(args):
         recheck()
         write_record(out / 'plan.json', {
             'format': 1, 'kind': 'pendingcrew-local-upgrade-preparation',
-            'authority': str(data), 'dbId': identity, 'before21': rows,
+            'app': str(old), 'authority': str(data), 'dbId': identity, 'before21': rows,
             'oldApp': old_package, 'newApp': new_package, 'requirement': args.requirement,
         })
     print(f'Prepared evidence only: {out / "plan.json"} (SHA256 {sha(out / "plan.json")})')
@@ -235,6 +235,7 @@ def stage_rollback(args):
     data = directory(args.authority)
     require(str(data) == plan['authority'], 'rollback authority differs from preparation')
     upgraded_app = directory(args.upgraded_app)
+    require(str(upgraded_app) == plan.get('app'), 'upgraded App path differs from preparation')
     old = directory(plan_path.parent / 'Old.app')
     sealed = directory(plan_path.parent / 'before21')
     require(package(upgraded_app, plan['requirement']) == plan['newApp'], 'upgraded App differs from preparation')
@@ -256,7 +257,7 @@ def stage_rollback(args):
         recheck()
         write_record(out / 'rollback.json', {
             'format': 1, 'kind': 'pendingcrew-local-rollback-staging',
-            'planSHA256': args.plan_sha, 'dbId': plan['dbId'], 'upgraded22': after,
+            'planSHA256': args.plan_sha, 'app': str(upgraded_app), 'dbId': plan['dbId'], 'upgraded22': after,
             'restore21': plan['before21'], 'oldApp': plan['oldApp'], 'upgradedApp': plan['newApp'],
         })
     print(f'Rollback staged without replacing either generation: {out / "rollback.json"}')
