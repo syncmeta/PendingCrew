@@ -42,6 +42,10 @@ pub(crate) fn note_lifecycle(tx: &mut Tx<'_>, ch: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn generation(c: &Connection, ch: &str) -> Result<Option<String>> {
+    Ok(crewd_store::meta_get(c, &format!("channel.archive.generation.v1:{ch}"))?)
+}
+
 fn authorize_read(c: &Connection, by: &Sender, ch: &str) -> Result<()> {
     crate::channel_work::authorize(c, by, ch, false)?;
     Ok(())
@@ -68,7 +72,7 @@ pub fn check(
     let permitted = channels::may_manage(c, by, &ch)?;
     let crew_archived = crews::is_archived(c, &ch.crew_id)?;
     let lifecycle = lifecycle(c, &ch.id)?;
-    let generation = crewd_store::meta_get(c, &format!("channel.archive.generation.v1:{}", ch.id))?;
+    let generation = generation(c, &ch.id)?;
     let b = asks::load_org(c)?;
     let mut facts = ChannelArchiveFacts::default();
     let mut observed = Vec::<serde_json::Value>::new();

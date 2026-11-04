@@ -3,6 +3,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const SIMILAR_REQUIREMENTS: &str = "adminCase.similarRequirements";
+pub const REQUIREMENT_REVIEWS: &str = "adminCase.requirementReviews";
+pub const REQUIREMENT_REVIEW: &str = "adminCase.requirementReview";
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -26,8 +28,70 @@ pub struct SimilarRequirementsPage {
 pub struct SimilarRequirement {
     pub first_id: String,
     pub second_id: String,
+    pub channel_id: String,
+    pub candidate_revision: String,
+    pub review_revision: String,
     pub probability: f64,
     pub observed_at_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RequirementReviewDisposition {
+    Group,
+    Dismiss,
+    Clear,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementReviewParams {
+    pub crew_id: String,
+    pub first_id: String,
+    pub second_id: String,
+    pub expected_review_revision: String,
+    pub disposition: RequirementReviewDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_revision: Option<String>,
+    pub note: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementReview {
+    pub crew_id: String,
+    pub first_id: String,
+    pub second_id: String,
+    pub channel_id: String,
+    pub revision: String,
+    pub disposition: RequirementReviewDisposition,
+    pub note: String,
+    pub changed_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_revision: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementReviewsParams {
+    pub crew_id: String,
+    pub after: Option<String>,
+    pub limit: Option<u16>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequirementReviewsPage {
+    pub crew_id: String,
+    pub items: Vec<RequirementReviewRow>,
+    pub next_after: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequirementReviewRow {
+    pub review: RequirementReview,
+    pub effective: bool,
 }
 pub const LIST: &str = "adminCase.list";
 pub const GET: &str = "adminCase.get";

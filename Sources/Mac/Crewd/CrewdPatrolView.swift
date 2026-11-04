@@ -76,7 +76,7 @@ struct CrewdPatrolView: View {
             if let channel=archiveTarget {CrewdChannelArchiveView(store:store,channel:channel,crew:store.selectedCrew)}
         }
         .sheet(isPresented:$casesPresented) {CrewdAdminCasesView(store:store)}
-        .sheet(isPresented: $similarPresented) { CrewdSimilarRequirementsView(store: store) }
+        .sheet(isPresented: $similarPresented) { CrewdSimilarRequirementsView(store: store, workspace: workspace) }
         .onChange(of: scan) { _, _ in reset() }
         .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; archived=[]; archivedLoaded=false; readStatus() }
         .onAppear { readStatus() }
@@ -315,13 +315,19 @@ private struct CrewdManualPatrolControls: View {
 }
 
 private struct CrewdSimilarRequirementsView: View {
+    enum Page: String, CaseIterable { case suggestions = "待审阅", reviews = "已审阅" }
     @ObservedObject var store: CrewdWorkStore
+    let workspace: CrewdWorkspace?
     @Environment(\.dismiss) private var dismiss
+    @State private var page: Page = .suggestions
     @State private var rows: [CrewdValue] = []
     @State private var next: String?
     @State private var enabled: Bool?
+    @State private var loaded = false
+    @State private var selected: CrewdValue?
     @State private var originals: [(String, String)] = []
     @State private var failure: String?
+    @State private var actionFeedback: String?
     @State private var busy = false
     @State private var task: Task<Void, Never>?
     @State private var request = UUID()
@@ -335,37 +341,82 @@ private struct CrewdSimilarRequirementsView: View {
             }
             Text("后台对同一公开群内的近期候选作有限比较。建议供人工审阅，原需求和计划仍各自保留。")
                 .font(.caption).foregroundStyle(.secondary)
+            if store.capabilities.contains("adminCase.requirementReviews") {
+                Picker("审阅范围", selection: $page) {
+                    ForEach(Page.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented)
+            }
             HStack {
                 Button("重新读取") { load() }
                 if next != nil { Button("下一页") { load(after: next) } }
                 if busy { ProgressView().controlSize(.small) }
             }.disabled(busy)
             if let failure { Text(failure).foregroundStyle(.orange) }
-            if enabled == false {
+            if let actionFeedback { Text(actionFeedback).font(.caption).foregroundStyle(.secondary) }
+            if page == .suggestions, enabled == false {
                 Text("当前后台未启用相近需求判断。")
-            } else if enabled == true, rows.isEmpty {
-                Text("目前没有可审阅的建议。")
+            } else if loaded, rows.isEmpty {
+                Text(page == .suggestions ? "目前没有可审阅的建议。" : "还没有人工审阅记录。")
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        Button("\(row["firstId"].string ?? "") 与 \(row["secondId"].string ?? "")") {
-                            inspect(row)
-                        }.disabled(busy)
+                        let pair = pair(in: row)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Button("\(pair["firstId"].string ?? "") 与 \(pair["secondId"].string ?? "")") {
+                                inspect(row)
+                            }.disabled(busy)
+                            if page == .reviews {
+                                let decision = pair["disposition"].string ?? ""
+                                Text(decisionLabel(decision, effective: row["effective"] == .bool(true)))
+                                    .font(.caption).foregroundStyle(.secondary)
+                                if let note = pair["note"].string {
+                                    Text(verbatim: note).font(.caption).textSelection(.enabled)
+                                }
+                            }
+                        }
                     }
+                    if selected != nil { Divider() }
                     ForEach(Array(originals.enumerated()), id: \.offset) { _, original in
                         Text(original.0).font(.subheadline.weight(.semibold))
                         Text(verbatim: original.1).textSelection(.enabled)
                     }
+                    if let workspace, store.capabilities.contains("adminCase.requirementReview") {
+                        CrewdRequirementReviewControls(
+                            workspace: workspace, crew: store.selectedCrew, scope: store.readScope,
+                            isCurrent: { store.readScope == $0 }, source: selected.map { pair(in: $0) },
+                            saved: page == .reviews, originalsRead: originals.count == 2 && !busy,
+                            refresh: { message in actionFeedback = message; load() }
+                        ).id(selectionKey)
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
-        }.padding().frame(width: 570, height: 440)
+        }.padding().modifier(CrewdAdaptiveFormFrame(width: 570, height: 520, scrolls: false))
         .task { load() }
+        .onChange(of: page) { _, _ in load() }
         .onChange(of: store.readScope) { _, _ in dismiss() }
         .onDisappear { request = UUID(); task?.cancel() }
     }
 
+    private func pair(in row: CrewdValue) -> CrewdValue { page == .reviews ? row["review"] : row }
+
+    private var selectionKey: String {
+        guard let selected else { return page.rawValue }
+        let pair = pair(in: selected)
+        return [page.rawValue, pair["firstId"].string, pair["secondId"].string,
+                pair["revision"].string ?? pair["candidateRevision"].string].compactMap { $0 }.joined(separator: "/")
+    }
+
+    private func decisionLabel(_ decision: String, effective: Bool) -> String {
+        switch decision {
+        case "group": return effective ? "已归组" : "原分组已失效"
+        case "dismiss": return effective ? "已排除" : "原排除已失效"
+        default: return "已撤销审阅"
+        }
+    }
+
     private func read(_ operation: @escaping @MainActor (UUID, UUID) async throws -> Void) {
+        task?.cancel()
         let token = UUID(), scope = store.readScope
         request = token
         busy = true
@@ -383,22 +434,30 @@ private struct CrewdSimilarRequirementsView: View {
     }
 
     private func load(after: String? = nil) {
+        let requested = page
+        selected = nil
+        if after == nil { rows = []; next = nil; enabled = nil; loaded = false }
         read { token, scope in
-            let page = try await store.similarRequirementPage(after: after)
-            guard request == token, store.readScope == scope else { return }
-            rows = page["items"].array
-            next = page["nextAfter"].string
-            enabled = page["enabled"] == .bool(true)
+            let result: CrewdValue
+            if requested == .suggestions { result = try await store.similarRequirementPage(after: after) }
+            else { result = try await store.requirementReviewPage(after: after) }
+            guard request == token, store.readScope == scope, page == requested else { return }
+            rows = result["items"].array
+            next = result["nextAfter"].string
+            enabled = requested == .suggestions ? result["enabled"] == .bool(true) : nil
+            loaded = true
         }
     }
 
     private func inspect(_ row: CrewdValue) {
+        selected = row
+        let source = pair(in: row)
         let crew = store.selectedCrew
         read { token, scope in
             var pair: [(String, String)] = []
             for key in ["firstId", "secondId"] {
-                guard let raw = row[key].string, let id = CrewdWorkID(raw, kind: .requirement) else { return }
-                let value = try await store.requirementDetail(id)
+                guard let raw = source[key].string, let id = CrewdWorkID(raw, kind: .requirement) else { return }
+                let value = try await store.requirementDetail(id, expectedCrew: crew)
                 guard request == token, store.readScope == scope else { return }
                 guard value["crewId"] == .string(crew), let text = value["text"].string else {
                     throw CrewdClientError(message: "原始需求已不可核对。请重新读取建议。")
@@ -406,6 +465,120 @@ private struct CrewdSimilarRequirementsView: View {
                 pair.append((raw, text))
             }
             originals = pair
+        }
+    }
+}
+
+private struct CrewdRequirementReviewControls: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    let crew: String
+    let scope: UUID
+    let isCurrent: (UUID) -> Bool
+    let source: CrewdValue?
+    let saved: Bool
+    let originalsRead: Bool
+    let refresh: (String) -> Void
+    @State private var note = ""
+    @State private var busy = false
+    @State private var feedback: String?
+
+    private var pending: [CrewdPresentationJournal.Prepared] {
+        workspace.durableUnknown.filter { row in
+            workspace.isCurrentOriginalObservation(row) && row.method == "command.submit" &&
+                row.params["command"]["operation"] == .string(CrewdPublicOperation.requirementReview.rawValue) &&
+                row.params["command"]["params"]["crewId"] == .string(crew)
+        }
+    }
+
+    private var writing: Bool {
+        workspace.publicCommands.observations.values.contains { row in
+            workspace.publicCommands.pending.contains(row.id) && row.envelope.operation == .requirementReview &&
+                row.envelope.params["crewId"] == .string(crew)
+        }
+    }
+
+    private var ready: Bool {
+        !busy && !writing && isCurrent(scope) && workspace.crewID == crew && workspace.client.readyForWork
+    }
+
+    var body: some View {
+        if let feedback { Text(feedback).font(.caption).foregroundStyle(.secondary) }
+        ForEach(pending) { row in
+            let original = row.params["command"]["params"]
+            Button("核对原审阅请求  " + (original["firstId"].string ?? "") + " / " + (original["secondId"].string ?? "")) {
+                lookup(row)
+            }.disabled(!ready)
+        }
+        if let source, saved ? source["disposition"] != .string("clear") : originalsRead {
+            TextField("填写审阅理由", text: $note, axis: .vertical).lineLimit(2...4)
+                .disabled(!ready || !pending.isEmpty)
+            Text("两条原需求、关联计划与处理状态各自保留。")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                if saved {
+                    Button("撤销原审阅") { submit("clear", source: source) }
+                } else {
+                    Button("归为一组") { submit("group", source: source) }
+                    Button("排除建议") { submit("dismiss", source: source) }
+                }
+            }.disabled(!ready || !pending.isEmpty || note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || note.utf8.count > 4_096)
+        }
+    }
+
+    private func submit(_ disposition: String, source: CrewdValue) {
+        guard ready, pending.isEmpty else { return }
+        var params: [String: CrewdValue] = [
+            "crewId": .string(crew), "firstId": source["firstId"], "secondId": source["secondId"],
+            "expectedReviewRevision": source[saved ? "revision" : "reviewRevision"],
+            "disposition": .string(disposition), "note": .string(note)
+        ]
+        if !saved { params["candidateRevision"] = source["candidateRevision"] }
+        busy = true
+        feedback = nil
+        Task { @MainActor in
+            defer { busy = false }
+            guard isCurrent(scope), workspace.crewID == crew, pending.isEmpty, !writing else { return }
+            do {
+                let receipt = try await workspace.submitPublicCommand(.requirementReview, params: .object(params), crew: crew) { result in
+                    if result.phase == .committed, result.value["result"]["channelId"] != source["channelId"] {
+                        throw CrewdPublicWire.invalid()
+                    }
+                }
+                observe(receipt)
+            } catch {
+                if isCurrent(scope) { feedback = error.localizedDescription }
+            }
+        }
+    }
+
+    private func lookup(_ original: CrewdPresentationJournal.Prepared) {
+        guard ready else { return }
+        busy = true
+        feedback = nil
+        Task { @MainActor in
+            defer { busy = false }
+            do {
+                let receipt = try await workspace.lookupOriginalCommand(original)
+                guard isCurrent(scope) else { return }
+                if let receipt, [.committed, .rejected, .suppressed].contains(receipt.phase) {
+                    try workspace.acknowledgeOriginalCommand(original, receipt: receipt)
+                }
+                observe(receipt)
+            } catch {
+                if isCurrent(scope) { feedback = error.localizedDescription }
+            }
+        }
+    }
+
+    private func observe(_ receipt: CrewdPublicReceipt?) {
+        guard isCurrent(scope), workspace.crewID == crew else { return }
+        switch receipt?.phase {
+        case .committed:
+            refresh(receipt?.historical == true ? "原历史回执已核对，当前审阅记录已另行读取。" : "审阅已记录，可在「已审阅」查看。")
+        case .rejected, .suppressed:
+            refresh("后台未接受此审阅，已重新读取当前建议。")
+        default:
+            feedback = "结果待确认。可用原编号查询回执。"
         }
     }
 }

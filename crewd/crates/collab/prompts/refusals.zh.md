@@ -537,3 +537,6 @@ expectedStatus 必须是原始需求状态。
 
 ## todo.attributes_revision_conflict
 这条待办的负责人或人工完成状态已变化。请先查看最新状态，再决定是否另做修改。
+
+## requirement.review_conflict
+候选或审阅记录已有变化。请重新读取原始需求和当前审阅记录，再作决定。

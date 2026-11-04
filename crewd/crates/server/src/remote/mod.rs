@@ -1021,6 +1021,8 @@ fn allowed_method(method: &str) -> bool {
             | "adminCase.legacyConfirm"
             | "adminCase.legacyReceipt"
             | "adminCase.similarRequirements"
+            | crewd_proto::admin_cases::REQUIREMENT_REVIEWS
+            | crewd_proto::admin_cases::REQUIREMENT_REVIEW
             | "executor.list"
             | "data.workspace.get"
             | "data.submit"

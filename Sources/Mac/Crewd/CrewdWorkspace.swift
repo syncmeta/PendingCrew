@@ -1133,7 +1133,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     private func isReadOnly(_ method: String) -> Bool {
-        if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements"].contains(method) { return true }
+        if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements", "adminCase.requirementReviews"].contains(method) { return true }
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
         return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet", "session.claude.recoveryInspect"].contains(method)
     }
@@ -1528,12 +1528,13 @@ final class CrewdWorkspace: ObservableObject {
             throw CrewdClientError(message:"请在个人同步设置中核对这项原请求；需先核实原空间与设备 writer，不能从通用回执入口结束。",kind:.notSubmitted)
         }
         _ = try publicCommandBinding(for: client)
-        // A terminal patrol receipt settles whether the original request was
-        // recorded even across restart. Current scan state is a separate read.
-        let historicalPatrol = receipt.historical &&
-            record.params["command"]["operation"] == .string(CrewdPublicOperation.patrolStart.rawValue) &&
+        // These terminal receipts prove the original write across restart.
+        // Current patrol and review state have their own reads.
+        let operation = record.params["command"]["operation"].string
+        let historicalRecordedRequest = receipt.historical &&
+            [CrewdPublicOperation.patrolStart.rawValue, CrewdPublicOperation.requirementReview.rawValue].contains(operation ?? "") &&
             [.committed, .rejected, .suppressed].contains(receipt.phase)
-        guard record.scope == presentationScope, !receipt.historical || historicalPatrol,
+        guard record.scope == presentationScope, !receipt.historical || historicalRecordedRequest,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,
               record.params["dbId"].string == receipt.databaseID,
               record.params["runtimeBindingId"].string == receipt.runtimeBindingID,
@@ -1541,7 +1542,7 @@ final class CrewdWorkspace: ObservableObject {
               [.committed, .launched, .written, .resized, .confirmed, .suppressed, .rejected].contains(receipt.phase),
               let journal = originalJournal else { throw CrewdPublicWire.invalid() }
         if record.params["command"]["operation"].string == "session.start", !settledSessionStart(receipt) { throw CrewdPublicWire.invalid() }
-        try journal.acknowledge(record, detail: historicalPatrol ? "已核对原巡检请求的历史回执。当前轮次另行读取。" : detail)
+        try journal.acknowledge(record, detail: historicalRecordedRequest ? "已核对原请求的历史回执。当前状态另行读取。" : detail)
         durableUnknown = try journal.unknownRecords()
         if record.params["command"]["operation"].string == "session.start" {
             uncertainSessionStartRecords.removeAll { $0.request == receipt.requestID }

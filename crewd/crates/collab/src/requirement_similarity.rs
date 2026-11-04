@@ -32,6 +32,14 @@ pub struct Snapshot {
     pub second_text: String,
     pub excerpt_truncated: bool,
     pub fingerprint: String,
+    pub(crate) channel: String,
+    pub(crate) review_witness: String,
+}
+
+impl Snapshot {
+    pub(crate) fn candidate_revision(&self) -> Result<String> {
+        judgments::fingerprint(&(&self.fingerprint, &self.review_witness))
+    }
 }
 
 pub enum Outcome {
@@ -85,6 +93,7 @@ struct Source {
     excerpt: String,
     excerpt_truncated: bool,
     fingerprint: String,
+    review_fingerprint: String,
 }
 
 fn invalid() -> crate::CollabError {
@@ -123,6 +132,10 @@ impl Authority {
     }
 
     fn source(&self, c: &Connection, number: i64) -> Result<Option<Source>> {
+        self.source_for(c, number, true)
+    }
+
+    fn source_for(&self, c: &Connection, number: i64, scoring: bool) -> Result<Option<Source>> {
         let Some(reference) = crewd_store::object_refs::get(c, ObjectKind::Requirement, number)?
         else {
             return Ok(None);
@@ -175,7 +188,7 @@ impl Authority {
         {
             return Err(invalid());
         }
-        if entry.closed.is_some() || self.claimed.contains(&core) {
+        if scoring && (entry.closed.is_some() || self.claimed.contains(&core)) {
             return Ok(None);
         }
         let object = ChannelWorkObject {
@@ -184,8 +197,9 @@ impl Authority {
         };
         let attributes = todo_attributes::get(c, &Sender::Human, &object)?;
         if attributes.origin != TodoOrigin::Requirement
-            || attributes.owner.is_some()
-            || attributes.manual_state == Some(crewd_proto::ManualTodoState::Done)
+            || (scoring
+                && (attributes.owner.is_some()
+                    || attributes.manual_state == Some(crewd_proto::ManualTodoState::Done)))
         {
             return Ok(None);
         }
@@ -220,25 +234,46 @@ impl Authority {
         if link_revision <= 0 || linked != "true" {
             return Ok(None);
         }
-        let fingerprint = judgments::fingerprint(&(
+        let generation = crate::channel_archive::generation(c, &channel.id)?;
+        let review_fingerprint = judgments::fingerprint(&(
             number,
             &reference.crew_id,
             core,
-            raw_id,
-            created_at,
+            &raw_id,
+            &created_at,
             &text,
-            &channel,
-            attributes.revision,
+            &channel.id,
             link_revision,
+            &generation,
         ))?;
+        let fingerprint = if scoring {
+            judgments::fingerprint(&(
+                number,
+                &reference.crew_id,
+                core,
+                raw_id,
+                created_at,
+                &text,
+                &channel,
+                attributes.revision,
+                link_revision,
+            ))?
+        } else {
+            String::new()
+        };
         let mut chars = text.chars();
-        let excerpt = chars.by_ref().take(MAX_EXCERPT_CHARS).collect();
+        let excerpt = if scoring {
+            chars.by_ref().take(MAX_EXCERPT_CHARS).collect()
+        } else {
+            String::new()
+        };
         Ok(Some(Source {
             crew: reference.crew_id,
             channel: channel.id,
             excerpt,
-            excerpt_truncated: chars.next().is_some(),
+            excerpt_truncated: scoring && chars.next().is_some(),
             fingerprint,
+            review_fingerprint,
         }))
     }
 
@@ -273,6 +308,7 @@ impl Authority {
             &self.config_fingerprint,
             stop,
         ))?;
+        let review_witness = self.review_witness(&a, &b)?;
         Ok(Some(Snapshot {
             id,
             crew: a.crew,
@@ -282,7 +318,13 @@ impl Authority {
             second_text: b.excerpt,
             excerpt_truncated: a.excerpt_truncated || b.excerpt_truncated,
             fingerprint,
+            channel: a.channel,
+            review_witness,
         }))
+    }
+
+    fn review_witness(&self, a: &Source, b: &Source) -> Result<String> {
+        judgments::fingerprint(&(&self.epoch, &a.review_fingerprint, &b.review_fingerprint))
     }
 
     fn snapshot(&self, c: &Connection, record: &Record) -> Result<Option<Snapshot>> {
@@ -294,6 +336,62 @@ impl Authority {
         };
         self.pair(c, record.first, a, record.second, b)
     }
+}
+
+/// Review visibility uses the same immutable source and link qualification
+/// without depending on model configuration or later Work ownership.
+pub(crate) struct ReviewSources(Authority);
+
+impl ReviewSources {
+    pub fn load(c: &Connection) -> Result<Self> {
+        Ok(Self(Authority::load(c, String::new())?))
+    }
+
+    pub fn witness(
+        &self,
+        c: &Connection,
+        crew: &str,
+        channel: &str,
+        first: i64,
+        second: i64,
+    ) -> Result<Option<String>> {
+        let a = self.0.source_for(c, first, false)?;
+        let b = self.0.source_for(c, second, false)?;
+        let (Some(a), Some(b)) = (a, b) else {
+            return Ok(None);
+        };
+        if a.crew != crew || b.crew != crew || a.channel != channel || b.channel != channel {
+            return Ok(None);
+        }
+        Ok(Some(self.0.review_witness(&a, &b)?))
+    }
+}
+
+pub(crate) fn current_suggestion(
+    c: &Connection,
+    crew: &str,
+    first: i64,
+    second: i64,
+) -> Result<Option<Snapshot>> {
+    let Some(config) = config(c)? else {
+        return Ok(None);
+    };
+    let id = pair_id(crew, first, second)?;
+    let Some(record) = load(c, &id)? else {
+        return Ok(None);
+    };
+    if !matches!(
+        record.state,
+        State::Answered {
+            suggested: true,
+            ..
+        }
+    ) || quarantined(c, &id)?
+    {
+        return Ok(None);
+    }
+    let snapshot = Authority::load(c, config)?.snapshot(c, &record)?;
+    Ok(snapshot.filter(|snapshot| snapshot.fingerprint == record.fingerprint))
 }
 
 fn pair_id(crew: &str, first: i64, second: i64) -> Result<String> {
@@ -508,14 +606,14 @@ fn quarantine(tx: &mut Tx<'_>, id: &str, witness: &str) -> Result<()> {
         return Err(invalid());
     }
     tx.conn()
-        .execute("DELETE FROM meta WHERE key=?1", [format!("{PENDING}{id}")])?;
+        .execute(
+            "DELETE FROM meta WHERE key=?1",
+            [format!("{PENDING}{id}")],
+        )?;
     Ok(())
 }
 
-fn pending_records(
-    tx: &mut Tx<'_>,
-    after: Option<&str>,
-) -> Result<KeysetPage<Record>> {
+fn pending_records(tx: &mut Tx<'_>, after: Option<&str>) -> Result<KeysetPage<Record>> {
     let (rows, next) = indexed_page(tx.conn(), PENDING, after, PENDING_PAGE)?;
     let mut records = Vec::new();
     for (id, witness) in rows {
@@ -689,9 +787,23 @@ pub fn list(
             && let Some(snapshot) = authority.snapshot(c, &record)?
             && snapshot.fingerprint == record.fingerprint
         {
+            let (review_revision, effective) = crate::requirement_review::candidate_state(
+                c,
+                crew,
+                record.first,
+                record.second,
+                &snapshot.review_witness,
+            )?;
+            if effective {
+                continue;
+            }
+            let candidate_revision = snapshot.candidate_revision()?;
             page.items.push(SimilarRequirement {
                 first_id: snapshot.first_id,
                 second_id: snapshot.second_id,
+                channel_id: snapshot.channel,
+                candidate_revision,
+                review_revision,
                 probability,
                 observed_at_ms: at,
             });
@@ -764,6 +876,206 @@ mod tests {
         let (ids, _) = ok(s, |tx| pending_page(tx, None));
         assert_eq!(ids.len(), 1);
         (first, second, ids[0].clone())
+    }
+
+    #[test]
+    fn requirement_review_is_exact_reversible_and_durable_without_mutating_originals() {
+        use crate::requirement_review as review;
+        use crewd_proto::{
+            RequirementReviewDisposition as D, RequirementReviewParams, RequirementReviewsParams,
+        };
+        let mut s = store();
+        configure(&mut s, Some(true));
+        let (first, second, id) = prepare_pair(&mut s);
+        let snapshot = ok(&mut s, |tx| dispatch(tx, &id)).unwrap();
+        ok(&mut s, |tx| {
+            settle(
+                tx,
+                &snapshot,
+                Outcome::Answered {
+                    probability: 0.92,
+                    suggested: true,
+                },
+            )
+        });
+        let p = RequirementReviewsParams {
+            crew_id: "crew-a".into(),
+            after: None,
+            limit: None,
+        };
+        let candidate = list(s.conn(), "crew-a", None, 10).unwrap().items.remove(0);
+        let mut action = RequirementReviewParams {
+            crew_id: p.crew_id.clone(),
+            first_id: first.clone(),
+            second_id: second.clone(),
+            expected_review_revision: candidate.review_revision,
+            disposition: D::Group,
+            candidate_revision: Some(candidate.candidate_revision),
+            note: " preserve original scope ".into(),
+        };
+        let original_a = requirements::get(s.conn(), &first).unwrap();
+        let original_b = requirements::get(s.conn(), &second).unwrap();
+        let mut foreign = action.clone();
+        foreign.crew_id = "crew-b".into();
+        assert!(crate::run(&mut s, crate::testkit::NOW, |tx| review::apply(tx, foreign)).is_err());
+        let mut stale = action.clone();
+        stale.candidate_revision = Some("0".repeat(64));
+        assert!(crate::run(&mut s, crate::testkit::NOW, |tx| review::apply(tx, stale)).is_err());
+        let written = ok(&mut s, |tx| review::apply(tx, action.clone()));
+        assert_eq!(written.revision, "1");
+        assert_eq!(written.note, action.note);
+        assert_eq!(written.channel_id, candidate.channel_id);
+        assert!(list(s.conn(), "crew-a", None, 10).unwrap().items.is_empty());
+        assert!(
+            crate::run(&mut s, crate::testkit::NOW, |tx| review::apply(
+                tx,
+                action.clone()
+            ))
+            .is_err()
+        );
+        assert_eq!(requirements::get(s.conn(), &first).unwrap(), original_a);
+        assert_eq!(requirements::get(s.conn(), &second).unwrap(), original_b);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crewd.db");
+        s.conn()
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(s);
+        let mut s = Store::open(&path).unwrap();
+        let changes = s.conn().total_changes();
+        let row = review::list(s.conn(), &p).unwrap().items.remove(0);
+        assert_eq!(row.review, written);
+        assert!(row.effective);
+        assert_eq!(s.conn().total_changes(), changes);
+
+        let clear = RequirementReviewParams {
+            candidate_revision: None,
+            expected_review_revision: "1".into(),
+            disposition: D::Clear,
+            note: "review again".into(),
+            ..action.clone()
+        };
+        let cleared = ok(&mut s, |tx| review::apply(tx, clear));
+        assert_eq!(cleared.revision, "2");
+        assert!(cleared.candidate_revision.is_none());
+        let visible_again = list(s.conn(), "crew-a", None, 10).unwrap().items.remove(0);
+        assert_eq!(visible_again.review_revision, "2");
+        action.expected_review_revision = "2".into();
+        action.disposition = D::Dismiss;
+        let dismissed = ok(&mut s, |tx| review::apply(tx, action.clone()));
+        configure(&mut s, None);
+        assert!(!list(s.conn(), "crew-a", None, 10).unwrap().enabled);
+        assert!(review::list(s.conn(), &p).unwrap().items[0].effective);
+        ok(&mut s, |tx| {
+            requirements::close(
+                tx,
+                &Sender::Human,
+                TodoCloseParams {
+                    id: first.clone(),
+                    expected_status: "unclaimed".into(),
+                    note: "original separately closed".into(),
+                },
+            )
+        });
+        assert!(review::list(s.conn(), &p).unwrap().items[0].effective);
+        crewd_store::judgment_state::restored(s.conn()).unwrap();
+        let historical = review::list(s.conn(), &p).unwrap().items.remove(0);
+        assert_eq!(historical.review, dismissed);
+        assert!(!historical.effective);
+        let clear = RequirementReviewParams {
+            candidate_revision: None,
+            expected_review_revision: "3".into(),
+            disposition: D::Clear,
+            note: "clear historical choice".into(),
+            ..action
+        };
+        assert_eq!(ok(&mut s, |tx| review::apply(tx, clear)).revision, "4");
+        assert_eq!(requirements::get(s.conn(), &second).unwrap(), original_b);
+    }
+
+    #[test]
+    fn requirement_review_archive_restore_fences_the_human_form_without_rescoring() {
+        use crate::{channels, requirement_review as review};
+        use crewd_proto::{
+            RequirementReviewDisposition as D, RequirementReviewParams, RequirementReviewsParams,
+        };
+        let mut s = store();
+        configure(&mut s, Some(true));
+        let channel = ok(&mut s, |tx| {
+            channels::create(
+                tx,
+                &Sender::Human,
+                channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: ChannelKind::Topic,
+                    name: "fixture topic".into(),
+                    purpose: None,
+                    members: vec![],
+                },
+            )
+        });
+        let first = requirement(&mut s, "crew-a", &channel.id, "original one");
+        let second = requirement(&mut s, "crew-a", &channel.id, "original two");
+        ok(&mut s, observe_page);
+        let (pending, _) = ok(&mut s, |tx| pending_page(tx, None));
+        let snapshot = ok(&mut s, |tx| dispatch(tx, &pending[0])).unwrap();
+        ok(&mut s, |tx| {
+            settle(
+                tx,
+                &snapshot,
+                Outcome::Answered {
+                    probability: 0.91,
+                    suggested: true,
+                },
+            )
+        });
+        let old = list(s.conn(), "crew-a", None, 10).unwrap().items.remove(0);
+        let mut command = RequirementReviewParams {
+            crew_id: "crew-a".into(),
+            first_id: first,
+            second_id: second,
+            expected_review_revision: old.review_revision,
+            disposition: D::Group,
+            candidate_revision: Some(old.candidate_revision.clone()),
+            note: "confirmed exact originals".into(),
+        };
+        ok(&mut s, |tx| review::apply(tx, command.clone()));
+        let history = RequirementReviewsParams {
+            crew_id: "crew-a".into(),
+            after: None,
+            limit: None,
+        };
+        for archived in [true, false] {
+            ok(&mut s, |tx| {
+                channels::update(
+                    tx,
+                    &Sender::Human,
+                    &channel.id,
+                    channels::ChannelPatch {
+                        archived: Some(archived),
+                        ..Default::default()
+                    },
+                )
+            });
+            assert!(!review::list(s.conn(), &history).unwrap().items[0].effective);
+        }
+        let current = list(s.conn(), "crew-a", None, 10).unwrap().items.remove(0);
+        assert_eq!(current.observed_at_ms, old.observed_at_ms);
+        assert_eq!(current.probability, old.probability);
+        assert_ne!(current.candidate_revision, old.candidate_revision);
+        assert_eq!(current.review_revision, "1");
+        command.expected_review_revision = current.review_revision;
+        assert!(
+            crate::run(&mut s, crate::testkit::NOW, |tx| review::apply(
+                tx,
+                command.clone()
+            ))
+            .is_err()
+        );
+        command.candidate_revision = Some(current.candidate_revision);
+        assert_eq!(ok(&mut s, |tx| review::apply(tx, command)).revision, "2");
+        assert!(review::list(s.conn(), &history).unwrap().items[0].effective);
     }
 
     #[test]

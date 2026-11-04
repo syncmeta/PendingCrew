@@ -32,6 +32,8 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
         "adminCase.legacyConfirm",
         "adminCase.legacyReceipt",
         "adminCase.similarRequirements",
+        "adminCase.requirementReviews",
+        "adminCase.requirementReview",
     ] {
         assert!(
             hello["capabilities"]
@@ -117,6 +119,7 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
                 json!({"requestId":unknown_request}),
             ),
             ("adminCase.similarRequirements", json!({"crewId":f.crew})),
+            ("adminCase.requirementReviews", json!({"crewId":f.crew})),
         ] {
             assert_eq!(
                 call(&mut agent, method, params).await.unwrap_err().0,
@@ -130,6 +133,98 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn exact_requirement_review_uses_the_original_human_command_receipt() {
+    use crewd_collab::{Sender, judgments, requirement_similarity as similarity, requirements};
+    use crewd_proto::{TodoCreateParams, judgments::{JudgmentConfig, JudgmentSettingsSet}};
+    let f = Fixture::new().await;
+    f.enable_public_command_identity().await;
+    let crew = f.crew.clone();
+    let channel = format!("{crew}/lobby");
+    let (ids, decision) = f.state.collab(move |tx| {
+        let previous = judgments::configuration(tx.conn())?;
+        judgments::set_configuration(tx, &Sender::Human, JudgmentSettingsSet {
+            request_id: uuid::Uuid::new_v4().to_string(), credential_update: Default::default(),
+            expected_revision: previous.revision, config: Some(JudgmentConfig {
+                enabled: true, provider: "typesafe".into(), base_url: "https://example.invalid".into(),
+                model: "fixture".into(), choice_min: 0.5, wake_yes: 0.5,
+                credential_source: "file".into(), similar_requirements: Some(true),
+            }),
+        })?;
+        let mut ids = Vec::new();
+        for text in ["original first fixture requirement", "original second fixture requirement"] {
+            let created = requirements::create(tx, &Sender::Human, TodoCreateParams {
+                request_id: uuid::Uuid::new_v4().to_string(), crew_id: crew.clone(),
+                channel_id: Some(channel.clone()), text: text.into(),
+            })?;
+            ids.push(created.todo.requirement_id.unwrap());
+        }
+        similarity::observe_page(tx)?;
+        let (pending, _) = similarity::pending_page(tx, None)?;
+        assert_eq!(pending.len(), 1);
+        Ok((ids, pending[0].clone()))
+    }).await.unwrap();
+    let scored = f.state.collab(move |tx| similarity::dispatch(tx, &decision)).await.unwrap().unwrap();
+    f.state.collab(move |tx| similarity::settle(tx, &scored, similarity::Outcome::Answered {
+        probability: 0.95, suggested: true,
+    })).await.unwrap();
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let identity = call(&mut human, "system.hello", json!({})).await.unwrap()["runtimeIdentity"].clone();
+    let scoped = json!({"crewId":f.crew});
+    let rows = call(&mut human, "adminCase.similarRequirements", scoped.clone()).await.unwrap();
+    let candidate = &rows["items"][0];
+    assert_eq!(candidate["firstId"], ids[0]);
+    assert_eq!(candidate["secondId"], ids[1]);
+    let packet = json!({
+        "requestId":uuid::Uuid::new_v4().to_string(),"dbId":identity["dbId"],
+        "runtimeBindingId":identity["runtimeBindingId"],
+        "command":{"operation":"adminCase.requirementReview","params":{
+            "crewId":f.crew,"firstId":ids[0],"secondId":ids[1],"expectedReviewRevision":candidate["reviewRevision"],
+            "disposition":"group","candidateRevision":candidate["candidateRevision"],"note":"keep both originals"
+        }}
+    });
+    let mut agent = RpcClient::connect(&socket).await;
+    call(&mut agent, "agent.attach", json!({"sessionId":f.worker,"token":f.token(&f.worker)})).await.unwrap();
+    assert_eq!(call(&mut agent, "command.submit", packet.clone()).await.unwrap_err().0, crewd_proto::RpcError::FORBIDDEN);
+    let committed = call(&mut human, "command.submit", packet.clone()).await.unwrap();
+    assert_eq!(committed["phase"], "committed");
+    assert_eq!(committed["result"]["revision"], "1");
+    assert_eq!(committed["result"]["disposition"], "group");
+    assert_eq!(call(&mut human, "command.submit", packet.clone()).await.unwrap(), committed);
+    let recovered = call(&mut human, "command.lookup", json!({
+        "requestId":packet["requestId"],"dbId":identity["dbId"],
+    })).await.unwrap();
+    assert_eq!(recovered, committed);
+    let mut changed = packet.clone();
+    changed["command"]["params"]["note"] = json!("changed replay");
+    assert_eq!(call(&mut human, "command.submit", changed).await.unwrap_err().0, crewd_proto::RpcError::CONFLICT);
+    let reviews = call(&mut human, "adminCase.requirementReviews", scoped.clone()).await.unwrap();
+    assert_eq!(reviews["items"], json!([{"review":committed["result"],"effective":true}]));
+    assert_eq!(call(&mut human, "adminCase.similarRequirements", scoped).await.unwrap()["items"], json!([]));
+    for id in &ids {
+        let row = call(&mut human, "todo.get", json!({"id":id})).await.unwrap();
+        assert_eq!(row["status"], "unclaimed");
+    }
+    let clear = json!({
+        "requestId":uuid::Uuid::new_v4().to_string(),"dbId":identity["dbId"],
+        "runtimeBindingId":identity["runtimeBindingId"],
+        "command":{"operation":"adminCase.requirementReview","params":{
+            "crewId":f.crew,"firstId":ids[0],"secondId":ids[1],"expectedReviewRevision":"1",
+            "disposition":"clear","candidateRevision":null,"note":" preserve exact note "
+        }}
+    });
+    let cleared = call(&mut human, "command.submit", clear).await.unwrap();
+    assert_eq!(cleared["result"]["revision"], "2");
+    assert_eq!(cleared["result"]["note"], " preserve exact note ");
+    assert!(cleared["result"].get("candidateRevision").is_none());
+    assert!(cleared["command"]["params"].get("candidateRevision").is_none());
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), task).await.unwrap().unwrap();
 }
 
 #[tokio::test]

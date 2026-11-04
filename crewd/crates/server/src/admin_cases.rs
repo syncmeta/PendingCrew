@@ -21,6 +21,14 @@ async fn route(
     let owner = state.clone();
     let by = actor.clone();
     match req.method.as_str() {
+        REQUIREMENT_REVIEWS => {
+            let p: RequirementReviewsParams = crewd_proto::parse_params(req.params)?;
+            let page = state.db.call_result(move |store| {
+                by.authorize_tx(&owner, store.conn(), REQUIREMENT_REVIEWS)?;
+                crewd_collab::requirement_review::list(store.conn(), &p)
+            }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)?;
+            serde_json::to_value(page).map_err(dispatch::internal)
+        }
         SIMILAR_REQUIREMENTS => {
             let p: SimilarRequirementsParams = crewd_proto::parse_params(req.params)?;
             let view = state

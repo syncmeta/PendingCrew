@@ -537,3 +537,6 @@ Command receipt capacity is full. Read existing receipts and resolve unknown out
 
 ## todo.attributes_revision_conflict
 This Todo's owner or manual state changed. Inspect its latest state before deciding on a new edit.
+
+## requirement.review_conflict
+The candidate or its review changed. Reload the original requirements and current review before deciding.

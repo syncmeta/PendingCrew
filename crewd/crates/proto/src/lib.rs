@@ -829,6 +829,10 @@ pub fn api_schema() -> Value {
             ),
         ),
         (
+            admin_cases::REQUIREMENT_REVIEWS,
+            m(sub::<RequirementReviewsParams>(g), sub::<RequirementReviewsPage>(g)),
+        ),
+        (
             admin_cases::LEGACY_LIST,
             m(
                 sub::<AdminCaseLegacyListParams>(g),

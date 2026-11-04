@@ -13212,6 +13212,23 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "adminCase.requirementReview",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/RequirementReviewParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "session.start",
               "type": "string"
             },
@@ -14301,6 +14318,165 @@
         "text",
         "status",
         "createdAt"
+      ],
+      "type": "object"
+    },
+    "RequirementReview": {
+      "additionalProperties": false,
+      "properties": {
+        "candidateRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "channelId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/RequirementReviewDisposition"
+        },
+        "firstId": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "secondId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "firstId",
+        "secondId",
+        "channelId",
+        "revision",
+        "disposition",
+        "note",
+        "changedAtMs"
+      ],
+      "type": "object"
+    },
+    "RequirementReviewDisposition": {
+      "enum": [
+        "group",
+        "dismiss",
+        "clear"
+      ],
+      "type": "string"
+    },
+    "RequirementReviewParams": {
+      "additionalProperties": false,
+      "properties": {
+        "candidateRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/RequirementReviewDisposition"
+        },
+        "expectedReviewRevision": {
+          "type": "string"
+        },
+        "firstId": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "secondId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "firstId",
+        "secondId",
+        "expectedReviewRevision",
+        "disposition",
+        "note"
+      ],
+      "type": "object"
+    },
+    "RequirementReviewRow": {
+      "properties": {
+        "effective": {
+          "type": "boolean"
+        },
+        "review": {
+          "$ref": "#/$defs/RequirementReview"
+        }
+      },
+      "required": [
+        "review",
+        "effective"
+      ],
+      "type": "object"
+    },
+    "RequirementReviewsPage": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RequirementReviewRow"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "items"
+      ],
+      "type": "object"
+    },
+    "RequirementReviewsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId"
       ],
       "type": "object"
     },
@@ -15409,6 +15585,12 @@
     },
     "SimilarRequirement": {
       "properties": {
+        "candidateRevision": {
+          "type": "string"
+        },
+        "channelId": {
+          "type": "string"
+        },
         "firstId": {
           "type": "string"
         },
@@ -15420,6 +15602,9 @@
           "format": "double",
           "type": "number"
         },
+        "reviewRevision": {
+          "type": "string"
+        },
         "secondId": {
           "type": "string"
         }
@@ -15427,6 +15612,9 @@
       "required": [
         "firstId",
         "secondId",
+        "channelId",
+        "candidateRevision",
+        "reviewRevision",
         "probability",
         "observedAtMs"
       ],
@@ -18162,6 +18350,14 @@
       },
       "result": {
         "$ref": "#/$defs/AdminCaseList"
+      }
+    },
+    "adminCase.requirementReviews": {
+      "params": {
+        "$ref": "#/$defs/RequirementReviewsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RequirementReviewsPage"
       }
     },
     "adminCase.similarRequirements": {

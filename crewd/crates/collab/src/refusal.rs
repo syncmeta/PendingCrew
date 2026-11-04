@@ -33,6 +33,7 @@ refusal_codes! {
     ChannelWorkRevisionConflict = "channel.work_revision_conflict" [],
     ChannelWorkCursorExpired = "channel.work_cursor_expired" [],
     TodoAttributesRevisionConflict = "todo.attributes_revision_conflict" [],
+    RequirementReviewConflict = "requirement.review_conflict" [],
     FolderRevisionConflict = "view_folder.revision_conflict" [],
     FolderLimit = "view_folder.limit" ["limit"],
     FolderCycle = "view_folder.cycle" [],

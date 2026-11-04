@@ -148,6 +148,7 @@ import Foundation
   precondition(transferResult == transferPayload && transferResult["outcomeRecord"]["phase"] == .string("unresolved") && transferResult["retirement"] == .string("parked"))
   try await effectReport()
   try await humanBrief()
+  try await requirementReviews()
   print("admin cases opaque pagination, detail, malformed/foreign, crew and connection stale rejection passed")
  }
 
@@ -262,5 +263,47 @@ import Foundation
   store.invalidateConnection()
   held!.resume(returning: .object(original))
   do { _ = try await pending.value; fatalError("old brief accepted") } catch is CancellationError {}
+ }
+
+ @MainActor private static func requirementReviews() async throws {
+  let candidate = String(repeating: "a", count: 64)
+  let review: [String: CrewdValue] = [
+   "crewId": .string("a"), "firstId": .string("#9"), "secondId": .string("#12"), "channelId": .string("group"),
+   "revision": .string("1"), "disposition": .string("group"), "note": .string("保留两条来源"),
+   "changedAtMs": .integer(31), "candidateRevision": .string(candidate)
+  ]
+  var result = CrewdValue.object(review)
+  var responseCrew = "a"
+  let store = CrewdWorkStore { method, params in
+   precondition(params["crewId"] == .string("a") && params["limit"] == .integer(20))
+   if method == "adminCase.similarRequirements" {
+    let item: CrewdValue = .object([
+     "firstId": .string("#9"), "secondId": .string("#12"), "channelId": .string("group"),
+     "candidateRevision": .string(candidate), "reviewRevision": .string("0"),
+     "probability": .number(0.94), "observedAtMs": .integer(25)
+    ])
+    return .object(["crewId": .string("a"), "enabled": .bool(true), "items": .array([item]), "nextAfter": .null])
+   }
+   precondition(method == "adminCase.requirementReviews")
+   return .object(["crewId": .string(responseCrew),
+                   "items": .array([.object(["review": result, "effective": .bool(true)])]), "nextAfter": .null])
+  }
+  store.selectCrew("a")
+  do { _ = try await store.requirementReviewPage(); fatalError("unsupported review read") } catch {}
+  store.configureCapabilities(["adminCase.requirementReviews"])
+  let page = try await store.similarRequirementPage(after: nil)
+  precondition(page["items"].array.first?["candidateRevision"] == .string(candidate))
+  let saved = try await store.requirementReviewPage()
+  precondition(saved["items"].array.first?["review"] == .object(review))
+  for (key, invalid) in [("crewId", CrewdValue.string("b")), ("secondId", .string("#7")),
+                         ("revision", .string("01")), ("candidateRevision", .null)] {
+   var malformed = review
+   malformed[key] = invalid
+   result = .object(malformed)
+   do { _ = try await store.requirementReviewPage(); fatalError("invalid saved pair accepted") } catch {}
+  }
+  result = .object(review)
+  responseCrew = "b"
+  do { _ = try await store.requirementReviewPage(); fatalError("foreign review page accepted") } catch {}
  }
 }

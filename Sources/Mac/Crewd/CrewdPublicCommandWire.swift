@@ -62,6 +62,9 @@ struct CrewdPublicReceipt {
                   let disposition = result["disposition"].string,
                   ["started", "joined"].contains(disposition) else { throw CrewdPublicWire.invalid() }
         }
+        if originalCommand["operation"] == .string(CrewdPublicOperation.requirementReview.rawValue), phase == .committed {
+            try CrewdRequirementReviewWire.validateResult(value["result"], params: originalCommand["params"])
+        }
         if originalCommand["operation"].string?.hasPrefix("personalDraft.")==true,phase == .committed{try CrewPersonalCoreWire.validateResult(value["result"],command:originalCommand)}
         if originalCommand["operation"].string?.hasPrefix("session.codex.") == true,phase == .confirmed {
             try CrewdCodexWire.validateResult(value["result"],command:originalCommand)
@@ -144,6 +147,55 @@ enum CrewdPublicWire {
     }
 }
 
+enum CrewdRequirementReviewWire {
+    static func canonical(_ value: CrewdValue) throws -> CrewdValue {
+        let required: Set<String> = ["crewId", "firstId", "secondId", "expectedReviewRevision", "disposition", "note"]
+        guard case .object(var fields) = value, required.isSubset(of: Set(fields.keys)),
+              Set(fields.keys).isSubset(of: required.union(["candidateRevision"])),
+              let first = requirementNumber(value["firstId"]), let second = requirementNumber(value["secondId"]), first < second,
+              let expected = revision(value["expectedReviewRevision"]), expected < UInt64.max,
+              let note = value["note"].string, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              note.utf8.count <= 4_096 else { throw CrewdPublicWire.invalid() }
+        _ = try CrewdPublicWire.token(value["crewId"])
+        switch value["disposition"].string {
+        case "group", "dismiss":
+            guard isCandidate(value["candidateRevision"]) else { throw CrewdPublicWire.invalid() }
+        case "clear":
+            guard expected > 0, value["candidateRevision"] == .null else { throw CrewdPublicWire.invalid() }
+            fields.removeValue(forKey: "candidateRevision")
+        default: throw CrewdPublicWire.invalid()
+        }
+        return .object(fields)
+    }
+
+    static func validateResult(_ value: CrewdValue, params: CrewdValue) throws {
+        for key in ["crewId", "firstId", "secondId", "disposition", "note", "candidateRevision"] {
+            guard value[key] == params[key] else { throw CrewdPublicWire.invalid() }
+        }
+        guard let expected = revision(params["expectedReviewRevision"]), expected < UInt64.max,
+              revision(value["revision"]) == expected + 1, (value["changedAtMs"].int ?? -1) >= 0 else {
+            throw CrewdPublicWire.invalid()
+        }
+        _ = try CrewdPublicWire.token(value["channelId"])
+    }
+
+    private static func requirementNumber(_ value: CrewdValue) -> UInt64? {
+        guard let text = value.string, text.first == "#", let number = UInt64(text.dropFirst()),
+              number > 0, text == "#\(number)" else { return nil }
+        return number
+    }
+
+    private static func revision(_ value: CrewdValue) -> UInt64? {
+        guard let raw = value.string, let number = UInt64(raw), String(number) == raw else { return nil }
+        return number
+    }
+
+    private static func isCandidate(_ value: CrewdValue) -> Bool {
+        guard let text = value.string, text.utf8.count == 64 else { return false }
+        return text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+}
+
 /// Mirrors the server's closed operation enum. It cannot proxy arbitrary RPCs.
 enum CrewdPublicOperation: String, Codable {
     case personalDraftOwner="personalDraft.ownerConfigure",personalDraftMember="personalDraft.memberSet",personalDraftConsent="personalDraft.consentSet",personalDraftCheckpoint="personalDraft.checkpoint",personalDraftResolve="personalDraft.resolve"
@@ -154,6 +206,7 @@ enum CrewdPublicOperation: String, Codable {
     case crewCreate = "crew.create"
     case firstMessage = "crew.createFirstMessage"
     case patrolStart = "work.patrolStart"
+    case requirementReview = "adminCase.requirementReview"
     case messagePost = "message.post"
     case sessionStart = "session.start"
     case sessionStop = "session.stop"
@@ -254,6 +307,8 @@ private enum CrewdPublicParameters {
         case .patrolStart:
             required = ["crewId"]
             _ = try CrewdPublicWire.token(fields["crewId"] ?? .null)
+        case .requirementReview:
+            return try CrewdRequirementReviewWire.canonical(value)
         case .firstMessage:
             required = ["crew", "text"]
             guard case .object(var crew) = fields["crew"], crew["title"] != nil,

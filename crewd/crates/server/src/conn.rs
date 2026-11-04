@@ -674,6 +674,7 @@ async fn request_step(
                     | crewd_proto::admin_cases::LEGACY_CONFIRM
                     | crewd_proto::admin_cases::LEGACY_RECEIPT
                     | crewd_proto::admin_cases::SIMILAR_REQUIREMENTS
+                    | crewd_proto::admin_cases::REQUIREMENT_REVIEWS
             ) =>
         {
             if agent.is_attached() {

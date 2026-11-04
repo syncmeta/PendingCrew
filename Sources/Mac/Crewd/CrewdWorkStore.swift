@@ -317,6 +317,7 @@ final class CrewdWorkStore: ObservableObject {
               value["enabled"] == .bool(true) || (rows.isEmpty && next == .null) else {
             throw CrewdClientError(message: "相近需求结果不完整或范围不符。")
         }
+        var pairs = Set<[String]>()
         for row in rows {
             let score: Double?
             switch row["probability"] {
@@ -331,9 +332,65 @@ final class CrewdWorkStore: ObservableObject {
                   (0.8...1).contains(score), let observed = row["observedAtMs"].int, observed >= 0 else {
                 throw CrewdClientError(message: "相近需求建议的编号或证据不完整。")
             }
+            guard pairs.insert([first, second]).inserted else {
+                throw CrewdClientError(message: "相近需求建议重复。")
+            }
+            if capabilities.contains("adminCase.requirementReviews") {
+                guard validReviewPair(row), row["channelId"].string?.isEmpty == false,
+                      validReviewRevision(row["reviewRevision"]), validCandidateRevision(row["candidateRevision"]) else {
+                    throw CrewdClientError(message: "相近需求建议缺少可核对的版本。")
+                }
+            }
         }
         return value
     }
+
+    func requirementReviewPage(after: String? = nil) async throws -> CrewdValue {
+        let token = generation, crew = selectedCrew
+        let invalid = CrewdClientError(message: "相近需求审阅记录不完整或范围不符。")
+        guard !crew.isEmpty, capabilities.contains("adminCase.requirementReviews") else { throw invalid }
+        var params: [String: CrewdValue] = ["crewId": .string(crew), "limit": .integer(20)]
+        if let after { params["after"] = .string(after) }
+        let value = try await call("adminCase.requirementReviews", .object(params))
+        try check(token)
+        guard value["crewId"] == .string(crew), case .array(let rows) = value["items"], rows.count <= 20,
+              value["nextAfter"] == .null ||
+                (!rows.isEmpty && value["nextAfter"].string?.isEmpty == false && value["nextAfter"].string != after) else { throw invalid }
+        var pairs = Set<[String]>()
+        for row in rows {
+            let review = row["review"]
+            guard review["crewId"] == .string(crew), validReviewPair(review),
+                  let first = review["firstId"].string, let second = review["secondId"].string,
+                  pairs.insert([first, second]).inserted, review["channelId"].string?.isEmpty == false,
+                  validReviewRevision(review["revision"]), review["revision"] != .string("0"),
+                  (review["changedAtMs"].int ?? -1) >= 0, case .bool(let effective) = row["effective"],
+                  let disposition = review["disposition"].string, ["group", "dismiss", "clear"].contains(disposition),
+                  let note = review["note"].string, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  note.utf8.count <= 4_096,
+                  disposition == "clear" ? (!effective && review["candidateRevision"] == .null) : validCandidateRevision(review["candidateRevision"]) else { throw invalid }
+        }
+        return value
+    }
+
+    private func validReviewPair(_ value: CrewdValue) -> Bool {
+        func number(_ key: String) -> UInt64? {
+            guard let text = value[key].string, CrewdWorkID(text, kind: .requirement) != nil else { return nil }
+            return UInt64(text.dropFirst())
+        }
+        guard let first = number("firstId"), let second = number("secondId") else { return false }
+        return first < second
+    }
+
+    private func validReviewRevision(_ value: CrewdValue) -> Bool {
+        guard let raw = value.string, let number = UInt64(raw) else { return false }
+        return String(number) == raw
+    }
+
+    private func validCandidateRevision(_ value: CrewdValue) -> Bool {
+        guard let raw = value.string, raw.utf8.count == 64 else { return false }
+        return raw.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
     func patrolPage(scan: String, after: String?) async throws -> CrewdValue {
         let token = generation, crew = selectedCrew
         guard !crew.isEmpty, ["work", "entries", "channels"].contains(scan) else { throw CrewdClientError(message: "请先选择机组。") }
