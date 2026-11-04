@@ -6,6 +6,12 @@ import Foundation
     let body = CrewdDataRef(namespace:"namespace",kind:"block",id:"10000000-0000-0000-0000-000000000002")
     let newBody = CrewdDataRef(namespace:"namespace",kind:"block",id:"10000000-0000-0000-0000-000000000003")
     let placement = "10000000-0000-0000-0000-000000000004"
+    let sibling = "10000000-0000-0000-0000-000000000005"
+    let hiddenSibling = "10000000-0000-0000-0000-000000000006"
+    var composed = false
+    var historicalEdits: [String:CrewdDataObjectDetail] = [:]
+    var tamperHistoricalOrder = false
+    var tamperHistoricalSource = false
     var receipts: [String:CrewdDataChangeResult] = [:]
     var sends: [CrewdDataSubmitParams] = []
     var lookups: [String] = []
@@ -14,6 +20,7 @@ import Foundation
     var rejectCAS = false
     var untypedConflict = false
     var beforeSubmitReply: (() async throws -> Void)?
+    var beforeHistoricalRead: (() -> Void)?
     var missingHistoricalCapture = false
     var observedHistoricalReads: [(CrewdDataRef,String)] = []
     var protected = false
@@ -33,16 +40,45 @@ import Foundation
         var references: [CrewdDataResolvedRef] = []
         if reference == view {
             let visible = CrewdDataRefState.visible(reference:target)
-            let position = CrewdDataPlacement(id:placement,block:visible,atRevision:pinned ? "3" : nil,layout:.object(["position":.integer(2)]))
-            references = [.init(anchor:"placement:"+placement,target:visible,commit:nil,revision:target == body ? "3":"1",live:!pinned,complete:true)]
-            object = .view(id:view.id,revision:viewRevision,title:title,definition:.document(placements:[position],layout:.object(["width":.integer(3)])),archived:false,provenance:provenance)
+            let pin = pinned && target == body
+            let position = CrewdDataPlacement(id:placement,block:visible,atRevision:pin ? "3" : nil,layout:.object(["position":.integer(2)]))
+            references = [.init(anchor:"placement:"+placement,target:visible,commit:nil,revision:target == body ? "3":"1",live:!pin,complete:true)]
+            var positions = [position]
+            if composed {
+                let shared = CrewdDataRefState.visible(reference:body)
+                positions.insert(.init(id:sibling,block:shared,atRevision:"3",layout:.object(["sibling":.bool(true)])),at:0)
+                positions.append(.init(id:hiddenSibling,block:.unavailable,atRevision:nil,layout:.object(["hidden":.bool(true)])))
+                references.append(.init(anchor:"placement:"+sibling,target:shared,commit:nil,revision:"3",live:false,complete:true))
+                references.append(.init(anchor:"placement:"+hiddenSibling,target:.unavailable,commit:nil,revision:nil,live:true,complete:false))
+            }
+            object = .view(id:view.id,revision:viewRevision,title:title,definition:.document(placements:positions,layout:.object(["width":.integer(3)])),archived:false,provenance:provenance)
         } else {
-            object = .block(id:reference.id,revision:reference == body ? "3":"1",contentType:"text/plain",content:.string(reference == body ? "原文🌙":text),archived:false,provenance:provenance)
+            var recorded = provenance
+            if composed && reference == newBody {
+                let source = CrewdDataRefState.visible(reference:body)
+                recorded.sources = [.init(reference:source,atRevision:tamperHistoricalSource ? "2":"3",attributes:.object([:]))]
+                references = [.init(anchor:"source:0",target:source,commit:nil,revision:"3",live:false,complete:true)]
+            }
+            object = .block(id:reference.id,revision:reference == body ? "3":"1",contentType:"text/plain",content:.string(reference == body ? "原文🌙":text),archived:false,provenance:recorded)
         }
         return .init(context:context,resolvedContext:context,generation:context.generation,object:object,references:references,affectedLiveViews:[view],affectedTruncated:false)
     }
 
     func historicalView(_ revision: String) -> CrewdDataObjectDetail {
+        if var snapshot = historicalEdits[revision] {
+            snapshot.context = context; snapshot.resolvedContext = context; snapshot.generation = context.generation
+            if case .view(let id,let rev,let title,.document(let positions,let layout),let archived,let provenance) = snapshot.object {
+                var captured = positions.map { position in
+                    var value = position
+                    value.atRevision = snapshot.references.first { $0.anchor == "placement:" + position.id }?.revision
+                    return value
+                }
+                if tamperHistoricalOrder { captured.reverse() }
+                snapshot.object = .view(id:id,revision:rev,title:title,definition:.document(placements:captured,layout:layout),archived:archived,provenance:provenance)
+                for i in snapshot.references.indices { snapshot.references[i].live = false }
+            }
+            return snapshot
+        }
         let visible = CrewdDataRefState.visible(reference:body)
         let position = CrewdDataPlacement(id:placement,block:visible,atRevision:"3",layout:.object([:]))
         let object = CrewdDataObject.view(id:view.id,revision:revision,title:"旧版\(revision)",definition:.document(placements:[position],layout:.object([:])),archived:false,provenance:provenance)
@@ -60,8 +96,9 @@ import Foundation
             let reference = try CrewdKnowledgeStore.decode(value["reference"],CrewdDataRef.self)
             if let revision = value["atRevision"].string {
                 observedHistoricalReads.append((reference,revision))
+                beforeHistoricalRead?()
                 if reference == view { return try CrewdKnowledgeStore.encode(historicalView(revision)) }
-                precondition(reference == body && revision == "3")
+                precondition((reference == body && revision == "3") || (composed && reference == newBody && revision == "1"))
             }
             return try CrewdKnowledgeStore.encode(detail(reference))
         case "data.history":
@@ -86,17 +123,21 @@ import Foundation
             precondition(layout == .object(["width":.integer(3)]))
             var created: [String:CrewdDataCreated] = [:]
             var changed: [CrewdDataObjectVersion] = []
+            func ordered(_ selected: CrewdDataPlacementEdit) -> [CrewdDataPlacementEdit] {
+                composed ? [.keep(id:sibling,layout:.object(["sibling":.bool(true)])),selected,
+                            .keep(id:hiddenSibling,layout:.object(["hidden":.bool(true)]))] : [selected]
+            }
             if edits.count == 2,
                case let .createBlock(alias,type,.string(content),blockSources,blockAttributes) = edits[0] {
                 precondition(type == "text/plain" && blockAttributes == provenance.attributes && blockSources.count == 1)
                 precondition(blockSources[0].reference == .existing(reference:body) && blockSources[0].atRevision == "3")
-                precondition(positions == [.set(id:placement,alias:nil,block:.created(alias:alias),atRevision:nil,layout:.object(["position":.integer(2)]))])
+                precondition(positions == ordered(.set(id:placement,alias:nil,block:.created(alias:alias),atRevision:nil,layout:.object(["position":.integer(2)]))))
                 text = content
                 let version = CrewdDataObjectVersion(reference:newBody,revision:"1")
                 created[alias] = .object(object:version)
                 changed.append(version)
             } else {
-                precondition(edits.count == 1 && positions == [.keep(id:placement,layout:.object(["position":.integer(2)]))])
+                precondition(edits.count == 1 && positions == ordered(.keep(id:placement,layout:.object(["position":.integer(2)]))))
             }
             title = nextTitle
             viewRevision = String(Int(viewRevision)! + 1)
@@ -105,6 +146,7 @@ import Foundation
             context.generation = String(Int(before)!+1)
             var result = CrewdDataChangeResult(requestId:attempt.requestId,phase:.committed,context:context,beforeGeneration:before,afterGeneration:context.generation,snapshotId:nil,created:created,changed:changed,conflicts:[],reason:nil,resolvedByRequest:nil)
             receipts[attempt.requestId] = result
+            if composed { historicalEdits[viewRevision] = detail(view) }
             if loseReply { throw NSError(domain:"original reply lost",code:1) }
             if malformedReply { result.changed.removeLast() }
             return try CrewdKnowledgeStore.encode(result)
@@ -129,9 +171,10 @@ import Foundation
         let scope = CrewdPresentationJournal.Scope(namespace:UUID(),localDirectory:root.path,authorityID:"authority",databaseID:"db",grantID:nil,grantRevision:nil)
         let origin = CrewdKnowledgeStore.Origin(scope:scope,observation:UUID(),connection:UUID(),crew:"crew")
         let wire = DocumentWire()
+        var originAvailable = true
         func newStore() throws -> CrewdKnowledgeStore {
             let journal = try CrewdPresentationJournal(root:root,scope:scope)
-            return CrewdKnowledgeStore(origin:{origin},rpc:{try await wire.call($0,$1)},journal:{journal})
+            return CrewdKnowledgeStore(origin:{originAvailable ? origin:nil},rpc:{try await wire.call($0,$1)},journal:{journal})
         }
         let store = try newStore()
         func read(_ store: CrewdKnowledgeStore) async {
@@ -140,6 +183,72 @@ import Foundation
         }
         let mode = CommandLine.arguments[1]
         if mode == "history-paging" { wire.viewRevision = "26" }
+        if mode.hasPrefix("placement-") {
+            wire.composed = true; wire.pinned = true
+            await read(store)
+            let parent = store.detail!
+            precondition(!store.canPrepareNativeDocumentEdit(parent))
+            let choices = store.editableDocumentPlacements(parent)
+            precondition(choices.map(\.id) == [wire.sibling,wire.placement] && choices.map(\.position) == [1,2])
+            precondition(choices[1].pinnedRevision == "3")
+            do {
+                _ = try await store.prepareNativeDocumentEdit(parent,placementID:wire.hiddenSibling)
+                preconditionFailure("unavailable position cannot be edited")
+            } catch CrewdKnowledgeStore.Failure.unsupported {}
+            let edit = try await store.prepareNativeDocumentEdit(parent,placementID:wire.placement)
+            precondition(edit.selectedPlacement == choices[1] && edit.body == "原文🌙")
+            if mode == "placement-stale" {
+                store.handleEvent("data.changed",.object(["crewId":.string("crew")]))
+                do {
+                    _ = try await store.submitNativeDocumentEdit(edit,title:edit.title,body:"不要写")
+                    preconditionFailure("stale selection accepted")
+                } catch CrewdKnowledgeStore.Failure.stale {}
+                precondition(wire.sends.isEmpty)
+            } else {
+                wire.loseReply = mode == "placement-lost"
+                wire.tamperHistoricalOrder = mode == "placement-order"
+                wire.tamperHistoricalSource = mode == "placement-source"
+                let originLost = mode == "placement-origin-change"
+                if mode == "placement-event" || originLost {
+                    wire.beforeSubmitReply = {
+                        store.handleEvent("data.changed",.object(["crewId":.string("crew")]))
+                        if originLost { originAvailable = false }
+                    }
+                } else if mode == "placement-read-event" {
+                    wire.beforeHistoricalRead = { store.handleEvent("data.changed",.object(["crewId":.string("crew")])) }
+                }
+                let titleOnly = mode == "placement-title"
+                let replacement = "替换 e\u{301}🌙"
+                let saved = try await store.submitNativeDocumentEdit(edit,title:"新题",body:titleOnly ? edit.body:replacement)
+                precondition(wire.sends.count == 1 && wire.viewRevision == "5")
+                precondition(saved?.phase == ((wire.loseReply || wire.tamperHistoricalOrder || wire.tamperHistoricalSource || originLost) ? nil:.committed))
+                if saved == nil {
+                    originAvailable = true
+                    let reopened = try newStore()
+                    wire.context.generation = "3"; wire.viewRevision = "6"; wire.title = "之后的文档"
+                    await read(reopened)
+                    let id = reopened.pending.first!.id
+                    await reopened.lookup(id)
+                    precondition(reopened.hasBlockingPending == (wire.tamperHistoricalOrder || wire.tamperHistoricalSource))
+                    precondition(wire.lookups == [wire.sends[0].requestId] && wire.sends.count == 1)
+                    precondition(wire.viewRevision == "6" && wire.title == "之后的文档")
+                } else {
+                    let reopened = try newStore()
+                    await read(reopened)
+                    precondition(!reopened.hasBlockingPending && wire.lookups.isEmpty)
+                }
+                let captured = wire.historicalEdits["5"]!
+                guard case .view(_,_,_,.document(let positions,_),_,_) = captured.object else { preconditionFailure() }
+                precondition(positions.map(\.id) == [wire.sibling,wire.placement,wire.hiddenSibling])
+                precondition(positions[0].block == .visible(reference:wire.body) && positions[0].atRevision == "3")
+                precondition(positions[1].block == .visible(reference:titleOnly ? wire.body:wire.newBody))
+                precondition(positions[1].atRevision == (titleOnly ? "3":nil))
+                precondition(positions[2].block == .unavailable)
+                precondition(wire.detail(wire.body).object.revision == "3")
+            }
+            print("PASS native document edit \(mode)")
+            return
+        }
         await read(store)
         let original = try await store.prepareNativeDocumentEdit(store.detail!)
         if mode == "history-paging" {
@@ -279,7 +388,8 @@ import Foundation
         let config = try receive()
         let root = URL(fileURLWithPath:config["journalRoot"].string!)
         let db = config["dbId"].string!
-        let scope = CrewdPresentationJournal.Scope(namespace:UUID(),localDirectory:root.path,authorityID:db,databaseID:db,grantID:nil,grantRevision:nil)
+        let namespace = config["journalNamespace"].string.flatMap(UUID.init(uuidString:)) ?? UUID()
+        let scope = CrewdPresentationJournal.Scope(namespace:namespace,localDirectory:root.path,authorityID:db,databaseID:db,grantID:nil,grantRevision:nil)
         let origin = CrewdKnowledgeStore.Origin(scope:scope,observation:UUID(),connection:UUID(),crew:config["crewId"].string!)
         let journal = try CrewdPresentationJournal(root:root,scope:scope)
         let store = CrewdKnowledgeStore(origin:{origin},rpc:{ method, params in
@@ -294,8 +404,27 @@ import Foundation
         await store.refresh()
         await store.open(view)
         guard let parent = store.detail else { throw CrewdKnowledgeStore.Failure.unavailable }
-        let original = try await store.prepareNativeDocumentEdit(parent)
+        if let recover = config["recoverRequest"].string, let request = UUID(uuidString:recover) {
+            precondition(store.pending.map(\.id) == [request])
+            await store.lookup(request)
+            precondition(!store.hasBlockingPending && store.result?.phase == .committed)
+            try send(.object(["finished":try CrewdKnowledgeStore.encode(store.result!)]))
+            return
+        }
+        let original = try await store.prepareNativeDocumentEdit(parent,placementID:config["placementId"].string)
         let saved: CrewdDataChangeResult?
+        if config["placementId"].string != nil {
+            precondition(original.body.utf8.elementsEqual(config["originalBody"].string!.utf8))
+            saved = try await store.submitNativeDocumentEdit(original,title:original.title,body:config["replacementBody"].string!)
+            if config["expectLostReply"] == .bool(true) {
+                precondition(saved == nil && store.pending.count == 1)
+                try send(.object(["unknown":.string(store.pending[0].id.uuidString.lowercased())]))
+                return
+            }
+            precondition(saved?.phase == .committed)
+            try send(.object(["finished":try CrewdKnowledgeStore.encode(saved!)]))
+            return
+        }
         if let revision = config["restoreRevision"].string {
             precondition(original.title == "新题" && original.body.utf8.elementsEqual("新的正文 e\u{301}🌙".utf8))
             let target = try store.nativeDocumentHistoryTarget(parent)

@@ -35,6 +35,7 @@ enum CrewdKnowledgeTitleSearch {
     struct NativeDocumentEdit: Equatable {
         let title: String
         let body: String
+        let selectedPlacement: EditableDocumentPlacement?
         fileprivate let origin: Origin
         fileprivate let parent: CrewdDataObjectDetail
         fileprivate let view: CrewdDataRef
@@ -53,9 +54,31 @@ enum CrewdKnowledgeTitleSearch {
              body.utf8.elementsEqual(previous.body.utf8) ? self.body : body)
         }
     }
+    struct EditableDocumentPlacement: Equatable, Identifiable {
+        let id: String
+        let position: Int
+        let pinnedRevision: String?
+    }
+    fileprivate struct SelectedPlacementEditReceipt: Codable, Equatable {
+        struct Position: Codable, Equatable {
+            let id: String
+            let layoutDigest: String
+            let visibleBlock: CrewdDataRef?
+            let pinnedRevision: String?
+        }
+        let selectedID: String
+        let positions: [Position]
+        let titleDigest: String
+        let layoutDigest: String
+        let viewAttributesDigest: String
+        let bodyDigest: String?
+        let bodyAttributesDigest: String?
+        let sourceRevision: String?
+    }
     struct NativeDocumentEditReceipt: Codable, Equatable {
         fileprivate let view: CrewdDataObjectVersion
         fileprivate let replacedBody: CrewdDataRef?
+        fileprivate var selected: SelectedPlacementEditReceipt? = nil
 
         fileprivate func matches(_ result: CrewdDataChangeResult) -> Bool {
             if let replacedBody {
@@ -601,6 +624,46 @@ enum CrewdKnowledgeTitleSearch {
               let link = Self.documentWorkLink(detail.object,namespace:context.namespace), link.reference == reference else { throw Failure.invalid }
         return link
     }
+    private func verifySelectedPlacementReadback(_ response: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext, origin o: Origin) async throws {
+        guard let edit = intent.documentEdit, let witness = edit.selected, response.phase == .committed else { return }
+        try checkObservation(response,intent:intent)
+        guard origin() == o, sameAuthority(intent.context,context) else { throw Failure.stale }
+        let view: CrewdDataObjectDetail = try await call("data.object.get",
+            CrewdDataObjectGetParams(context:context,reference:edit.view.reference,atRevision:edit.view.revision),preservingPresentation:true)
+        guard origin() == o, view.context == context, view.resolvedContext == context, view.generation == context.generation,
+              case .view(let id,let revision,let title,.document(let positions,let layout),false,let viewProvenance) = view.object,
+              id == edit.view.reference.id, revision == edit.view.revision, positions.map(\.id) == witness.positions.map(\.id),
+              try Self.compositionDigest(title) == witness.titleDigest,
+              try Self.compositionDigest(layout) == witness.layoutDigest,
+              try Self.compositionDigest(viewProvenance.attributes) == witness.viewAttributesDigest else { throw Failure.invalid }
+
+        let captures = Dictionary(grouping:view.references,by:\.anchor)
+        for (position, original) in zip(positions,witness.positions) {
+            guard try Self.compositionDigest(position.layout) == original.layoutDigest else { throw Failure.invalid }
+            if position.id == witness.selectedID, let source = edit.replacedBody {
+                guard let sourceRevision = witness.sourceRevision, let digest = witness.bodyDigest,
+                      let attributesDigest = witness.bodyAttributesDigest,
+                      case .object(let body)? = response.created["replacementBody"],
+                      position.block == .visible(reference:body.reference), position.atRevision == body.revision,
+                      let links = captures["placement:" + position.id], links.count == 1, let link = links.first,
+                      link.complete, !link.live, link.revision == body.revision, link.target == position.block else { throw Failure.invalid }
+                let detail: CrewdDataObjectDetail = try await call("data.object.get",
+                    CrewdDataObjectGetParams(context:context,reference:body.reference,atRevision:body.revision),preservingPresentation:true)
+                guard origin() == o, detail.context == context, detail.resolvedContext == context, detail.generation == context.generation,
+                      case .block(let blockID,let revision,"text/plain",.string(let text),false,let provenance) = detail.object,
+                      blockID == body.reference.id, revision == body.revision, try Self.compositionDigest(text) == digest,
+                      try Self.compositionDigest(provenance.attributes) == attributesDigest,
+                      provenance.sources.count == 1, let recorded = provenance.sources.first,
+                      recorded.reference == .visible(reference:source), recorded.atRevision == sourceRevision else { throw Failure.invalid }
+                let sourceLinks = detail.references.filter { $0.anchor == "source:0" }
+                guard sourceLinks.count == 1, let link = sourceLinks.first,
+                      link.complete, !link.live, link.target == .visible(reference:source), link.revision == sourceRevision else { throw Failure.invalid }
+            } else if let reference = original.visibleBlock {
+                guard position.block == .visible(reference:reference),
+                      original.pinnedRevision == nil || position.atRevision == original.pinnedRevision else { throw Failure.invalid }
+            }
+        }
+    }
     private func verifyArchiveReadback(_ response: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext, origin o: Origin) async throws {
         guard let archive = intent.viewArchive, response.phase == .committed else { return }
         try checkObservation(response,intent:intent)
@@ -650,6 +713,12 @@ enum CrewdKnowledgeTitleSearch {
                 try ledger.finish(record, state:"refused")
                 if current(o, token) { pending.removeAll { $0.id == intent.id }; records.removeValue(forKey: intent.id) }
                 throw NativeSubmissionRefusal(original:error)
+            }
+            if intent.documentEdit?.selected != nil {
+                try await verifySelectedPlacementReadback(response,intent:intent,context:response.context,origin:o)
+                // The server can broadcast our data.changed before replying.
+                // It revokes presentation, while the exact origin and journal still own this receipt.
+                guard origin() == o else { return nil }
             }
             if intent.viewArchive != nil { try await verifyArchiveReadback(response,intent:intent,context:response.context,origin:o) }
             if intent.documentWorkLink != nil { try await verifyDocumentWorkLinkReadback(response,intent:intent,context:response.context,origin:o) }
@@ -818,29 +887,57 @@ enum CrewdKnowledgeTitleSearch {
             edits:[.archiveView(id:target.reference.id,expectedRevision:target.parent.object.revision,archived:archived)])
         return try await submitNativeChange(change,viewArchive:.init(view:next,archived:archived))
     }
-    func canPrepareNativeDocumentEdit(_ parent: CrewdDataObjectDetail) -> Bool {
+    private func nativeDocumentPlacements(_ parent: CrewdDataObjectDetail) -> [CrewdDataPlacement]? {
         guard let context = workspace?.context, workspace?.state == "ready", let active, origin() == active,
               !detailIsSnapshot, detail == parent, parent.context == context, parent.resolvedContext == context,
               parent.generation == context.generation,
               detailReference == .init(namespace:context.namespace,kind:"view",id:parent.object.identity),
               case .view(_,_,_,.document(let placements,_),false,let provenance) = parent.object,
-              provenance.createdBy["kind"].string == "human", placements.count == 1,
-              let placement = placements.first, placement.atRevision == nil,
-              case .visible(let block) = placement.block, block.namespace == context.namespace, block.kind == "block" else { return false }
-        return parent.references.contains { $0.anchor == "placement:" + placement.id && $0.target == placement.block && $0.live && $0.complete && $0.revision != nil }
+              provenance.createdBy["kind"].string == "human" else { return nil }
+        return placements
     }
-    func prepareNativeDocumentEdit(_ parent: CrewdDataObjectDetail) async throws -> NativeDocumentEdit {
-        guard canPrepareNativeDocumentEdit(parent), let active, let view = detailReference,
+    private func nativeDocumentCapture(_ placement: CrewdDataPlacement, namespace: String, links: [CrewdDataResolvedRef]) -> CrewdDataResolvedRef? {
+        guard case .visible(let block) = placement.block, block.namespace == namespace, block.kind == "block" else { return nil }
+        guard links.count == 1, let link = links.first, link.target == placement.block, link.complete,
+              let revision = link.revision, Self.positiveRevision(revision) != nil,
+              link.live == (placement.atRevision == nil),
+              placement.atRevision == nil || placement.atRevision == revision else { return nil }
+        return link
+    }
+    private func nativeDocumentCapture(_ placement: CrewdDataPlacement, parent: CrewdDataObjectDetail) -> CrewdDataResolvedRef? {
+        nativeDocumentCapture(placement,namespace:parent.context.namespace,links:parent.references.filter { $0.anchor == "placement:" + placement.id })
+    }
+    func editableDocumentPlacements(_ parent: CrewdDataObjectDetail) -> [EditableDocumentPlacement] {
+        guard let placements = nativeDocumentPlacements(parent), Set(placements.map(\.id)).count == placements.count else { return [] }
+        let captures = Dictionary(grouping:parent.references,by:\.anchor)
+        return placements.enumerated().compactMap { index, placement in
+            let links = captures["placement:" + placement.id] ?? []
+            guard nativeDocumentCapture(placement,namespace:parent.context.namespace,links:links) != nil else { return nil }
+            return .init(id:placement.id,position:index + 1,pinnedRevision:placement.atRevision)
+        }
+    }
+    // Whole-body history/restore remains limited to the original simple document.
+    func canPrepareNativeDocumentEdit(_ parent: CrewdDataObjectDetail) -> Bool {
+        guard let placements = nativeDocumentPlacements(parent), placements.count == 1,
+              let placement = placements.first, placement.atRevision == nil else { return false }
+        return nativeDocumentCapture(placement,parent:parent) != nil
+    }
+    func prepareNativeDocumentEdit(_ parent: CrewdDataObjectDetail, placementID: String? = nil) async throws -> NativeDocumentEdit {
+        let selected = placementID.flatMap { id in editableDocumentPlacements(parent).first { $0.id == id } }
+        guard placementID == nil ? canPrepareNativeDocumentEdit(parent) : selected != nil,
+              let active, let view = detailReference,
               case .view(_,_,let title,.document(let placements,let layout),_,let provenance) = parent.object,
-              let placement = placements.first, case .visible(let bodyRef) = placement.block else { throw Failure.unsupported }
+              let placement = (selected == nil ? placements.first : placements.first { $0.id == selected?.id }),
+              case .visible(let bodyRef) = placement.block,
+              let capture = nativeDocumentCapture(placement,parent:parent) else { throw Failure.unsupported }
         let anchor = "placement:" + placement.id
-        guard let body = try await resolved(placement.block,anchor:anchor,atRevision:nil,parent:parent),
-              canPrepareNativeDocumentEdit(parent), body.context == parent.context, body.resolvedContext == parent.context,
+        guard let body = try await resolved(placement.block,anchor:anchor,atRevision:placement.atRevision,parent:parent),
+              (placementID == nil ? canPrepareNativeDocumentEdit(parent) : editableDocumentPlacements(parent).contains { $0.id == placement.id }),
+              body.context == parent.context, body.resolvedContext == parent.context,
               body.generation == parent.generation,
               case .block(let id,let revision,"text/plain",.string(let text),false,let bodyProvenance) = body.object,
-              id == bodyRef.id, bodyProvenance.createdBy["kind"].string == "human",
-              parent.references.contains(where: { $0.anchor == anchor && $0.target == placement.block && $0.revision == revision && $0.live && $0.complete }) else { throw Failure.unsupported }
-        return .init(title:title,body:text,origin:active,parent:parent,view:view,placement:placement,layout:layout,
+              id == bodyRef.id, revision == capture.revision, bodyProvenance.createdBy["kind"].string == "human" else { throw Failure.unsupported }
+        return .init(title:title,body:text,selectedPlacement:selected,origin:active,parent:parent,view:view,placement:placement,layout:layout,
                      viewAttributes:provenance.attributes,bodyRef:bodyRef,bodyRevision:revision,bodyAttributes:bodyProvenance.attributes)
     }
     func reloadNativeDocumentEdit(_ edit: NativeDocumentEdit) async throws -> NativeDocumentEdit {
@@ -850,7 +947,11 @@ enum CrewdKnowledgeTitleSearch {
               sameAuthority(edit.parent.context,context) else { throw Failure.stale }
         await open(edit.view)
         guard let detail else { throw Failure.unavailable }
-        return try await prepareNativeDocumentEdit(detail)
+        let current = try await prepareNativeDocumentEdit(detail,placementID:edit.selectedPlacement?.id)
+        if edit.selectedPlacement != nil {
+            guard current.bodyRef == edit.bodyRef, current.placement.atRevision == edit.placement.atRevision else { throw Failure.stale }
+        }
+        return current
     }
     static let documentCompositionLimit = 128
 
@@ -1142,7 +1243,12 @@ enum CrewdKnowledgeTitleSearch {
         try await submitNativeDocumentChange(edit,title:title,body:body)
     }
     private func submitNativeDocumentChange(_ edit: NativeDocumentEdit, title: String, body: String, restoring snapshot: NativeDocumentRevisionSnapshot? = nil) async throws -> CrewdDataChangeResult? {
-        guard !busy, active == edit.origin, canPrepareNativeDocumentEdit(edit.parent) else { throw Failure.stale }
+        guard !busy, active == edit.origin, let positions = nativeDocumentPlacements(edit.parent) else { throw Failure.stale }
+        if let selected = edit.selectedPlacement {
+            guard snapshot == nil, editableDocumentPlacements(edit.parent).contains(selected) else { throw Failure.stale }
+        } else {
+            guard canPrepareNativeDocumentEdit(edit.parent) else { throw Failure.stale }
+        }
         let revision = edit.parent.object.revision
         guard !title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, title.utf8.count <= 512, body.utf8.count <= 1_048_576,
               edit.hasChanges(title:title,body:body), let currentRevision = Int64(revision), currentRevision > 0,
@@ -1160,9 +1266,26 @@ enum CrewdKnowledgeTitleSearch {
         } else {
             placement = .keep(id:edit.placement.id,layout:edit.placement.layout)
         }
+        let revised = positions.map { original -> CrewdDataPlacementEdit in
+            original.id == edit.placement.id ? placement : .keep(id:original.id,layout:original.layout)
+        }
         edits.append(.updateView(id:edit.view.id,expectedRevision:revision,title:title,
-                                 definition:.document(placements:[placement],layout:edit.layout),sources:nil,attributes:edit.viewAttributes))
-        let witness = NativeDocumentEditReceipt(view:.init(reference:edit.view,revision:String(currentRevision + 1)),replacedBody:bodyChanged ? edit.bodyRef:nil)
+                                 definition:.document(placements:revised,layout:edit.layout),sources:nil,attributes:edit.viewAttributes))
+        var witness = NativeDocumentEditReceipt(view:.init(reference:edit.view,revision:String(currentRevision + 1)),replacedBody:bodyChanged ? edit.bodyRef:nil)
+        if edit.selectedPlacement != nil {
+            let originalPositions = try positions.map { position -> SelectedPlacementEditReceipt.Position in
+                let reference: CrewdDataRef?
+                if case .visible(let block) = position.block { reference = block } else { reference = nil }
+                return .init(id:position.id,layoutDigest:try Self.compositionDigest(position.layout),
+                             visibleBlock:reference,pinnedRevision:position.atRevision)
+            }
+            witness.selected = try .init(selectedID:edit.placement.id,positions:originalPositions,
+                titleDigest:Self.compositionDigest(title),layoutDigest:Self.compositionDigest(edit.layout),
+                viewAttributesDigest:Self.compositionDigest(edit.viewAttributes),
+                bodyDigest:bodyChanged ? Self.compositionDigest(body) : nil,
+                bodyAttributesDigest:bodyChanged ? Self.compositionDigest(edit.bodyAttributes) : nil,
+                sourceRevision:bodyChanged ? edit.bodyRevision : nil)
+        }
         return try await submitNativeChange(.apply(message:snapshot == nil ? "编辑文档" : "恢复文档版本",edits:edits),documentEdit:witness)
     }
     func nativeDocumentStage(channel:String)throws->CrewdPresentationJournal.DocumentStage? {
@@ -1230,6 +1353,7 @@ enum CrewdKnowledgeTitleSearch {
             workspace = response.workspace
             switch response.lookup {
             case .known(let original):
+                if intent.documentEdit?.selected != nil { try await verifySelectedPlacementReadback(original,intent:intent,context:response.workspace.context,origin:o) }
                 if intent.viewArchive != nil { try await verifyArchiveReadback(original,intent:intent,context:response.workspace.context,origin:o) }
                 if intent.documentWorkLink != nil { try await verifyDocumentWorkLinkReadback(original,intent:intent,context:response.workspace.context,origin:o) }
                 if intent.composition != nil { try await verifyCompositionReadback(original,intent:intent,context:response.workspace.context,origin:o) }

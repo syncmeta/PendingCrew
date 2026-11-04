@@ -81,7 +81,11 @@ struct CrewdKnowledgeWorkspaceView: View {
     @State private var showArchived = false
     @State private var confirmArchive: CrewdKnowledgeStore.NativeViewArchiveTarget?
     @State private var lifecycleFeedback: String?
-    @State private var editTarget: CrewdDataObjectDetail?
+    private struct DocumentEditTarget: Identifiable {
+        let id = UUID()
+        let parent: CrewdDataObjectDetail
+    }
+    @State private var editTarget: DocumentEditTarget?
     @State private var historyTarget: CrewdDataObjectDetail?
     @State private var compositionTarget: CrewdDataObjectDetail?
     @State private var documentWorkTarget: CrewdDataObjectDetail?
@@ -129,14 +133,16 @@ struct CrewdKnowledgeWorkspaceView: View {
         .onChange(of: store.workspace?.context) { old, current in
             if old?.authorityId != current?.authorityId || old?.crewId != current?.crewId || old?.namespace != current?.namespace {
                 selected = ""
-                if let current, let editTarget,
-                   editTarget.context.authorityId != current.authorityId || editTarget.context.crewId != current.crewId || editTarget.context.namespace != current.namespace {
-                    self.editTarget = nil
-                }
                 if let current, let historyTarget,
                    historyTarget.context.authorityId != current.authorityId || historyTarget.context.crewId != current.crewId || historyTarget.context.namespace != current.namespace {
                     self.historyTarget = nil
                 }
+            }
+            if let current, let target = editTarget?.parent,
+               target.context.authorityId != current.authorityId || target.context.dbId != current.dbId ||
+                target.context.crewId != current.crewId || target.context.namespace != current.namespace ||
+                target.context.restoreEpoch != current.restoreEpoch {
+                editTarget = nil
             }
             if let current, let target = documentWorkTarget,
                target.context.authorityId != current.authorityId || target.context.dbId != current.dbId ||
@@ -158,10 +164,11 @@ struct CrewdKnowledgeWorkspaceView: View {
             ScrollView { systemControls }
             #endif
         }
-        .sheet(isPresented: Binding(get:{editTarget != nil},set:{if !$0 {editTarget=nil}})) {
-            if let editTarget {
-                CrewdNativeDocumentEditor(store:store,parent:editTarget,scopeCurrent:{ true },onSaved:{ await reload() })
-            }
+        .sheet(item:$editTarget) { target in
+            CrewdNativeDocumentEditor(store:store,parent:target.parent,scopeCurrent:{
+                editTarget?.id == target.id && (selected.isEmpty || selected == target.parent.object.identity) &&
+                    collection == .documents && !showArchived
+            },onSaved:{ await reload() })
         }
         .sheet(isPresented: Binding(get:{historyTarget != nil},set:{if !$0 {historyTarget=nil}})) {
             if let historyTarget {
@@ -281,9 +288,13 @@ struct CrewdKnowledgeWorkspaceView: View {
                 if collection == .documents, workStore != nil, (try? store.documentWorkLinkAnchor(document:detail)) != nil {
                     Button("关联待办",systemImage:"link") { documentWorkTarget = detail }.disabled(store.busy)
                 }
-                if collection == .documents, store.canPrepareNativeDocumentEdit(detail) {
-                    Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = detail }.disabled(store.busy)
-                    Button("编辑文档",systemImage:"pencil") { editTarget = detail }.disabled(store.busy || store.hasBlockingPending)
+                if collection == .documents {
+                    if store.canPrepareNativeDocumentEdit(detail) {
+                        Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = detail }.disabled(store.busy)
+                    }
+                    if !store.editableDocumentPlacements(detail).isEmpty {
+                        Button("编辑文档",systemImage:"pencil") { editTarget = .init(parent:detail) }.disabled(store.busy || store.hasBlockingPending)
+                    }
                 }
                 if collection == .documents, store.canPrepareNativeDocumentComposition(detail) {
                     Button("编排内容块",systemImage:"square.stack") { compositionTarget = detail }.disabled(store.busy)
@@ -533,7 +544,9 @@ private struct CrewdGroupKnowledgeView:View {
         .sheet(isPresented:$linking,onDismiss:{retry=UUID()}){CrewdKnowledgeLinkPicker(workspace:workspace,collection:collection)}
         .sheet(isPresented:$creating){CrewdNativeDocumentCreation(workspace:workspace)}
         .sheet(item:$editTarget){ target in
-            CrewdNativeDocumentEditor(store:content,parent:target.parent,scopeCurrent:{ isCurrent(target) },onSaved:{await refreshAfterEdit()})
+            CrewdNativeDocumentEditor(store:content,parent:target.parent,scopeCurrent:{
+                editTarget?.id == target.id && isCurrent(target)
+            },onSaved:{await refreshAfterEdit()})
         }
         .sheet(item:$historyTarget){ target in
             CrewdNativeDocumentHistory(store:content,parent:target.parent,scopeCurrent:{ isCurrent(target) },onRestored:{await refreshAfterEdit()})
@@ -615,9 +628,11 @@ private struct CrewdGroupKnowledgeView:View {
                                 Button("关联待办",systemImage:"link") { documentWorkTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
                                     .disabled(content.busy)
                             }
-                            if content.canPrepareNativeDocumentEdit(detail) {
+                            if !content.editableDocumentPlacements(detail).isEmpty {
                                 Button("编辑原文",systemImage:"pencil") { editTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
                                     .disabled(content.busy || content.hasBlockingPending)
+                            }
+                            if content.canPrepareNativeDocumentEdit(detail) {
                                 Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
                                     .disabled(content.busy)
                             }
@@ -1300,19 +1315,21 @@ private struct CrewdNativeDocumentEditor: View {
         VStack(alignment:.leading,spacing:12) {
             HStack { Text("编辑文档").font(CrewdType.title); Spacer(); Button("关闭") { dismiss() }.disabled(working) }
             if let edit {
+                if let selected = edit.selectedPlacement {
+                    Text("内容块 \(selected.position)").font(CrewdType.label)
+                    if let revision = selected.pinnedRevision {
+                        Text("修改正文后会从固定版本 \(revision) 保存一份此文档的独立内容。原固定版本仍可引用。")
+                            .font(CrewdType.caption).foregroundStyle(.secondary)
+                    }
+                }
                 TextField("标题",text:$title).disabled(working || store.hasBlockingPending)
-                TextEditor(text:$bodyText).frame(minHeight:160).accessibilityLabel("文档正文")
+                TextEditor(text:$bodyText).frame(minHeight:160)
+                    .accessibilityLabel(edit.selectedPlacement == nil ? "文档正文" : "所选内容块正文")
                     .disabled(working || store.hasBlockingPending)
                 if refreshedBaseline {
                     DisclosureGroup("已重新读取后台版本，保存前可核对") {
                         Text(edit.title).font(CrewdType.label).textSelection(.enabled)
                         ScrollView { Text(edit.body).frame(maxWidth:.infinity,alignment:.leading).textSelection(.enabled) }.frame(maxHeight:120)
-                    }
-                }
-                ForEach(store.pendingNativeDocumentEdits(viewID:parent.object.identity)) { intent in
-                    HStack {
-                        Text("原编辑待核对").font(CrewdType.caption)
-                        Button("查询原编辑结果") { lookup(intent.id) }.disabled(working || store.busy)
                     }
                 }
                 HStack {
@@ -1325,6 +1342,35 @@ private struct CrewdNativeDocumentEditor: View {
                         .disabled(working || store.busy || needsReview || store.hasBlockingPending ||
                                   title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !edit.hasChanges(title:title,body:bodyText))
                 }
+            } else if !working && scopeCurrent() {
+                let placements = store.editableDocumentPlacements(parent)
+                if !placements.isEmpty {
+                    Text("选择要编辑的内容块。").font(CrewdType.caption)
+                    ScrollView {
+                        LazyVStack(alignment:.leading,spacing:8) {
+                            ForEach(placements) { placement in
+                                Button {
+                                    working = true
+                                    Task { await load(placement.id) }
+                                } label: {
+                                    if let revision = placement.pinnedRevision {
+                                        Text("内容块 \(placement.position) · 固定版本 \(revision)")
+                                    } else {
+                                        Text("内容块 \(placement.position)")
+                                    }
+                                }.disabled(store.busy || store.hasBlockingPending)
+                            }
+                        }
+                    }.frame(maxHeight:220)
+                }
+            }
+            if scopeCurrent() {
+                ForEach(store.pendingNativeDocumentEdits(viewID:parent.object.identity)) { intent in
+                    HStack {
+                        Text("原编辑待核对").font(CrewdType.caption)
+                        Button("查询原编辑结果") { lookup(intent.id) }.disabled(working || store.busy)
+                    }
+                }
             }
             if let failure { Text(failure).font(CrewdType.caption).foregroundStyle(.orange).textSelection(.enabled) }
             if working { ProgressView().controlSize(.small) }
@@ -1334,14 +1380,19 @@ private struct CrewdNativeDocumentEditor: View {
         #endif
         .interactiveDismissDisabled(working)
         .task {
-            defer { working = false }
-            do {
-                guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
-                let original = try await store.prepareNativeDocumentEdit(parent)
-                guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
-                edit = original; title = original.title; bodyText = original.body
-            } catch { failure = "无法确认可编辑的原文。此入口支持机组内当前的人类单段纯文本文档。" }
+            if store.canPrepareNativeDocumentEdit(parent) { await load(nil) }
+            else { working = false }
         }
+    }
+
+    private func load(_ placementID: String?) async {
+        defer { working = false }
+        do {
+            guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
+            let original = try await store.prepareNativeDocumentEdit(parent,placementID:placementID)
+            guard scopeCurrent(), !Task.isCancelled else { throw CrewdKnowledgeStore.Failure.stale }
+            edit = original; title = original.title; bodyText = original.body; failure = nil
+        } catch { failure = "无法确认此内容块的当前版本。请选择仍可读取的机组内人类纯文本内容块。" }
     }
 
     private func save(_ original: CrewdKnowledgeStore.NativeDocumentEdit) {
@@ -1351,7 +1402,10 @@ private struct CrewdNativeDocumentEditor: View {
             do {
                 guard scopeCurrent() else { throw CrewdKnowledgeStore.Failure.stale }
                 let result = try await store.submitNativeDocumentEdit(original,title:title,body:bodyText)
-                if result?.phase == .committed { if scopeCurrent() { await onSaved() }; dismiss(); return }
+                if result?.phase == .committed {
+                    if scopeCurrent() { await onSaved(); if scopeCurrent() { dismiss() } }
+                    return
+                }
                 if result == nil { await store.refresh() }
                 failure = store.hasBlockingPending ? "编辑结果待核对。请查询原请求，草稿保留。" : "保存尚未确认，请读取当前版本核对。"
             } catch let error as CrewdClientError { failure = error.localizedDescription }
@@ -1367,7 +1421,8 @@ private struct CrewdNativeDocumentEditor: View {
             guard scopeCurrent() else { return }
             await store.lookup(id)
             if store.result.flatMap({ UUID(uuidString:$0.requestId) }) == id, store.result?.phase == .committed, scopeCurrent() {
-                await onSaved(); dismiss()
+                await onSaved()
+                if scopeCurrent() { dismiss() }
             } else { failure = store.status }
         }
     }
