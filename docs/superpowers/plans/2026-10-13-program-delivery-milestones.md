@@ -4,12 +4,14 @@
 
 | 路线 | 已取得的证据 | 下一道关口 |
 |---|---|---|
-| Mac 日用与 Tirkadavur | `2ef0998d` 公证 Mac 整包通过隔离升级及回滚。早先两次真实机组首条群消息耗时 135 和 179 秒，原生记录显示 WebSocket 约 96 秒后回退 HTTP。Mac 客户端已接入默认关闭的 Codex 本机代理选项，只在下次启动本机后台时生效。使用实际原生参数和普通 Core 的隔离机组完成真实任务，机长读取需求、创建唯一关联工作并引用原消息回复，耗时 22.484 秒。该轮原生记录有七次 WebSocket 请求，未观察到 HTTP 回退，两进程均已退出。 | 正式窗口设置及日用验收。切换前核对现有 Core 与会话的安全停工条件。 |
+| Mac 日用与 Tirkadavur | `2cb8f0b3` 公证 Mac 整包通过隔离升级及回滚。早先两次真实机组首条群消息耗时 135 和 179 秒，原生记录显示 WebSocket 约 96 秒后回退 HTTP。Mac 客户端已接入默认关闭的 Codex 本机代理选项，只在下次启动本机后台时生效。使用实际原生参数和普通 Core 的隔离机组完成真实任务，机长读取需求、创建唯一关联工作并引用原消息回复，耗时 22.484 秒。该轮原生记录有七次 WebSocket 请求，未观察到 HTTP 回退，两进程均已退出。 | 正式窗口设置及日用验收。切换前核对现有 Core 与会话的安全停工条件。 |
 | 行政自动化 | 巡检、待人清单及案件动作报告已接线。相近需求和重复工作复核已通过本机、配对及原回执恢复验收。`cd8d439d` 接入人工答复和撤回的原请求回执，实测重启只查原 UUID，配对撤权后拒绝结案。`ae68d397` 将送达决定与机长指派一并入账。`2cb8f0b3` 接入协调拆项，原机长可一次创建两至八个直属子项，父项和原需求关系保持原样。本地模拟判断服务及实际机长连接验证送达、指派与拆项互斥、数据库重开后查回原结果且不重复建项。Mac Debug 嵌入同源普通 Core。 | 普通后台的 Jev HTTPS 链路、正式窗口与日用验收。 |
 | 文档数据 | 原文档编辑、搜索、恢复、回收站及待办双向链接已联调。原生端新增同机组内容块编排，可引用指定版本、排序、移除，并从历史恢复排列。实际普通 Core 与 Swift 数据层验证两份文档引用同一块，原块更新后引用仍固定在原版本。丢回执后，后台重启且文档已有后续编辑，客户端仍只查原请求及其确切版本。恢复保留后续标题和工作关联。组合 Mac Debug 编译通过。 | 从正式窗口验收文档编排和待办的双向操作，以及移动端共享入口。 |
 | iOS 与跨端 | `686f52d3` 普通 iPhoneOS arm64 构建通过，验证了本轮共享人工待确认入口的编译。早先 `09ac03f5` 已用 macOS 原生传输与 `0947711d` Core 验证短链接配对、原授权回执、重连查原巡检和撤权。最近一次读取手机 PendingCrew 版本时设备明确返回锁屏。 | 真机的应用配对、读取、答复及恢复待设备解锁后独立验收。 |
 
-公证、隔离安装、正常日用和公开发布分别记账。上一份通过隔离升级及回滚的公证候选是 `2ef0998d`。Apple 回执为 `09351a3b-b20d-40e9-91fe-00c5a40eeff2`，附票 ZIP 的 SHA-256 为 `3c3b8657289998da4c1588fec7535923155d292a8e05bc35edf9d8f7c4ab9d7f`。新候选 `945cd2c6`（0.2.3，构建 `20761.65326`）完成 Release 签名及 Apple 公证。回执 `59254362-f660-49e3-ba3c-61f331ddfddc` 为 Accepted。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证，SHA-256 为 `30795310162ac74cf8a451819cd2ba808015d01273b0a9bf5eafccc419a298e4`。新候选的隔离安装、正常日用和公开发布仍待各自验收。首条回复的后续修正在 `9a5a6a08`。
+公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
+
+早先 `2ef0998d` 的隔离升级及回滚也通过，Apple 回执为 `09351a3b-b20d-40e9-91fe-00c5a40eeff2`。`945cd2c6`（0.2.3，构建 `20761.65326`）通过 Apple 公证、票据及 Gatekeeper 检查，回执为 `59254362-f660-49e3-ba3c-61f331ddfddc`。首条回复的后续修正在 `9a5a6a08`。
 
 `fb538158` 的重复工作验收记录见 `/private/tmp/pcw-dup-run.6efvm1ga/result.json`，配对记录见 `/private/tmp/pcw-work-duplicate-paired-final.log`，同源 Debug 证据见 `/private/tmp/pcw-fb538158-normal.b4TXd7/mac-debug-proof.json`。
 
@@ -21,7 +23,7 @@ Mac 代理参数和真实 Tirkadavur 类验收的摘要见 `/private/tmp/pcw-tir
 
 协调指派的账本回归见 `/private/tmp/pcw-coordination-assignment-collab-sealed.log`，本机连接与相关后台回归见 `/private/tmp/pcw-coordination-gate.erGX0x/server-coordination-family.log`。Mac 编译使用已核验的 `cd8d439d` 普通后台作为嵌入输入。普通 Linux 的回环 HTTPS 隔离验收脚本已准备，等待适用运行环境和同源二进制。
 
-`2cb8f0b3` 的实际机长连接回归见 `/private/tmp/pcw-coordination-split-socket-runtime.log`。同源普通 Core 在未配置判断服务时拒绝指派和拆项，两次进程均正常退出。Core 21→22 隔离迁移和整份旧数据回退也通过，确认原回执、需求、工作和文档均可读回。普通后台、Mac Debug 和迁移证据分别见 `/private/tmp/pcw-coord-smoke._j3yyfjt/result.json`、`/private/tmp/pcw-split-ordinary.3WoYkW/mac-debug-proof.json`、`/private/tmp/pcw-2cb8f0b3-upgrade-E5703728/result.json`。迁移验收运行的是后台二进制，正式安装包的签名、安装和回退另行验收。
+`2cb8f0b3` 的实际机长连接回归见 `/private/tmp/pcw-coordination-split-socket-runtime.log`。同源普通 Core 在未配置判断服务时拒绝指派和拆项，两次进程均正常退出。Core 21→22 隔离迁移和整份旧数据回退也通过，确认原回执、需求、工作和文档均可读回。普通后台、Mac Debug 和迁移证据分别见 `/private/tmp/pcw-coord-smoke._j3yyfjt/result.json`、`/private/tmp/pcw-split-ordinary.3WoYkW/mac-debug-proof.json`、`/private/tmp/pcw-2cb8f0b3-upgrade-E5703728/result.json`。此处迁移证据使用未签名后台，上方记录另用附票整包验收。
 
 `2cb8f0b3` 的私有 macOS Release 候选为 0.2.4，构建 `20761.71404`。应用与内嵌后台完成带安全时间戳的 Developer ID 签名，公证输入 ZIP 重新解包后通过严格签名检查。公证输入 SHA-256 为 `0c6b7b081615742004b36ca3e7e8c0a537c29ba3523cb941a759315b031af19f`。使用包中实际签名后台复测 Core 21→22 与整份旧数据回退也通过。候选及迁移记录见 `/private/tmp/pcw-split-ordinary.3WoYkW/notary-input-proof.json` 和 `/private/tmp/pcw-024-signed-core-1767AF70/result.json`。此候选待提交 Apple 公证；正式整包安装、回退和窗口验收另记。
 
