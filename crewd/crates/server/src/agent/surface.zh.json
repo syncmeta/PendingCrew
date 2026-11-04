@@ -1524,6 +1524,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "coordination_decision_id": {
+            "description": "仅当前机长可填。使用本机组原协调通知已送达的请求 ID，把实际换人绑定到该请求。必须核对原工作和当前修订，无待接受转交。相同意图重读原凭据。",
+            "type": "string"
+          },
           "expected_revision": {
             "description": "读取到的当前修订，作为字符串；冲突时先核对返回事实。",
             "type": "string"
@@ -4092,6 +4096,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "coordination_decision_id": {
+            "description": "仅当前机长可填。使用本机组原协调通知已送达的请求 ID，把实际换人绑定到该请求。必须核对原工作和当前修订，无待接受转交。相同意图重读原凭据。",
+            "type": "string"
+          },
           "expected_revision": {
             "description": "读取到的当前修订，作为字符串；冲突时先核对返回事实。",
             "type": "string"

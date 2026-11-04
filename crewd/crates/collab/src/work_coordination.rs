@@ -4,6 +4,9 @@ use crewd_proto::{CoordinationPhase, CoordinationReason, CoordinationView};
 use crewd_store::{StoreError, meta_get, meta_set, object_refs::ObjectKind};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+mod assignment;
+pub use assignment::assign;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub id: String,
@@ -22,6 +25,16 @@ struct Record {
 }
 fn key(id: &str) -> String {
     format!("work.coordination.v1:{id}")
+}
+fn wake_source(id: &str, decision: &str) -> String {
+    format!("work-coordination:{id}:{decision}")
+}
+fn matches_wake(r: &Record, wake: &wakes::WakeRow) -> bool {
+    wake.kind == wakes::WakeKind::System
+        && r.view.wake_id == Some(wake.id)
+        && wake.session == r.snapshot.captain
+        && r.view.recipient.as_deref() == Some(wake.session.as_str())
+        && wake.source == wake_source(&r.snapshot.id, &r.view.decision_id)
 }
 fn invalid() -> crate::CollabError {
     StoreError::Invalid("invalid coordination authority".into()).into()
@@ -314,7 +327,12 @@ pub fn recover_page(
     }
     Ok((count, prepared, next))
 }
-pub fn status(c: &Connection, crew: &str, id: &str) -> Result<crewd_proto::CoordinationStatus> {
+pub fn status(
+    c: &Connection,
+    crew: &str,
+    id: &str,
+    decision: Option<&str>,
+) -> Result<crewd_proto::CoordinationStatus> {
     let work = work::get(c, id)?;
     if work.crew_id != crew {
         return Err(invalid());
@@ -325,14 +343,24 @@ pub fn status(c: &Connection, crew: &str, id: &str) -> Result<crewd_proto::Coord
             r.view.phase = CoordinationPhase::Stale;
             r.view.reason = CoordinationReason::StateChanged;
         }
-        if let Some(id) = r.view.wake_id {
-            r.view.wake_state = wakes::by_ids(c, &[id])?.first().map(|r| r.state);
-        }
+        r.view.wake_state = if let Some(id) = r.view.wake_id {
+            wakes::by_ids(c, &[id])?
+                .iter()
+                .find(|row| matches_wake(r, row))
+                .map(|row| row.state)
+        } else {
+            None
+        };
     }
     Ok(crewd_proto::CoordinationStatus {
         crew_id: crew.into(),
         id: id.into(),
         record: record.map(|r| r.view),
+        last_assignment: assignment::latest(c, crew, id)?,
+        requested_assignment: decision
+            .map(|decision| assignment::lookup(c, crew, id, decision))
+            .transpose()?
+            .flatten(),
     })
 }
 pub fn settle(
@@ -366,7 +394,7 @@ pub fn settle(
             r.view.reason = CoordinationReason::Stopped;
             return save(tx, &r);
         }
-        let source = format!("work-coordination:{}:{}", s.id, r.view.decision_id);
+        let source = wake_source(&s.id, &r.view.decision_id);
         let result = wakes::enqueue(
             tx,
             wakes::WakeRequest {
@@ -397,13 +425,11 @@ pub(crate) fn render(c: &Connection, row: &wakes::WakeRow) -> Result<work::Follo
     let Some(r) = record(c, id)? else {
         return Ok(work::FollowupNote::Stale);
     };
-    if row.kind != wakes::WakeKind::System
+    if !matches_wake(&r, row)
         || paused(c, &r.snapshot)?
         || !r.view.adopted
         || !matches!(r.view.phase, CoordinationPhase::Settled)
         || r.view.decision_id != decision
-        || r.view.wake_id != Some(row.id)
-        || row.session != r.snapshot.captain
         || wakes::automatic_work_paused(c, &row.session)?
         || snapshot(c, id)?.is_none_or(|s| s.fingerprint != r.snapshot.fingerprint)
     {
@@ -411,7 +437,7 @@ pub(crate) fn render(c: &Connection, row: &wakes::WakeRow) -> Result<work::Follo
     }
     Ok(work::FollowupNote::Current(crate::prompts::fill(
         crate::prompts::render_file(crate::Locale::Zh).get("notice.work.coordination"),
-        &[("work", id)],
+        &[("work", id), ("decision", decision)],
     )))
 }
 /// Existing durable notification identities for guarded channel lifecycle checks.
@@ -448,7 +474,7 @@ mod tests {
         ok(s, |tx| {
             work::update(
                 tx,
-                &Sender::Session("w-a1".into()),
+                &Sender::Session(p.owner.unwrap()),
                 WorkUpdateParams {
                     id: id.into(),
                     expected_revision: p.revision,
@@ -458,6 +484,234 @@ mod tests {
                 },
             )
         });
+    }
+
+    fn adopt(s: &mut crewd_store::Store, id: &str) -> CoordinationView {
+        report(s, id, "one");
+        report(s, id, "two");
+        let snap = ok(s, |tx| prepare(tx, id)).unwrap();
+        assert!(ok(s, |tx| dispatch(tx, &snap)));
+        ok(s, |tx| {
+            settle(
+                tx,
+                &snap,
+                Some(0.1),
+                Some(0.9),
+                true,
+                CoordinationReason::Answered,
+            )
+        });
+        status(s.conn(), "crew-a", id, None)
+            .unwrap()
+            .record
+            .unwrap()
+    }
+
+    fn deliver(s: &mut crewd_store::Store, wake_id: i64) {
+        ok(s, |tx| {
+            wakes::claim(tx, &[wake_id])?;
+            wakes::ack_delivered(tx, "cap-a", &[wake_id], wakes::Riders::Release, &[], &[])
+        });
+    }
+
+    fn assignment(s: &crewd_store::Store, id: &str, target: &str) -> crewd_proto::WorkAssignParams {
+        crewd_proto::WorkAssignParams {
+            id: id.into(),
+            owner: target.into(),
+            expected_revision: work::get(s.conn(), id).unwrap().revision,
+            note: "coordination assignment reason".into(),
+        }
+    }
+
+    #[test]
+    fn delivered_assignment_is_atomic_and_previous_result_survives_new_decision() {
+        let mut s = store();
+        let id = work(&mut s);
+        let first = adopt(&mut s, &id);
+        let p = assignment(&s, &id, "w-a2");
+        assert!(
+            crate::run(&mut s, NOW, |tx| assign(
+                tx,
+                "cap-a",
+                &first.decision_id,
+                p.clone()
+            ))
+            .is_err()
+        );
+        deliver(&mut s, first.wake_id.unwrap());
+        let wrong_crew = assignment(&s, &id, "w-b1");
+        for (actor, params) in [
+            ("w-a1", p.clone()),
+            ("cap-b", p.clone()),
+            ("cap-a", wrong_crew),
+        ] {
+            assert!(
+                crate::run(&mut s, NOW, |tx| assign(
+                    tx,
+                    actor,
+                    &first.decision_id,
+                    params
+                ))
+                .is_err()
+            );
+        }
+        s.conn().execute_batch("CREATE TRIGGER deny_coord_assignment BEFORE INSERT ON meta WHEN NEW.key LIKE 'work.coordination.assignment.latest.v1:%' BEGIN SELECT RAISE(ABORT,'receipt failure'); END;").unwrap();
+        assert!(
+            crate::run(&mut s, NOW, |tx| assign(
+                tx,
+                "cap-a",
+                &first.decision_id,
+                p.clone()
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            work::get(s.conn(), &id).unwrap().revision,
+            p.expected_revision
+        );
+        let count = |s: &crewd_store::Store| {
+            s.conn()
+                .query_row(
+                    "SELECT count(*) FROM wakes WHERE source LIKE 'work-assigned:%'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(count(&s), 0);
+        s.conn()
+            .execute_batch("DROP TRIGGER deny_coord_assignment")
+            .unwrap();
+        let one = ok(&mut s, |tx| {
+            assign(tx, "cap-a", &first.decision_id, p.clone())
+        });
+        assert_eq!(one.previous_owner, "w-a1");
+        assert_eq!(one.owner, "w-a2");
+        let second = adopt(&mut s, &id);
+        deliver(&mut s, second.wake_id.unwrap());
+        let second_p = assignment(&s, &id, "w-a1");
+        let two = ok(&mut s, |tx| {
+            assign(tx, "cap-a", &second.decision_id, second_p)
+        });
+        assert_ne!(one.event_seq, two.event_seq);
+        s.conn()
+            .execute("DELETE FROM wakes WHERE id=?1", [first.wake_id.unwrap()])
+            .unwrap();
+        let read = status(s.conn(), "crew-a", &id, Some(&first.decision_id)).unwrap();
+        assert_eq!(read.last_assignment, Some(two));
+        assert_eq!(read.requested_assignment, Some(one.clone()));
+        crewd_store::judgment_state::restored(s.conn()).unwrap();
+        assert_eq!(
+            ok(&mut s, |tx| assign(
+                tx,
+                "cap-a",
+                &first.decision_id,
+                p.clone()
+            )),
+            one
+        );
+        let changed = crewd_proto::WorkAssignParams {
+            note: "changed intent".into(),
+            ..p
+        };
+        assert!(
+            crate::run(&mut s, NOW, |tx| assign(
+                tx,
+                "cap-a",
+                &first.decision_id,
+                changed
+            ))
+            .is_err()
+        );
+        assert_eq!(count(&s), 2);
+        let key = format!("work.coordination.assignment.v1:{id}:{}", first.decision_id);
+        let raw = meta_get(s.conn(), &key).unwrap().unwrap();
+        let mut corrupt: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        corrupt["delivery"]["attempts"] = serde_json::json!(31);
+        meta_set(s.conn(), &key, &corrupt.to_string()).unwrap();
+        assert!(status(s.conn(), "crew-a", &id, Some(&first.decision_id)).is_err());
+    }
+
+    #[test]
+    fn stop_restore_transfer_and_unrelated_wake_cannot_authorize_assignment() {
+        let mut s = store();
+        let id = work(&mut s);
+        let first = adopt(&mut s, &id);
+        let wake = first.wake_id.unwrap();
+        deliver(&mut s, wake);
+        s.conn()
+            .execute("UPDATE wakes SET source='different' WHERE id=?1", [wake])
+            .unwrap();
+        assert_eq!(
+            status(s.conn(), "crew-a", &id, None)
+                .unwrap()
+                .record
+                .unwrap()
+                .wake_state,
+            None
+        );
+        let p = assignment(&s, &id, "w-a2");
+        assert!(
+            crate::run(&mut s, NOW, |tx| assign(
+                tx,
+                "cap-a",
+                &first.decision_id,
+                p.clone()
+            ))
+            .is_err()
+        );
+        s.conn()
+            .execute(
+                "UPDATE wakes SET source=?1 WHERE id=?2",
+                (wake_source(&id, &first.decision_id), wake),
+            )
+            .unwrap();
+        crewd_store::judgment_state::restored(s.conn()).unwrap();
+        assert!(
+            crate::run(&mut s, NOW, |tx| assign(
+                tx,
+                "cap-a",
+                &first.decision_id,
+                p.clone()
+            ))
+            .is_err()
+        );
+        let second = adopt(&mut s, &id);
+        deliver(&mut s, second.wake_id.unwrap());
+        ok(&mut s, |tx| wakes::human_stop(tx, "cap-a"));
+        assert!(
+            crate::run(&mut s, NOW, |tx| assign(
+                tx,
+                "cap-a",
+                &second.decision_id,
+                p
+            ))
+            .is_err()
+        );
+
+        let mut s = store();
+        let id = work(&mut s);
+        let p = assignment(&s, &id, "w-a2");
+        ok(&mut s, |tx| {
+            crate::work_transfer::request(
+                tx,
+                &Sender::Session("w-a1".into()),
+                crewd_proto::WorkTransferRequestParams {
+                    id: id.clone(),
+                    expected_revision: p.expected_revision,
+                    to: p.owner,
+                    note: p.note,
+                },
+            )
+        });
+        let third = adopt(&mut s, &id);
+        deliver(&mut s, third.wake_id.unwrap());
+        let p = assignment(&s, &id, "w-a2");
+        assert!(crate::run(&mut s, NOW, |tx| assign(tx, "cap-a", &third.decision_id, p)).is_err());
+        assert_eq!(
+            work::get(s.conn(), &id).unwrap().owner.as_deref(),
+            Some("w-a1")
+        );
     }
     #[test]
     fn report_cursor_baselines_then_recovers_lost_events_and_resets_on_restore() {
@@ -518,7 +772,10 @@ mod tests {
             ))
             .is_err()
         );
-        let v = status(s.conn(), "crew-a", &id).unwrap().record.unwrap();
+        let v = status(s.conn(), "crew-a", &id, None)
+            .unwrap()
+            .record
+            .unwrap();
         assert!(matches!(v.phase, CoordinationPhase::Dispatched));
         assert!(!v.adopted);
         assert!(v.wake_id.is_none());
@@ -564,7 +821,10 @@ mod tests {
         ok(&mut s, |tx| wakes::human_stop(tx, "cap-a"));
         let stopped = ok(&mut s, |tx| prepare(tx, &id)).unwrap();
         assert!(!ok(&mut s, |tx| dispatch(tx, &stopped)));
-        let view = status(s.conn(), "crew-a", &id).unwrap().record.unwrap();
+        let view = status(s.conn(), "crew-a", &id, None)
+            .unwrap()
+            .record
+            .unwrap();
         assert!(matches!(view.phase, CoordinationPhase::Suppressed));
         assert!(view.wake_id.is_none());
     }
@@ -574,7 +834,7 @@ mod tests {
         let id = work(&mut s);
         assert!(ok(&mut s, |tx| prepare(tx, &id)).is_none());
         assert!(matches!(
-            status(s.conn(), "crew-a", &id)
+            status(s.conn(), "crew-a", &id, None)
                 .unwrap()
                 .record
                 .unwrap()
@@ -597,7 +857,10 @@ mod tests {
                 CoordinationReason::Answered,
             )
         });
-        let view = status(s.conn(), "crew-a", &id).unwrap().record.unwrap();
+        let view = status(s.conn(), "crew-a", &id, None)
+            .unwrap()
+            .record
+            .unwrap();
         assert!(view.adopted);
         let row = wakes::by_ids(s.conn(), &[view.wake_id.unwrap()])
             .unwrap()
@@ -634,7 +897,7 @@ mod tests {
             )
         });
         assert!(
-            status(s.conn(), "crew-a", &id)
+            status(s.conn(), "crew-a", &id, None)
                 .unwrap()
                 .record
                 .unwrap()
@@ -656,7 +919,7 @@ mod tests {
             )
         });
         assert!(matches!(
-            status(s.conn(), "crew-a", &id)
+            status(s.conn(), "crew-a", &id, None)
                 .unwrap()
                 .record
                 .unwrap()

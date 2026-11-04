@@ -403,14 +403,14 @@ async fn source_admission_revoked_after_permit_causes_zero_launch_and_registrati
     r.close().await;
 }
 
-struct Socket {
+pub(super) struct Socket {
     rd: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
     wr: tokio::net::unix::OwnedWriteHalf,
     id: u64,
     task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
 impl Socket {
-    fn owned(state: Arc<AppState>) -> Self {
+    pub(super) fn owned(state: Arc<AppState>) -> Self {
         let (client, server) = tokio::net::UnixStream::pair().unwrap();
         let task = tokio::spawn(crate::conn::run(state, server));
         let (rd, wr) = client.into_split();
@@ -421,7 +421,7 @@ impl Socket {
             task,
         }
     }
-    async fn attach(state: Arc<AppState>, sid: &str) -> Self {
+    pub(super) async fn attach(state: Arc<AppState>, sid: &str) -> Self {
         let token = state.tokens.mint(sid);
         let mut s = Self::owned(state);
         s.call("agent.attach", json!({"sessionId":sid,"token":token}))
@@ -429,7 +429,7 @@ impl Socket {
             .unwrap();
         s
     }
-    async fn call(
+    pub(super) async fn call(
         &mut self,
         method: &str,
         params: serde_json::Value,
@@ -460,7 +460,7 @@ impl Socket {
             }
         }
     }
-    async fn close(mut self) {
+    pub(super) async fn close(mut self) {
         use tokio::io::AsyncWriteExt;
         self.wr.shutdown().await.unwrap();
         drop(self.rd);

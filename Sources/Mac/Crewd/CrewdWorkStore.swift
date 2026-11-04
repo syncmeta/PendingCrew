@@ -125,6 +125,51 @@ struct CrewdPlan: Equatable, Sendable {
     var frozen: Bool { summary["frozen"] == .bool(true) }
 }
 
+struct CrewdCoordinationStatus {
+    struct Assignment: Equatable {
+        let decisionID: String
+        let captain: String
+        let previousOwner: String
+        let owner: String
+        let previousRevision: String
+        let revision: String
+        let eventSequence: String
+        let assignedAtMs: Int64
+
+        init(_ value: CrewdValue, crew: String, id: String) throws {
+            let invalid = CrewdClientError(message:"机长分派回执的计划、人员或事件不符。")
+            guard case .object = value, value["crewId"] == .string(crew), value["id"] == .string(id),
+                  let decision = value["decisionId"].string, UUID(uuidString:decision)?.uuidString.lowercased() == decision,
+                  let captain = Self.session(value["captain"]), let previousOwner = Self.session(value["previousOwner"]),
+                  let owner = Self.session(value["owner"]), owner != previousOwner,
+                  let previous = value["previousRevision"].string, let current = value["revision"].string,
+                  let before = UInt64(previous), before > 0, String(before) == previous, before < UInt64.max,
+                  current == String(before + 1),
+                  let event = value["eventSeq"].string, let sequence = Int64(event), sequence > 0, String(sequence) == event else {
+                throw invalid
+            }
+            let milliseconds: Int64?
+            switch value["assignedAtMs"] {
+            case .integer(let number): milliseconds = number
+            case .unsigned(let number): milliseconds = Int64(exactly:number)
+            default: milliseconds = nil
+            }
+            guard let milliseconds, milliseconds >= 0 else { throw invalid }
+            decisionID = decision; self.captain = captain; self.previousOwner = previousOwner; self.owner = owner
+            previousRevision = previous; revision = current; eventSequence = event; assignedAtMs = milliseconds
+        }
+
+        private static func session(_ value: CrewdValue) -> String? {
+            guard let id = value.string, !id.isEmpty, id.trimmingCharacters(in:.whitespacesAndNewlines) == id else { return nil }
+            return id
+        }
+    }
+
+    let record: CrewdValue
+    let lastAssignment: Assignment?
+    let requestedAssignment: Assignment?
+}
+
 /// One backend-owned organization snapshot. Todo and progress contain references to these
 /// same plans; they cannot independently mutate a status or synthesize a completion ratio.
 @MainActor
@@ -198,10 +243,17 @@ final class CrewdWorkStore: ObservableObject {
         ensureTask = task
         await task.value
     }
-    func coordinationStatus(crew: String, id: String) async throws -> CrewdValue {
+    func coordinationStatus(crew: String, id: String, decisionID: String? = nil) async throws -> CrewdCoordinationStatus {
         let token = generation
         guard !crew.isEmpty, CrewdWorkID(id,kind:.plan) != nil else { throw CrewdClientError(message:"计划身份无效。") }
-        let result = try await call("work.coordinationStatus",.object(["crewId":.string(crew),"id":.string(id)]))
+        var params: [String:CrewdValue] = ["crewId":.string(crew),"id":.string(id)]
+        if let decisionID {
+            guard UUID(uuidString:decisionID)?.uuidString.lowercased() == decisionID else {
+                throw CrewdClientError(message:"请输入完整的判断编号。",kind:.notSubmitted)
+            }
+            params["decisionId"] = .string(decisionID)
+        }
+        let result = try await call("work.coordinationStatus",.object(params))
         try check(token)
         guard case .object(let fields) = result, fields["crewId"]?.string == crew, fields["id"]?.string == id,
               let record = fields["record"] else { throw CrewdClientError(message:"协调记录不完整或不属于当前计划。") }
@@ -223,7 +275,15 @@ final class CrewdWorkStore: ObservableObject {
             }
             guard let wake=row["wakeId"], wake == .null || wake.int != nil else {throw CrewdClientError(message:"协调通知身份无效。")}
         }
-        return record
+        func assignment(_ key: String) throws -> CrewdCoordinationStatus.Assignment? {
+            guard let value = fields[key], value != .null else { return nil }
+            return try .init(value,crew:crew,id:id)
+        }
+        let requested = try assignment("requestedAssignment")
+        if let requested, requested.decisionID != decisionID {
+            throw CrewdClientError(message:"原分派回执与查询的判断编号不符。")
+        }
+        return .init(record:record,lastAssignment:try assignment("lastAssignment"),requestedAssignment:requested)
     }
     func reassignmentStatus(crew: String, id: String) async throws -> CrewdValue {
         let token = generation

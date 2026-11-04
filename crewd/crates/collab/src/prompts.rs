@@ -95,7 +95,7 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
         "notice.admin.custody",
         &["case", "crew", "request", "targets", "reason"],
     ),
-    ("notice.work.coordination", &["work"]),
+    ("notice.work.coordination", &["work", "decision"]),
     ("notice.work.reassignment", &["work", "owner"]),
     ("notice.admin.title", &[]),
     ("notice.patrol.unreadable", &[]),

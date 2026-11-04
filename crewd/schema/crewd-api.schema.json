@@ -5650,6 +5650,56 @@
       ],
       "type": "object"
     },
+    "CoordinationAssignment": {
+      "additionalProperties": false,
+      "description": "A verified owner change made in response to one specific coordination request.",
+      "properties": {
+        "assignedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "captain": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "eventSeq": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "previousOwner": {
+          "type": "string"
+        },
+        "previousRevision": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id",
+        "decisionId",
+        "captain",
+        "previousOwner",
+        "owner",
+        "previousRevision",
+        "revision",
+        "eventSeq",
+        "assignedAtMs"
+      ],
+      "type": "object"
+    },
     "CoordinationPhase": {
       "enum": [
         "prepared",
@@ -5683,10 +5733,30 @@
         "id": {
           "type": "string"
         },
+        "lastAssignment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordinationAssignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "record": {
           "anyOf": [
             {
               "$ref": "#/$defs/CoordinationView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestedAssignment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CoordinationAssignment"
             },
             {
               "type": "null"
@@ -5705,6 +5775,12 @@
       "properties": {
         "crewId": {
           "type": "string"
+        },
+        "decisionId": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "id": {
           "type": "string"

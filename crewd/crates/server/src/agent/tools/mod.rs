@@ -146,7 +146,7 @@ pub(crate) async fn call_scoped(
     scope: crate::connection_scope::ConnectionScope,
     token: String,
 ) -> CallResult {
-    port::with_archive_authority(st, me, scope, token, call(st, me, tool, args)).await
+    port::with_scoped_actor(st, me, scope, token, call(st, me, tool, args)).await
 }
 
 pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> CallResult {

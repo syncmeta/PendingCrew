@@ -866,23 +866,23 @@ pub async fn remove_member(
 }
 
 #[derive(Clone)]
-struct ArchiveAuthority {
+struct ScopedActor {
     state: std::sync::Arc<AppState>,
     session: String,
     scope: crate::connection_scope::ConnectionScope,
     token: String,
 }
-tokio::task_local! { static ARCHIVE_AUTHORITY: ArchiveAuthority; }
-pub(crate) async fn with_archive_authority<F: std::future::Future>(
+tokio::task_local! { static SCOPED_ACTOR: ScopedActor; }
+pub(crate) async fn with_scoped_actor<F: std::future::Future>(
     state: &std::sync::Arc<AppState>,
     me: &Identity,
     scope: crate::connection_scope::ConnectionScope,
     token: String,
     future: F,
 ) -> F::Output {
-    ARCHIVE_AUTHORITY
+    SCOPED_ACTOR
         .scope(
-            ArchiveAuthority {
+            ScopedActor {
                 state: state.clone(),
                 session: me.session_id.clone(),
                 scope,
@@ -892,41 +892,41 @@ pub(crate) async fn with_archive_authority<F: std::future::Future>(
         )
         .await
 }
-fn archive_denied() -> CollabError {
+fn scoped_actor_denied() -> CollabError {
     CollabError::Forbidden(crewd_collab::refusal::Refusal::new(
         crewd_collab::refusal::Code::ResourceForbidden,
     ))
 }
-fn archive_authority(st: &AppState, me: &Identity) -> PortResult<ArchiveAuthority> {
-    let a = ARCHIVE_AUTHORITY
+fn scoped_actor(st: &AppState, me: &Identity) -> PortResult<ScopedActor> {
+    let a = SCOPED_ACTOR
         .try_with(Clone::clone)
-        .map_err(|_| PortError::from(archive_denied()))?;
+        .map_err(|_| PortError::from(scoped_actor_denied()))?;
     if !std::ptr::eq(a.state.as_ref(), st) || a.session != me.session_id {
-        return Err(archive_denied().into());
+        return Err(scoped_actor_denied().into());
     }
     Ok(a)
 }
-fn validate_archive_actor(
+fn validate_scoped_actor(
     c: &Connection,
-    a: &ArchiveAuthority,
+    a: &ScopedActor,
     me: &Identity,
 ) -> crewd_collab::Result<()> {
     if !a.scope.is_live()
         || !a.state.tokens.verify(&a.session, &a.token)
         || (a.state.management.get().is_some() && !a.state.admission.contains(&a.session))
     {
-        return Err(archive_denied());
+        return Err(scoped_actor_denied());
     }
     let current = crewd_collab::sessions::get(c, &a.session)?;
     if current.crew_id != me.crew_id || crewd_collab::sessions::role_of(c, &a.session)? != me.role {
-        return Err(archive_denied());
+        return Err(scoped_actor_denied());
     }
     if crewd_collab::crews::is_archived(c, &current.crew_id)?
         || crewd_collab::crews::get(c, &current.crew_id)?
             .removed_at
             .is_some()
     {
-        return Err(archive_denied());
+        return Err(scoped_actor_denied());
     }
     Ok(())
 }
@@ -935,11 +935,11 @@ pub async fn channel_archive_check(
     by: &Identity,
     channel: &str,
 ) -> PortResult<crewd_proto::channel_archive::ChannelArchiveCheck> {
-    let a = archive_authority(st, by)?;
+    let a = scoped_actor(st, by)?;
     let by = by.clone();
     let channel = channel.to_string();
     read(st, move |c| {
-        validate_archive_actor(c, &a, &by)?;
+        validate_scoped_actor(c, &a, &by)?;
         crewd_collab::channel_archive::check(
             c,
             &Sender::Session(by.session_id),
@@ -956,7 +956,7 @@ pub async fn channel_archive_verified(
     by: &Identity,
     p: crewd_proto::channel_archive::ChannelArchiveVerifiedParams,
 ) -> PortResult<crewd_proto::channel_archive::ChannelArchiveCheck> {
-    let a = archive_authority(st, by)?;
+    let a = scoped_actor(st, by)?;
     let by = by.clone();
     #[cfg(feature = "testkit")]
     super::testkit::pause_caller(
@@ -968,7 +968,7 @@ pub async fn channel_archive_verified(
     )
     .await;
     write(st, move |tx| {
-        validate_archive_actor(tx.conn(), &a, &by)?;
+        validate_scoped_actor(tx.conn(), &a, &by)?;
         crewd_collab::channel_archive::archive(tx, &Sender::Session(by.session_id), p)
     })
     .await
@@ -978,7 +978,7 @@ pub async fn channel_restore_verified(
     by: &Identity,
     p: crewd_proto::channel_archive::ChannelRestoreVerifiedParams,
 ) -> PortResult<crewd_proto::channel_archive::ChannelArchiveCheck> {
-    let a = archive_authority(st, by)?;
+    let a = scoped_actor(st, by)?;
     let by = by.clone();
     #[cfg(feature = "testkit")]
     super::testkit::pause_caller(
@@ -990,7 +990,7 @@ pub async fn channel_restore_verified(
     )
     .await;
     write(st, move |tx| {
-        validate_archive_actor(tx.conn(), &a, &by)?;
+        validate_scoped_actor(tx.conn(), &a, &by)?;
         crewd_collab::channel_archive::restore(tx, &Sender::Session(by.session_id), p)
     })
     .await
@@ -1171,10 +1171,10 @@ pub async fn readable_views(st: &AppState, me: &Identity) -> PortResult<Vec<Chan
 /// New archive tools also revalidate authority inside the resolver's actual DB read;
 /// an invalid target must not leak a private list of name suggestions after revocation.
 pub async fn archive_readable_views(st: &AppState, me: &Identity) -> PortResult<Vec<ChannelView>> {
-    let authority = archive_authority(st, me)?;
+    let authority = scoped_actor(st, me)?;
     let me = me.clone();
     read(st, move |c| {
-        validate_archive_actor(c, &authority, &me)?;
+        validate_scoped_actor(c, &authority, &me)?;
         readable_views_conn(c, &me.session_id)
     })
     .await
@@ -2027,6 +2027,23 @@ pub async fn work_assign(
 ) -> PortResult<crewd_proto::WorkPlan> {
     let by = Sender::Session(session.to_owned());
     write(st, move |tx| crewd_collab::work::assign(tx, &by, p)).await
+}
+pub(crate) async fn work_assign_coordination(
+    st: &AppState,
+    by: &Identity,
+    decision: String,
+    p: crewd_proto::WorkAssignParams,
+) -> PortResult<crewd_proto::CoordinationAssignment> {
+    let authority = scoped_actor(st, by)?;
+    let by = by.clone();
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &authority, &by)?;
+        if !authority.state.admission.contains(&by.session_id) {
+            return Err(scoped_actor_denied());
+        }
+        crewd_collab::work_coordination::assign(tx, &by.session_id, &decision, p)
+    })
+    .await
 }
 pub async fn work_close(
     st: &AppState,

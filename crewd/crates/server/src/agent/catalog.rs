@@ -439,6 +439,7 @@ pub const CATALOG: &[ToolSpec] = &[
             p("expected_revision", Str, true),
             p("owner", Str, true),
             p("note", Str, true),
+            p("coordination_decision_id", Str, false),
         ],
     )),
     idempotent(all(

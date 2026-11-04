@@ -802,7 +802,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         methods::WORK_COORDINATION_STATUS => {
             let p: CoordinationStatusParams = parse_params(p)?;
             read(state, move |c| {
-                crewd_collab::work_coordination::status(c, &p.crew_id, &p.id)
+                crewd_collab::work_coordination::status(c, &p.crew_id, &p.id, p.decision_id.as_deref())
             })
             .await
         }

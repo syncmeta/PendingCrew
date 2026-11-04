@@ -987,6 +987,10 @@ RFC3339 检查时间，晚于现在且不超过工作规则上限；done 或 dro
 ## r.work_result
 {result}
 
+## r.work_coordination_assignment
+该协调请求的原始指派凭据：
+{result}
+
 ## work_closure_history
 按原工作读取真实账本的事实性关闭事件，最新在前，与负责人变更历史分开。记录中的证据是当时提交的依据，不代表系统已经独立核实。
 
@@ -1034,6 +1038,9 @@ true 也查看已移除机组中的工作，默认 false。返回 frozen:true �
 
 ## work_item_assign.note
 指派或认领理由，不能为空。
+
+## work_item_assign.coordination_decision_id
+仅当前机长可填。使用本机组原协调通知已送达的请求 ID，把实际换人绑定到该请求。必须核对原工作和当前修订，无待接受转交。相同意图重读原凭据。
 
 ## work_item_reassign_lost
 仅在daemon核实当前负责人恢复失败，或真实投递的检查点达到既有失联阈值且再次到期后重派。调用方不能自称失联；健康、仅停止或未知负责人拒绝，普通成员不能夺取他人工作。需要当前修订与实际目标session；成功记录失联重派历史并持久通知，通知仍遵守人类停止。

@@ -8,9 +8,16 @@ use crewd_proto::{
 use serde::Deserialize;
 use serde_json::Value;
 fn receipt<T: serde::Serialize>(cx: &Ctx<'_>, v: port::PortResult<T>) -> CallResult {
+    receipt_with(cx, "r.work_result", v)
+}
+fn receipt_with<T: serde::Serialize>(
+    cx: &Ctx<'_>,
+    key: &str,
+    v: port::PortResult<T>,
+) -> CallResult {
     match v {
         Ok(v) => match serde_json::to_string(&v) {
-            Ok(result) => cx.ok("r.work_result", &[("result", &result)]),
+            Ok(result) => cx.ok(key, &[("result", &result)]),
             Err(e) => cx.fail(port::PortError::Internal(e.to_string())),
         },
         Err(e) => cx.fail(e),
@@ -155,25 +162,42 @@ struct Assign {
     owner: String,
     note: String,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoordinationAssign {
+    id: String,
+    expected_revision: String,
+    owner: String,
+    note: String,
+    #[serde(default, deserialize_with = "decision_id")]
+    coordination_decision_id: Option<String>,
+}
+fn decision_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
+}
 pub async fn assign(cx: &Ctx<'_>, v: Value) -> CallResult {
-    let a: Assign = match parse_args(cx, v) {
+    let a: CoordinationAssign = match parse_args(cx, v) {
         Ok(a) => a,
         Err(e) => return e,
     };
+    let p = crewd_proto::WorkAssignParams {
+        id: a.id,
+        expected_revision: a.expected_revision,
+        owner: a.owner,
+        note: a.note,
+    };
+    if let Some(decision) = a.coordination_decision_id {
+        return receipt_with(
+            cx,
+            "r.work_coordination_assignment",
+            port::work_assign_coordination(cx.st, cx.me, decision, p).await,
+        );
+    }
     receipt(
         cx,
-        port::work_assign(
-            cx.st,
-            &cx.me.session_id,
-            crewd_proto::WorkAssignParams {
-                id: a.id,
-                expected_revision: a.expected_revision,
-                owner: a.owner,
-                note: a.note,
-            },
-        )
-        .await
-        .map(crewd_proto::WorkSummary::from),
+        port::work_assign(cx.st, &cx.me.session_id, p)
+            .await
+            .map(crewd_proto::WorkSummary::from),
     )
 }
 

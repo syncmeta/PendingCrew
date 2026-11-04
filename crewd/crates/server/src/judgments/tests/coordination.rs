@@ -43,7 +43,7 @@ async fn result(f: &Fixture, id: &str) -> crewd_proto::CoordinationView {
             let view = f
                 .state
                 .db
-                .call_result(move |s| work_coordination::status(s.conn(), &crew, &id))
+                .call_result(move |s| work_coordination::status(s.conn(), &crew, &id, None))
                 .await
                 .unwrap()
                 .unwrap()
@@ -170,7 +170,8 @@ async fn dispatched_coordination_reopens_unknown_without_provider_replay() {
 }
 
 #[tokio::test]
-async fn coordination_reaches_captain_actor_only_typed_ack_delivers_and_work_stays_open() {
+async fn coordination_assignment_uses_actual_captain_socket_and_typed_ack_then_reopens() {
+    use super::admin_execution::Socket;
     use crate::orchestra::{
         self,
         clock::SystemClock,
@@ -184,7 +185,7 @@ async fn coordination_reaches_captain_actor_only_typed_ack_delivers_and_work_sta
         session::{BRIEF_DELIVERY_ID, DeliveryOutcome, SessionEvent},
     };
     let fake=FakeJev::start(vec![Reply::ok(json!({"model":"fake-native","answers":{"meaningful_progress":{"type":"noul","noul":0.1},"needs_coordination":{"type":"noul","noul":0.9}}}).to_string())]).await;
-    let f = Fixture::new().await;
+    let mut f = Fixture::new().await;
     f.configure(&fake.base_url).await;
     let rx = f.state.hub.subscribe_collab();
     let exec = StandIn::default();
@@ -209,6 +210,7 @@ async fn coordination_reaches_captain_actor_only_typed_ack_delivers_and_work_sta
     f.runtime.run_coordination(id.clone(), true).await.unwrap();
     let view = result(&f, &id).await;
     let captain = view.recipient.clone().unwrap();
+    let decision = &view.decision_id;
     let wake = view.wake_id.unwrap();
     let marker = f
         .state
@@ -229,6 +231,7 @@ async fn coordination_reaches_captain_actor_only_typed_ack_delivers_and_work_sta
                 .and_then(|l| l.initial.clone())
             {
                 if initial.contains("请核实并协调") {
+                    assert!(initial.contains(decision));
                     break (BRIEF_DELIVERY_ID, Subject::Brief);
                 }
                 if !brief_ack {
@@ -246,7 +249,7 @@ async fn coordination_reaches_captain_actor_only_typed_ack_delivers_and_work_sta
             if exec
                 .sent(&captain)
                 .iter()
-                .any(|text| text.contains("请核实并协调"))
+                .any(|text| text.contains("请核实并协调") && text.contains(decision))
             {
                 break (exec.last_send_id(&captain), Subject::Steer);
             }
@@ -267,6 +270,33 @@ async fn coordination_reaches_captain_actor_only_typed_ack_delivers_and_work_sta
         .unwrap()
         .unwrap();
     assert_eq!(before.state, crewd_collab::wakes::WakeState::Inflight);
+    let work_id = id.clone();
+    let initial = f
+        .state
+        .db
+        .call_result(move |s| work::get(s.conn(), &work_id))
+        .await
+        .unwrap()
+        .unwrap();
+    let args = json!({
+        "id":id, "expected_revision":initial.revision, "owner":captain,
+        "note":"verified assignment for the coordination request",
+        "coordination_decision_id":view.decision_id,
+    });
+    let mut captain_socket = Socket::attach(f.state.clone(), &captain).await;
+    let tool = |args| json!({"tool":"work_item_assign","args":args});
+    let pending = captain_socket
+        .call("agent.call", tool(args.clone()))
+        .await
+        .unwrap();
+    assert_eq!(pending["isError"], true, "{pending}");
+    let mut malformed = args.clone();
+    malformed["coordination_decision_id"] = serde_json::Value::Null;
+    let invalid = captain_socket
+        .call("agent.call", tool(malformed))
+        .await
+        .unwrap();
+    assert_eq!(invalid["isError"], true, "{invalid}");
     exec.emit(
         &captain,
         SessionEvent::Delivery {
@@ -329,11 +359,60 @@ async fn coordination_reaches_captain_actor_only_typed_ack_delivers_and_work_sta
             })
             .count();
     assert_eq!(inputs, 1);
+    let receipt = captain_socket
+        .call("agent.call", tool(args.clone()))
+        .await
+        .unwrap();
+    assert_eq!(receipt["isError"], false, "{receipt}");
+    let (_, body) = receipt["text"].as_str().unwrap().split_once('\n').unwrap();
+    let body: crewd_proto::CoordinationAssignment = serde_json::from_str(body).unwrap();
+    assert_eq!(body.id, id);
+    assert_eq!(body.decision_id, view.decision_id);
+    assert_eq!(body.captain, captain);
+    assert_eq!(body.owner, captain);
+    assert_eq!(body.previous_owner, f.worker);
+    let mut human = Socket::owned(f.state.clone());
+    let query = json!({"crewId": f.crew,"id":id,"decisionId":view.decision_id});
+    let result = human
+        .call("work.coordinationStatus", query.clone())
+        .await
+        .unwrap();
+    assert_eq!(result["lastAssignment"], json!(body));
+    assert_eq!(result["requestedAssignment"], json!(body));
+    f.state.tokens.revoke(&captain);
+    let refused = captain_socket.call("agent.call", tool(args.clone())).await;
+    assert!(refused.is_err() || refused.unwrap()["isError"] == true);
+    captain_socket.close().await;
+    human.close().await;
     f.runtime.shutdown().await;
     assert!(handle.shutdown(std::time::Duration::from_secs(2)).await);
     actor.finished().await.unwrap();
     bridge.abort();
     let _ = bridge.await;
+    f.reopen().await;
+    let mut human = Socket::owned(f.state.clone());
+    let result = human.call("work.coordinationStatus", query).await.unwrap();
+    assert_eq!(result["requestedAssignment"], json!(body));
+    f.state.admission.allow(&captain);
+    let mut captain_socket = Socket::attach(f.state.clone(), &captain).await;
+    let replayed = captain_socket.call("agent.call", tool(args)).await.unwrap();
+    assert_eq!(replayed, receipt);
+    let wakes = f
+        .state
+        .db
+        .call_result(move |s| {
+            crewd_collab::wakes::list(s.conn(), None, 100).map(|rows| {
+                rows.iter()
+                    .filter(|row| row.source == format!("work-assigned:{id}:{}", body.revision))
+                    .count()
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(wakes, 1);
+    captain_socket.close().await;
+    human.close().await;
     f.close().await;
 }
 

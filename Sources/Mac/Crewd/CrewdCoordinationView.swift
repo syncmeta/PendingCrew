@@ -6,11 +6,20 @@ struct CrewdCoordinationView: View {
     let id: String
     let revision: String
     var members: [CrewdValue] = []
-    @State private var record: CrewdValue?
+    @State private var status: CrewdCoordinationStatus?
     @State private var failure: String?
     @State private var task: Task<Void,Never>?
     @State private var token = UUID()
-    private var identity: String { crew + "/" + id + "/" + revision }
+    @State private var decisionInput = ""
+    @State private var historicalDecision: String?
+    @State private var historicalAssignment: CrewdCoordinationStatus.Assignment?
+    @State private var historyFailure: String?
+    @State private var historyTask: Task<Void,Never>?
+    @State private var historyToken = UUID()
+    private var identity: String { crew + "/" + id }
+    private var queryDecision: String? {
+        UUID(uuidString:decisionInput.trimmingCharacters(in:.whitespacesAndNewlines))?.uuidString.lowercased()
+    }
     var body: some View {
         VStack(alignment:.leading,spacing:6) {
             Text("进展判断与协调").font(.headline)
@@ -19,32 +28,100 @@ struct CrewdCoordinationView: View {
                 if task != nil { Button("取消") { invalidate() } }
             }
             if let failure { Text(failure).foregroundStyle(.orange) }
-            if let record {
+            if let status {
+                let record = status.record
                 if record == .null { Text("该计划暂无协调判断记录。") }
                 else {
+                    Text("判断").fontWeight(.semibold)
                     Text("判断状态：" + phase(record["phase"].string ?? ""))
                     Text("判断说明：" + reason(record["reason"].string ?? ""))
-                    Text(record["adopted"] == .bool(true) ? "协调请求已采纳；尚不代表协调完成。" : "本条记录未采纳协调请求。")
-                    if let recipient=record["recipient"].string {
-                        Text("通知对象：" + (members.first(where:{$0["id"] == .string(recipient)})?["displayName"].string ?? recipient))
+                    Text(record["adopted"] == .bool(true) ? "已采纳协调请求。" : "本条记录未采纳协调请求。")
+                    if let decision = record["decisionId"].string {
+                        Text("判断编号 " + decision).foregroundStyle(.secondary).textSelection(.enabled)
                     }
-                    Text("通知状态：" + wake(record["wakeState"].string))
-                    Text("实际进展、完成情况与成果以本计划的状态、回报和证据为准。概率判断不等于确认卡死。").foregroundStyle(.secondary)
+                    Text("通知").fontWeight(.semibold)
+                    if let recipient=record["recipient"].string {
+                        Text("通知对象 " + member(recipient))
+                    }
+                    Text("通知状态 " + wake(record["wakeState"].string))
+                }
+                Text("最近一次实际分派").fontWeight(.semibold)
+                assignment(status.lastAssignment)
+            }
+            DisclosureGroup("按判断编号核对原分派") {
+                TextField("判断编号",text:$decisionInput)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(historyTask != nil)
+                HStack {
+                    Button(historyTask == nil ? "查询原分派" : "正在查询…") { readHistory() }
+                        .disabled(queryDecision == nil || historyTask != nil)
+                    if historyTask != nil { Button("取消") { clearHistory() } }
+                }
+                if let historyFailure { Text(historyFailure).foregroundStyle(.orange) }
+                if let historicalDecision {
+                    Text("原判断 " + historicalDecision).textSelection(.enabled)
+                    assignment(historicalAssignment)
                 }
             }
+            .onChange(of:decisionInput) {_,_ in clearHistory()}
         }.font(.caption)
-        .onChange(of:identity) {_,_ in invalidate()}
-        .onChange(of:store.readScope) {_,_ in invalidate()}
-        .onDisappear {invalidate()}
+        .onChange(of:identity) {_,_ in reset()}
+        .onChange(of:revision) {_,_ in
+            let inspected = status != nil || task != nil
+            invalidate()
+            if inspected { read() }
+        }
+        .onChange(of:store.readScope) {_,_ in reset()}
+        .onDisappear {reset()}
     }
-    private func invalidate() {token=UUID();task?.cancel();task=nil;record=nil;failure=nil}
+    @ViewBuilder private func assignment(_ receipt: CrewdCoordinationStatus.Assignment?) -> some View {
+        if let receipt {
+            Text("机长 " + member(receipt.captain,includeID:true) + " 已分派").textSelection(.enabled)
+            Text(member(receipt.previousOwner,includeID:true) + " → " + member(receipt.owner,includeID:true)).textSelection(.enabled)
+            Text("计划版本 " + receipt.previousRevision + " → " + receipt.revision + " · 事件 " + receipt.eventSequence)
+                .textSelection(.enabled)
+            Text("分派时间 " + Date(timeIntervalSince1970:Double(receipt.assignedAtMs) / 1_000).formatted(date:.abbreviated,time:.shortened))
+            Text("对应判断编号 " + receipt.decisionID).textSelection(.enabled)
+            Text("回执保留当时的分派事实。当前负责人见计划详情。").foregroundStyle(.secondary)
+        } else {
+            Text("当前后台未返回可核对的分派回执。").foregroundStyle(.secondary)
+        }
+    }
+    private func member(_ id: String, includeID: Bool = false) -> String {
+        guard let name = members.first(where:{$0["id"] == .string(id)})?["displayName"].string, !name.isEmpty else { return id }
+        return includeID && name != id ? name + " (" + id + ")" : name
+    }
+    private func reset() { invalidate(); clearHistory(); decisionInput = "" }
+    private func clearHistory() {
+        historyToken = UUID(); historyTask?.cancel(); historyTask = nil
+        historicalDecision = nil; historicalAssignment = nil; historyFailure = nil
+    }
+    private func readHistory() {
+        guard let decision = queryDecision, historyTask == nil else { return }
+        clearHistory()
+        let request = historyToken
+        historyTask = Task { @MainActor in
+            defer { if historyToken == request { historyTask = nil } }
+            do {
+                let value = try await store.coordinationStatus(crew:crew,id:id,decisionID:decision)
+                guard historyToken == request else { return }
+                historicalDecision = decision; historicalAssignment = value.requestedAssignment
+            } catch {
+                guard historyToken == request else { return }
+                if let failure = error as? CrewdClientError, failure.code == -32602 {
+                    historyFailure = "当前后台未接受按判断编号查询。"
+                } else { historyFailure = "查询失败：" + error.localizedDescription }
+            }
+        }
+    }
+    private func invalidate() {token=UUID();task?.cancel();task=nil;status=nil;failure=nil}
     private func read() {
-        let request=UUID();token=request;record=nil;failure=nil
+        let request=UUID();token=request;status=nil;failure=nil
         task=Task { @MainActor in
             defer {if token == request {task=nil}}
             do {
                 let value=try await store.coordinationStatus(crew:crew,id:id)
-                guard token == request else{return};record=value
+                guard token == request else{return};status=value
             }catch {guard token == request else{return};failure="读取失败："+error.localizedDescription}
         }
     }
@@ -56,6 +133,6 @@ struct CrewdCoordinationView: View {
     }
     private func wake(_ value:String?)->String {
         guard let value else{return "未记录通知投递"}
-        return ["pending":"排队中", "inflight":"投递中", "delivered":"已投递，不代表协调已完成", "dropped":"未投递或已丢弃"][value] ?? "未知投递状态"
+        return ["pending":"排队中", "inflight":"投递中", "delivered":"已送达", "dropped":"投递未完成"][value] ?? "未知投递状态"
     }
 }

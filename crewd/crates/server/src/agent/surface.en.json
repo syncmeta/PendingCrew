@@ -1524,6 +1524,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "coordination_decision_id": {
+            "description": "Current captain only. Use the delivered coordination request ID from the same crew to link the actual owner change to that request. Review the original work and current revision, and ensure no transfer awaits acceptance. An exact repeat returns the original receipt.",
+            "type": "string"
+          },
           "expected_revision": {
             "description": "Observed current revision as a string; review returned facts on conflict.",
             "type": "string"
@@ -4092,6 +4096,10 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "coordination_decision_id": {
+            "description": "Current captain only. Use the delivered coordination request ID from the same crew to link the actual owner change to that request. Review the original work and current revision, and ensure no transfer awaits acceptance. An exact repeat returns the original receipt.",
+            "type": "string"
+          },
           "expected_revision": {
             "description": "Observed current revision as a string; review returned facts on conflict.",
             "type": "string"

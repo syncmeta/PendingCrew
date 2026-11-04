@@ -108,7 +108,7 @@ Background acknowledgement; full text at #{seq}.
 用户提议你接管一项尚未解决的行政责任。case_id={case} crew_id={crew} request_id={request}；原工作范围（最多显示50项）：{targets}。原因：{reason}。用 admin_case_custody_get 查看完整事实及 pending.revision，再用 admin_case_custody_accept 明确接受。送达不等于承接，承接不等于业务完成；原工作owner不变。
 
 ## notice.work.coordination
-请核实并协调 {work} 的进展；模型建议需要协调，不代表任务卡死或已经完成协调。请读取当前工作和报告，再决定下一步。
+Review and coordinate progress on {work}, using request ID {decision}. Read the current work and reports first. If you decide to change its owner, pass coordination_decision_id and the current revision to work_item_assign so the actual change is recorded against the request. The model suggestion alone establishes neither a stall nor a completed coordination action.
 
 ## notice.work.reassignment
 {work} 的原负责人已核实失联，调度已将同一项工作重派给 {owner}。请查看当前负责人和进展；重派与通知不代表工作完成。

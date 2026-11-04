@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct CoordinationStatusParams {
     pub crew_id: String,
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -36,6 +38,25 @@ pub struct CoordinationStatus {
     pub crew_id: String,
     pub id: String,
     pub record: Option<CoordinationView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_assignment: Option<CoordinationAssignment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_assignment: Option<CoordinationAssignment>,
+}
+/// A verified owner change made in response to one specific coordination request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CoordinationAssignment {
+    pub crew_id: String,
+    pub id: String,
+    pub decision_id: String,
+    pub captain: String,
+    pub previous_owner: String,
+    pub owner: String,
+    pub previous_revision: String,
+    pub revision: String,
+    pub event_seq: String,
+    pub assigned_at_ms: i64,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
