@@ -345,17 +345,33 @@ impl Transcript {
 }
 
 pub(crate) const CREW_APPROVAL_UNAVAILABLE: &str = "自动审批未完成，动作未执行。";
+const CREW_APPROVAL_FAILURE: &str = "Automatic approval review failed:";
+const CREW_APPROVAL_NOT_EXECUTED: &str =
+    "The action was not executed because automatic approval review could not be completed.";
 
-/// The native failure explicitly establishes non-execution. Keep the review
-/// transport body out of the transcript and the Human-channel notice.
-pub(crate) fn crew_approval_unavailable(item: &Value) -> bool {
+fn crew_approval_unavailable(item: &Value) -> bool {
     item["type"] == "mcpToolCall"
         && item["server"] == proto::CREW_MCP_SERVER
         && item["status"] == "failed"
-        && item.pointer("/error/message").and_then(Value::as_str).is_some_and(|error| {
-            error.starts_with("Automatic approval review failed:")
-                && error.contains("The action was not executed because automatic approval review could not be completed.")
-        })
+        && item
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|error| {
+                error.starts_with(CREW_APPROVAL_FAILURE)
+                    && error.contains(CREW_APPROVAL_NOT_EXECUTED)
+            })
+}
+
+/// Remove the reviewer transport body from a Crew tool's explicit native
+/// non-execution report while keeping the existing status discriminator.
+pub fn redact_crew_approval_failure(item: &mut Value) -> bool {
+    if !crew_approval_unavailable(item) {
+        return false;
+    }
+    item["error"] = serde_json::json!({
+        "message": format!("{CREW_APPROVAL_FAILURE} {CREW_APPROVAL_NOT_EXECUTED}"),
+    });
+    true
 }
 
 /// 一个条目的文本形状。认不出的类型给一行 `[类型]`（codex 加了新条目也不至于看不见）。
@@ -687,11 +703,27 @@ mod tests {
             "type": "mcpToolCall", "server": "crew", "tool": "crew_structure", "status": "failed",
             "error": {"message":"Automatic approval review failed: <html>SYNTHETIC_PRIVATE_REVIEW_BODY</html>\n\nThe action was not executed because automatic approval review could not be completed."}
         });
+        item["error"]["details"] = json!("SYNTHETIC_PRIVATE_REVIEW_BODY");
+        let rendered = render_item(&item);
         assert_eq!(
-            render_item(&item),
+            rendered,
             vec!["⚙ crew.crew_structure（failed）：自动审批未完成，动作未执行。"]
         );
+        let mut sanitized = item.clone();
+        assert!(redact_crew_approval_failure(&mut sanitized));
+        assert!(
+            !sanitized
+                .to_string()
+                .contains("SYNTHETIC_PRIVATE_REVIEW_BODY")
+        );
+        assert_eq!(render_item(&sanitized), rendered);
+        let original_sanitized = sanitized.clone();
+        assert!(redact_crew_approval_failure(&mut sanitized));
+        assert_eq!(sanitized, original_sanitized);
         item["server"] = json!("foreign");
+        let original_foreign = item.clone();
+        assert!(!redact_crew_approval_failure(&mut item));
+        assert_eq!(item, original_foreign);
         assert_eq!(
             render_item(&item),
             vec!["⚙ foreign.crew_structure（failed）"]
@@ -699,6 +731,9 @@ mod tests {
         item["server"] = json!("crew");
         item["error"]["message"] =
             json!("Automatic approval review failed: arbitrary unsupported message");
+        let original_ordinary = item.clone();
+        assert!(!redact_crew_approval_failure(&mut item));
+        assert_eq!(item, original_ordinary);
         assert_eq!(render_item(&item), vec!["⚙ crew.crew_structure（failed）"]);
     }
 

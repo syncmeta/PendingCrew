@@ -2,6 +2,7 @@
 use super::{Handle, rpc::rpc_err};
 use crate::{AppState, dispatch};
 use crewd_exec::codex::control::{CodexOperation as Op, CodexOutcome as Out};
+use crewd_exec::codex::turns::redact_crew_approval_failure;
 use crewd_proto::{RpcError, codex::*, orchestra::SessionIdParams, parse_params};
 use serde_json::{Value, json};
 
@@ -260,26 +261,36 @@ pub(crate) async fn read(
         ));
     }
     let result = match method {
-        HISTORY => serde_json::to_value(CodexHistoryPage {
-            session_id: sid,
-            thread_id: thread,
-            items: native
+        HISTORY => {
+            let mut turns = native
                 .get("data")
                 .and_then(Value::as_array)
                 .ok_or_else(|| {
                     RpcError::new(RpcError::CONFLICT, "native history response has no page")
                 })?
-                .clone(),
-            next_cursor: native
-                .get("nextCursor")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            backwards_cursor: native
-                .get("backwardsCursor")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        })
-        .map_err(dispatch::internal)?,
+                .clone();
+            for item in turns
+                .iter_mut()
+                .filter_map(|turn| turn.get_mut("items").and_then(Value::as_array_mut))
+                .flatten()
+            {
+                redact_crew_approval_failure(item);
+            }
+            serde_json::to_value(CodexHistoryPage {
+                session_id: sid,
+                thread_id: thread,
+                items: turns,
+                next_cursor: native
+                    .get("nextCursor")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                backwards_cursor: native
+                    .get("backwardsCursor")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            })
+            .map_err(dispatch::internal)?
+        }
         MODELS => {
             let rows = native
                 .get("data")

@@ -27,7 +27,7 @@ use crate::codex::rpc::{
     response_line,
 };
 use crate::codex::turns::{
-    CREW_APPROVAL_UNAVAILABLE, Signals, Transcript, TurnTracker, crew_approval_unavailable,
+    CREW_APPROVAL_UNAVAILABLE, Signals, Transcript, TurnTracker, redact_crew_approval_failure,
 };
 use crate::delivery::Subject;
 use crate::driver::{Control, ControlOutcome, UntrustedContext};
@@ -1362,11 +1362,12 @@ impl CodexCore {
             }
         }
         let s: Signals = self.tracker.on_notification(method, params);
-        if let Some((turn_id, item)) = s.item {
+        if let Some((turn_id, mut item)) = s.item {
+            let approval_unavailable = redact_crew_approval_failure(&mut item);
             if method == "item/completed" {
                 self.transcript.push(turn_id.clone(), item.clone());
                 if self.tracker.active_turn() == Some(turn_id.as_str())
-                    && crew_approval_unavailable(&item)
+                    && approval_unavailable
                     && self.notified.insert("crew-approval-unavailable".into())
                 {
                     self.event(SessionEvent::Notice(CREW_APPROVAL_UNAVAILABLE.into()));

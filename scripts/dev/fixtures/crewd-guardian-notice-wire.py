@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Replay synthetic app-server observations through the exact ordinary Core.
 
-This never requests a tool call or a provider turn. Only fake_codex is started
-as a runner. The actual Core writes and reads the Human-channel notice.
+Only fake_codex is started as a runner. The actual Core writes and reads the
+Human-channel notice and projects the same failure on live and history wires.
 """
 import argparse
 import json
@@ -18,6 +18,7 @@ from crewd_recovery_common import Public, birth, physical_observation, same, sav
 
 NOTICE = "自动审批未完成，动作未执行。"
 PRIVATE = "SYNTHETIC_PRIVATE_REVIEW_BODY"
+ORDINARY = "Synthetic MCP error retained."
 TASK = "PCW_GUARDIAN_SYNTHETIC_FIRST_TASK"
 BARRIER = "PCW_GUARDIAN_FOREIGN_PACKETS_CONSUMED"
 ERROR = (
@@ -26,9 +27,34 @@ ERROR = (
 )
 
 
+def guardian_item():
+    return {"id": "owned-guardian-failure", "type": "mcpToolCall", "server": "crew",
+            "tool": "crew_structure", "status": "failed",
+            "error": {"message": ERROR, "extra": PRIVATE}}
+
+
+def ordinary_item():
+    item = guardian_item()
+    return dict(item, id="ordinary-error", error={"message": ORDINARY})
+
+
+def foreign_item():
+    return dict(guardian_item(), id="foreign", server="fixture-external",
+                error={"message": ERROR.replace(PRIVATE, "SYNTHETIC_EXTERNAL_REVIEW_BODY")})
+
+
 def proxy(fake, wire):
     release = pathlib.Path(wire).with_suffix(".release")
     child = subprocess.Popen([fake, *sys.argv[4:]], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    output_lock = threading.Lock()
+
+    def forward(line):
+        with output_lock:
+            sys.stdout.buffer.write(line)
+            sys.stdout.buffer.flush()
+
+    def emit(frame):
+        forward((json.dumps(frame) + "\n").encode())
 
     def stop(*_):
         child.terminate()
@@ -39,26 +65,23 @@ def proxy(fake, wire):
 
     def relay():
         def notify(target, turn, item):
-            notification = {"method": "item/completed", "params":
-                            {"threadId": target, "turnId": turn, "item": item}}
-            sys.stdout.write(json.dumps(notification) + "\n")
-            sys.stdout.flush()
+            emit({"method": "item/completed", "params":
+                  {"threadId": target, "turnId": turn, "item": item}})
 
         with open(wire, "a", encoding="utf-8") as log:
             for line in child.stdout:
-                sys.stdout.buffer.write(line)
-                sys.stdout.buffer.flush()
+                forward(line)
                 frame = json.loads(line)
                 if frame.get("method") != "turn/started":
                     continue
                 thread = frame["params"]["threadId"]
                 turn = frame["params"]["turn"]["id"]
-                item = {"id": "owned-guardian-failure", "type": "mcpToolCall", "server": "crew",
-                        "tool": "crew_structure", "status": "failed", "error": {"message": ERROR}}
+                item = guardian_item()
                 for case, target, current, event_item in [
                     ("foreign_thread", "fixture-other-thread", turn, item),
                     ("old_turn", thread, "fixture-old-turn", item),
-                    ("foreign_server", thread, turn, dict(item, id="foreign", server="fixture-external")),
+                    ("foreign_server", thread, turn, foreign_item()),
+                    ("ordinary_error", thread, turn, ordinary_item()),
                     ("actual", thread, turn, item),
                     ("duplicate", thread, turn, item),
                 ]:
@@ -76,6 +99,15 @@ def proxy(fake, wire):
     relay_thread.start()
     try:
         for line in sys.stdin.buffer:
+            request = json.loads(line)
+            if request.get("method") == "thread/turns/list":
+                with open(wire, encoding="utf-8") as log:
+                    actual = next(row for line in log if (row := json.loads(line))["case"] == "actual")
+                emit({"id": request["id"], "result": {"data": [
+                    {"id": actual["turn"], "status": "completed",
+                     "items": [guardian_item(), ordinary_item()]}
+                ], "nextCursor": None, "backwardsCursor": "stored-anchor"}})
+                continue
             child.stdin.write(line)
             child.stdin.flush()
     finally:
@@ -152,8 +184,26 @@ def main():
     def notes(client, channel):
         return [row for row in messages(client, channel) if NOTICE in row["text"]]
 
+    def assert_scrubbed(item):
+        assert PRIVATE not in json.dumps(item), "guardian transport body crossed the public wire"
+        original = guardian_item()
+        assert {key: value for key, value in item.items() if key != "error"} == {
+            key: value for key, value in original.items() if key != "error"}
+        assert item["error"]["message"].startswith("Automatic approval review failed:")
+        assert "The action was not executed" in item["error"]["message"]
+
+    def history(client, sid, expected_turn):
+        page = client.rpc("session.codex.history", {"sessionId": sid, "itemsView": "full"})
+        assert page["backwardsCursor"] == "stored-anchor" and len(page["items"]) == 1
+        turn = page["items"][0]
+        assert turn["id"] == expected_turn
+        _, ordinary = turn["items"]
+        assert ordinary == ordinary_item()
+        return page
+
     try:
         first, client = start()
+        client.rpc("events.subscribe", {"topics": ["session"]})
         database = client.identity["dbId"]
         runtime = client.identity["runtimeBindingId"]
         _, created = submit(client, "crew.createFirstMessage",
@@ -186,9 +236,27 @@ def main():
         groups = client.rpc("crew.list", {})
         assert len(roster) == 1 and roster[0]["id"] == sid and len(groups) == 2
         injected = [json.loads(line) for line in frames.read_text().splitlines()]
-        assert [row["case"] for row in injected] == ["foreign_thread", "old_turn", "foreign_server", "actual", "duplicate"]
-        assert injected[3]["thread"] == roster[0]["agentSessionId"]
-        assert {row["turn"] for row in injected[3:]} == {injected[3]["turn"]}
+        assert [row["case"] for row in injected] == [
+            "foreign_thread", "old_turn", "foreign_server", "ordinary_error", "actual", "duplicate"]
+        assert injected[4]["thread"] == roster[0]["agentSessionId"]
+        turn = injected[4]["turn"]
+        assert {row["turn"] for row in injected[4:]} == {turn}
+        live_history = history(client, sid, turn)
+        observed = [event["data"] for event in client.events
+                    if event.get("event") == "session.runnerItem" and event["data"]["sessionId"] == sid]
+        qualified = [row for row in observed if row["item"].get("id") == guardian_item()["id"]]
+        assert {row["turnId"] for row in qualified} == {"fixture-old-turn", turn}
+        items = [row["item"] for row in observed]
+        history_item = live_history["items"][0]["items"][0]
+        redacted = {"live": all(PRIVATE not in json.dumps(item) for item in items),
+                    "history": PRIVATE not in json.dumps(history_item)}
+        result["rawRedaction"] = redacted
+        assert all(redacted.values()), f"guardian transport body crossed the public wire: {redacted}"
+        for row in qualified:
+            assert_scrubbed(row["item"])
+        assert_scrubbed(history_item)
+        assert ordinary_item() in items
+        assert foreign_item() in items
         before = calls.read_bytes()
         native_turns = [json.loads(line) for line in before.splitlines() if b'"turn/start"' in line]
         assert len(native_turns) == 1 and TASK in json.dumps(native_turns[0])
@@ -200,10 +268,14 @@ def main():
         assert reopened.identity["dbId"] == database and reopened.identity["runtimeBindingId"] != runtime
         assert original["historical"] and original["phase"] == "launched" and original["result"] == launched["result"]
         assert notes(reopened, channel) == actual and reopened.rpc("decision.list", {}) == []
-        assert calls.read_bytes() == before and reopened.rpc("session.live", {"sessionId": sid})["running"] is False
+        assert reopened.rpc("session.live", {"sessionId": sid})["running"] is False
+        assert history(reopened, sid, turn) == live_history
+        new_calls = [json.loads(line) for line in calls.read_bytes()[len(before):].splitlines()]
+        assert not any(row.get("method") in {"thread/resume", "turn/start"} for row in new_calls)
         reopened.close()
         stop(second)
         result.update(status="PASS", notice=actual[0], observedPackets=injected, historicalReceipt=original,
+                      rawLiveAndHistoryRedacted=True, ordinaryAndForeignErrorsUnchanged=True,
                       originalRunner=physical_observation(physical), turns=1, pendingApproval=False)
     except Exception as error:
         result.update(status="FAIL", error=repr(error))
@@ -217,7 +289,7 @@ def main():
                     stop(process)
         finally:
             save(root / "proof.json", result)
-    print("PASS original native event → one actual Human-channel notice; no pending request, new member, or replay.")
+    print("PASS guardian notice, raw live/history redaction and ordinary error preservation; no action or replay.")
 
 
 if __name__ == "__main__":
