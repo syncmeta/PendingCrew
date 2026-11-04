@@ -90,7 +90,7 @@ def package(root, requirement, source=None, expected=None):
 
 
 @contextlib.contextmanager
-def lease(root):
+def authority_lease(root):
     initial = root.stat()
     require(initial.st_uid == os.getuid() and initial.st_mode & 0o077 == 0,
             'authority directory must be owner-private')
@@ -105,16 +105,24 @@ def lease(root):
         except BlockingIOError:
             raise ValueError('Core authority is still in use') from None
 
-        def recheck():
-            attached = lock.lstat()
-            require(os.path.samestat(root.stat(), initial) and os.path.samestat(attached, current)
+        def recheck(location):
+            attached = (location / 'crewd.lock').lstat()
+            require(os.path.samestat(location.lstat(), initial) and os.path.samestat(attached, current)
                     and attached.st_nlink == 1, 'authority or Core lock was replaced')
 
-        recheck()
+        recheck(root)
         yield recheck
-        recheck()
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def lease(root):
+    with authority_lease(root) as recheck:
+        def check_here():
+            recheck(root)
+        yield check_here
+        check_here()
 
 
 def inspect(root, rows, version):
