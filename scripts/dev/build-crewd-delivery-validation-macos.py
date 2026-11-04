@@ -3,7 +3,7 @@
 Default prints the concrete command. --execute creates a private ad-hoc candidate;
 it never launches, installs, uses a personal signing identity, or publishes.
 """
-import argparse, hashlib, json, pathlib, plistlib, shutil, subprocess, sys, time
+import argparse, hashlib, importlib.util, json, pathlib, plistlib, shutil, struct, subprocess, sys, time
 
 DD = str(pathlib.Path.home() / 'Library/Developer/Xcode/DerivedData/PendingCrew-aehzthzfjzjnxdfaqjkozipivxpn')
 SPM = str(pathlib.Path(DD) / 'SourcePackages')
@@ -14,6 +14,46 @@ def digest(path):
 def run(argv, cwd, log):
     with log.open('ab') as output:
         subprocess.run(argv, cwd=cwd, stdout=output, stderr=subprocess.STDOUT, check=True)
+
+def load_helper(repo, name):
+    spec = importlib.util.spec_from_file_location(name, repo/'scripts/dev'/f'{name}.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+def normalize_debug_rpaths(app, products, ref, purpose, closure, seal, log):
+    # Xcode injects these two paths independently of LD_RUNPATH_SEARCH_PATHS.
+    # Edit only the private, unsigned copy, then require the regular strict audit.
+    products = closure.reviewed_target_root(products, existing=True)
+    transient = ('@loader_path', str(products / 'PackageFrameworks'))
+    qualified = closure.qualify_unsigned_target(app, ref, 'Debug', purpose, transient_build_rpaths=transient)
+    executable = app / qualified['mainPath']
+    original = executable.read_bytes()
+    if closure.sha(original) != qualified['mainBuildSignature']['sha256']:
+        raise ValueError('Debug executable changed after qualification')
+    architecture, = closure.image(original, transient)
+    paths = [path for path in transient if path in architecture['rpaths']]
+    before = seal.thin(original)
+    if before['cpu'] != 0x100000c or any(architecture['rpaths'].count(path) != 1 for path in paths):
+        raise ValueError('Unexpected Debug architecture or duplicate transient paths')
+    if paths:
+        command = ['/usr/bin/install_name_tool']
+        for path in paths:
+            command.extend(('-delete_rpath', path))
+        run([*command, str(executable)], app.parent, log)
+    edited = executable.read_bytes()
+    closure.image(edited)
+    after = seal.thin(edited)
+    expected = [raw for raw in before['commands']
+                if not (struct.unpack_from('<I', raw)[0] == 0x8000001c and closure.string(raw, 12, '<') in paths)]
+    start, end = before['commandEnd'], before['contentEnd']
+    if (before['header'][:16] + before['header'][24:] != after['header'][:16] + after['header'][24:]
+            or before['rounding'] != after['rounding'] or expected != after['commands']
+            or after['commandEnd'] > start or any(edited[after['commandEnd']:start])
+            or after['contentEnd'] != end or original[start:end] != edited[start:end]):
+        raise ValueError('Debug executable changed beyond the transient paths and linker signature')
+    return {'removed': paths, 'beforeSHA256': closure.sha(original), 'afterSHA256': closure.sha(edited),
+            'unchangedPayloadSHA256': closure.sha(edited[start:end])}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -69,15 +109,20 @@ def main():
     # Xcode may copy package frameworks after post-build scripts in an incremental build.
     # Finalize the actual unsigned target after all Xcode tasks, before capture/sealing.
     sys.dont_write_bytecode = True
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('candidate_closure',repo/'scripts/dev/crewd-validation-load-closure.py')
-    closure = importlib.util.module_from_spec(spec); spec.loader.exec_module(closure)
+    closure = load_helper(repo, 'crewd-validation-load-closure')
     built = pathlib.Path(DD)/'Build/Products'/args.configuration/'PendingCrew.app'
     if ordinary and digest(built/'Contents/Helpers/crewd') != args.backend_sha256:
         raise ValueError('Ordinary target did not embed the coordinated normal Core')
-    finalization = closure.finalize_unsigned_target(built, args.ref, args.configuration, args.purpose)
     app = out/('PendingCrew Remote Preview.app' if args.purpose == 'remote-preview' else 'PendingCrew UI Preview.app' if args.purpose == 'ui-preview' else 'PendingCrew.app' if ordinary else 'PendingCrew SQLite Candidate.app')
-    shutil.copytree(built, app, symlinks=True)
+    if args.configuration == 'Debug':
+        shutil.copytree(built, app, symlinks=True)
+        seal = load_helper(repo, 'crewd-macho-seal-equivalence')
+        normalization = normalize_debug_rpaths(app, built.parent, args.ref, args.purpose, closure, seal, out/'rpath.log')
+        finalization = closure.finalize_unsigned_target(app, args.ref, args.configuration, args.purpose)
+        finalization['debugRpathNormalization'] = normalization
+    else:
+        finalization = closure.finalize_unsigned_target(built, args.ref, args.configuration, args.purpose)
+        shutil.copytree(built, app, symlinks=True)
     helpers = app/'Contents/Helpers'
     helpers.mkdir(exist_ok=True)
     shutil.copy2(backend, helpers/'crewd')

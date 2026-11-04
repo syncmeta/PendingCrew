@@ -45,7 +45,7 @@ def platform_library(name):
  # No @rpath, relative, arbitrary absolute, traversal or environment-selected image.
  return name.startswith(('/System/Library/Frameworks/','/usr/lib/')) and name==str(pathlib.PurePosixPath(name)) and '..' not in pathlib.PurePosixPath(name).parts
 
-def image(data):
+def image(data, transient_build_rpaths=()):
  result=[]
  for identity,part in slices(data):
   endian='<' if part[:4]==bytes.fromhex('cffaedfe') else '>' if part[:4]==bytes.fromhex('feedfacf') else None
@@ -65,7 +65,7 @@ def image(data):
     imports.append({'kind':LOAD[command],'name':name})
    elif command==0x8000001c:
     name=string(raw,12,endian)
-    if name not in ['@executable_path/../Frameworks','@executable_path/Frameworks','@loader_path/../Frameworks','/usr/lib/swift']:fail('unreviewed rpath: '+name)
+    if name not in ['@executable_path/../Frameworks','@executable_path/Frameworks','@loader_path/../Frameworks','/usr/lib/swift'] and name not in transient_build_rpaths:fail('unreviewed rpath: '+name)
     rpaths.append(name)
    elif command==0xe:
     name=string(raw,12,endian)
@@ -172,8 +172,8 @@ def signature_audit(app,closure):
   rows.append({'path':image_row['path'],'queries':queries})
  return rows
 
-def main_build_signature(path):
- path=pathlib.Path(path);before=path.read_bytes();image(before)
+def main_build_signature(path,transient_build_rpaths=()):
+ path=pathlib.Path(path);before=path.read_bytes();image(before,transient_build_rpaths)
  argv=['/usr/bin/codesign','--display','--verbose=4',str(path)]
  q=readonly_query(argv)
  text=q['stdout']+q['stderr']
@@ -204,7 +204,7 @@ def expected_bundle_identifier(configuration,purpose="product"):
   return 'com.pendingname.pendingcrew.ui-preview'
  return 'com.pendingname.pendingcrew' if configuration in ['Debug','Release'] else 'com.pendingname.pendingcrew.native-candidate'
 
-def qualify_unsigned_target(app,ref,configuration="DeliveryValidation",purpose="product"):
+def qualify_unsigned_target(app,ref,configuration="DeliveryValidation",purpose="product",*,transient_build_rpaths=()):
  app=pathlib.Path(app)
  if configuration not in ['DeliveryValidation','KnowledgeValidation','Debug','Release']:fail('closed target configuration')
  expected_id=expected_bundle_identifier(configuration,purpose)
@@ -227,7 +227,7 @@ def qualify_unsigned_target(app,ref,configuration="DeliveryValidation",purpose="
  if not isinstance(name,str) or pathlib.PurePosixPath(name).name!=name or not name:fail('invalid target executable')
  main=app/'Contents/MacOS'/name
  if main.is_symlink() or main.resolve(strict=True)!=main or not main.is_file() or main.stat().st_uid!=os.getuid():fail('actual main missing/aliased/not-owned')
- signature=main_build_signature(main)
+ signature=main_build_signature(main,transient_build_rpaths)
  return {'sourceRef':ref,'purpose':purpose,'bundleIdentifier':expected_id,'infoSHA256':sha(raw),'mainPath':main.relative_to(app).as_posix(),'mainBuildSignature':signature,'rootAppSealAbsent':True}
 
 TARGET_PRODUCTS=pathlib.Path('/private/tmp/pcw-codex-first-xcode/Build/Products')
