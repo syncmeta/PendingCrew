@@ -23,6 +23,7 @@ pub mod commands;
 pub mod host;
 pub mod judgments;
 pub mod message_attribution;
+pub mod message_delivery;
 mod model;
 pub mod notifications;
 /// M3c（编排）的方法、事件与类型。
@@ -194,6 +195,7 @@ pub mod methods {
         crate::message_attribution::GET,
         crate::message_attribution::SET,
         crate::message_attribution::HISTORY,
+        crate::message_delivery::EXPLAIN,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
         crate::commands::COMMAND_SUBMIT,
         crate::commands::COMMAND_LOOKUP,
@@ -934,6 +936,13 @@ pub fn api_schema() -> Value {
             m(
                 sub::<message_attribution::MessageAttributionGet>(g),
                 sub::<message_attribution::MessageAttributionView>(g),
+            ),
+        ),
+        (
+            message_delivery::EXPLAIN,
+            m(
+                sub::<message_delivery::MessageDeliveryParams>(g),
+                sub::<message_delivery::MessageDeliveryView>(g),
             ),
         ),
         (

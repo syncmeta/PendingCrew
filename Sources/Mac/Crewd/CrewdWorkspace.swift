@@ -1197,7 +1197,7 @@ final class CrewdWorkspace: ObservableObject {
         if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements", "adminCase.requirementReviews",
             "adminCase.workDuplicates", "adminCase.workDuplicateHistory", "ask.resolveCheck", "work.coordinationStatus",
             "todo.rulingCheck", "todo.rulingResult", CrewdRequirementCreateWire.lookupMethod,
-            CrewdChannelResponsibilityPage.method].contains(method) { return true }
+            CrewdChannelResponsibilityPage.method, CrewdMessageDeliveryExplanation.method].contains(method) { return true }
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
         return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet", "session.claude.recoveryInspect"].contains(method)
     }

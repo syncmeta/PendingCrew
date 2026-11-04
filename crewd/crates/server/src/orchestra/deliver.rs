@@ -295,7 +295,7 @@ impl<P: Port> Core<P> {
         trusted_human: bool,
     ) -> anyhow::Result<()> {
         let now = self.now();
-        let targets = plan::plan(msg, ctx, answer, now);
+        let targets = plan::explained_plan(msg, ctx, answer, now);
         if let Sender::Session { id: poster, .. } = &msg.sender
             && msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
         {
@@ -312,9 +312,12 @@ impl<P: Port> Core<P> {
                 .collect();
             self.breaker.on_post(poster, &woke, now);
         }
+        if targets.is_empty() {
+            let _ = self.port.message_no_targets(&msg.id, &msg.at).await;
+        }
         // 先全部入队、再逐个试投（评审 (3)）：一个目标投递出错不能让后面的目标连唤醒都没有。
         let mut fresh = Vec::new();
-        for t in targets {
+        for plan::ExplainedTarget { target: t, reasons } in targets {
             if trusted_human
                 && msg.at.seq
                     <= self
@@ -343,7 +346,12 @@ impl<P: Port> Core<P> {
                 note: None,
                 origin: message_origin(msg, &t.session),
             };
-            if let Some(wake_id) = self.enqueue_with_id(w).await? {
+            let trace = crate::wake_adapter::routing_capture(
+                msg,
+                crewd_proto::message_delivery::MessageWakePath::Live,
+                reasons,
+            );
+            if let Some(wake_id) = self.enqueue_with_trace(w, Some(trace)).await? {
                 if let (Some(a), Sender::Human) = (&self.cfg.admission, &msg.sender)
                     && msg.provenance == crewd_wake::plan::MessageProvenance::Ordinary
                     && msg.created_at.0 >= a.started_at
@@ -1455,9 +1463,10 @@ impl<P: Port> Core<P> {
                 let Some(Some(ctx)) = ctxs.get(&msg.at.channel) else {
                     continue;
                 };
-                if let Some(t) = plan::plan(&msg, ctx, None, now)
-                    .into_iter()
-                    .find(|t| t.session == s)
+                if let Some(plan::ExplainedTarget { target: t, reasons }) =
+                    plan::explained_plan(&msg, ctx, None, now)
+                        .into_iter()
+                        .find(|t| t.target.session == s)
                 {
                     let w = NewWake {
                         session: s.clone(),
@@ -1468,7 +1477,12 @@ impl<P: Port> Core<P> {
                         note: None,
                         origin: message_origin(&msg, &s),
                     };
-                    self.enqueue(w).await?;
+                    let trace = crate::wake_adapter::routing_capture(
+                        &msg,
+                        crewd_proto::message_delivery::MessageWakePath::Backlog,
+                        reasons,
+                    );
+                    self.enqueue_with_trace(w, Some(trace)).await?;
                 }
             }
         }

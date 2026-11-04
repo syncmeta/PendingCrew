@@ -111,6 +111,23 @@ pub struct WakeTarget {
     pub priority: Priority,
 }
 
+/// The exact eligible branches that contributed to a deduplicated target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WakeReason {
+    Directed,
+    DmPeer,
+    Subscription,
+    ArbiterSelected,
+    ChannelOwnerFallback,
+    CrewCaptainFallback,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExplainedTarget {
+    pub target: WakeTarget,
+    pub reasons: Vec<WakeReason>,
+}
+
 pub const MAX_WAKE_AGE_MS: i64 = 6 * HOUR;
 
 pub fn priority_of(sender: &Sender) -> Priority {
@@ -168,13 +185,20 @@ pub fn needs_arbiter(msg: &MsgFacts, ctx: &ChannelCtx, now: Ms) -> bool {
 /// 人发、不在 dm、没有指向、调度层没给可用答案时叫谁（§22.7 Q2）：群主（须是成员）→ 机组机长（须是成员）→ 没人。
 /// 只取第一个能用的。改兜底规则只改这里。
 pub fn untargeted_human(ctx: &ChannelCtx) -> Vec<String> {
-    [&ctx.owner, &ctx.crew_captain]
+    fallback(ctx)
+        .map(|(id, _)| id.clone())
         .into_iter()
-        .flatten()
-        .find(|s| ctx.session_members.contains(s))
-        .into_iter()
-        .cloned()
         .collect()
+}
+
+fn fallback(ctx: &ChannelCtx) -> Option<(&String, WakeReason)> {
+    [
+        (&ctx.owner, WakeReason::ChannelOwnerFallback),
+        (&ctx.crew_captain, WakeReason::CrewCaptainFallback),
+    ]
+    .into_iter()
+    .filter_map(|(id, reason)| id.as_ref().map(|id| (id, reason)))
+    .find(|(id, _)| ctx.session_members.contains(id))
 }
 
 /// `arbiter`：调度层给的叫醒集合（`None` = 没问 / 没答 / 失败；空集 = 低置信）。
@@ -184,48 +208,69 @@ pub fn plan(
     arbiter: Option<&[String]>,
     now: Ms,
 ) -> Vec<WakeTarget> {
+    explained_plan(msg, ctx, arbiter, now)
+        .into_iter()
+        .map(|result| result.target)
+        .collect()
+}
+
+pub fn explained_plan(
+    msg: &MsgFacts,
+    ctx: &ChannelCtx,
+    arbiter: Option<&[String]>,
+    now: Ms,
+) -> Vec<ExplainedTarget> {
     if is_stale(msg, now) {
         return vec![];
     }
     let pool = candidates(msg, ctx);
     let is_member = |s: &str| ctx.session_members.iter().any(|m| m == s);
-    let mut out: Vec<WakeTarget> = Vec::new();
+    let mut out: Vec<ExplainedTarget> = Vec::new();
     // 只从候选里选（候选已去掉发送者）；同一个 session 只出现一次，保留最高的一档。
-    let push = |s: &str, priority: Priority, out: &mut Vec<WakeTarget>| {
+    let push = |s: &str, priority: Priority, reason: WakeReason, out: &mut Vec<ExplainedTarget>| {
         if !pool.iter().any(|c| c == s) {
             return;
         }
-        match out.iter_mut().find(|t| t.session == s) {
-            Some(t) => t.priority = t.priority.max(priority),
-            None => out.push(WakeTarget {
-                session: s.to_string(),
-                priority,
+        match out.iter_mut().find(|t| t.target.session == s) {
+            Some(t) => {
+                t.target.priority = t.target.priority.max(priority);
+                if !t.reasons.contains(&reason) {
+                    t.reasons.push(reason);
+                }
+            }
+            None => out.push(ExplainedTarget {
+                target: WakeTarget {
+                    session: s.to_string(),
+                    priority,
+                },
+                reasons: vec![reason],
             }),
         }
     };
     let priority = priority_of(&msg.sender);
     let directed = directed_members(msg, ctx);
     for s in &directed {
-        push(s, priority, &mut out);
+        push(s, priority, WakeReason::Directed, &mut out);
     }
     if !ctx.dm_sessions.is_empty() {
         // dm：人或 session 说话 = 叫醒 dm 里的另一方（不用 @）；系统消息不叫（除非 @，上面已处理）。
         if msg.sender != Sender::System {
             for s in ctx.dm_sessions.iter().filter(|s| is_member(s)) {
-                push(s, priority, &mut out);
+                push(s, priority, WakeReason::DmPeer, &mut out);
             }
         }
     } else if msg.sender == Sender::Human && directed.is_empty() {
         let chosen: Vec<String> = arbiter
             .map(|a| a.iter().filter(|s| is_member(s)).cloned().collect())
             .unwrap_or_default();
-        let chosen = if chosen.is_empty() {
-            untargeted_human(ctx)
+        if chosen.is_empty() {
+            if let Some((session, reason)) = fallback(ctx) {
+                push(session, priority, reason, &mut out);
+            }
         } else {
-            chosen
-        };
-        for s in &chosen {
-            push(s, priority, &mut out);
+            for s in &chosen {
+                push(s, priority, WakeReason::ArbiterSelected, &mut out);
+            }
         }
     }
     for l in &ctx.listens {
@@ -235,7 +280,12 @@ pub fn plan(
             .is_none_or(|ss| ss.iter().any(|f| msg.sender.matches_filter(f)));
         let live = ctx.live_sessions.iter().any(|s| s == &l.session);
         if l.until > now && sender_ok && live {
-            push(&l.session, Priority::Auto, &mut out);
+            push(
+                &l.session,
+                Priority::Auto,
+                WakeReason::Subscription,
+                &mut out,
+            );
         }
     }
     out
@@ -279,6 +329,35 @@ mod tests {
         let mut c = ctx(parties, None);
         c.dm_sessions = parties.iter().map(|s| s.to_string()).collect();
         c
+    }
+
+    #[test]
+    fn explained_targets_keep_original_priority_and_merge_actual_reasons() {
+        let msg = msg(Sender::Human, vec![Mention::Session("recipient".into())]);
+        let mut ctx = dm(&["recipient"]);
+        ctx.listens.push(Listen {
+            session: "recipient".into(),
+            until: NOW.add(MIN),
+            senders: None,
+        });
+        let targets = explained_plan(&msg, &ctx, None, NOW);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].target,
+            WakeTarget {
+                session: "recipient".into(),
+                priority: Priority::Human
+            }
+        );
+        assert_eq!(
+            targets[0].reasons,
+            [
+                WakeReason::Directed,
+                WakeReason::DmPeer,
+                WakeReason::Subscription
+            ]
+        );
+        assert_eq!(plan(&msg, &ctx, None, NOW), [targets[0].target.clone()]);
     }
 
     fn who(targets: &[WakeTarget]) -> Vec<&str> {

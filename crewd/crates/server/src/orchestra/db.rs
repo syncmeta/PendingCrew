@@ -730,6 +730,43 @@ impl Port for DbPort {
         self.state.tokens.revoke(session);
     }
 
+    async fn enqueue_message(
+        &self,
+        w: NewWake,
+        trace: crewd_collab::message_delivery::Capture,
+    ) -> Result<Option<i64>> {
+        let result = self
+            .write(move |tx| {
+                crewd_collab::message_delivery::enqueue(
+                    tx,
+                    WakeRequest {
+                        session: w.session,
+                        kind: kind_to(w.kind),
+                        source: w.source,
+                        priority: priority_to(w.priority),
+                        not_before_ms: Some(w.not_before.0),
+                        note: w.note,
+                        origin: origin_to(&w.origin),
+                    },
+                    trace,
+                )
+            })
+            .await?;
+        Ok(match result {
+            Enqueued::New(id) => Some(id),
+            Enqueued::Duplicate(_) | Enqueued::Skipped => None,
+        })
+    }
+
+    async fn message_no_targets(&self, message: &str, source: &MessageRef) -> Result<()> {
+        let message = message.to_owned();
+        let source = source.clone();
+        self.write(move |tx| {
+            crewd_collab::message_delivery::no_targets(tx, &message, &source.channel, source.seq)
+        })
+        .await
+    }
+
     async fn enqueue(&self, w: NewWake) -> Result<Option<i64>> {
         if w.kind == WakeKind::StopCheck && w.source == super::work_idle::CANDIDATE_SOURCE {
             let candidate: crewd_collab::stop_checks::Candidate =
@@ -3173,6 +3210,33 @@ mod tests {
                 }
             })
             .await;
+            let explanation = crewd_proto::message_delivery::MessageDeliveryParams {
+                crew_id: "c-1".into(),
+                channel_id: message.channel_id.clone(),
+                message_id: message.id.clone(),
+            };
+            let explanation = rig
+                .port
+                .read(move |c| {
+                    collab::message_delivery::read(c, &collab::Sender::Human, explanation)
+                })
+                .await?;
+            use crewd_proto::message_delivery::{
+                MessageDeliveryState, MessageWakePath, MessageWakeReason,
+            };
+            assert_eq!(explanation.items.len(), 1);
+            assert_eq!(explanation.items[0].session_id.as_deref(), Some("w-1"));
+            assert_eq!(explanation.items[0].path, MessageWakePath::Live);
+            assert_eq!(
+                explanation.items[0].reasons,
+                [MessageWakeReason::ExplicitMention]
+            );
+            if matches!(&settled, Ok(Ok(_))) {
+                assert_eq!(
+                    explanation.items[0].state,
+                    MessageDeliveryState::DeliveredOrAlreadyRead
+                );
+            }
             let final_cursor = rig
                 .state
                 .db

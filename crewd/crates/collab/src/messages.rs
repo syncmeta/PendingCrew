@@ -423,9 +423,12 @@ fn post_with(
         };
         push_mention(&mut mentions, resolved);
     }
+    let explicit = crate::message_delivery::direct_targets(&mentions);
+    let mut replied = Vec::new();
     let mut answering = None;
     if let Some(rid) = &p.in_reply_to {
         let resolved = resolve_reply(conn, &sender, &ch.id, rid)?;
+        replied = crate::message_delivery::direct_targets(&resolved.mentions);
         for m in resolved.mentions {
             push_mention(&mut mentions, m);
         }
@@ -447,6 +450,14 @@ fn post_with(
     };
     message.seq = crewd_store::messages::insert(conn, &message, None)?
         .ok_or_else(|| CollabError::Conflict(Refusal::new(Code::MessageIdConflict)))?;
+    crate::message_delivery::record_post(
+        tx,
+        &message,
+        &ch.crew_id,
+        explicit,
+        replied,
+        answering.is_some(),
+    )?;
     match &sender {
         Sender::Human => cursors::advance(tx, cursors::HUMAN, &ch.id, message.seq)?,
         Sender::Session(id) => sessions::note_output(tx, id)?,

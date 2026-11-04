@@ -562,6 +562,20 @@ pub trait Port: Send + Sync + 'static {
     // —— 唤醒队列与熔断
     /// 插入成功 = 新行的 id；`UNIQUE(session, kind, source)` 撞了 = None；目标的机组已被移除（M3a `Enqueued::Skipped`）= None。
     fn enqueue(&self, w: NewWake) -> impl Future<Output = Result<Option<i64>>> + Send;
+    fn enqueue_message(
+        &self,
+        wake: NewWake,
+        _trace: crewd_collab::message_delivery::Capture,
+    ) -> impl Future<Output = Result<Option<i64>>> + Send {
+        self.enqueue(wake)
+    }
+    fn message_no_targets(
+        &self,
+        _message: &str,
+        _source: &MessageRef,
+    ) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
     /// 该 session 所有 `pending` 的唤醒（不论到没到点），优先级高的在前、同档按入队先后。
     fn managed_resume_cut(
         &self,

@@ -392,6 +392,20 @@ async fn production_runtime_routes_wakes_attributes_and_recovery_does_not_redisp
             .count(),
         1
     );
+    let explain = f
+        .rpc(
+            crewd_proto::message_delivery::EXPLAIN,
+            json!({
+                "crewId":f.crew,"channelId":m.channel_id,"messageId":m.id
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(explain["routing"], "targets_recorded");
+    assert_eq!(explain["items"][0]["path"], "jev");
+    assert_eq!(explain["items"][0]["reasons"], json!(["jev_selected"]));
+    assert_eq!(explain["items"][0]["sessionId"], f.worker);
+    assert!(!explain.to_string().contains("private-fake-key"));
     assert_eq!(fake.requests().len(), 2);
     f.runtime
         .run(JudgmentSourceKind::Requirement, id, true)

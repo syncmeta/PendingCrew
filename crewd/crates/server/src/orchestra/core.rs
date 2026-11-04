@@ -3214,8 +3214,21 @@ impl<P: Port> Core<P> {
     }
 
     pub(crate) async fn enqueue_with_id(&self, w: NewWake) -> anyhow::Result<Option<i64>> {
+        self.enqueue_with_trace(w, None).await
+    }
+
+    pub(crate) async fn enqueue_with_trace(
+        &self,
+        w: NewWake,
+        trace: Option<crewd_collab::message_delivery::Capture>,
+    ) -> anyhow::Result<Option<i64>> {
         let session = w.session.clone();
-        let Some(id) = self.due.touch(&self.port).enqueue(w.clone()).await? else {
+        let port = self.due.touch(&self.port);
+        let id = match trace {
+            Some(trace) => port.enqueue_message(w.clone(), trace).await?,
+            None => port.enqueue(w.clone()).await?,
+        };
+        let Some(id) = id else {
             return Ok(None);
         };
         let row = QueuedWake {

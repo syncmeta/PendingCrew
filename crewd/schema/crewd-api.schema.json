@@ -11755,6 +11755,112 @@
       ],
       "type": "object"
     },
+    "MessageDeliveryItem": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/MessageWakePath"
+        },
+        "priority": {
+          "$ref": "#/$defs/WakePriorityView"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/MessageWakeReason"
+          },
+          "type": "array"
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/MessageDeliveryState"
+        }
+      },
+      "required": [
+        "priority",
+        "path",
+        "reasons",
+        "state"
+      ],
+      "type": "object"
+    },
+    "MessageDeliveryParams": {
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "channelId",
+        "messageId"
+      ],
+      "type": "object"
+    },
+    "MessageDeliveryRouting": {
+      "enum": [
+        "unknown",
+        "no_eligible_target",
+        "targets_recorded"
+      ],
+      "type": "string"
+    },
+    "MessageDeliveryState": {
+      "enum": [
+        "queued",
+        "delivering",
+        "delivered_or_already_read",
+        "dropped",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "MessageDeliveryView": {
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/MessageDeliveryItem"
+          },
+          "type": "array"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "routing": {
+          "$ref": "#/$defs/MessageDeliveryRouting"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "crewId",
+        "channelId",
+        "messageId",
+        "routing",
+        "items",
+        "truncated"
+      ],
+      "type": "object"
+    },
     "MessageListParams": {
       "additionalProperties": false,
       "properties": {
@@ -11896,6 +12002,27 @@
         "query"
       ],
       "type": "object"
+    },
+    "MessageWakePath": {
+      "enum": [
+        "live",
+        "jev",
+        "backlog"
+      ],
+      "type": "string"
+    },
+    "MessageWakeReason": {
+      "enum": [
+        "explicit_mention",
+        "reply_to_sender",
+        "directed_unknown",
+        "dm_peer",
+        "subscription",
+        "jev_selected",
+        "channel_owner_fallback",
+        "crew_captain_fallback"
+      ],
+      "type": "string"
     },
     "NoParams": {
       "additionalProperties": false,
@@ -20201,6 +20328,14 @@
       },
       "result": {
         "$ref": "#/$defs/MessageAttributionView"
+      }
+    },
+    "message.deliveryExplain": {
+      "params": {
+        "$ref": "#/$defs/MessageDeliveryParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MessageDeliveryView"
       }
     },
     "message.list": {

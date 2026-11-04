@@ -64,6 +64,8 @@ struct CrewdMessageInspectionSheet: View {
                                 automaticallyLoad:true,scopeCurrent:{ current })
                         }
                         Divider()
+                        CrewdMessageDeliveryView(store:store,source:target.source,members:workspace.knownSessions,scopeCurrent:{ current })
+                        Divider()
                         CrewdMessageAttributionView(store:store,source:target.source,
                             allowsCorrection:workspace.dataDirectory != nil,historySourceEpoch:historySourceEpoch,scopeCurrent:{ current })
                     }.frame(maxWidth:.infinity,alignment:.leading)
@@ -90,6 +92,129 @@ struct CrewdMessageInspectionSheet: View {
             }
         }
         .onDisappear { visible = false }
+    }
+}
+
+private struct CrewdMessageDeliveryView: View {
+    typealias Explanation = CrewdMessageDeliveryExplanation
+    @ObservedObject var store: CrewdWorkStore
+    let source: Explanation.Source
+    let members: [String:CrewdValue]
+    let scopeCurrent: @MainActor () -> Bool
+    @State private var explanation: Explanation?
+    @State private var failed = false
+    @State private var reading = false
+    @State private var request = UUID()
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:8) {
+            Text("会话唤醒与投递").font(.headline)
+            if !store.supportsMessageDeliveryExplanation {
+                Text("投递情况未知。当前后台未提供这项记录。").foregroundStyle(.secondary)
+            } else {
+                if let explanation {
+                    switch explanation.routing {
+                    case .unknown:
+                        Text("投递情况未知。旧消息或已清理的记录可能缺少可核实证据。").foregroundStyle(.secondary)
+                    case .noEligibleTarget:
+                        Text("当时没有符合条件的会话唤醒对象。")
+                    case .targetsRecorded:
+                        ForEach(Array(explanation.items.enumerated()),id:\.offset) { _, item in deliveryRow(item) }
+                        if explanation.truncated {
+                            Text("这里只显示部分投递记录。").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } else if failed {
+                    Text("投递情况未知。读取失败，请刷新核对。").foregroundStyle(.orange)
+                }
+                Button(reading ? "正在读取投递记录…" : "刷新投递记录") {
+                    Task { await read() }
+                }.disabled(reading)
+            }
+            Text("这里显示会话唤醒的路由与处理记录。成员当前活动和实际回复以会话记录为准。")
+                .font(.caption).foregroundStyle(.secondary)
+        }.font(.callout)
+        .task(id:store.supportsMessageDeliveryExplanation) { await read() }
+        .onChange(of:store.readScope) { _,_ in invalidate() }
+        .onDisappear { invalidate() }
+    }
+
+    private func invalidate() {
+        request = UUID(); explanation = nil; failed = false; reading = false
+    }
+
+    private func read() async {
+        guard scopeCurrent(), store.supportsMessageDeliveryExplanation else { invalidate(); return }
+        guard !reading, !Task.isCancelled else { return }
+        let token = UUID(), scope = store.readScope
+        request = token; reading = true; failed = false; explanation = nil
+        defer { if request == token { reading = false } }
+        do {
+            let value = try await store.messageDeliveryExplanation(source:source)
+            guard request == token, scope == store.readScope, scopeCurrent(), !Task.isCancelled else { return }
+            explanation = value
+        } catch is CancellationError {
+            return
+        } catch {
+            guard request == token, scope == store.readScope, scopeCurrent(), !Task.isCancelled else { return }
+            failed = true
+        }
+    }
+
+    private func deliveryRow(_ item: Explanation.Item) -> some View {
+        VStack(alignment:.leading,spacing:4) {
+            Text(recipient(item.sessionID) + " · " + stateLabel(item.state)).font(.callout.weight(.semibold))
+            Text(pathLabel(item.path) + " · " + priorityLabel(item.priority)).font(.caption).foregroundStyle(.secondary)
+            Text("路由依据：" + item.reasons.map(reasonLabel).joined(separator:"、"))
+                .font(.caption).foregroundStyle(.secondary)
+        }.frame(maxWidth:.infinity,alignment:.leading)
+    }
+
+    private func recipient(_ id: String?) -> String {
+        guard let id else { return "原会话唤醒对象已无法核实" }
+        guard let member = members[id], member["id"] == .string(id),
+              let name = member["displayName"].string, !name.isEmpty else { return id }
+        let duplicates = members.values.filter { $0["displayName"] == .string(name) }.count
+        return duplicates > 1 ? name + "（" + String(id.suffix(8)) + "）" : name
+    }
+
+    private func stateLabel(_ state: Explanation.Item.State) -> String {
+        switch state {
+        case .queued: return "待投递"
+        case .delivering: return "正在投递"
+        case .deliveredOrAlreadyRead: return "已送达或此前已读"
+        case .dropped: return "投递已终止"
+        case .unknown: return "投递结果未知"
+        }
+    }
+
+    private func pathLabel(_ path: Explanation.Item.Path) -> String {
+        switch path {
+        case .live: return "发消息时路由"
+        case .jev: return "判断流程路由"
+        case .backlog: return "积压消息补投"
+        }
+    }
+
+    private func priorityLabel(_ priority: Explanation.Item.Priority) -> String {
+        switch priority {
+        case .human: return "人工优先级"
+        case .system: return "系统优先级"
+        case .auto: return "自动优先级"
+        }
+    }
+
+    private func reasonLabel(_ reason: Explanation.Item.Reason) -> String {
+        switch reason {
+        case .explicitMention: return "消息中明确 @"
+        case .replyToSender: return "回复了该成员的消息"
+        case .directedUnknown: return "定向通知，具体依据未知"
+        case .dmPeer: return "私聊对方"
+        case .subscription: return "成员订阅了此群"
+        case .jevSelected: return "Jev 判断选中该成员"
+        case .channelOwnerFallback: return "按群主规则补选"
+        case .crewCaptainFallback: return "按机长规则补选"
+        }
     }
 }
 

@@ -555,12 +555,13 @@ impl Runtime {
                 if closed.load(Ordering::Acquire) {
                     return Ok(Vec::new());
                 }
+                let mut empty_message = None;
                 let targets = if key == JudgmentSourceKind::Requirement {
                     chosen
                         .recipients
                         .iter()
                         .cloned()
-                        .map(|id| (id, crewd_collab::wakes::WakePriority::Human))
+                        .map(|id| (id, crewd_collab::wakes::WakePriority::Human, None))
                         .collect::<Vec<_>>()
                 } else {
                     let m = crewd_collab::messages::get(tx.conn(), &source)?;
@@ -571,30 +572,40 @@ impl Runtime {
                     else {
                         return Ok(Vec::new());
                     };
-                    plan::plan(
+                    let targets = plan::explained_plan(
                         &facts,
                         &ctx,
                         chosen.adopted.then_some(chosen.recipients.as_slice()),
                         now,
-                    )
-                    .into_iter()
-                    .map(|t| {
-                        (
-                            t.session,
-                            match t.priority {
-                                crewd_wake::Priority::Human => {
-                                    crewd_collab::wakes::WakePriority::Human
-                                }
-                                crewd_wake::Priority::System => {
-                                    crewd_collab::wakes::WakePriority::System
-                                }
-                                crewd_wake::Priority::Auto => {
-                                    crewd_collab::wakes::WakePriority::Auto
-                                }
-                            },
-                        )
-                    })
-                    .collect()
+                    );
+                    if targets.is_empty() {
+                        empty_message = Some((m.id, m.channel_id, m.seq));
+                    }
+                    targets
+                        .into_iter()
+                        .map(|plan::ExplainedTarget { target: t, reasons }| {
+                            let trace = crate::wake_adapter::routing_capture(
+                                &facts,
+                                crewd_proto::message_delivery::MessageWakePath::Jev,
+                                reasons,
+                            );
+                            (
+                                t.session,
+                                match t.priority {
+                                    crewd_wake::Priority::Human => {
+                                        crewd_collab::wakes::WakePriority::Human
+                                    }
+                                    crewd_wake::Priority::System => {
+                                        crewd_collab::wakes::WakePriority::System
+                                    }
+                                    crewd_wake::Priority::Auto => {
+                                        crewd_collab::wakes::WakePriority::Auto
+                                    }
+                                },
+                                Some(trace),
+                            )
+                        })
+                        .collect()
                 };
                 let link = chosen
                     .link
@@ -613,34 +624,38 @@ impl Runtime {
                     &key,
                     &source,
                     &record.decision_id,
-                    targets.iter().map(|(id, _)| id.clone()).collect(),
+                    targets.iter().map(|(id, _, _)| id.clone()).collect(),
                     link,
                     diagnostic,
                 )? {
                     return Ok(Vec::new());
                 }
+                if let Some((id, channel, seq)) = empty_message {
+                    crewd_collab::message_delivery::no_targets(tx, &id, &channel, seq)?;
+                }
                 let mut admitted = Vec::new();
-                for (target, priority) in targets {
-                    let enqueued = crewd_collab::wakes::enqueue(
-                        tx,
-                        crewd_collab::wakes::WakeRequest {
-                            session: target.clone(),
-                            kind: if key == JudgmentSourceKind::Requirement {
-                                crewd_collab::wakes::WakeKind::System
-                            } else {
-                                crewd_collab::wakes::WakeKind::Message
-                            },
-                            source: if key == JudgmentSourceKind::Requirement {
-                                format!("judgment-route:{source}")
-                            } else {
-                                crewd_collab::wakes::source::message(&source)
-                            },
-                            priority,
-                            not_before_ms: None,
-                            note: None,
-                            origin: None,
+                for (target, priority, trace) in targets {
+                    let request = crewd_collab::wakes::WakeRequest {
+                        session: target.clone(),
+                        kind: if key == JudgmentSourceKind::Requirement {
+                            crewd_collab::wakes::WakeKind::System
+                        } else {
+                            crewd_collab::wakes::WakeKind::Message
                         },
-                    )?;
+                        source: if key == JudgmentSourceKind::Requirement {
+                            format!("judgment-route:{source}")
+                        } else {
+                            crewd_collab::wakes::source::message(&source)
+                        },
+                        priority,
+                        not_before_ms: None,
+                        note: None,
+                        origin: None,
+                    };
+                    let enqueued = match trace {
+                        Some(trace) => crewd_collab::message_delivery::enqueue(tx, request, trace)?,
+                        None => crewd_collab::wakes::enqueue(tx, request)?,
+                    };
                     if fresh_human_message
                         && priority == crewd_collab::wakes::WakePriority::Human
                         && let crewd_collab::wakes::Enqueued::New(wake) = enqueued

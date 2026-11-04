@@ -1008,6 +1008,7 @@ fn allowed_method(method: &str) -> bool {
             | "judgment.inspect"
             | "message.attribution.get"
             | crewd_proto::message_attribution::HISTORY
+            | crewd_proto::message_delivery::EXPLAIN
             | "channel.archiveCheck"
             | "adminCase.list"
             | "adminCase.get"

@@ -21,6 +21,7 @@ mod judgments;
 pub mod ledger;
 mod legacy_terminal;
 mod message_attribution;
+mod message_delivery;
 pub mod native_helpers;
 pub mod native_receipts;
 mod notifications;

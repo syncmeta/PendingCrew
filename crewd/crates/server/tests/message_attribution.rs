@@ -139,6 +139,16 @@ async fn human_override_clear_reset_cas_and_attached_denial_preserve_original_me
     assert_eq!(rows[2]["after"]["target"], rows[1]["before"]["target"]);
     assert!(rows[2].get("before").is_none());
     assert!(history.get("nextCursor").is_none() && history["olderUnavailable"] == false);
+    let delivery = rpc(&mut human, "message.deliveryExplain", query.clone()).await;
+    assert_eq!(
+        delivery,
+        json!({
+            "crewId":f.crew,"channelId":ch,"messageId":source.id,
+            "routing":"unknown","items":[],"truncated":false
+        })
+    );
+    let denied = call(&mut worker, "message.deliveryExplain", query.clone()).await;
+    assert_eq!(denied.unwrap_err().0, crewd_proto::RpcError::FORBIDDEN);
     let denied = call(&mut worker, "message.attribution.history", query).await;
     assert_eq!(denied.unwrap_err().0, crewd_proto::RpcError::FORBIDDEN);
     let wrong_channel = call(&mut human, "message.attribution.history",

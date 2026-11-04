@@ -751,6 +751,24 @@ pub fn reset_inflight_and_reservations(
     Ok(failed)
 }
 
+/// Exact role in a still-held reservation, when present.
+pub(crate) fn is_delivery_rider(
+    conn: &Connection,
+    session: &str,
+    wake: i64,
+) -> Result<Option<bool>> {
+    Ok(load(conn, session)?.and_then(|state| {
+        let active = state.active?;
+        if active.rider_ids.contains(&wake) {
+            Some(true)
+        } else if active.wake_ids.contains(&wake) {
+            Some(false)
+        } else {
+            None
+        }
+    }))
+}
+
 pub(crate) fn held_channels(conn: &Connection, session: &str) -> Result<Vec<String>> {
     Ok(load(conn, session)?
         .and_then(|s| s.active)

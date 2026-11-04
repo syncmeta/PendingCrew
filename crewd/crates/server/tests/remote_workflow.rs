@@ -3451,3 +3451,125 @@ async fn paired_human_reads_message_correction_history_until_grant_is_revoked() 
     drop(remote);
     stopped(running).await;
 }
+
+#[tokio::test]
+async fn paired_human_reads_exact_message_delivery_until_revocation() {
+    use crewd_collab::{Sender, message_delivery, messages, sessions, wakes};
+    use crewd_proto::{
+        Mention, MentionKind, Role,
+        message_delivery::{EXPLAIN, MessageWakePath, MessageWakeReason},
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut first = service(dir.path()).await;
+    let (port, identity) = enabled(&mut first.owner).await;
+    let (cert, _, grant) = approved(&mut first.owner, &identity).await;
+    let crew = local(
+        &mut first.owner,
+        "crew.create",
+        json!({"title":"Synthetic delivery evidence","workingDirectory":dir.path()}),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    stopped(first).await;
+    let channel = crewd_store::channels::lobby_id(&crew);
+    // Persist the actual typed queue/evidence writer with the listener stopped.
+    // The separate actor tests exercise how the production planner reaches it.
+    let ((message, recipient), _) = {
+        let mut store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
+        crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+            let session = sessions::register(
+                tx,
+                sessions::NewSession {
+                    crew_id: crew.clone(),
+                    role: Role::Worker,
+                    executor: "codex".into(),
+                    title: Some("Delivery target".into()),
+                    ..Default::default()
+                },
+            )?;
+            let message = messages::post(
+                tx,
+                Sender::Human,
+                messages::NewPost {
+                    channel_id: channel.clone(),
+                    text: "Synthetic source body must not be exposed".into(),
+                    mentions: vec![Mention {
+                        kind: MentionKind::Session,
+                        target_id: Some(session.id.clone()),
+                    }],
+                    ..Default::default()
+                },
+            )?
+            .message;
+            let result = message_delivery::enqueue(
+                tx,
+                wakes::WakeRequest {
+                    session: session.id.clone(),
+                    kind: wakes::WakeKind::Message,
+                    source: wakes::source::message(&message.id),
+                    priority: wakes::WakePriority::Human,
+                    not_before_ms: None,
+                    note: None,
+                    origin: None,
+                },
+                message_delivery::Capture {
+                    message_id: message.id.clone(),
+                    channel_id: message.channel_id.clone(),
+                    seq: message.seq,
+                    path: MessageWakePath::Live,
+                    reasons: vec![MessageWakeReason::DirectedUnknown],
+                },
+            )?;
+            assert!(matches!(result, wakes::Enqueued::New(_)));
+            Ok((message.id, session.id))
+        })
+        .unwrap()
+    };
+
+    let mut reopened = service(dir.path()).await;
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            if local(&mut reopened.owner, "remote.status", json!({})).await["listening"] == true {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("persisted pairing listener did not reopen");
+    let query = json!({"crewId":crew,"channelId":channel,"messageId":message});
+    let expected = json!({
+        "crewId":crew, "channelId":channel, "messageId":message, "routing":"targets_recorded",
+        "items":[{"sessionId":recipient,"path":"live","priority":"human",
+                  "reasons":["explicit_mention"],"state":"queued"}],
+        "truncated":false
+    });
+    assert_eq!(
+        local(&mut reopened.owner, EXPLAIN, query.clone()).await,
+        expected
+    );
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    assert_eq!(remote.call(EXPLAIN, query.clone()).await, expected);
+    let wrong = remote
+        .frame(
+            EXPLAIN,
+            json!({"crewId":crew,"channelId":"unrelated-channel","messageId":message}),
+        )
+        .await
+        .unwrap();
+    assert!(wrong["error"].is_object() && wrong.get("result").is_none());
+    assert_eq!(remote.call(EXPLAIN, query.clone()).await, expected);
+
+    local(&mut reopened.owner, "remote.revoke", json!({
+        "grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"delivery evidence fixture complete"
+    })).await;
+    let denied = tokio::time::timeout(LIMIT, remote.frame(EXPLAIN, query))
+        .await
+        .unwrap();
+    assert!(denied.is_err() || denied.unwrap()["error"].is_object());
+    drop(remote);
+    stopped(reopened).await;
+}

@@ -143,6 +143,33 @@ pub(crate) fn channel_context(
     }))
 }
 
+pub(crate) fn routing_capture(
+    message: &MsgFacts,
+    path: crewd_proto::message_delivery::MessageWakePath,
+    reasons: Vec<crewd_wake::plan::WakeReason>,
+) -> collab::message_delivery::Capture {
+    use crewd_proto::message_delivery::{MessageWakePath as Path, MessageWakeReason as Reason};
+    use crewd_wake::plan::WakeReason;
+    collab::message_delivery::Capture {
+        message_id: message.id.clone(),
+        channel_id: message.at.channel.clone(),
+        seq: message.at.seq,
+        path,
+        reasons: reasons
+            .into_iter()
+            .map(|reason| match reason {
+                WakeReason::Directed => Reason::DirectedUnknown,
+                WakeReason::DmPeer => Reason::DmPeer,
+                WakeReason::Subscription => Reason::Subscription,
+                WakeReason::ArbiterSelected if path == Path::Jev => Reason::JevSelected,
+                WakeReason::ArbiterSelected => Reason::DirectedUnknown,
+                WakeReason::ChannelOwnerFallback => Reason::ChannelOwnerFallback,
+                WakeReason::CrewCaptainFallback => Reason::CrewCaptainFallback,
+            })
+            .collect(),
+    }
+}
+
 // Post receipt prediction uses the same readonly facts/context above.
 use crate::AppState;
 use crate::agent::port::{PortError, PortResult};

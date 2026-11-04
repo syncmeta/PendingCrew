@@ -841,6 +841,7 @@ pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
         .collect();
     // 级联之前：它的 session 退出别的机组的群、交出群主（终审 I4）。
     let cascaded = crate::channels::release_sessions_of_doomed_crew(tx, id)?;
+    crate::message_delivery::purge_source_crew(tx, id)?;
     tx.conn().execute("DELETE FROM crews WHERE id=?1", [id])?;
     crewd_store::work_organization::purge_crew_in_tx(tx.conn(), id)?;
     let after = crate::asks::load_org(tx.conn())?;
@@ -3278,8 +3279,25 @@ mod tests {
         let foreign_before =
             crewd_store::meta_get(s.conn(), &format!("{PURGE_PROVENANCE_PREFIX}{foreign}"))
                 .unwrap();
+        let doomed_delivery = format!("message.delivery.v1:{doomed}");
+        let foreign_delivery = format!("message.delivery.v1:{foreign}");
+        let retained_delivery = crewd_store::meta_get(s.conn(), &foreign_delivery).unwrap();
+        assert!(
+            crewd_store::meta_get(s.conn(), &doomed_delivery)
+                .unwrap()
+                .is_some()
+        );
+        assert!(retained_delivery.is_some());
         let ((), changes) = ok_at(&mut s, NOW + 1, |tx| purge(tx, "crew-x"));
         assert!(crate::messages::get(s.conn(), &doomed).is_err());
+        assert_eq!(
+            crewd_store::meta_get(s.conn(), &doomed_delivery).unwrap(),
+            None
+        );
+        assert_eq!(
+            crewd_store::meta_get(s.conn(), &foreign_delivery).unwrap(),
+            retained_delivery
+        );
         assert!(crate::channels::get(s.conn(), &doomed_dm).is_err());
         assert_eq!(
             crewd_store::meta_get(s.conn(), &format!("{PURGE_PROVENANCE_PREFIX}{doomed}")).unwrap(),

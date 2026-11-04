@@ -135,6 +135,81 @@ struct CrewdMessageAttributionHistoryPage: Equatable {
     }
 }
 
+/// Retained routing and delivery evidence for one original message.
+struct CrewdMessageDeliveryExplanation: Equatable {
+    static let method = "message.deliveryExplain"
+    static let limit = 64
+    typealias Source = CrewdMessageAttributionHistoryPage.Source
+
+    enum Routing: String {
+        case unknown
+        case noEligibleTarget = "no_eligible_target"
+        case targetsRecorded = "targets_recorded"
+    }
+    struct Item: Equatable {
+        enum Priority: String { case human, system, auto }
+        enum Path: String { case live, jev, backlog }
+        enum Reason: String {
+            case explicitMention = "explicit_mention"
+            case replyToSender = "reply_to_sender"
+            case directedUnknown = "directed_unknown"
+            case dmPeer = "dm_peer"
+            case subscription
+            case jevSelected = "jev_selected"
+            case channelOwnerFallback = "channel_owner_fallback"
+            case crewCaptainFallback = "crew_captain_fallback"
+        }
+        enum State: String {
+            case queued, delivering
+            case deliveredOrAlreadyRead = "delivered_or_already_read"
+            case dropped, unknown
+        }
+        let sessionID: String?
+        let priority: Priority
+        let path: Path
+        let reasons: [Reason]
+        let state: State
+    }
+    let routing: Routing
+    let items: [Item]
+    let truncated: Bool
+
+    init(_ value: CrewdValue, source: Source) throws {
+        let invalid = CrewdClientError(message:"投递记录不完整或与当前消息不一致。")
+        func matches(_ wire: CrewdValue?, _ expected: String) -> Bool {
+            wire?.string?.utf8.elementsEqual(expected.utf8) == true
+        }
+        guard case .object(let fields) = value,
+              matches(fields["crewId"],source.crew), matches(fields["channelId"],source.channel),
+              matches(fields["messageId"],source.message),
+              let routingName = fields["routing"]?.string, let routing = Routing(rawValue:routingName),
+              case .array(let rows)? = fields["items"], rows.count <= Self.limit,
+              case .bool(let truncated)? = fields["truncated"],
+              (routing == .targetsRecorded) == !rows.isEmpty,
+              !truncated || rows.count == Self.limit else { throw invalid }
+        self.routing = routing
+        self.truncated = truncated
+        items = try rows.map { row in
+            guard case .object(let fields) = row,
+                  let priorityName = fields["priority"]?.string, let priority = Item.Priority(rawValue:priorityName),
+                  let pathName = fields["path"]?.string, let path = Item.Path(rawValue:pathName),
+                  let stateName = fields["state"]?.string, let state = Item.State(rawValue:stateName),
+                  case .array(let rawReasons)? = fields["reasons"], !rawReasons.isEmpty, rawReasons.count <= 8 else { throw invalid }
+            let reasons = rawReasons.compactMap { $0.string.flatMap(Item.Reason.init(rawValue:)) }
+            guard reasons.count == rawReasons.count, Set(reasons).count == reasons.count else { throw invalid }
+            let sessionID: String?
+            if let rawID = fields["sessionId"] {
+                guard let id = rawID.string, !id.isEmpty, id.utf8.count <= 256 else { throw invalid }
+                sessionID = id
+            } else {
+                guard state == .unknown else { throw invalid }
+                sessionID = nil
+            }
+            return .init(sessionID:sessionID,priority:priority,path:path,reasons:reasons,state:state)
+        }
+    }
+}
+
 /// Present the server's wait tiers without inferring them from the local clock.
 enum CrewdHumanWaitPresentation {
     static func summary(_ row: CrewdValue) -> String? {
@@ -816,6 +891,19 @@ final class CrewdWorkStore: ObservableObject {
         try check(token)
         guard supportsMessageAttributionHistory, selectedCrew == source.crew else { throw CancellationError() }
         return try .init(page,source:source,cursor:cursor)
+    }
+    var supportsMessageDeliveryExplanation: Bool { capabilities.contains(CrewdMessageDeliveryExplanation.method) }
+    func messageDeliveryExplanation(source: CrewdMessageDeliveryExplanation.Source) async throws -> CrewdMessageDeliveryExplanation {
+        guard supportsMessageDeliveryExplanation, selectedCrew == source.crew,
+              !source.crew.isEmpty, !source.channel.isEmpty, !source.message.isEmpty else {
+            throw CrewdClientError(message:"当前连接无法读取这条消息的投递记录。",kind:.notSubmitted)
+        }
+        let token = generation
+        let params: CrewdValue = .object(["crewId":.string(source.crew),"channelId":.string(source.channel),"messageId":.string(source.message)])
+        let value = try await call(CrewdMessageDeliveryExplanation.method,params)
+        try check(token)
+        guard supportsMessageDeliveryExplanation, selectedCrew == source.crew else { throw CancellationError() }
+        return try .init(value,source:source)
     }
     func messageAttribution(crew:String,message:String,target:CrewdValue?=nil) async throws -> CrewdValue {
         let token=generation
