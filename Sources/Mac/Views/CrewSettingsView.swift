@@ -466,7 +466,9 @@ private struct BackendsSettingsTab: View {
 private struct CrewdLocalSettingsTab: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(CrewdCodexConfiguration.key) private var selectedProgram = ""
+    @AppStorage(CrewdCodexConfiguration.systemProxyKey) private var useCodexSystemProxy = false
     @State private var selectionError: String?
+    @State private var nextCodexRoute: CrewdCodexConfiguration.NetworkRouteStatus?
     @AppStorage(CrewdClaudeConfiguration.key) private var claudeProgram = ""
     // Read the dynamic properties during body evaluation so persisted picker
     // changes invalidate these labels. The shared resolvers retain environment
@@ -505,6 +507,22 @@ private struct CrewdLocalSettingsTab: View {
                 if let selectionError { Text(selectionError).foregroundStyle(.red) }
                 Text("请先在终端安装并登录 Codex。这里不读取登录凭据，也不代你登录。路径变更在下次本机后台启动时生效；请先停工退出，再重新打开应用。显式环境配置优先于此设置。")
                     .font(.caption).foregroundStyle(.secondary)
+                #if !PENDINGCREW_LOCAL_DEMO
+                Toggle("为本机 Codex 使用 macOS HTTPS 代理地址",isOn:$useCodexSystemProxy)
+                Text("适用于 Codex 及其子工具通过代理环境发出的 HTTPS 请求。绕过名单固定为 localhost、127.0.0.1 和 ::1，与 macOS 的绕过名单独立。显式启动环境优先。设置在本应用下次启动本机后台时生效。")
+                    .font(.caption).foregroundStyle(.secondary)
+                if useCodexSystemProxy {
+                    Text("系统代理配置不符合条件时，后台仍可读取资料，Codex 会停用。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let nextCodexRoute {
+                    Text("下次启动预览 · " + nextCodexRoute.label).font(.caption).foregroundStyle(.secondary)
+                }
+                Button("重新读取代理设置") { refreshCodexRoute() }
+                if let workspace = model.crewdBackend?.workspace, workspace.dataDirectory != nil {
+                    CrewdLocalCodexRouteStatus(workspace:workspace)
+                }
+                #endif
             }
             Section("下次后台启动使用的 Claude 交互终端") {
                 Text(configuredClaudeProgram ?? "尚未配置 Claude。请选择已安装的 Claude 可执行文件。")
@@ -530,6 +548,22 @@ private struct CrewdLocalSettingsTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).padding()
+        .onAppear { refreshCodexRoute() }
+        .onChange(of:useCodexSystemProxy) { _,_ in refreshCodexRoute() }
+        .onChange(of:selectedProgram) { _,_ in refreshCodexRoute() }
+    }
+
+    private func refreshCodexRoute() {
+        nextCodexRoute = CrewdCodexConfiguration.networkRoute(program:program,useSystemProxy:useCodexSystemProxy).status
+    }
+}
+
+private struct CrewdLocalCodexRouteStatus: View {
+    @ObservedObject var workspace: CrewdWorkspace
+
+    var body: some View {
+        let configured = workspace.currentLocalCodexNetworkRouteStatus?.label ?? "启动时采用的代理设置未核实。"
+        Text("当前后台 · " + configured).font(.caption).foregroundStyle(.secondary)
     }
 }
 #endif

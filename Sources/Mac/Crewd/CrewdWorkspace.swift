@@ -490,6 +490,7 @@ final class CrewdWorkspace: ObservableObject {
     private var previousPathSatisfied: Bool?
     #if os(macOS)
     private var backend: Process?
+    @Published private var ownedCodexNetworkRouteStatus: CrewdCodexConfiguration.NetworkRouteStatus?
     private var ownedChildIdentity: CrewdKernelProcessIdentity?
     private struct OwnedIPCBinding {
         let generation: UUID
@@ -714,8 +715,9 @@ final class CrewdWorkspace: ObservableObject {
             guard FileManager.default.isExecutableFile(atPath: program.path) else { throw CrewdClientError(message: "未找到配套后台程序，请使用完整的应用包。") }
             // Fake providers are ordinary explicit validation inputs, never a product requirement.
             let codex = CrewdCodexConfiguration.program(environment: env)
+            let codexRoute = CrewdCodexConfiguration.networkRoute(program:codex,environment:env)
             let p = Process(); p.executableURL = program
-            p.arguments = CrewdCodexConfiguration.launchArguments(directory: dataDirectory, program: codex)
+            p.arguments = CrewdCodexConfiguration.launchArguments(directory:dataDirectory,program:codex,networkRoute:codexRoute)
             p.environment = CrewdCodexConfiguration.childEnvironment(env)
             // crewd owns a lock and its sessions. GUI reconnect never imports data or replays tasks.
             let logs = dataDirectory.appendingPathComponent("client-backend.log")
@@ -726,6 +728,7 @@ final class CrewdWorkspace: ObservableObject {
             let log = try FileHandle(forWritingTo: logs); try log.seekToEnd()
             p.standardOutput = log; p.standardError = log
             try p.run(); backend = p
+            ownedCodexNetworkRouteStatus = codexRoute.status
             // A failed birth observation leaves the helper unconfirmed; never
             // infer ownership from the launch path or an advertised PID.
             ownedChildIdentity = try? CrewdKernelProcessIdentity.ownChild(p.processIdentifier)
@@ -740,6 +743,11 @@ final class CrewdWorkspace: ObservableObject {
             guard !sleeping, !Task.isCancelled else { return }
             self.error = error.localizedDescription; status = "连接失败"
         }
+    }
+
+    /// Known only for the locally launched Process currently verified over IPC.
+    var currentLocalCodexNetworkRouteStatus: CrewdCodexConfiguration.NetworkRouteStatus? {
+        hasVerifiedOwnedLocalHelper ? ownedCodexNetworkRouteStatus : nil
     }
 
     /// Business retirement never transfers ownership. Only the independently
@@ -830,7 +838,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         // A late original close cannot clear a replacement Process or scope.
         if backend === owned, !owned.isRunning {
-            backend = nil; ownedChildIdentity = nil; ownedIPCBinding = nil
+            backend = nil; ownedChildIdentity = nil; ownedIPCBinding = nil; ownedCodexNetworkRouteStatus = nil
             if ownedLifecycle === lifecycle { ownedLifecycle = nil }
         }
     }
