@@ -914,49 +914,137 @@ private struct CrewdKnowledgeLinkPicker:View {
     @ObservedObject var workspace:CrewdWorkspace
     @ObservedObject var library:CrewdKnowledgeStore
     @ObservedObject var group:CrewdChannelKnowledgeStore
+    @ObservedObject var client:CrewdClient
     let collection:CrewdKnowledgeCollection
     @Environment(\.dismiss) private var dismiss
+    @State private var owner=UUID()
     @State private var sourceCrew=""
     @State private var chosen=""
+    @State private var query=""
     @State private var targetCrew=""
     @State private var targetChannel=""
+    @State private var refresh=UUID()
+    @State private var submitting=false
     @State private var failure:String?
-    init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){self.workspace=workspace;self.library=workspace.linkedKnowledge;self.group=workspace.channelKnowledge;self.collection=collection}
-    private var current:Bool{group.crew == targetCrew && group.channel == targetChannel && !workspace.isRetired}
+    init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){
+        self.workspace=workspace; self.library=workspace.knowledgeLinkPicker; self.group=workspace.channelKnowledge
+        self.client=workspace.client; self.collection=collection
+    }
+    private var current:Bool {
+        !targetChannel.isEmpty && workspace.crewID == targetCrew && workspace.channelID == targetChannel &&
+            group.crew == targetCrew && group.channel == targetChannel && !workspace.isRetired
+    }
+    private var targetReadKey:String {
+        [targetCrew,targetChannel,client.connectionEpoch.uuidString,String(client.readyForWork),group.activationEpoch.uuidString].joined(separator:"/")
+    }
+    private var sourceReadKey:String { targetReadKey + "/" + sourceCrew + "/" + refresh.uuidString }
+    private var catalog:CrewdKnowledgeStore.ViewCatalog? { current ? library.linkSourceCatalog(crew:sourceCrew) : nil }
+    private var rows:[CrewdKnowledgeStore.ViewCatalogItem] {
+        catalog?.items.filter { collection.includes($0.kind) && CrewdKnowledgeTitleSearch.matches($0.title,query:query) } ?? []
+    }
     private var chosenSource:CrewdChannelKnowledgeReference? {
-        guard let context=library.workspace?.context,context.crewId == sourceCrew,
-              library.objects.contains(where: { $0.identity == chosen }) else { return nil }
-        return .init(context:context,reference:.init(namespace:context.namespace,kind:"view",id:chosen))
+        guard current,let item=rows.first(where:{$0.id == chosen}) else { return nil }
+        return library.catalogLinkSource(item.id,kind:item.kind,crew:sourceCrew)
+    }
+    private var linkedViewIDs:Set<String> {
+        guard let context=catalog?.context else { return [] }
+        return group.linkedViewIDs(in:context)
     }
     private var linkPending:Bool {
         guard let chosenSource else { return false }
         return CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:workspace.presentationScope,crew:targetCrew,channel:targetChannel)
             .contains { $0.source.identity == chosenSource.identity }
     }
+    private var canLink:Bool {
+        current && client.readyForWork && !submitting && !group.writing && !library.busy &&
+            group.loaded && !group.loading && group.failure == nil && group.linkRevision != nil &&
+            chosenSource != nil && !linkedViewIDs.contains(chosen) && !linkPending
+    }
     var body:some View {
+        let linked = linkedViewIDs
         VStack(alignment:.leading,spacing:0){
             CrewdPanelHeader(title:"引用已有资料").padding(20)
             Divider()
             ScrollView{VStack(alignment:.leading,spacing:16){
             Picker("源机组",selection:$sourceCrew){ForEach(workspace.crews.compactMap{$0["id"].string},id:\.self){id in Text(workspace.crews.first(where:{$0["id"] == .string(id)})?["title"].string ?? id).tag(id)}}
-            if library.busy{ProgressView("正在读取资料")}
-            if !library.busy,library.objects.filter(collection.includes).isEmpty{CrewdInlineNotice(title:"这个机组尚无可引用的资料",detail:"请选择其他源机组，或先在原机组保存内容。",symbol:"doc.text.magnifyingglass")}
-            LazyVStack(alignment:.leading,spacing:4){ForEach(library.objects.filter(collection.includes),id:\.identity){object in
-                Button{chosen=object.identity}label:{Text(object.displayTitle).padding(10).frame(maxWidth:.infinity,alignment:.leading).background(chosen == object.identity ? Theme.Palette.surfaceMuted:Color.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)
+                .disabled(submitting || group.writing)
+            HStack {
+                TextField("按标题搜索源机组资料",text:$query).textFieldStyle(.roundedBorder)
+                Button("刷新源资料",systemImage:"arrow.clockwise") { refresh=UUID() }.disabled(library.busy || submitting)
+            }
+            if library.busy { ProgressView("正在读取源资料") }
+            if group.loading { ProgressView("正在核对本群引用") }
+            sourceStatus
+            LazyVStack(alignment:.leading,spacing:4){ForEach(rows){item in
+                Button{chosen=item.id}label:{
+                    HStack {
+                        Text(item.title)
+                        Spacer()
+                        if linked.contains(item.id) { Text("本群已引用").font(CrewdType.caption).foregroundStyle(.secondary) }
+                    }.padding(10).frame(maxWidth:.infinity,alignment:.leading)
+                        .background(chosen == item.id ? Theme.Palette.surfaceMuted:Color.clear,in:RoundedRectangle(cornerRadius:6))
+                }.buttonStyle(.plain).disabled(submitting || group.writing).accessibilityAddTraits(chosen == item.id ? .isSelected:[])
             }}
+            if let error=group.failure {
+                CrewdInlineNotice(title:"本群引用尚未确认",detail:error,warning:true)
+                Button("刷新本群引用") { Task { if current {try? await group.refresh()} } }.disabled(group.loading || submitting)
+            }
             if let failure{CrewdInlineNotice(title:"引用尚未完成",detail:failure,warning:true)}
             CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:targetCrew,channel:targetChannel)
             }.padding(20)}
             Divider()
-            HStack{Button("关闭"){dismiss()};Spacer();Button(group.writing ? "正在加入…":"引用到本群"){link()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || chosenSource == nil || group.writing || library.busy || linkPending)}.padding(16)
+            HStack{Button("关闭"){dismiss()}.disabled(submitting);Spacer();Button(submitting ? "正在加入…":"引用到本群"){link()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!canLink)}.padding(16)
         }.modifier(CrewdAdaptiveFormFrame(width:560,height:580,scrolls:false))
-        .onAppear{targetCrew=group.crew;targetChannel=group.channel;sourceCrew=group.crew}
-        .task(id:sourceCrew){guard !sourceCrew.isEmpty else{return};chosen="";do{try await workspace.readKnowledgeLibrary(crew:sourceCrew);try await group.refresh();failure=nil}catch{failure=error.localizedDescription}}
+        .onAppear{if targetChannel.isEmpty {targetCrew=group.crew;targetChannel=group.channel;sourceCrew=group.crew}}
+        .onDisappear { workspace.closeKnowledgeLinkPicker(owner:owner) }
+        .onChange(of:current){_,value in if !value && !targetChannel.isEmpty { dismiss() } }
+        .onChange(of:sourceCrew){_,_ in chosen=""; query=""; failure=nil }
+        .task(id:sourceReadKey){await loadSource()}
+        .task(id:targetReadKey){if current,client.readyForWork {try? await group.refresh()}}
+    }
+    @ViewBuilder private var sourceStatus:some View {
+        if let catalog {
+            HStack {
+                Text(catalog.next == nil ? "已读完源机组资料，匹配 \(rows.count) 项。" : "已读取的源资料匹配 \(rows.count) 项，仍有后续资料。")
+                Spacer()
+                if catalog.next != nil {
+                    Button(library.catalogStatus == .failed ? "重读后续资料" : "读取后续资料") {
+                        Task { await library.loadNextViewCatalogPage() }
+                    }.disabled(library.busy || submitting)
+                }
+            }.font(CrewdType.caption).foregroundStyle(.secondary)
+            if library.catalogStatus == .failed { Text("后续资料未能读取。请刷新后再引用。").font(CrewdType.caption).foregroundStyle(.orange) }
+        } else if !library.busy {
+            let message = library.catalogStatus == .uninitialized ? "源机组资料库尚未初始化。" : "源资料尚未确认。可刷新后继续。"
+            Text(message).font(CrewdType.caption).foregroundStyle(.secondary)
+        }
+    }
+    private func loadSource() async {
+        guard current,client.readyForWork,!sourceCrew.isEmpty else { return }
+        let requested=sourceCrew, key=sourceReadKey
+        chosen=""; failure=nil
+        do { try await workspace.readKnowledgeLinkSource(owner:owner,crew:targetCrew,channel:targetChannel,source:requested) }
+        catch { if current,sourceReadKey == key,!Task.isCancelled { failure=error.localizedDescription } }
     }
     private func link(){
-        guard current,!linkPending,let source=chosenSource,let revision=group.linkRevision else{return}
+        guard canLink,let source=chosenSource,let revision=group.linkRevision else{return}
         guard let snapshot=workspace.knowledgeLinkDrafts.begin(crew:targetCrew,channel:targetChannel,source:source,revision:revision,linked:true) else{return}
-        Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if current{dismiss()}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure=error.localizedDescription}}
+        submitting=true; failure=nil
+        Task {
+            defer {submitting=false}
+            do {
+                guard current,client.readyForWork,chosenSource == snapshot.source,group.loaded,!group.loading,
+                      group.failure == nil,group.linkRevision == snapshot.revision,!linkedViewIDs.contains(chosen) else {
+                    throw CrewdClientError(message:"源资料或原群引用已变化，请重新核对。",kind:.notSubmitted)
+                }
+                _ = try await group.submit(snapshot)
+                workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true)
+                if current {dismiss()}
+            } catch {
+                workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error))
+                if current {failure=error.localizedDescription}
+            }
+        }
     }
 }
 

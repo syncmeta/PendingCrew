@@ -207,6 +207,34 @@ final class CrewdWorkspace: ObservableObject {
         self.knowledgeNavigation = UUID()
         return true
     })
+    private struct KnowledgeLinkPickerRoute: Equatable {
+        let owner: UUID
+        let crew: String
+        let channel: String
+        let source: String
+    }
+    private var knowledgeLinkPickerRoute: KnowledgeLinkPickerRoute?
+    private func acceptsKnowledgeLinkPicker(_ route: KnowledgeLinkPickerRoute) -> Bool {
+        acceptsObservation(observationGeneration) && client.capabilities.contains("data") && originalJournalReady &&
+            !route.channel.isEmpty && crewID == route.crew && channelID == route.channel &&
+            channelKnowledge.crew == route.crew && channelKnowledge.channel == route.channel &&
+            crews.contains(where:{$0["id"] == .string(route.source)})
+    }
+    lazy var knowledgeLinkPicker = CrewdKnowledgeStore(origin:{ [weak self] in
+        guard let self, let route = self.knowledgeLinkPickerRoute, self.acceptsKnowledgeLinkPicker(route),
+              let scope = self.presentationScope else { return nil }
+        return .init(scope:scope,observation:self.observationGeneration,connection:self.client.connectionEpoch,crew:route.source)
+    },rpc:{ [weak self] method,params in
+        guard let self, let route = self.knowledgeLinkPickerRoute, self.acceptsKnowledgeLinkPicker(route),
+              ["data.workspace.get","data.object.list"].contains(method),
+              (method == "data.workspace.get" ? params["crewId"] : params["context"]["crewId"]) == .string(route.source) else {
+            throw CrewdKnowledgeStore.Failure.unavailable
+        }
+        return try await self.client.call(method,params)
+    },journal:{ [weak self] in
+        guard let self,self.originalJournalReady,let journal=self.originalJournal else { throw CrewdKnowledgeStore.Failure.unavailable }
+        return journal
+    })
     @Published private(set) var knowledgeNavigation = UUID()
     lazy var resources=CrewdResources { [weak self] method,params in
         guard let self, !self.retired else {throw CrewdClientError(message: "连接已切换，旧作用域不能提交。", kind: .notSubmitted)}
@@ -441,6 +469,7 @@ final class CrewdWorkspace: ObservableObject {
             }
             self.knowledge.handleEvent(name, data)
             self.linkedKnowledge.handleEvent(name,data)
+            if self.knowledgeLinkPickerRoute != nil { self.knowledgeLinkPicker.handleEvent(name,data) }
             self.channelKnowledge.handleEvent(name,data)
             self.authorityEvents.send((name, data))
             if name=="personalDraft.changed" || name=="events.lagged"{CrewPersonalDraftService.shared.coreChanged(self)}
@@ -461,7 +490,7 @@ final class CrewdWorkspace: ObservableObject {
                 else { self.runnerItems.append(item); if self.runnerItems.count > 200 { self.runnerItems.removeFirst() } }
             } else if name == "system.shutdown" {
                 self.closeTerminalDisplays()
-                self.knowledge.invalidate(); self.linkedKnowledge.invalidate(); self.channelKnowledge.invalidate(); self.resources.invalidateConnection(); self.channelResources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
+                self.knowledge.invalidate(); self.linkedKnowledge.invalidate(); self.closeKnowledgeLinkPicker(); self.channelKnowledge.invalidate(); self.resources.invalidateConnection(); self.channelResources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.sleeping = true; self.status = "后台已休眠"; self.reconnect?.cancel(); self.reconnectID = nil
                 self.again = false; self.recoverNeeded = false; self.sync?.cancel()
             } else { self.scheduleSync(recoverHistory: name == "events.lagged") }
         }
@@ -469,7 +498,7 @@ final class CrewdWorkspace: ObservableObject {
             self?.closeTerminalDisplays()
             self?.clearExecutorProfiles()
             guard let self, !self.retired, !self.stopping, !self.booting, !self.sleeping, self.reconnectID == nil else { return }
-            self.knowledge.invalidate(); self.linkedKnowledge.invalidate(); self.channelKnowledge.invalidate(); self.resources.invalidateConnection(); self.channelResources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
+            self.knowledge.invalidate(); self.linkedKnowledge.invalidate(); self.closeKnowledgeLinkPicker(); self.channelKnowledge.invalidate(); self.resources.invalidateConnection(); self.channelResources.invalidateConnection(); self.channelWork.invalidateConnection(); self.workStore.invalidateConnection(); self.workDirty = true
             self.error = self.client.lastError
             if self.dataDirectory == nil {
                 self.remoteRecoveryPending = self.client.recoveryDisposition == .transport
@@ -565,7 +594,7 @@ final class CrewdWorkspace: ObservableObject {
         #endif
         sync?.cancel(); sync = nil; reconnect?.cancel(); reconnect = nil; reconnectID = nil
         again = false; recoverNeeded = false
-        knowledge.invalidate(); linkedKnowledge.invalidate(); channelKnowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
+        knowledge.invalidate(); linkedKnowledge.invalidate(); closeKnowledgeLinkPicker(); channelKnowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection()
         client.retire(); status = "已切换连接"
     }
     func connect() async {
@@ -672,7 +701,7 @@ final class CrewdWorkspace: ObservableObject {
     @discardableResult func exitOwnedLocalHelper(mode: CrewdQuitMode) async throws -> Bool {
         guard let directory = dataDirectory else { return false }
         stopping = true; sleeping = true
-        reconnect?.cancel(); sync?.cancel(); closeTerminalDisplays(); knowledge.invalidate()
+        reconnect?.cancel(); sync?.cancel(); closeTerminalDisplays(); knowledge.invalidate(); closeKnowledgeLinkPicker()
         status = mode == .direct ? "正在强制停止" : "正在叫他们停工"
         if retired {
             guard let target = retiredManagementTarget else { return false } // Former observer, no management authority.
@@ -759,7 +788,7 @@ final class CrewdWorkspace: ObservableObject {
         try Task.checkCancellation()
         guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
         clearExecutorProfiles()
-        knowledge.invalidate(); linkedKnowledge.invalidate(); channelKnowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
+        knowledge.invalidate(); linkedKnowledge.invalidate(); closeKnowledgeLinkPicker(); channelKnowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         closeTerminalDisplays()
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
         #if os(macOS)
@@ -812,23 +841,29 @@ final class CrewdWorkspace: ObservableObject {
 
     func selectCrew(_ id: String) {
         guard crewID != id else { return }
-        knowledge.invalidate(); linkedKnowledge.invalidate(); linkedKnowledgeCrew=""; channelKnowledge.selectChannel(crew:id,channel:""); workStore.selectCrew(id); resources.selectCrew(id); channelResources.selectScope(crew:id,channel:""); workDirty = true
+        knowledge.invalidate(); linkedKnowledge.invalidate(); linkedKnowledgeCrew=""; closeKnowledgeLinkPicker(); channelKnowledge.selectChannel(crew:id,channel:""); workStore.selectCrew(id); resources.selectCrew(id); channelResources.selectScope(crew:id,channel:""); workDirty = true
         channelWork.selectChannel(crew:id,channel:"")
         clearExecutorProfiles(); selectedExecutor = "codex"
         selection = UUID(); crewID = id; sessionID = ""; channelID = ""; sessions = []; channels = []; messages = []; inspection = .null; runnerItems = []; history = ""
         scheduleSync(recoverHistory: true)
     }
-    func readKnowledgeLibrary(crew source:String)async throws {
-        guard !retired,crews.contains(where:{$0["id"] == .string(source)}) else{throw CrewdClientError(message:"该源机组当前不可读。",kind:.notSubmitted)}
-        if linkedKnowledgeCrew != source{linkedKnowledge.invalidate();linkedKnowledgeCrew=source}
-        await linkedKnowledge.loadAllViews()
+    func readKnowledgeLinkSource(owner:UUID,crew:String,channel:String,source:String) async throws {
+        let route = KnowledgeLinkPickerRoute(owner:owner,crew:crew,channel:channel,source:source)
+        guard acceptsKnowledgeLinkPicker(route) else { throw CrewdClientError(message:"源机组或当前群不可读。",kind:.notSubmitted) }
+        if knowledgeLinkPickerRoute != route { knowledgeLinkPickerRoute=route; knowledgeLinkPicker.invalidate() }
+        await knowledgeLinkPicker.refreshViewCatalog(includeArchived:false)
+        guard !Task.isCancelled, knowledgeLinkPickerRoute == route, acceptsKnowledgeLinkPicker(route) else { throw CancellationError() }
+    }
+    func closeKnowledgeLinkPicker(owner:UUID?=nil) {
+        guard let route=knowledgeLinkPickerRoute,owner == nil || route.owner == owner else { return }
+        knowledgeLinkPickerRoute=nil; knowledgeLinkPicker.invalidate()
     }
     func openLinkedKnowledge(_ item:CrewdChannelKnowledgeItem)async throws {
-        guard !retired,item.state == "ready",!item.source.context.crewId.isEmpty,
+        guard !retired,item.isReadableActiveView,!item.source.context.crewId.isEmpty,
               channelKnowledge.items.contains(item) else{throw CrewdClientError(message:"本群知识引用已变化，请重新读取。",kind:.notSubmitted)}
         let epoch=observationGeneration,route=selection
         if linkedKnowledgeCrew != item.source.context.crewId {linkedKnowledge.invalidate();linkedKnowledgeCrew=item.source.context.crewId}
-        await linkedKnowledge.refresh()
+        await linkedKnowledge.refresh(loadViews:false)
         guard acceptsObservation(epoch),selection == route,let context=linkedKnowledge.workspace?.context,
               CrewdChannelKnowledgeReference(context:context,reference:item.source.reference).identity == item.id else{throw CrewdClientError(message:"知识来源上下文已变化，未将历史引用当作当前正文。")}
         await linkedKnowledge.open(item.source.reference)
@@ -879,7 +914,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
 
-    func selectChannel(_ id: String) { selection = UUID(); channelID = id;channelWork.selectChannel(crew:crewID,channel:id);channelResources.selectScope(crew:crewID,channel:id);channelKnowledge.selectChannel(crew:crewID,channel:id);linkedKnowledge.invalidate(); messages = []; scheduleSync() }
+    func selectChannel(_ id: String) { if channelID != id {closeKnowledgeLinkPicker()};selection = UUID(); channelID = id;channelWork.selectChannel(crew:crewID,channel:id);channelResources.selectScope(crew:crewID,channel:id);channelKnowledge.selectChannel(crew:crewID,channel:id);linkedKnowledge.invalidate(); messages = []; scheduleSync() }
 
     func scheduleSync(recoverHistory: Bool = false) {
         guard !sleeping, client.connected else { return }

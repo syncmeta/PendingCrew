@@ -133,7 +133,6 @@ enum CrewdKnowledgeTitleSearch {
     @Published private(set) var result: CrewdDataChangeResult?
     @Published private(set) var busy = false
     @Published private(set) var status = "知识数据尚未读取。"
-    @Published private(set) var nextObjectPage: String?
     @Published private(set) var viewCatalog: ViewCatalog?
     @Published private(set) var catalogStatus = ViewCatalogStatus.idle
     private(set) var detailIsSnapshot = false
@@ -165,7 +164,7 @@ enum CrewdKnowledgeTitleSearch {
     func invalidate() {
         operation = UUID(); active = nil; workspace = nil; objects = []; detail = nil; detailReference = nil
         schema = nil; rows = nil; history = nil; snapshots = nil; preview = nil
-        pending = []; result = nil; busy = false; records = [:]; nextObjectPage = nil
+        pending = []; result = nil; busy = false; records = [:]
         clearViewCatalog()
         rendererPrepared = [:]; rendererTerminal = [:]; renderer.revoke()
         status = "连接、机组或权限已变化；未重发旧请求。"
@@ -189,7 +188,7 @@ enum CrewdKnowledgeTitleSearch {
     }
     private func clearPresentation() {
         renderer.revoke(); detail = nil; detailReference = nil; objects = []; schema = nil; rows = nil
-        history = nil; snapshots = nil; preview = nil; nextObjectPage = nil
+        history = nil; snapshots = nil; preview = nil
         clearViewCatalog()
     }
     private func clearViewCatalog() { viewCatalog = nil; catalogStatus = .idle }
@@ -235,7 +234,7 @@ enum CrewdKnowledgeTitleSearch {
     private func sameAuthority(_ a: CrewdDataContext, _ b: CrewdDataContext) -> Bool {
         a.dbId == b.dbId && a.authorityId == b.authorityId && a.restoreEpoch == b.restoreEpoch && a.crewId == b.crewId && a.namespace == b.namespace
     }
-    func refresh() async {
+    func refresh(loadViews: Bool = true) async {
         let o: Origin, token: UUID
         do { (o, token) = try begin() } catch { status = "知识数据或原提交历史当前不可用。"; return }
         defer { finish(o, token) }
@@ -246,25 +245,13 @@ enum CrewdKnowledgeTitleSearch {
             if let old = workspace, old.context != info.context { renderer.revoke(); detail = nil; objects = []; clearViewCatalog() }
             workspace = info
             guard info.state == "ready" else { status = info.state == "uninitialized" ? "知识工作区尚未初始化；读取不会创建数据库。" : "知识工作区不可用；未退回旧库。"; return }
-            let page = try Self.decode(try await perform("data.object.list", Self.encode(CrewdDataObjectListParams(context: info.context, objectType: "view", after: nil, limit: 50, atRevision: nil, includeArchived: false))), CrewdDataObjectPage.self)
-            guard current(o, token), page.context == info.context else { throw Failure.stale }
-            objects = page.items; nextObjectPage = page.next
+            if loadViews {
+                let page = try Self.decode(try await perform("data.object.list", Self.encode(CrewdDataObjectListParams(context: info.context, objectType: "view", after: nil, limit: 50, atRevision: nil, includeArchived: false))), CrewdDataObjectPage.self)
+                guard current(o, token), page.context == info.context else { throw Failure.stale }
+                objects = page.items
+            }
             status = "已读取当前数据视图；未改动数据。"
         } catch { if current(o, token) { status = "读取未完成或权限拒绝；未初始化或切换数据来源。" } }
-    }
-    func loadAllViews()async {
-        await refresh()
-        var seen:Set<String>=[]
-        while let next=nextObjectPage {
-            guard !Task.isCancelled,seen.insert(next).inserted else{return}
-            await list(objectType:"view",after:next)
-        }
-    }
-    func list(objectType: String, after: String? = nil, includeArchived: Bool = false) async {
-        await read { context in
-            let page: CrewdDataObjectPage = try await self.call("data.object.list", CrewdDataObjectListParams(context: context, objectType: objectType, after: after, limit: 50, atRevision: nil, includeArchived: includeArchived))
-            return { self.objects = after == nil ? page.items : self.objects + page.items; self.nextObjectPage = page.next }
-        }
     }
     private func catalogItem(_ object: CrewdDataObject) -> ViewCatalogItem? {
         guard case .view(let id,_,let title,let definition,let archived,_) = object,
@@ -353,6 +340,16 @@ enum CrewdKnowledgeTitleSearch {
                 self.installRenderer(value.object,snapshot:false)
             }
         }
+    }
+    func linkSourceCatalog(crew: String) -> ViewCatalog? {
+        guard let catalog = viewCatalog, active == catalog.origin, origin() == catalog.origin,
+              !catalog.includeArchived, catalog.context.crewId == crew, workspace?.context == catalog.context else { return nil }
+        return catalog
+    }
+    func catalogLinkSource(_ id: String, kind: ViewCatalogKind, crew: String) -> CrewdChannelKnowledgeReference? {
+        guard !busy, catalogStatus == .ready, let catalog = linkSourceCatalog(crew:crew),
+              catalog.items.contains(where:{$0.id == id && $0.kind == kind && !$0.archived}) else { return nil }
+        return .init(context:catalog.context,reference:.init(namespace:catalog.context.namespace,kind:"view",id:id))
     }
     func open(_ reference: CrewdDataRef, atRevision: String? = nil) async {
         guard ["block", "view", "relation"].contains(reference.kind) else { status = "关联对象须通过原生权限导航；未猜测知识 RPC。"; return }
@@ -966,6 +963,13 @@ extension CrewdChannelKnowledgeItem {
     private var refreshTask:Task<Void,Never>?
     private let call:Call
     init(call:@escaping Call){self.call=call}
+    func linkedViewIDs(in context: CrewdDataContext) -> Set<String> {
+        guard loaded,!loading,failure == nil else { return [] }
+        return Set(items.compactMap { item in
+            let source = CrewdChannelKnowledgeReference(context:context,reference:item.source.reference)
+            return source.identity == item.id ? item.source.reference.id : nil
+        })
+    }
     func selectChannel(crew:String,channel:String){
         guard self.crew != crew || self.channel != channel else{return}
         generation=UUID();query=UUID();refreshTask?.cancel();self.crew=crew;self.channel=channel;items=[];linkRevision=nil;loaded=false;loading=false;failure=nil
