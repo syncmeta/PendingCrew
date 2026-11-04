@@ -1123,6 +1123,7 @@ fn allowed_method(method: &str) -> bool {
             | "session.respondRunnerRequest"
             | "todo.list"
             | "todo.create"
+            | crewd_proto::methods::TODO_CREATE_LOOKUP
             | "todo.get"
             | "todo.close"
             | crewd_proto::methods::TODO_RULING_CHECK

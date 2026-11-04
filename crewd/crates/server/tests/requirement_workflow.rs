@@ -731,3 +731,81 @@ async fn requirement_changed_after_real_render_never_claims_or_reaches_executor(
         r.close().await;
     }
 }
+
+#[tokio::test]
+async fn original_requirement_create_lookup_is_read_only_and_denies_attached_agents() {
+    let f = Fixture::new().await;
+    let other = f.add_crew("lookup other crew", None).await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let hello = rpc(&mut human, "system.hello", json!({})).await;
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "todo.createLookup")
+    );
+    let request = "a22c3929-67f8-4c67-8d17-1c7a1cd1f381";
+    let digest = "ecb359a14d8b9313dcd747cf16d7195f1aeffedf799012ae353fcfdfb55f9599";
+    let q = json!({"requestId":request,"crewId":f.crew,"textSha256":digest});
+    let absent = json!({"requestId":request,"status":"notFound"});
+    let before = snapshot(&f).await;
+    assert_eq!(
+        rpc(&mut human, "todo.createLookup", q.clone()).await,
+        absent
+    );
+    assert_eq!(snapshot(&f).await, before);
+    let original = rpc(
+        &mut human,
+        "todo.create",
+        json!({
+            "requestId":request,"crewId":f.crew,"text":"  Cafe\u{301}\n原文 "
+        }),
+    )
+    .await;
+    let before = snapshot(&f).await;
+    assert_eq!(
+        rpc(&mut human, "todo.createLookup", q.clone()).await,
+        json!({
+            "requestId":request,"status":"committed","receipt":{
+                "crewId":f.crew,"requirementId":original["requirementId"],
+                "createdAt":original["createdAt"],"textSha256":digest
+            }
+        })
+    );
+    for (field, value) in [
+        ("crewId", json!(other)),
+        ("channelId", json!("another-channel")),
+        (
+            "textSha256",
+            json!("4e7e8d623befb4e72775278f6b201b51e2d176c9f60b8d0c059be97a578c9cb2"),
+        ),
+    ] {
+        let mut mismatch = q.clone();
+        mismatch[field] = value;
+        assert_eq!(rpc(&mut human, "todo.createLookup", mismatch).await, absent);
+    }
+    let mut invalid = q.clone();
+    invalid["textSha256"] = json!("not hex");
+    assert_eq!(
+        call(&mut human, "todo.createLookup", invalid)
+            .await
+            .unwrap_err()
+            .0,
+        -32602
+    );
+    let mut agent = attach(&f, &socket, &f.worker).await;
+    assert_eq!(
+        call(&mut agent, "todo.createLookup", q)
+            .await
+            .unwrap_err()
+            .0,
+        -32003
+    );
+    drop(agent);
+    assert_eq!(snapshot(&f).await, before);
+    close_socket(task, stop).await;
+}

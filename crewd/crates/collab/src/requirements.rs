@@ -3,14 +3,16 @@ use crate::refusal::{Code, Refusal};
 use crate::wakes::{self, WakeKind, WakePriority, WakeRequest};
 use crate::{Change, CollabError, Result, Sender, Tx, asks, crews, sessions};
 use crewd_proto::{
-    Ledger, RequirementClosure, RequirementDetail, Todo, TodoCloseParams, TodoCreateParams,
+    ChannelWorkKind, ChannelWorkObject, Ledger, RequirementClosure, RequirementDetail, Todo,
+    TodoCloseParams, TodoCreateLookupParams, TodoCreateLookupReceipt, TodoCreateLookupResult,
+    TodoCreateParams,
 };
 use crewd_store::{
     StoreError,
     object_refs::{self, ObjectKind, ObjectReference},
 };
 use crewd_work::{Actor, EntryNo};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, params};
 const SOURCE: &str = "requirement-new:";
 fn invalid(code: Code) -> CollabError {
     CollabError::Invalid(Refusal::new(code))
@@ -93,6 +95,144 @@ pub(crate) fn detail(
         channel_association: None,
     })
 }
+fn original_text_sha256(text: &str) -> String {
+    ring::digest::digest(&ring::digest::SHA256, text.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Recover only the original immutable request and current source-channel association.
+pub fn create_lookup(
+    c: &Connection,
+    by: &Sender,
+    p: TodoCreateLookupParams,
+) -> Result<TodoCreateLookupResult> {
+    human(by)?;
+    let request_id = uuid::Uuid::parse_str(&p.request_id)
+        .map_err(|_| invalid(Code::TodoRequestInvalid))?
+        .to_string();
+    let scope_id = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 512
+            && value.trim() == value
+            && !value.chars().any(char::is_control)
+    };
+    if !scope_id(&p.crew_id) {
+        return Err(crate::resource_acl::invalid("crewId"));
+    }
+    if p.channel_id
+        .as_deref()
+        .is_some_and(|channel| !scope_id(channel))
+    {
+        return Err(crate::resource_acl::invalid("channelId"));
+    }
+    if p.text_sha256.len() != 64
+        || !p
+            .text_sha256
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(crate::resource_acl::invalid("textSha256"));
+    }
+    let absent = || TodoCreateLookupResult::NotFound {
+        request_id: request_id.clone(),
+    };
+    let raw_id = format!("requirement-request-{request_id}");
+    // One indexed original source lookup; do not read mutable response/body projections.
+    let raw: Option<(String, String, Option<String>, i64, Option<String>)> = c
+        .query_row(
+            "SELECT t.text,t.created_at,t.extra,r.number,r.core_id
+         FROM todos t
+         JOIN object_refs r ON r.raw_todo_id=t.id AND r.kind='requirement'
+             AND r.crew_id=t.crew_id AND r.source_id='todo:'||t.id AND r.created_at=t.created_at
+         WHERE t.id=?1 AND t.crew_id=?2 AND t.ledger='agent' AND t.deleted_at IS NULL",
+            params![raw_id, p.crew_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let Some((text, created_at, marker, number, core_id)) = raw else {
+        return Ok(absent());
+    };
+    let marker = marker
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+    let exact_marker = marker.as_ref().is_some_and(|m| {
+        m.get("requirementRequestId")
+            .and_then(serde_json::Value::as_str)
+            == Some(request_id.as_str())
+            && match (m.get("sourceChannelId"), p.channel_id.as_deref()) {
+                // The first todo.create marker predates channel creation and omitted this key.
+                (None | Some(serde_json::Value::Null), None) => true,
+                (Some(serde_json::Value::String(original)), Some(requested)) => {
+                    original == requested
+                }
+                _ => false,
+            }
+    });
+    if !exact_marker || original_text_sha256(&text) != p.text_sha256 || number <= 0 {
+        return Ok(absent());
+    }
+    let Some(created_ms) = chrono::DateTime::parse_from_rfc3339(&created_at)
+        .ok()
+        .map(|time| time.timestamp_millis())
+        .filter(|ms| crewd_store::ts_from_ms(*ms) == created_at)
+    else {
+        return Ok(absent());
+    };
+    let Some(entry) = core_id.as_deref().and_then(|id| {
+        id.parse::<EntryNo>()
+            .ok()
+            .filter(|entry| entry.0 > 0 && entry.to_string() == id)
+    }) else {
+        return Ok(absent());
+    };
+    let book = crewd_store::work_organization::load(c)?
+        .ok_or_else(|| StoreError::Invalid("organization work authority is missing".into()))?;
+    // WorkBook clamps registration to its monotonic clock. The original raw Todo
+    // and its reference agree on the canonical wall time even if that clock was ahead.
+    if book
+        .entry_crew(entry)
+        .is_none_or(|crew| crew.as_str() != p.crew_id)
+        || book
+            .entries
+            .get(&entry)
+            .is_none_or(|entry| entry.registered_at.0 < created_ms)
+    {
+        return Ok(absent());
+    }
+    let requirement_id = format!("#{number}");
+    let current_association = if let Some(channel) = &p.channel_id {
+        match crate::channel_work::association(
+            c,
+            by,
+            channel,
+            &ChannelWorkObject {
+                kind: ChannelWorkKind::Requirement,
+                id: requirement_id.clone(),
+            },
+        ) {
+            Ok(association) => Some(association),
+            Err(CollabError::NotFound(_)) => return Ok(absent()),
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+    Ok(TodoCreateLookupResult::Committed {
+        request_id,
+        receipt: TodoCreateLookupReceipt {
+            crew_id: p.crew_id,
+            requirement_id,
+            text_sha256: p.text_sha256,
+            created_at,
+            source_channel_id: p.channel_id,
+            current_association,
+        },
+    })
+}
+
 pub fn create(tx: &mut Tx<'_>, by: &Sender, p: TodoCreateParams) -> Result<RequirementDetail> {
     human(by)?;
     let uuid =
@@ -328,6 +468,246 @@ mod tests {
     fn rows(s: &crewd_store::Store) -> Vec<wakes::WakeRow> {
         wakes::list(s.conn(), Some("cap-a"), 100).unwrap()
     }
+    fn lookup(p: &TodoCreateParams) -> TodoCreateLookupParams {
+        TodoCreateLookupParams {
+            request_id: p.request_id.clone(),
+            crew_id: p.crew_id.clone(),
+            text_sha256: original_text_sha256(&p.text),
+            channel_id: p.channel_id.clone(),
+        }
+    }
+    #[test]
+    fn original_create_lookup_redacts_absence_and_checks_exact_utf8_and_reference() {
+        let mut s = store();
+        let mut p = input();
+        p.text = "  Cafe\u{301}\n原文 ".into();
+        let mut q = lookup(&p);
+        assert_eq!(
+            q.text_sha256,
+            "ecb359a14d8b9313dcd747cf16d7195f1aeffedf799012ae353fcfdfb55f9599"
+        );
+        let absent = TodoCreateLookupResult::NotFound {
+            request_id: p.request_id.clone(),
+        };
+        let before = s.conn().total_changes();
+        assert_eq!(
+            create_lookup(s.conn(), &Sender::Human, q.clone()).unwrap(),
+            absent
+        );
+        assert_eq!(s.conn().total_changes(), before);
+
+        let original = ok(&mut s, |tx| create(tx, &Sender::Human, p.clone()));
+        let before = s.conn().total_changes();
+        q.request_id = q.request_id.to_uppercase();
+        assert_eq!(
+            create_lookup(s.conn(), &Sender::Human, q.clone()).unwrap(),
+            TodoCreateLookupResult::Committed {
+                request_id: p.request_id.clone(),
+                receipt: TodoCreateLookupReceipt {
+                    crew_id: p.crew_id.clone(),
+                    requirement_id: original.todo.requirement_id.clone().unwrap(),
+                    created_at: original.todo.created_at.clone(),
+                    text_sha256: q.text_sha256.clone(),
+                    source_channel_id: None,
+                    current_association: None,
+                },
+            },
+        );
+        let mut mismatch = q.clone();
+        mismatch.text_sha256 = original_text_sha256("  Café\n原文 ");
+        assert_eq!(
+            create_lookup(s.conn(), &Sender::Human, mismatch).unwrap(),
+            absent
+        );
+        let mut foreign = q.clone();
+        foreign.crew_id = "crew-b".into();
+        assert_eq!(
+            create_lookup(s.conn(), &Sender::Human, foreign).unwrap(),
+            absent
+        );
+        assert!(create_lookup(s.conn(), &Sender::Session("cap-a".into()), q.clone()).is_err());
+        assert_eq!(s.conn().total_changes(), before);
+        s.conn()
+            .execute(
+                "UPDATE object_refs SET core_id=NULL WHERE raw_todo_id=?1",
+                [&original.todo.id],
+            )
+            .unwrap();
+        let before = s.conn().total_changes();
+        assert_eq!(create_lookup(s.conn(), &Sender::Human, q).unwrap(), absent);
+        assert_eq!(s.conn().total_changes(), before);
+    }
+
+    #[test]
+    fn original_create_lookup_refuses_copied_and_noncanonical_timestamps() {
+        let mut s = store();
+        let p = input();
+        let original = ok(&mut s, |tx| create(tx, &Sender::Human, p.clone()));
+        let original_ms = chrono::DateTime::parse_from_rfc3339(&original.todo.created_at)
+            .unwrap()
+            .timestamp_millis();
+        let q = lookup(&p);
+        for invalid_time in [
+            "bad timestamp".into(),
+            crewd_store::ts_from_ms(original_ms + 1),
+        ] {
+            s.conn()
+                .execute(
+                    "UPDATE todos SET created_at=?1 WHERE id=?2",
+                    params![invalid_time, original.todo.id],
+                )
+                .unwrap();
+            s.conn()
+                .execute(
+                    "UPDATE object_refs SET created_at=?1 WHERE raw_todo_id=?2",
+                    params![invalid_time, original.todo.id],
+                )
+                .unwrap();
+            let before = s.conn().total_changes();
+            assert_eq!(
+                create_lookup(s.conn(), &Sender::Human, q.clone()).unwrap(),
+                TodoCreateLookupResult::NotFound {
+                    request_id: p.request_id.clone()
+                }
+            );
+            assert_eq!(s.conn().total_changes(), before);
+        }
+    }
+
+    #[test]
+    fn original_create_lookup_preserves_pre_channel_marker_and_workbook_clock_clamp() {
+        let mut s = store();
+        let p = input();
+        let mut future = p.clone();
+        future.request_id = uuid::Uuid::new_v4().to_string();
+        crate::testkit::ok_at(&mut s, NOW + 60_000, |tx| {
+            create(tx, &Sender::Human, future)
+        });
+        let original = ok(&mut s, |tx| create(tx, &Sender::Human, p.clone()));
+        s.conn()
+            .execute(
+                "UPDATE todos SET extra=?1 WHERE id=?2",
+                params![
+                    serde_json::json!({"requirementRequestId":p.request_id}).to_string(),
+                    original.todo.id,
+                ],
+            )
+            .unwrap();
+        let before = s.conn().total_changes();
+        let mut q = lookup(&p);
+        let TodoCreateLookupResult::Committed { receipt, .. } =
+            create_lookup(s.conn(), &Sender::Human, q.clone()).unwrap()
+        else {
+            panic!("legacy original should be retained");
+        };
+        assert_eq!(receipt.created_at, crewd_store::ts_from_ms(NOW));
+        assert_eq!(
+            receipt.requirement_id,
+            original.todo.requirement_id.unwrap()
+        );
+        assert!(receipt.source_channel_id.is_none() && receipt.current_association.is_none());
+        q.channel_id = Some("any-channel".into());
+        assert_eq!(
+            create_lookup(s.conn(), &Sender::Human, q).unwrap(),
+            TodoCreateLookupResult::NotFound {
+                request_id: p.request_id
+            }
+        );
+        assert_eq!(s.conn().total_changes(), before);
+    }
+
+    #[test]
+    fn original_create_lookup_keeps_detached_and_archived_channel_state_and_redacts_purge() {
+        use crate::channels::{ChannelPatch, NewChannel};
+        use crewd_proto::{ChannelKind, ChannelWorkLinkParams};
+        let mut s = store();
+        let channel = ok(&mut s, |tx| {
+            crate::channels::create(
+                tx,
+                &Sender::Human,
+                NewChannel {
+                    crew_id: "crew-b".into(),
+                    kind: ChannelKind::Topic,
+                    name: "original synthetic source".into(),
+                    purpose: None,
+                    members: vec![],
+                },
+            )
+        })
+        .id;
+        let mut p = input();
+        p.channel_id = Some(channel.clone());
+        let original = ok(&mut s, |tx| create(tx, &Sender::Human, p.clone()));
+        let id = original.todo.requirement_id.unwrap();
+        let q = lookup(&p);
+        let before = s.conn().total_changes();
+        let TodoCreateLookupResult::Committed {
+            receipt: linked, ..
+        } = create_lookup(s.conn(), &Sender::Human, q.clone()).unwrap()
+        else {
+            panic!("missing original");
+        };
+        assert_eq!(linked.current_association, original.channel_association);
+        assert!(linked.current_association.unwrap().linked);
+        assert_eq!(s.conn().total_changes(), before);
+        let detached = ok(&mut s, |tx| {
+            crate::channel_work::link(
+                tx,
+                &Sender::Human,
+                ChannelWorkLinkParams {
+                    channel_id: channel.clone(),
+                    expected_link_revision: original.channel_association.unwrap().link_revision,
+                    object: ChannelWorkObject {
+                        kind: ChannelWorkKind::Requirement,
+                        id: id.clone(),
+                    },
+                },
+                false,
+            )
+        });
+        ok(&mut s, |tx| {
+            crate::channels::update(
+                tx,
+                &Sender::Human,
+                &channel,
+                ChannelPatch {
+                    archived: Some(true),
+                    ..Default::default()
+                },
+            )
+        });
+        let before = s.conn().total_changes();
+        let TodoCreateLookupResult::Committed { receipt, .. } =
+            create_lookup(s.conn(), &Sender::Human, q.clone()).unwrap()
+        else {
+            panic!("archived original is readable");
+        };
+        assert_eq!(receipt.requirement_id, id);
+        assert_eq!(receipt.source_channel_id.as_deref(), Some(channel.as_str()));
+        let association = receipt.current_association.unwrap();
+        assert!(!association.linked);
+        assert_eq!(association.link_revision, detached.link_revision);
+        assert_eq!(s.conn().total_changes(), before);
+        let absent = TodoCreateLookupResult::NotFound {
+            request_id: p.request_id,
+        };
+        let mut foreign = q.clone();
+        foreign.channel_id = Some("unrelated-valid-id".into());
+        assert_eq!(
+            create_lookup(s.conn(), &Sender::Human, foreign).unwrap(),
+            absent
+        );
+        ok(&mut s, |tx| crews::archive(tx, "crew-b"));
+        ok(&mut s, |tx| crews::purge(tx, "crew-b"));
+        let before = s.conn().total_changes();
+        assert_eq!(create_lookup(s.conn(), &Sender::Human, q).unwrap(), absent);
+        assert!(
+            get(s.conn(), &id).is_ok(),
+            "purging the original channel leaves the original requirement"
+        );
+        assert_eq!(s.conn().total_changes(), before);
+    }
+
     #[test]
     fn same_request_retries_without_mutation_and_different_payload_is_conflict() {
         let mut s = store();

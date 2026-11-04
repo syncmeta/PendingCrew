@@ -20,6 +20,7 @@ struct CrewdChannelTodoView:View {
     @State private var metadataTarget: CrewdTodoMetadataTarget?
     @State private var creatingHuman = false
     @State private var creatingRequirement=false
+    @State private var requirementRecoveryScope = UUID()
     private var tag: Binding<String> {
         externalTag ?? Binding(get:{selectedTags[queryKey] ?? ""},set:{selectedTags[queryKey]=$0})
     }
@@ -146,6 +147,8 @@ struct CrewdChannelTodoView:View {
         .sheet(item:$metadataTarget){target in
             if let mutationDrafts {CrewdTodoMetadataEditor(group:group,drafts:mutationDrafts,target:target,members:members)}
         }
+        .onChange(of:creatingRequirement) { _, isPresented in if !isPresented { requirementRecoveryScope = UUID() } }
+        .onDisappear { requirementRecoveryScope = UUID() }
         .sheet(isPresented:$creatingRequirement){
             VStack(alignment:.leading,spacing:16){
                 CrewdPanelHeader(title:"新建 AI 待办",symbol:"checklist")
@@ -254,27 +257,79 @@ struct CrewdChannelTodoView:View {
         VStack(alignment:.leading,spacing:12) {
             if let failure {Text(failure).font(CrewdType.caption).foregroundStyle(.orange).textSelection(.enabled)}
             ForEach(requirementDrafts.uncertain(crew,channel:channel),id:\.requestID){old in
-                Text("创建结果未确认，请先核对原提交。").font(.caption2).foregroundStyle(.orange)
+                Text("创建结果未确认。取消或另写需求都会保留原请求。").font(.caption2).foregroundStyle(.orange)
                 Text(old.text).font(.caption).lineLimit(3).textSelection(.enabled)
-                Button("确认这份原始提交"){if requirementDrafts.confirm(old){create(old)}}.font(.caption).disabled(busy)
+                Button("只读核对原请求") { recoverRequirement(old) }.font(.caption)
+                    .disabled(busy || !work.supportsRequirementCreateLookup || workspace == nil)
+                if !work.supportsRequirementCreateLookup {
+                    Text("当前后台尚不能核对。原记录仍保留。").font(.caption).foregroundStyle(.secondary)
+                }
             }
             CrewdFormField(title:"待办内容") {TextField("写下希望完成的事情",text:Binding(get:{requirementDrafts.text(crew,channel:channel)},set:{requirementDrafts.set(crew,channel:channel,text:$0)}),axis:.vertical).lineLimit(4...8).disabled(busy)}
-            HStack {Button("取消"){creatingRequirement=false};Spacer()
-            Button(busy ? "提交中":"新建"){if let snapshot=requirementDrafts.begin(crew,channel:channel){create(snapshot)}}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(busy || requirementDrafts.text(crew,channel:channel).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+            HStack {Button("取消"){requirementRecoveryScope = UUID(); creatingRequirement=false};Spacer()
+            Button(busy ? "提交中":"新建"){if let snapshot=requirementDrafts.begin(crew,channel:channel){create(snapshot)}}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(busy || !requirementDrafts.canSubmit(crew,channel:channel))
             }
         }
     }
-    private func create(_ snapshot:CrewdRequirementDrafts.Snapshot){Task{
-        guard crew == snapshot.crew,channel == snapshot.channel,work.selectedCrew == snapshot.crew else{requirementDrafts.finish(snapshot,accepted:false);return}
-        do {
-            let receipt=try await work.createRequirement(requestID:snapshot.requestID,text:snapshot.text,channel:snapshot.channel)
-            requirementDrafts.finish(snapshot,accepted:true)
-            guard crew == snapshot.crew,channel == snapshot.channel else{return}
-            creatingRequirement=false
-            if receipt["channelAssociation"]["linked"] == .bool(false){failure="原需求已确认，但此前会话关联已解除；不会重新关联。"}
-            do{try await group.refresh()}catch{}
-        }catch{requirementDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));if crew == snapshot.crew,channel == snapshot.channel{failure=error.localizedDescription}}
-    }}
+    private func create(_ snapshot: CrewdRequirementDrafts.Snapshot) {
+        let scope = work.readScope, activation = group.activationEpoch, presentation = requirementRecoveryScope
+        Task { @MainActor in
+            @MainActor func current() -> Bool {
+                creatingRequirement && requirementRecoveryScope == presentation &&
+                    work.readScope == scope && group.activationEpoch == activation
+            }
+            guard current(), crew == snapshot.crew, channel == snapshot.channel, work.selectedCrew == snapshot.crew else {
+                requirementDrafts.finish(snapshot,accepted:false); return
+            }
+            do {
+                let receipt = try await work.createRequirement(requestID:snapshot.requestID,text:snapshot.text,channel:snapshot.channel)
+                let clear = requirementDrafts.isCurrent(snapshot)
+                requirementDrafts.finish(snapshot,accepted:true)
+                guard current() else { return }
+                if clear { creatingRequirement = false }
+                if receipt["channelAssociation"]["linked"] == .bool(false) {
+                    failure = "原需求已确认，但此前会话关联已解除。"
+                }
+                try? await group.refresh()
+            } catch {
+                requirementDrafts.finish(snapshot,accepted:false,uncertain:workspace == nil && CrewdClientError.isUncertainSubmission(error))
+                if current() { failure = error.localizedDescription }
+            }
+        }
+    }
+    private func recoverRequirement(_ snapshot: CrewdRequirementDrafts.Snapshot) {
+        guard let workspace, requirementDrafts.beginLookup(snapshot) else { return }
+        let scope = work.readScope, activation = group.activationEpoch, presentation = requirementRecoveryScope
+        failure = nil
+        Task {
+            var matched = false
+            defer { requirementDrafts.finish(snapshot,accepted:matched) }
+            @MainActor func current() -> Bool {
+                creatingRequirement && requirementRecoveryScope == presentation &&
+                    work.readScope == scope && group.activationEpoch == activation
+            }
+            do {
+                let receipt = try await workspace.recoverRequirementCreate(snapshot,stillCurrent:current)
+                guard current() else { return }
+                matched = receipt != nil
+                guard let receipt else {
+                    failure = "暂未查到这份原需求。原记录仍保留，可稍后核对。"
+                    return
+                }
+                // A newer draft in this sheet keeps its text and presentation.
+                if requirementDrafts.text(snapshot.crew,channel:snapshot.channel).isEmpty ||
+                    requirementDrafts.isCurrent(snapshot) {
+                    creatingRequirement = false
+                }
+                if receipt.currentAssociation?.linked == false {
+                    failure = "已查回原需求 " + receipt.requirementID + "，此前会话关联已解除。"
+                }
+                try? await group.refresh()
+            } catch is CancellationError {} catch {
+                if current() { failure = error.localizedDescription }
+            }
+        }
+    }
     private func select(_ row:CrewdValue){
         if selected?["object"] == row["object"] {detailToken=UUID();reading=false;selected=nil;detail = .null;return}
         readDetail(row)

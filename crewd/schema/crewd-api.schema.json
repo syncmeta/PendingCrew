@@ -16831,6 +16831,114 @@
       ],
       "type": "object"
     },
+    "TodoCreateLookupParams": {
+      "additionalProperties": false,
+      "properties": {
+        "channelId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "textSha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "crewId",
+        "textSha256"
+      ],
+      "type": "object"
+    },
+    "TodoCreateLookupReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "currentAssociation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChannelWorkAssociation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requirementId": {
+          "type": "string"
+        },
+        "sourceChannelId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "textSha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "requirementId",
+        "textSha256",
+        "createdAt"
+      ],
+      "type": "object"
+    },
+    "TodoCreateLookupResult": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "requestId": {
+              "type": "string"
+            },
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "requestId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/TodoCreateLookupReceipt"
+            },
+            "requestId": {
+              "type": "string"
+            },
+            "status": {
+              "const": "committed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "requestId",
+            "receipt"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "TodoCreateParams": {
       "additionalProperties": false,
       "properties": {
@@ -20328,6 +20436,14 @@
       },
       "result": {
         "$ref": "#/$defs/RequirementDetail"
+      }
+    },
+    "todo.createLookup": {
+      "params": {
+        "$ref": "#/$defs/TodoCreateLookupParams"
+      },
+      "result": {
+        "$ref": "#/$defs/TodoCreateLookupResult"
       }
     },
     "todo.get": {

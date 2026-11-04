@@ -162,6 +162,7 @@ pub mod methods {
     pub const RESTART_ANSWER: &str = "restart.answer";
     pub const DIRECTORY_LIST: &str = "directory.list";
     pub const TODO_CREATE: &str = "todo.create";
+    pub const TODO_CREATE_LOOKUP: &str = "todo.createLookup";
     pub const TODO_GET: &str = "todo.get";
     pub const TODO_CLOSE: &str = "todo.close";
     pub const TODO_RULING_CHECK: &str = "todo.rulingCheck";
@@ -299,6 +300,7 @@ pub mod methods {
         RESTART_ANSWER,
         DIRECTORY_LIST,
         TODO_CREATE,
+        TODO_CREATE_LOOKUP,
         TODO_GET,
         TODO_CLOSE,
         TODO_RULING_CHECK,
@@ -1444,6 +1446,10 @@ pub fn api_schema() -> Value {
         (
             methods::TODO_CREATE,
             m(sub::<TodoCreateParams>(g), sub::<RequirementDetail>(g)),
+        ),
+        (
+            methods::TODO_CREATE_LOOKUP,
+            m(sub::<TodoCreateLookupParams>(g), sub::<TodoCreateLookupResult>(g)),
         ),
         (
             methods::TODO_GET,

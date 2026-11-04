@@ -1,9 +1,9 @@
-//! Current Human connection authority for requirement review and legacy closure.
+//! Current Human connection authority for requirement recovery, review and legacy closure.
 use crate::{AppState, dispatch, public_commands::Actor};
 use crewd_collab::{Sender, requirement_ruling as facts};
 use crewd_proto::{
     Request, RequirementRulingCheckParams, RequirementRulingParams, Response, RpcError,
-    TodoCloseParams, methods,
+    TodoCloseParams, TodoCreateLookupParams, methods,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -11,7 +11,10 @@ use std::sync::Arc;
 pub(crate) fn handles(method: &str) -> bool {
     matches!(
         method,
-        methods::TODO_RULING_CHECK | methods::TODO_RULING_RESULT | methods::TODO_CLOSE
+        methods::TODO_CREATE_LOOKUP
+            | methods::TODO_RULING_CHECK
+            | methods::TODO_RULING_RESULT
+            | methods::TODO_CLOSE
     )
 }
 
@@ -28,6 +31,19 @@ async fn route(state: &Arc<AppState>, actor: &Actor, req: Request) -> Result<Val
     let actor = actor.clone();
     let owner = state.clone();
     match req.method.as_str() {
+        methods::TODO_CREATE_LOOKUP => {
+            let p: TodoCreateLookupParams = crewd_proto::parse_params(req.params)?;
+            let result = state
+                .db
+                .call_result(move |store| {
+                    actor.authorize_tx(&owner, store.conn(), methods::TODO_CREATE_LOOKUP)?;
+                    crewd_collab::requirements::create_lookup(store.conn(), &Sender::Human, p)
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(result).map_err(dispatch::internal)
+        }
         methods::TODO_RULING_CHECK => {
             let p: RequirementRulingCheckParams = crewd_proto::parse_params(req.params)?;
             let result = state
@@ -67,7 +83,7 @@ async fn route(state: &Arc<AppState>, actor: &Actor, req: Request) -> Result<Val
         }
         _ => Err(RpcError::new(
             RpcError::METHOD_NOT_FOUND,
-            "Unknown requirement ruling method",
+            "Unknown protected requirement method",
         )),
     }
 }

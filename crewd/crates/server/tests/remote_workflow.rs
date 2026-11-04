@@ -3241,3 +3241,59 @@ async fn core_personal_drafts_attached_agent_has_no_read_write_or_subscription_o
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn paired_human_reads_original_requirement_create_receipt_and_revocation_denies() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = crewd_server::ServeOptions {
+        orchestra: Some(crewd_server::OrchestraServe::default()),
+        ..Default::default()
+    };
+    let mut running = service_with(dir.path(), options).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"synthetic original requirement lookup","workingDirectory":dir.path()
+            }),
+        )
+        .await["id"]
+        .clone();
+    let request = uuid::Uuid::new_v4().to_string();
+    let digest = "ecb359a14d8b9313dcd747cf16d7195f1aeffedf799012ae353fcfdfb55f9599";
+    let q = json!({"requestId":request,"crewId":crew,"textSha256":digest});
+    assert_eq!(
+        remote.call("todo.createLookup", q.clone()).await,
+        json!({
+            "requestId":request,"status":"notFound"
+        })
+    );
+    let original = remote
+        .call(
+            "todo.create",
+            json!({
+                "requestId":request,"crewId":crew,"text":"  Cafe\u{301}\n原文 "
+            }),
+        )
+        .await;
+    let receipt = remote.call("todo.createLookup", q.clone()).await;
+    assert_eq!(
+        receipt,
+        json!({"requestId":request,"status":"committed","receipt":{
+            "crewId":crew,"requirementId":original["requirementId"],"textSha256":digest,
+            "createdAt":original["createdAt"]
+        }})
+    );
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"original receipt fixture complete"
+    })).await;
+    let denied = tokio::time::timeout(LIMIT, remote.frame("todo.createLookup", q))
+        .await
+        .unwrap();
+    assert!(denied.is_err() || denied.unwrap()["error"].is_object());
+    drop(remote);
+    stopped(running).await;
+}

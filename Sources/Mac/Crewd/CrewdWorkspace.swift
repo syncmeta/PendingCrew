@@ -1174,6 +1174,8 @@ final class CrewdWorkspace: ObservableObject {
             }.map(\.params))
             personalDraftContexts=personalDraftContexts.filter{$0.value.dbId == scope.databaseID}
             originalJournal = journal; presentationScope = scope; durableUnknown = unknown
+            do { try restoreRequirementCreates(in:unknown,journal:journal) }
+            catch { self.error = error.localizedDescription }
             originalFirstMessageHistory = history; journalFailureConnection = nil
             composerDrafts = CrewComposerDraftStore.durable(file: journal.composerDraftFile(namespace: presentationNamespace), namespace: presentationNamespace)
             for entry in composerDrafts.entries.values {
@@ -1194,7 +1196,7 @@ final class CrewdWorkspace: ObservableObject {
     private func isReadOnly(_ method: String) -> Bool {
         if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements", "adminCase.requirementReviews",
             "adminCase.workDuplicates", "adminCase.workDuplicateHistory", "ask.resolveCheck", "work.coordinationStatus",
-            "todo.rulingCheck", "todo.rulingResult"].contains(method) { return true }
+            "todo.rulingCheck", "todo.rulingResult", CrewdRequirementCreateWire.lookupMethod].contains(method) { return true }
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
         return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet", "session.claude.recoveryInspect"].contains(method)
     }
@@ -1214,6 +1216,7 @@ final class CrewdWorkspace: ObservableObject {
             }
         }
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
+        if method == "todo.create" { return try await submitRequirementCreate(params) }
         if ["ask.answer","ask.withdraw"].contains(method) {
             guard !workStore.offersAskResolution,
                   originalAskResolutionRecords(crew:params["crewId"].string,ask:params["ask"].string).isEmpty else {
@@ -1295,6 +1298,89 @@ final class CrewdWorkspace: ObservableObject {
             throw error
         }
     }
+    private func restoreRequirementCreates(in records: [CrewdPresentationJournal.Prepared], journal: CrewdPresentationJournal) throws {
+        let intents = try journal.requirementCreateIntents(in:records)
+        let snapshots: [CrewdRequirementDrafts.Snapshot] = intents.compactMap { intent in
+            guard let record = intent.records.first else { return nil }
+            let original = intent.original
+            return .init(crew:original.crew,text:original.text,requestID:original.request,revision:record.id,channel:original.channel)
+        }
+        requirementDrafts.restoreUncertain(snapshots)
+        composerRequirementDrafts.restoreUncertain(snapshots)
+    }
+
+    private func submitRequirementCreate(_ params: CrewdValue) async throws -> CrewdValue {
+        let original: CrewdRequirementCreateWire.Original
+        do { original = try .init(params) }
+        catch { throw CrewdClientError(message:"原需求创建参数不符，尚未提交。",kind:.notSubmitted) }
+        guard !Task.isCancelled, original.crew == crewID, original.crew == workStore.selectedCrew,
+              original.channel.isEmpty || original.channel == channelID else {
+            throw CrewdClientError(message:"创建需求的机组或群已变化，尚未提交。",kind:.notSubmitted)
+        }
+        guard originalJournalReady, let journal = originalJournal else {
+            throw CrewdClientError(message:"原需求提交历史尚未就绪，尚未提交。",kind:.notSubmitted)
+        }
+        let epoch = generation, route = selection, connection = client.connectionEpoch, scope = presentationScope
+        @MainActor func current() -> Bool {
+            acceptsObservation(epoch) && selection == route && client.connectionEpoch == connection &&
+                presentationScope == scope && originalJournal === journal
+        }
+        let prepared: CrewdPresentationJournal.Prepared
+        do { prepared = try journal.prepareRequirementCreate(params,original:original) }
+        catch {
+            if let records = try? journal.unknownRecords() {
+                durableUnknown = records
+                try? restoreRequirementCreates(in:records,journal:journal)
+            }
+            throw CrewdClientError(message:error.localizedDescription,kind:.notSubmitted)
+        }
+        do {
+            let value = try await client.call("todo.create",params)
+            guard current(), !Task.isCancelled else { throw CancellationError() }
+            try original.validateSubmission(value)
+            try journal.finish(prepared,state:"replyObserved")
+            return value
+        } catch {
+            let unsent = (error as? CrewdClientError)?.kind == .notSubmitted
+            do { try journal.finishRequirementCreate(prepared,notSubmitted:unsent,detail:error.localizedDescription) }
+            catch { if current() { self.error = "原需求回执未能保全，请只读核对原请求。" } }
+            if acceptsObservation(epoch), client.connectionEpoch == connection, presentationScope == scope,
+               originalJournal === journal, let records = try? journal.unknownRecords() {
+                durableUnknown = records
+                try? restoreRequirementCreates(in:records,journal:journal)
+            }
+            if unsent { throw error }
+            throw CrewdClientError(message:error.localizedDescription)
+        }
+    }
+
+    func recoverRequirementCreate(_ snapshot: CrewdRequirementDrafts.Snapshot,
+                                  stillCurrent: @MainActor () -> Bool) async throws -> CrewdRequirementCreateWire.Receipt? {
+        guard stillCurrent(), originalJournalReady, let journal = originalJournal, workStore.supportsRequirementCreateLookup,
+              snapshot.crew == crewID, snapshot.crew == workStore.selectedCrew,
+              snapshot.channel.isEmpty || snapshot.channel == channelID else {
+            throw CrewdClientError(message:"当前连接不能只读核对这份原需求。原记录仍保留。",kind:.notSubmitted)
+        }
+        let epoch = generation, route = selection, connection = client.connectionEpoch, scope = presentationScope
+        @MainActor func current() -> Bool {
+            stillCurrent() && acceptsObservation(epoch) && selection == route && client.connectionEpoch == connection &&
+                presentationScope == scope && originalJournal === journal && !Task.isCancelled
+        }
+        let intents = try journal.requirementCreateIntents(in:journal.unknownRecords())
+        guard let intent = intents.first(where:{ $0.original.request == snapshot.requestID }),
+              intent.original.crew == snapshot.crew, intent.original.channel == snapshot.channel,
+              intent.original.text.utf8.elementsEqual(snapshot.text.utf8) else { throw CrewdRequirementCreateWire.invalid() }
+        let receipt = try await journal.lookupRequirementCreate(intent,stillCurrent:current,read:workStore.requirementCreateLookup)
+        guard current() else { throw CancellationError() }
+        if receipt != nil {
+            let records = try journal.unknownRecords()
+            durableUnknown = records
+            try restoreRequirementCreates(in:records,journal:journal)
+            workDirty = true; scheduleSync()
+        }
+        return receipt
+    }
+
     private func lookupOriginalLegacyConfirmation(_ params: CrewdValue) async throws -> CrewdValue {
         let epoch = observationGeneration
         let connection = client.connectionEpoch

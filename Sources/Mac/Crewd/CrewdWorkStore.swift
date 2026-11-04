@@ -1087,6 +1087,16 @@ final class CrewdWorkStore: ObservableObject {
         if !channel.isEmpty {params["channelId"] = .string(channel)}
         return try await mutate("todo.create",.object(params))
     }
+    var supportsRequirementCreateLookup: Bool { capabilities.contains(CrewdRequirementCreateWire.lookupMethod) }
+    func requirementCreateLookup(_ original: CrewdRequirementCreateWire.Original) async throws -> CrewdRequirementCreateWire.Receipt? {
+        guard original.crew == selectedCrew, supportsRequirementCreateLookup else {
+            throw CrewdClientError(message:"当前后台或机组尚不能只读核对原需求。",kind:.notSubmitted)
+        }
+        let token = generation
+        let value = try await call(CrewdRequirementCreateWire.lookupMethod,original.lookup)
+        try check(token)
+        return try CrewdRequirementCreateWire.receipt(value,original:original)
+    }
     @discardableResult func closeRequirement(_ id: CrewdWorkID, expectedStatus: String, note: String) async throws -> CrewdValue {
         guard id.kind == .requirement else { throw CrewdClientError(message: "需求必须使用公共 # 编号。") }
         return try await mutate("todo.close", .object([
@@ -1436,7 +1446,8 @@ final class CrewdWorkStore: ObservableObject {
                 if method == "todo.close", params["id"].string != id.raw {
                     throw CrewdClientError(message: "关闭需求返回了其他对象。")
                 }
-                if method == "todo.create", (value["crewId"] != params["crewId"] || value["text"] != params["text"]) {
+                if method == "todo.create", (value["crewId"] != params["crewId"] ||
+                    params["text"].string.map({ value["text"].string?.utf8.elementsEqual($0.utf8) == true }) != true) {
                     throw CrewdClientError(message: "创建需求回执与原始机组或原文不符。")
                 }
                 if method == "todo.close" {

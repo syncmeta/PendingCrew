@@ -191,6 +191,8 @@ struct CrewdWorkPanels: View {
     @State private var rulingTarget: CrewdRequirementRulingTarget?
     @State private var selectedRequirement: CrewdWorkID?
     @State private var openingPlan = false
+    @State private var requirementRecovery: (scope: UUID, text: String)?
+    @State private var requirementRecoveryScope = UUID()
     @State private var closing:Set<CrewdWorkID>=[]
     @State private var closeNotes:[CrewdWorkID:String]=[:]
     private var folderView:CrewdResourceView{progressOnly ? .progress:.todo}
@@ -279,6 +281,7 @@ struct CrewdWorkPanels: View {
             }
             }
         }.padding(compact ? 8:16).foregroundStyle(CrewdChatStyle.ink(colorScheme)).background(pageBackground)
+        .onDisappear { requirementRecoveryScope = UUID() }
         .task(id:store.readScope.uuidString+store.capabilities.sorted().joined(separator:",")) { await store.ensureLoaded() }
         .sheet(isPresented: $patrolPresented) { CrewdPatrolView(store: store, workspace: patrolWorkspace) }
         .sheet(isPresented: $humanBriefPresented) {
@@ -467,23 +470,18 @@ struct CrewdWorkPanels: View {
     private var requirementComposer: some View {
         let crew=store.selectedCrew
         return VStack(alignment:.leading,spacing:6) {
+            if let notice = requirementRecovery, notice.scope == store.readScope {
+                Text(notice.text).font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(drafts.uncertain(crew),id:\.requestID) {snapshot in
                 VStack(alignment:.leading,spacing:4) {
-                    Text("创建结果未确认，请核对原提交后再继续。").font(.caption).foregroundStyle(.orange)
+                    Text("创建结果未确认。可以另写新需求，原请求仍会保留。").font(.caption).foregroundStyle(.orange)
                     Text(snapshot.text).font(.caption).lineLimit(3).textSelection(.enabled)
-                    Button("确认这份原始提交") {
-                        guard drafts.confirm(snapshot) else {return}
-                        Task {
-                            guard store.selectedCrew == snapshot.crew else {drafts.finish(snapshot,accepted:false);return}
-                            do {
-                                _ = try await store.createRequirement(requestID:snapshot.requestID,text:snapshot.text)
-                                drafts.finish(snapshot,accepted:true)
-                            } catch {
-                                drafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error))
-                                if store.selectedCrew == snapshot.crew {failure=describe(error)}
-                            }
-                        }
-                    }.disabled(drafts.busy(crew))
+                    Button("只读核对原请求") { recoverRequirement(snapshot) }
+                        .disabled(drafts.busy(crew) || !store.supportsRequirementCreateLookup || patrolWorkspace == nil)
+                    if !store.supportsRequirementCreateLookup {
+                        Text("当前后台尚不能核对。原记录仍保留。").font(.caption).foregroundStyle(.secondary)
+                    }
                 }.padding(.vertical,5)
             }
             TextField("写下原始需求",text:Binding(get:{drafts.text(crew)},set:{drafts.set(crew,text:$0)}),axis:.vertical).lineLimit(2...5)
@@ -499,13 +497,33 @@ struct CrewdWorkPanels: View {
                             _ = try await store.createRequirement(requestID:snapshot.requestID,text:snapshot.text)
                             drafts.finish(snapshot,accepted:true)
                         } catch {
-                            drafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error))
+                            drafts.finish(snapshot,accepted:false,uncertain:patrolWorkspace == nil && CrewdClientError.isUncertainSubmission(error))
                             if store.selectedCrew == snapshot.crew {failure=describe(error)}
                         }
                     }
-                }.disabled(crew.isEmpty || drafts.busy(crew) || drafts.text(crew).trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
+                }.disabled(!drafts.canSubmit(crew))
             }
         }.padding(8).background(CrewdChatStyle.bubble(colorScheme),in:RoundedRectangle(cornerRadius:6))
+    }
+    private func recoverRequirement(_ snapshot: CrewdRequirementDrafts.Snapshot) {
+        guard let workspace = patrolWorkspace, drafts.beginLookup(snapshot) else { return }
+        let scope = store.readScope, presentation = requirementRecoveryScope
+        failure = nil; requirementRecovery = nil
+        Task {
+            var matched = false
+            defer { drafts.finish(snapshot,accepted:matched) }
+            do {
+                let receipt = try await workspace.recoverRequirementCreate(snapshot) {
+                    requirementRecoveryScope == presentation && store.readScope == scope
+                }
+                guard requirementRecoveryScope == presentation, store.readScope == scope else { return }
+                matched = receipt != nil
+                if let receipt { requirementRecovery = (scope,"已查回原需求 " + receipt.requirementID + "。") }
+                else { failure = "暂未查到这份原需求。原记录仍保留，可稍后核对。" }
+            } catch is CancellationError {} catch {
+                if requirementRecoveryScope == presentation, store.readScope == scope { failure = describe(error) }
+            }
+        }
     }
     @ViewBuilder private func requirementDetail(_ id:CrewdWorkID)->some View {
         CrewdJudgmentInspectionView(store: store, crew: store.requirements[id]?["crewId"].string ?? store.selectedCrew, kind: "requirement", sourceID: id.raw, members: members)

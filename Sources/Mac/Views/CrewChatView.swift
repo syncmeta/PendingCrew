@@ -143,6 +143,7 @@ struct CrewChatView: View {
     /// channel requirement; the legacy macOS branch keeps its existing route.
     @State private var todoMode = false
     @State private var requirementReceipt: String?
+    @State private var requirementRecoveryScope = UUID()
 
     // MARK: - ComposerView bindings
     /// Forwarded to ComposerView; ChatActionSheet flips this to open
@@ -227,6 +228,8 @@ struct CrewChatView: View {
         // 切 crew 视图整个重建（macOS/iPad 都带 `.id(crewId)`），所以未发出的草稿不能只
         // 活在 @State 里 —— 进屏取回、变动存回，切走再切回来原样在。
         .onAppear { personalEditingScope=personalService.editingScope();appModel.crewdBackend?.workspace.bindPersonalProjection();restoreDraft() }
+        .onDisappear { requirementRecoveryScope = UUID() }
+        .onChange(of:draftStorageKey) { _,_ in requirementRecoveryScope = UUID(); requirementReceipt = nil }
         .task(id: draftStorageKey) { await restorePersonalDraft() }
         .onChange(of: replyTarget) { _, _ in saveDraft() }
         // File importer — .fileImporter is available on iOS 14+ and macOS 11+.
@@ -439,11 +442,12 @@ struct CrewChatView: View {
                     VStack(alignment: .leading) {
                         Text("此前群需求结果待确认；原文及请求编号保留，不会自动重发。").foregroundStyle(.orange)
                         Text(snapshot.text).lineLimit(3)
-                        Button("确认这份原始群需求请求") {
-                            if workspace.composerRequirementDrafts.confirm(snapshot) {
-                                Task { await submitCrewdRequirement(snapshot, workspace: workspace) }
-                            }
-                        }.disabled(sending || workspace.composerRequirementDrafts.busy(crewId, channel: crewdChannelID))
+                        Button("只读核对原群需求") { recoverCrewdRequirement(snapshot,workspace:workspace) }
+                            .disabled(sending || workspace.composerRequirementDrafts.busy(crewId,channel:crewdChannelID) ||
+                                      !workspace.workStore.supportsRequirementCreateLookup)
+                        if !workspace.workStore.supportsRequirementCreateLookup {
+                            Text("当前后台尚不能核对。原记录仍保留。").foregroundStyle(.secondary)
+                        }
                     }.font(.caption).padding(8)
                 }
             }
@@ -1877,9 +1881,43 @@ struct CrewChatView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         workspace.composerRequirementDrafts.set(crewId, channel: crewdChannelID, text: text)
-        guard let snapshot = workspace.composerRequirementDrafts.begin(crewId, channel: crewdChannelID) else { return }
+        guard let snapshot = workspace.composerRequirementDrafts.begin(crewId, channel: crewdChannelID) else {
+            if !workspace.composerRequirementDrafts.busy(crewId,channel:crewdChannelID) {
+                loadError = "相同原文已有请求待核对，请先只读查询。"
+            }
+            return
+        }
         await submitCrewdRequirement(snapshot, workspace: workspace)
     }
+    private func recoverCrewdRequirement(_ snapshot: CrewdRequirementDrafts.Snapshot, workspace: CrewdWorkspace) {
+        guard workspace.composerRequirementDrafts.beginLookup(snapshot) else { return }
+        let presentation = requirementRecoveryScope, draftKey = draftStorageKey
+        loadError = nil; requirementReceipt = nil
+        Task { @MainActor in
+            var matched = false
+            defer { workspace.composerRequirementDrafts.finish(snapshot,accepted:matched) }
+            @MainActor func current() -> Bool {
+                appModel.crewdBackend?.workspace === workspace && requirementRecoveryScope == presentation && draftStorageKey == draftKey
+            }
+            do {
+                let receipt = try await workspace.recoverRequirementCreate(snapshot,stillCurrent:current)
+                guard current() else { return }
+                matched = receipt != nil
+                guard let receipt else {
+                    loadError = "暂未查到这份原需求。原记录仍保留，可稍后核对。"
+                    return
+                }
+                requirementReceipt = "已查回原需求 " + receipt.requirementID +
+                    (receipt.currentAssociation?.linked == false ? "，此前会话关联已解除。" : "。")
+                // Recovered request text cannot authorize clearing the current
+                // message draft, whose original storage version is separate.
+                try? await workspace.channelWork.refresh()
+            } catch is CancellationError {} catch {
+                if current() { loadError = error.localizedDescription }
+            }
+        }
+    }
+
     private func submitCrewdRequirement(_ snapshot: CrewdRequirementDrafts.Snapshot, workspace: CrewdWorkspace) async {
         guard appModel.crewdBackend?.workspace === workspace, workspace.client.connected,
               !workspace.isRetired, workspace.crewID == snapshot.crew, workspace.channelID == snapshot.channel else {
@@ -1891,16 +1929,17 @@ struct CrewChatView: View {
         let sentStore = composerDraftStore
         let sentDraft = sentStore.snapshot(for: draftStorageKey)
         let personalTicket=sentPersonalKey.flatMap{CrewPersonalDraftService.shared.snapshot($0,payload:sentDraft.draft,scope:personalEditingScope)}
-        let epoch = workspace.observationGeneration
+        let epoch = workspace.observationGeneration, presentation = requirementRecoveryScope
         sending = true; defer { sending = false }
         do {
             let result = try await workspace.workStore.createRequirement(requestID: snapshot.requestID, text: snapshot.text, channel: snapshot.channel)
             workspace.composerRequirementDrafts.finish(snapshot, accepted: true)
-            guard appModel.crewdBackend?.workspace === workspace, workspace.acceptsObservation(epoch),
+            guard appModel.crewdBackend?.workspace === workspace, workspace.acceptsObservation(epoch), requirementRecoveryScope == presentation,
                   workspace.crewID == snapshot.crew, workspace.channelID == snapshot.channel else { return }
             requirementReceipt = "已创建本群需求 " + (result["requirementId"].string ?? "（请核对 Todo）")
             if result["channelAssociation"]["linked"] == .bool(false) { requirementReceipt = "需求已创建，但原会话关联已解除；不会重新关联。" }
-            let cleared=sentDraft.draft.text.trimmingCharacters(in:.whitespacesAndNewlines) == snapshot.text && sentStore.clearIfUnchanged(sentDraft)
+            let cleared=sentDraft.draft.text.trimmingCharacters(in:.whitespacesAndNewlines).utf8.elementsEqual(snapshot.text.utf8) &&
+                sentStore.clearIfUnchanged(sentDraft)
             if cleared,let personalTicket{CrewPersonalDraftService.shared.clearIfUnchanged(personalTicket)}
             if cleared,draftStorageKey == sentDraft.key {
                 draft = ""; stagedMentions = []; replyTarget = nil; activeMentionQuery = nil
@@ -1908,8 +1947,8 @@ struct CrewChatView: View {
             loadError = nil
             try? await workspace.channelWork.refresh()
         } catch {
-            workspace.composerRequirementDrafts.finish(snapshot, accepted: false, uncertain: CrewdClientError.isUncertainSubmission(error))
-            if appModel.crewdBackend?.workspace === workspace, workspace.acceptsObservation(epoch), workspace.crewID == snapshot.crew, workspace.channelID == snapshot.channel { loadError = error.localizedDescription }
+            workspace.composerRequirementDrafts.finish(snapshot,accepted:false)
+            if appModel.crewdBackend?.workspace === workspace, workspace.acceptsObservation(epoch), requirementRecoveryScope == presentation, workspace.crewID == snapshot.crew, workspace.channelID == snapshot.channel { loadError = error.localizedDescription }
         }
     }
 

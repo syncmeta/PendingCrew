@@ -10,6 +10,46 @@ pub struct TodoCreateParams {
     #[serde(default)]
     pub channel_id: Option<String>,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TodoCreateLookupParams {
+    pub request_id: String,
+    pub crew_id: String,
+    pub text_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "status",
+    deny_unknown_fields
+)]
+pub enum TodoCreateLookupResult {
+    NotFound {
+        request_id: String,
+    },
+    Committed {
+        request_id: String,
+        receipt: TodoCreateLookupReceipt,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TodoCreateLookupReceipt {
+    pub crew_id: String,
+    pub requirement_id: String,
+    pub text_sha256: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_association: Option<crate::ChannelWorkAssociation>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TodoGetParams {

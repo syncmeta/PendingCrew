@@ -33,6 +33,82 @@ final class CrewdPresentationJournal {
         let detail: String?
     }
     let scope: Scope
+    private static let requirementCreateNotSubmitted = "todo.create.notSubmitted.v1"
+
+    struct RequirementCreateIntent {
+        let original: CrewdRequirementCreateWire.Original
+        var records: [Prepared]
+    }
+
+    func requirementCreateIntents(in unresolved: [Prepared]) throws -> [RequirementCreateIntent] {
+        var intents: [UUID: RequirementCreateIntent] = [:]
+        for record in unresolved where record.scope == scope && record.method == "todo.create" {
+            let original = try CrewdRequirementCreateWire.Original(record.params)
+            guard record.crew == original.crew else { throw CrewdRequirementCreateWire.invalid() }
+            if let previous = intents[original.request] {
+                // Older frontends could leave two local observations for one
+                // request. Correlate only byte-identical, equally scoped ones.
+                guard previous.original.matches(original) else { throw CrewdRequirementCreateWire.invalid() }
+                intents[original.request]?.records.append(record)
+            } else {
+                intents[original.request] = .init(original:original,records:[record])
+            }
+        }
+        return intents.values.sorted { $0.original.requestID < $1.original.requestID }
+    }
+
+    func prepareRequirementCreate(_ params: CrewdValue, original: CrewdRequirementCreateWire.Original) throws -> Prepared {
+        guard try original.matches(.init(params)) else { throw CrewdRequirementCreateWire.invalid() }
+        return try withRequirementCreateLock {
+            let attempts = try records(includeObservedFirstMessages:false,includeRequirementCreateAttempts:true)
+            let originals = try requirementCreateIntents(in:attempts)
+            guard !originals.contains(where:{ $0.original.request == original.request }) else {
+                throw CrewdClientError(message:"这份原需求已经提交或待核对，请只读查询。",kind:.notSubmitted)
+            }
+            return try prepare(method:"todo.create",params:params,crew:original.crew)
+        }
+    }
+
+    func finishRequirementCreate(_ record: Prepared, notSubmitted: Bool, detail: String) throws {
+        try finish(record,state:notSubmitted ? "refused" : "unknown",
+                   detail:notSubmitted ? Self.requirementCreateNotSubmitted : detail)
+    }
+
+    func lookupRequirementCreate(_ intent: RequirementCreateIntent, stillCurrent: @MainActor () -> Bool,
+                                 read: @MainActor (CrewdRequirementCreateWire.Original) async throws -> CrewdRequirementCreateWire.Receipt?)
+        async throws -> CrewdRequirementCreateWire.Receipt? {
+        guard stillCurrent(), !Task.isCancelled else { throw CancellationError() }
+        let receipt = try await read(intent.original)
+        guard stillCurrent(), !Task.isCancelled else { throw CancellationError() }
+        if let receipt {
+            guard receipt.requestID == intent.original.request else { throw CrewdRequirementCreateWire.invalid() }
+            try withRequirementCreateLock {
+                for record in intent.records {
+                    try acknowledge(record,detail:"已核对原需求 " + receipt.requirementID + " 的创建回执，未再次提交。")
+                }
+            }
+        }
+        return receipt
+    }
+
+    // One stable per-namespace lock coordinates independent windows/processes.
+    // It covers only synchronous scan-and-prepare or verified acknowledgment.
+    private func withRequirementCreateLock<T>(_ body: () throws -> T) throws -> T {
+        try Self.privateDirectory(directory)
+        let path = directory.appendingPathComponent("requirement-create.lock").path
+        let fd = open(path,O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,mode_t(0o600))
+        let unavailable = StorageError.refused("原需求提交记录正在核对或锁不安全，请稍后再试。")
+        guard fd >= 0 else { throw unavailable }
+        defer { close(fd) }
+        var opened = stat(), named = stat()
+        guard fstat(fd,&opened) == 0, (opened.st_mode & S_IFMT) == S_IFREG,
+              (opened.st_mode & 0o7777) == 0o600, opened.st_uid == geteuid(), opened.st_nlink == 1,
+              flock(fd,LOCK_EX | LOCK_NB) == 0 else { throw unavailable }
+        guard lstat(path,&named) == 0, named.st_ino == opened.st_ino, named.st_dev == opened.st_dev,
+              named.st_mode == opened.st_mode, named.st_uid == opened.st_uid, named.st_nlink == 1 else { throw unavailable }
+        return try body()
+    }
+
     func composerDraftFile(namespace: String) -> URL {
         directory.appendingPathComponent("composer-drafts-" + Self.hash(Data(namespace.utf8)) + ".json")
     }
@@ -155,6 +231,11 @@ final class CrewdPresentationJournal {
         let saved = try decoder.decode(Prepared.self, from: bytes)
         guard saved.id == record.id, saved.scope == record.scope, saved.params == record.params,
               saved.method == record.method, saved.crew == record.crew else { throw StorageError.refused("核对原记录不符。") }
+        if record.method == "todo.create" {
+            guard try CrewdRequirementCreateWire.Original(saved.params).matches(.init(record.params)) else {
+                throw CrewdRequirementCreateWire.invalid()
+            }
+        }
         let hash = Self.hash(bytes)
         let destination = directory.appendingPathComponent("reconciled").appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: destination.path) {
@@ -380,7 +461,7 @@ final class CrewdPresentationJournal {
             }else if record.method=="session.codex.inputDiscard",let id=record.params["input"]["inputId"].string,wanted.contains(id){throw CrewdClientError(message:"原输入已请求丢弃；请只读核对原请求。",kind:.notSubmitted)}
         }
     }
-    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false,includeCodexInputs:Bool=false,includePersonalDrafts:Bool=false) throws -> [Prepared] {
+    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false,includeCodexInputs:Bool=false,includePersonalDrafts:Bool=false,includeRequirementCreateAttempts:Bool=false) throws -> [Prepared] {
         var rows: [Prepared] = []
         for file in try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("prepared"), includingPropertiesForKeys: nil).sorted(by: { $0.path < $1.path }) {
             guard file.pathExtension == "json" else { throw StorageError.refused("前端历史目录包含未知对象；保留原资料。") }
@@ -409,6 +490,12 @@ final class CrewdPresentationJournal {
             else if includeCodexInputs, record.method.hasPrefix("session.codex.input") || record.method == "command.submit" {rows.append(record)}
             else if includeNotifications, ["notification.installationRegister","notification.installationRevoke"].contains(record.method) {rows.append(record)}
             else if outcome.state == "unknown" { rows.append(record) }
+            else if record.method == "todo.create",
+                    outcome.state == "refused" ? outcome.detail != Self.requirementCreateNotSubmitted : includeRequirementCreateAttempts {
+                // Older generic refusals did not distinguish post-send SQL or
+                // transport errors. Only this typed local marker proves unsent.
+                rows.append(record)
+            }
             else if includeObservedFirstMessages, outcome.state == "replyObserved",
                     record.method == "command.submit", record.params["command"]["operation"].string == "crew.createFirstMessage" { rows.append(record) }
             else if !["replyObserved", "refused"].contains(outcome.state) { throw StorageError.refused("原前端历史出现未知状态。") }

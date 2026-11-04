@@ -2,6 +2,7 @@ import Foundation
 import Network
 import Security
 import Combine
+import CryptoKit
 
 /// Expected durable scope comes from an independently verified pairing receipt.
 /// These fields never replace TLS certificate verification or server grant checks.
@@ -551,6 +552,109 @@ enum CrewdAskResolutionWire {
     }
     static func invalid() -> CrewdClientError {
         .init(message:"原问题、版本或处理回执不符。请核对原请求。")
+    }
+}
+
+enum CrewdRequirementCreateWire {
+    static let lookupMethod = "todo.createLookup"
+
+    struct Original {
+        let request: UUID
+        let crew: String
+        let channel: String
+        let text: String
+
+        init(_ params: CrewdValue) throws {
+            guard case .object(let fields) = params,
+                  Set(fields.keys).isSubset(of:["requestId","crewId","channelId","text"]),
+                  let request = params["requestId"].string.flatMap(UUID.init(uuidString:)),
+                  let crew = params["crewId"].string, !crew.isEmpty,
+                  params["channelId"] == .null || params["channelId"].string?.isEmpty == false,
+                  let text = params["text"].string, !CrewdAskResolutionWire.trim(text).isEmpty else { throw invalid() }
+            self.request = request; self.crew = crew; channel = params["channelId"].string ?? ""; self.text = text
+        }
+
+        func matches(_ other: Original) -> Bool {
+            request == other.request && crew.utf8.elementsEqual(other.crew.utf8) &&
+                channel.utf8.elementsEqual(other.channel.utf8) && text.utf8.elementsEqual(other.text.utf8)
+        }
+
+        var requestID: String { request.uuidString.lowercased() }
+        var textSHA: String { SHA256.hash(data:Data(text.utf8)).map { String(format:"%02x",$0) }.joined() }
+        var lookup: CrewdValue {
+            var fields: [String:CrewdValue] = ["requestId":.string(requestID),"crewId":.string(crew),"textSha256":.string(textSHA)]
+            if !channel.isEmpty { fields["channelId"] = .string(channel) }
+            return .object(fields)
+        }
+
+        func validateSubmission(_ value: CrewdValue) throws {
+            guard value["id"] == .string("requirement-request-" + requestID),
+                  value["crewId"].string?.utf8.elementsEqual(crew.utf8) == true, value["ledger"] == .string("agent"),
+                  value["text"].string?.utf8.elementsEqual(text.utf8) == true,
+                  let id = value["requirementId"].string, isRequirementID(id),
+                  let created = value["createdAt"].string, !created.isEmpty,
+                  let status = value["status"].string, !status.isEmpty else { throw invalid() }
+            if status == "closed" {
+                guard value["closure"]["note"].string?.isEmpty == false,
+                      value["closure"]["at"].string?.isEmpty == false else { throw invalid() }
+            }
+            if channel.isEmpty {
+                guard value["channelAssociation"] == .null else { throw invalid() }
+            } else {
+                _ = try Association(value["channelAssociation"],channel:channel)
+            }
+        }
+    }
+
+    struct Association: Equatable {
+        let linked: Bool
+        init(_ value: CrewdValue, channel: String) throws {
+            guard case .object(let fields) = value, Set(fields.keys) == ["channelId","linkRevision","linked"],
+                  value["channelId"].string?.utf8.elementsEqual(channel.utf8) == true, let raw = value["linkRevision"].string,
+                  let revision = Int64(raw), revision >= 0, String(revision) == raw,
+                  case .bool(let linked) = value["linked"] else { throw invalid() }
+            self.linked = linked
+        }
+    }
+
+    struct Receipt: Equatable {
+        let requestID: UUID
+        let requirementID: String
+        let currentAssociation: Association?
+        fileprivate init(requestID: UUID, requirementID: String, currentAssociation: Association?) {
+            self.requestID = requestID; self.requirementID = requirementID; self.currentAssociation = currentAssociation
+        }
+    }
+
+    static func receipt(_ value: CrewdValue, original: Original) throws -> Receipt? {
+        guard case .object(let fields) = value, value["requestId"] == .string(original.requestID) else { throw invalid() }
+        if value["status"] == .string("notFound") {
+            guard Set(fields.keys) == ["requestId","status"] else { throw invalid() }
+            return nil
+        }
+        let receipt = value["receipt"]
+        guard value["status"] == .string("committed"), Set(fields.keys) == ["requestId","status","receipt"],
+              case .object(let body) = receipt, receipt["crewId"].string?.utf8.elementsEqual(original.crew.utf8) == true,
+              receipt["textSha256"] == .string(original.textSHA),
+              let id = receipt["requirementId"].string, isRequirementID(id),
+              let created = receipt["createdAt"].string, !created.isEmpty else { throw invalid() }
+        let common: Set<String> = ["crewId","requirementId","textSha256","createdAt"]
+        if original.channel.isEmpty {
+            guard Set(body.keys) == common else { throw invalid() }
+            return .init(requestID:original.request,requirementID:id,currentAssociation:nil)
+        }
+        guard Set(body.keys) == common.union(["sourceChannelId","currentAssociation"]),
+              receipt["sourceChannelId"].string?.utf8.elementsEqual(original.channel.utf8) == true else { throw invalid() }
+        return try .init(requestID:original.request,requirementID:id,currentAssociation:Association(receipt["currentAssociation"],channel:original.channel))
+    }
+
+    private static func isRequirementID(_ id: String) -> Bool {
+        guard id.first == "#", let number = Int64(id.dropFirst()), number > 0 else { return false }
+        return id == "#\(number)"
+    }
+
+    static func invalid() -> CrewdClientError {
+        .init(message:"原需求的请求编号、机组、群或原文不符。请保留原记录核对。")
     }
 }
 
