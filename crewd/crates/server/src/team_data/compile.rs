@@ -5,6 +5,14 @@ use crewd_store::team_data::{Allocation, PlacementParent};
 use crewd_store::team_data::{Capture, Mutation};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) const DOCUMENT_WORK_PREDICATE: &str = "pendingcrew.document-supports-work.v1";
+
+pub(crate) fn document_work_reference(predicate: &str, reference: &DataRef) -> bool {
+    predicate == DOCUMENT_WORK_PREDICATE
+        && matches!(reference.kind.as_str(), "plan" | "requirement")
+}
+
 #[derive(Clone)]
 pub struct Stored {
     pub object: DataObject,
@@ -18,6 +26,14 @@ pub trait Port {
     fn object(&self, reference: &DataRef, at: Option<&str>) -> Result<Stored, String>;
     /// Must verify actual current actor/target ACL and exact requested snapshot.
     fn target(&self, reference: &DataRef, at: Option<&str>) -> Result<Target, String>;
+    fn check_document_work_link(
+        &self,
+        _document: &DataRef,
+        _work: &DataRef,
+        _excluding_relation: Option<&str>,
+    ) -> Result<(), String> {
+        Err("document work links unavailable".into())
+    }
 }
 fn reference(namespace: &str, kind: &str, id: &str) -> DataRef {
     DataRef {
@@ -643,10 +659,39 @@ pub fn compile(
                 attributes,
             } => {
                 let v = compiler.created(alias, Some("relation"))?;
-                let subject =
-                    compiler.resolve(subject, None, "relation:subject", &mut captures, None)?;
-                let object =
-                    compiler.resolve(object, None, "relation:object", &mut captures, None)?;
+                let (subject, object) = if predicate == DOCUMENT_WORK_PREDICATE {
+                    let (
+                        DataInputRef::Existing {
+                            reference: document,
+                        },
+                        DataInputRef::Existing { reference: work },
+                    ) = (subject, object)
+                    else {
+                        return Err("document work link needs existing endpoints".into());
+                    };
+                    if !document_work_reference(predicate, work) {
+                        return Err("document work link needs a work plan or requirement".into());
+                    }
+                    if edits.len() != 1 || !attributes.as_object().is_some_and(|a| a.is_empty()) {
+                        return Err(
+                            "document work links require one edit and empty attributes".into()
+                        );
+                    }
+                    port.check_document_work_link(document, work, None)?;
+                    let subject = compiler.resolve(
+                        subject,
+                        None,
+                        "relation:subject",
+                        &mut captures,
+                        Some("view"),
+                    )?;
+                    (subject, work.clone())
+                } else {
+                    (
+                        compiler.resolve(subject, None, "relation:subject", &mut captures, None)?,
+                        compiler.resolve(object, None, "relation:object", &mut captures, None)?,
+                    )
+                };
                 let provenance = compiler.provenance(None, None, None, &mut captures)?;
                 (
                     DataObject::Relation {
@@ -683,6 +728,30 @@ pub fn compile(
                     _ => "relation",
                 };
                 let mut old = compiler.old(kind, id, expected_revision)?;
+                if let DataObject::Relation {
+                    subject,
+                    predicate,
+                    object: DataRefState::Visible { reference: work },
+                    archived: old_archived,
+                    ..
+                } = &old.object
+                    && document_work_reference(predicate, work)
+                {
+                    if edits.len() != 1 || old_archived == archived {
+                        return Err(
+                            "document work link needs a single change of archive state".into()
+                        );
+                    }
+                    if !*archived {
+                        let DataRefState::Visible {
+                            reference: document,
+                        } = subject
+                        else {
+                            return Err("original document link unavailable".into());
+                        };
+                        port.check_document_work_link(document, work, Some(id))?;
+                    }
+                }
                 captures = old.captures;
                 match &mut old.object {
                     DataObject::Block {

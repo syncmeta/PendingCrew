@@ -7,7 +7,7 @@ use crewd_proto::{Request, ResourceActor, Response, RpcError, team_data::*};
 use crewd_store::team_data::{self as store, Knowledge, Mutation, Stored};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::{path::PathBuf, sync::Arc};
+use std::{cell::OnceCell, path::PathBuf, sync::Arc};
 
 pub(crate) struct Runtime {
     root: PathBuf,
@@ -371,9 +371,7 @@ fn route_sync(
                     }
                     let allocations = compile::allocations(&p.context, edits).map_err(error)?;
                     let created = knowledge.allocate(&allocations).map_err(error)?;
-                    let port = Port {
-                        knowledge: &knowledge,
-                    };
+                    let port = Port::new(&knowledge, core, &context);
                     let mutations = compile::compile(
                         &p.context,
                         &created,
@@ -408,6 +406,12 @@ fn route_sync(
                         return Err(error("object revision conflict"));
                     }
                     let mut old = knowledge.get(reference, Some(revision)).map_err(error)?;
+                    if is_document_work_link(&current.object) || is_document_work_link(&old.object)
+                    {
+                        return Err(error(
+                            "document work links use explicit relation archive changes",
+                        ));
+                    }
                     let next = expected_revision
                         .parse::<u64>()
                         .map_err(error)?
@@ -462,8 +466,29 @@ fn route_sync(
             let stored = knowledge
                 .get(&p.reference, p.at_revision.as_deref())
                 .map_err(error)?;
-            let (object, references) =
+            let (mut object, mut references) =
                 project(&knowledge, stored, p.at_revision.is_some()).map_err(error)?;
+            let port = Port::new(&knowledge, core, &context);
+            if let Some(reference) =
+                port.project_document_work_link(&mut object, p.at_revision.is_some())
+            {
+                if matches!(
+                    object,
+                    DataObject::Relation {
+                        subject: DataRefState::Unavailable,
+                        ..
+                    }
+                ) && let Some(subject) = references
+                    .iter_mut()
+                    .find(|r| r.anchor == "relation:subject")
+                {
+                    subject.target = DataRefState::Unavailable;
+                    subject.commit = None;
+                    subject.revision = None;
+                    subject.complete = false;
+                }
+                references.push(reference);
+            }
             let mut affected = Vec::new();
             let mut after = None;
             let mut truncated = false;
@@ -512,7 +537,7 @@ fn route_sync(
             if p.at_revision.is_some() {
                 return Err(error("object revision is only valid for a specific object"));
             }
-            let (items, next) = knowledge
+            let (mut items, next) = knowledge
                 .list(
                     &p.object_type,
                     p.after.as_deref(),
@@ -520,6 +545,10 @@ fn route_sync(
                     p.include_archived,
                 )
                 .map_err(error)?;
+            let port = Port::new(&knowledge, core, &context);
+            for object in &mut items {
+                port.project_document_work_link(object, false);
+            }
             encode(DataObjectPage {
                 context: p.context,
                 generation: context.generation,
@@ -530,9 +559,13 @@ fn route_sync(
         "data.history" => {
             let p: DataHistoryParams = parse(args)?;
             knowledge.check(&p.context).map_err(error)?;
-            let (items, next) = knowledge
+            let (mut items, next) = knowledge
                 .history(&p.reference, p.after.as_deref(), p.limit)
                 .map_err(error)?;
+            let port = Port::new(&knowledge, core, &context);
+            for object in &mut items {
+                port.project_document_work_link(object, true);
+            }
             encode(DataHistory {
                 context: p.context,
                 items,
@@ -667,6 +700,186 @@ fn route_sync(
 }
 struct Port<'a> {
     knowledge: &'a Knowledge,
+    core: &'a rusqlite::Connection,
+    context: &'a DataContext,
+    work_book: OnceCell<Option<crewd_work::BookState>>,
+}
+fn is_document_work_link(object: &DataObject) -> bool {
+    matches!(object, DataObject::Relation {
+        predicate, object: DataRefState::Visible { reference }, ..
+    } if compile::document_work_reference(predicate, reference))
+}
+impl<'a> Port<'a> {
+    fn new(
+        knowledge: &'a Knowledge,
+        core: &'a rusqlite::Connection,
+        context: &'a DataContext,
+    ) -> Self {
+        Self {
+            knowledge,
+            core,
+            context,
+            work_book: OnceCell::new(),
+        }
+    }
+    fn document_active(&self, reference: &DataRef) -> bool {
+        reference.namespace == self.context.namespace
+            && reference.kind == "view"
+            && uuid::Uuid::parse_str(&reference.id).is_ok_and(|id| id.to_string() == reference.id)
+            && self.knowledge.get(reference, None).is_ok_and(|stored| {
+                matches!(
+                    stored.object,
+                    DataObject::View {
+                        definition: DataViewDefinition::Document { .. },
+                        archived: false,
+                        ..
+                    }
+                )
+            })
+    }
+    fn current_work_revision(&self, reference: &DataRef) -> Option<String> {
+        use crewd_store::object_refs::{self, ObjectKind};
+        if reference.namespace != self.context.namespace {
+            return None;
+        }
+        let kind = match reference.kind.as_str() {
+            "plan" => ObjectKind::Plan,
+            "requirement" => ObjectKind::Requirement,
+            _ => return None,
+        };
+        let number: i64 = reference.id.strip_prefix(kind.prefix())?.parse().ok()?;
+        if number <= 0 {
+            return None;
+        }
+        // Check the real owner's registry before loading any work content.
+        let original = object_refs::get(self.core, kind, number).ok()??;
+        if original.crew_id != self.context.crew_id || original.id() != reference.id {
+            return None;
+        }
+        // All projection rows share one checked work authority cut under this
+        // Core DB worker, rather than rebuilding the whole book for each row.
+        use crewd_store::work_organization as organization;
+        let book = self
+            .work_book
+            .get_or_init(|| {
+                let book = organization::load(self.core).ok()??;
+                organization::verify_references(self.core, &book).ok()?;
+                Some(book)
+            })
+            .as_ref()?;
+        let local = organization::core_for_reference(self.core, kind, number).ok()??;
+        match kind {
+            ObjectKind::Plan => {
+                let id: crewd_work::WorkId = local.parse().ok()?;
+                if book.item_crew(id).map(crewd_work::CrewId::as_str)
+                    != Some(self.context.crew_id.as_str())
+                {
+                    return None;
+                }
+                Some(book.items.get(&id)?.revision.to_string())
+            }
+            ObjectKind::Requirement => {
+                let id: crewd_work::EntryNo = local.parse().ok()?;
+                if book.entry_crew(id).map(crewd_work::CrewId::as_str)
+                    != Some(self.context.crew_id.as_str())
+                    || !book.entries.contains_key(&id)
+                {
+                    return None;
+                }
+                let source_live: bool = self.core.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM object_refs r JOIN todos t ON t.id=r.raw_todo_id
+                     WHERE r.kind='requirement' AND r.number=?1 AND t.crew_id=?2
+                       AND t.ledger='agent' AND t.deleted_at IS NULL)",
+                    rusqlite::params![number,self.context.crew_id], |row| row.get(0),
+                ).ok()?;
+                if !source_live {
+                    return None;
+                }
+                let object = crewd_proto::ChannelWorkObject {
+                    kind: crewd_proto::ChannelWorkKind::Requirement,
+                    id: reference.id.clone(),
+                };
+                collab::todo_attributes::get(self.core, &Sender::Human, &object)
+                    .ok()
+                    .map(|attrs| attrs.revision)
+            }
+            _ => None,
+        }
+    }
+    fn project_document_work_link(
+        &self,
+        relation: &mut DataObject,
+        historical: bool,
+    ) -> Option<DataResolvedRef> {
+        let DataObject::Relation {
+            subject,
+            predicate,
+            object,
+            ..
+        } = relation
+        else {
+            return None;
+        };
+        let DataRefState::Visible { reference } = object else {
+            return None;
+        };
+        if !compile::document_work_reference(predicate, reference) {
+            return None;
+        }
+        if !historical
+            && matches!(subject, DataRefState::Visible { reference } if !self.document_active(reference))
+        {
+            *subject = DataRefState::Unavailable;
+        }
+        let revision = if historical {
+            None
+        } else {
+            self.current_work_revision(reference)
+        };
+        let complete = revision.is_some();
+        if !complete {
+            *object = DataRefState::Unavailable;
+        }
+        Some(DataResolvedRef {
+            anchor: "relation:object".into(),
+            target: object.clone(),
+            commit: None,
+            revision,
+            live: !historical,
+            complete,
+        })
+    }
+    fn document_work_link_exists(
+        &self,
+        document: &DataRef,
+        work: &DataRef,
+        excluding: Option<&str>,
+    ) -> rusqlite::Result<bool> {
+        self.knowledge.conn.query_row(
+            "SELECT EXISTS (
+                SELECT 1 FROM _pc_objects
+                WHERE kind='relation' AND archived=0 AND (?5 IS NULL OR id<>?5)
+                  AND json_extract(body,'$.object.predicate')=?1
+                  AND json_extract(body,'$.object.subject.state')='visible'
+                  AND json_extract(body,'$.object.subject.reference.kind')='view'
+                  AND json_extract(body,'$.object.subject.reference.namespace')=?2
+                  AND json_extract(body,'$.object.subject.reference.id')=?3
+                  AND json_extract(body,'$.object.object.state')='visible'
+                  AND json_extract(body,'$.object.object.reference.namespace')=?2
+                  AND json_extract(body,'$.object.object.reference.id')=?4
+                  AND json_extract(body,'$.object.object.reference.kind')=?6
+            )",
+            rusqlite::params![
+                compile::DOCUMENT_WORK_PREDICATE,
+                self.context.namespace,
+                document.id,
+                work.id,
+                excluding,
+                work.kind
+            ],
+            |row| row.get(0),
+        )
+    }
 }
 impl compile::Port for Port<'_> {
     fn object(&self, r: &DataRef, at: Option<&str>) -> Result<compile::Stored, String> {
@@ -687,6 +900,23 @@ impl compile::Port for Port<'_> {
             ),
             revision: Some(store::object_fields(&v.object).2.into()),
         })
+    }
+    fn check_document_work_link(
+        &self,
+        document: &DataRef,
+        work: &DataRef,
+        excluding_relation: Option<&str>,
+    ) -> Result<(), String> {
+        if !self.document_active(document) || self.current_work_revision(work).is_none() {
+            return Err("document work link target unavailable".into());
+        }
+        if self
+            .document_work_link_exists(document, work, excluding_relation)
+            .map_err(|_| "document work link check unavailable")?
+        {
+            return Err("document work link already exists".into());
+        }
+        Ok(())
     }
 }
 fn project(
@@ -1246,11 +1476,15 @@ mod tests {
         let context = workspace["context"].clone();
         let mut change = real02_document_change();
         change["edits"][1]["definition"]["placements"][0]["alias"] = json!("position");
-        let original = json!({"context":context,"requestId":uuid::Uuid::new_v4().to_string(),"change":change});
+        let original =
+            json!({"context":context,"requestId":uuid::Uuid::new_v4().to_string(),"change":change});
         let committed = result(call("data.submit", original.clone()).await);
         assert_eq!(committed["phase"], "committed");
         let known = result(call("data.submit", original.clone()).await);
-        assert_eq!(known, committed, "original UUID still returns the original receipt");
+        assert_eq!(
+            known, committed,
+            "original UUID still returns the original receipt"
+        );
 
         let mut stale = original;
         stale["requestId"] = json!(uuid::Uuid::new_v4().to_string());
@@ -1269,6 +1503,297 @@ mod tests {
         );
         assert_eq!(lookup["lookup"]["status"], "notFound");
         assert_eq!(lookup["workspace"]["context"], committed["context"]);
+    }
+
+    #[tokio::test]
+    async fn sqlite_document_work_links_are_scoped_revisioned_and_readable_after_reopen() {
+        let f = Fixture::new().await;
+        let rt = runtime(&f).await;
+        let socket = f.spawn_socket().await;
+        let mut client = crate::agent::testkit::RpcClient::connect(&socket).await;
+        let request = |context: &Value, edit: Value| {
+            json!({"context":context,"requestId":uuid::Uuid::new_v4().to_string(),
+                   "change":{"kind":"apply","message":"document work link fixture","edits":[edit]}})
+        };
+        let requirement = client.call("todo.create", json!({"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"text":"Original request"})).await.unwrap();
+        let plan = client.call("work.create", json!({"crewId":f.crew,"title":"Original plan","sources":[requirement["requirementId"]]})).await.unwrap();
+        let foreign_crew = client
+            .call(
+                "crew.create",
+                json!({"title":"Foreign work fixture","workingDirectory":f.data_dir()}),
+            )
+            .await
+            .unwrap();
+        let foreign = client.call("todo.create", json!({"crewId":foreign_crew["id"],"requestId":uuid::Uuid::new_v4().to_string(),"text":"Foreign request"})).await.unwrap();
+        let requirement_before = client
+            .call("todo.get", json!({"id":requirement["requirementId"]}))
+            .await
+            .unwrap();
+        let plan_before = client
+            .call("work.get", json!({"id":plan["id"]}))
+            .await
+            .unwrap();
+
+        let workspace = client
+            .call("data.workspace.get", json!({"crewId":f.crew}))
+            .await
+            .unwrap();
+        let mut change = real02_document_change();
+        change["edits"][1]["definition"]["placements"][0]["alias"] = json!("position");
+        let saved = client.call("data.submit", json!({"context":workspace["context"],"requestId":uuid::Uuid::new_v4().to_string(),"change":change})).await.unwrap();
+        let document = saved["created"]["dailyPage"]["object"]["reference"].clone();
+        let body = saved["created"]["dailyKnowledge"]["object"]["reference"].clone();
+        let base = saved["context"].clone();
+        let work_ref =
+            |kind: &str, id: &Value| json!({"namespace":base["namespace"],"kind":kind,"id":id});
+        let link_edit = |reference: &Value| {
+            json!({"kind":"createRelation","alias":"documentWorkLink",
+            "subject":{"kind":"existing","reference":document},"predicate":compile::DOCUMENT_WORK_PREDICATE,
+            "object":{"kind":"existing","reference":reference},"attributes":{}})
+        };
+        let req_ref = work_ref("requirement", &requirement["requirementId"]);
+        let plan_ref = work_ref("plan", &plan["id"]);
+        let foreign_ref = work_ref("requirement", &foreign["requirementId"]);
+        assert!(
+            client
+                .call("data.submit", request(&base, link_edit(&foreign_ref)))
+                .await
+                .is_err()
+        );
+        let mut wrong_namespace = plan_ref.clone();
+        wrong_namespace["namespace"] = json!("other-namespace");
+        assert!(
+            client
+                .call("data.submit", request(&base, link_edit(&wrong_namespace)))
+                .await
+                .is_err()
+        );
+        let wrong_kind = work_ref("plan", &requirement["requirementId"]);
+        assert!(
+            client
+                .call("data.submit", request(&base, link_edit(&wrong_kind)))
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .call("data.submit", request(&base, link_edit(&body)))
+                .await
+                .is_err(),
+            "the reserved predicate cannot create a generic knowledge relation"
+        );
+        let web_bypass = json!({"kind":"createView","alias":"forbiddenWeb","title":"Forbidden Web","definition":{
+            "kind":"web","renderer":"web","rendererVersion":"1","html":"","css":"","javascript":"",
+            "bindings":[{"kind":"set","id":"work","source":{"kind":"object","reference":{"kind":"existing","reference":plan_ref}},"attributes":{}}],
+            "requestedCapabilities":[],"attributes":{}},"sources":[],"attributes":{}});
+        assert!(
+            client
+                .call("data.submit", request(&base, web_bypass))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            client
+                .call("data.workspace.get", json!({"crewId":f.crew}))
+                .await
+                .unwrap()["context"],
+            base
+        );
+
+        let original = request(&base, link_edit(&req_ref));
+        let req = client.call("data.submit", original.clone()).await.unwrap();
+        let rel = req["created"]["documentWorkLink"]["object"]["reference"].clone();
+        assert_eq!(
+            client.call("data.submit", original.clone()).await.unwrap(),
+            req
+        );
+        assert!(
+            client
+                .call("data.submit", request(&req["context"], link_edit(&req_ref)))
+                .await
+                .is_err()
+        );
+        let stale = client
+            .call("data.submit", request(&base, link_edit(&plan_ref)))
+            .await
+            .unwrap_err();
+        assert_eq!(stale.0, RpcError::CONFLICT);
+        let plan_link = client
+            .call(
+                "data.submit",
+                request(&req["context"], link_edit(&plan_ref)),
+            )
+            .await
+            .unwrap();
+        let current = plan_link["context"].clone();
+        let list = client.call("data.object.list", json!({"context":current,"objectType":"relation","limit":50,"includeArchived":false})).await.unwrap();
+        let items = list["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|r| r["object"]["reference"] == plan_ref));
+        assert!(items.iter().any(|r| r["object"]["reference"] == req_ref));
+        let detail = client
+            .call(
+                "data.object.get",
+                json!({"context":current,"reference":rel}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(detail["object"]["subject"]["reference"], document);
+        assert_eq!(detail["object"]["object"]["reference"], req_ref);
+        let work = detail["references"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["anchor"] == "relation:object")
+            .unwrap();
+        assert_eq!(work["complete"], true);
+        assert_eq!(work["live"], true);
+        let historical = client
+            .call(
+                "data.object.get",
+                json!({"context":current,"reference":rel,"atRevision":"1"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            historical["object"]["object"],
+            json!({"state":"unavailable"})
+        );
+        assert!(
+            historical["references"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["anchor"] == "relation:object"
+                    && r["complete"] == false
+                    && r["live"] == false)
+        );
+        let history = client
+            .call(
+                "data.history",
+                json!({"context":current,"reference":rel,"limit":50}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            history["items"][0]["object"],
+            json!({"state":"unavailable"})
+        );
+
+        let archived_doc = client.call("data.submit",request(&current,json!({"kind":"archiveView","id":document["id"],"expectedRevision":"1","archived":true}))).await.unwrap();
+        let hidden = client
+            .call(
+                "data.object.get",
+                json!({"context":archived_doc["context"],"reference":rel}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(hidden["object"]["subject"], json!({"state":"unavailable"}));
+        let archive_edit = |revision, archived| json!({"kind":"archiveRelation","id":rel["id"],"expectedRevision":revision,"archived":archived});
+        let retired = client
+            .call(
+                "data.submit",
+                request(&archived_doc["context"], archive_edit("1", true)),
+            )
+            .await
+            .unwrap();
+        assert!(
+            client
+                .call(
+                    "data.submit",
+                    request(&retired["context"], archive_edit("2", false))
+                )
+                .await
+                .is_err()
+        );
+        let restored_doc = client.call("data.submit",request(&retired["context"],json!({"kind":"archiveView","id":document["id"],"expectedRevision":"2","archived":false}))).await.unwrap();
+        let restored = client
+            .call(
+                "data.submit",
+                request(&restored_doc["context"], archive_edit("2", false)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            restored["changed"],
+            json!([{"reference":rel,"revision":"3"}])
+        );
+        let latest = restored["context"].clone();
+        assert!(client.call("data.submit",json!({"context":latest,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"restoreObject","reference":rel,"revision":"1","expectedRevision":"3"}})).await.is_err());
+        let mut old_epoch = latest.clone();
+        old_epoch["restoreEpoch"] = json!("foreign-epoch");
+        assert!(
+            client
+                .call("data.submit", request(&old_epoch, archive_edit("3", true)))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            client
+                .call("todo.get", json!({"id":requirement["requirementId"]}))
+                .await
+                .unwrap(),
+            requirement_before
+        );
+        assert_eq!(
+            client
+                .call("work.get", json!({"id":plan["id"]}))
+                .await
+                .unwrap(),
+            plan_before
+        );
+
+        let reopened = Arc::new(Runtime::new(rt.root.clone()).unwrap());
+        let stored = reopened
+            .handle(
+                f.state.clone(),
+                human(),
+                Request {
+                    id: 1,
+                    method: "data.object.get".into(),
+                    params: json!({"context":latest,"reference":rel}),
+                },
+            )
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(stored["object"]["object"]["reference"], req_ref);
+        assert_eq!(stored["object"]["subject"]["reference"], document);
+        assert_eq!(stored["object"]["archived"], false);
+        assert_eq!(
+            client
+                .call(
+                    "data.object.get",
+                    json!({"context":latest,"reference":body})
+                )
+                .await
+                .unwrap()["object"]["content"],
+            "日用版知识验收完成"
+        );
+        let known = client
+            .call(
+                "data.request.get",
+                json!({"context":base,"requestId":original["requestId"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(known["lookup"]["result"], req);
+        let closed = ConnectionScope::new();
+        closed.close();
+        assert!(
+            reopened
+                .session(
+                    f.state.clone(),
+                    f.worker.clone(),
+                    f.token(&f.worker),
+                    closed,
+                    "data.object.get",
+                    json!({"context":latest,"reference":rel})
+                )
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
