@@ -42,14 +42,14 @@ struct CrewdFirstCaptainReply: Equatable {
         """
     }
 
-    func isReply(channel: String?, senderKind: String?, sender: String?, sequence: Int?) -> Bool {
+    func isReply(channel: String?, senderKind: String?, sender: String?, sequence: Int?, inReplyTo: String?) -> Bool {
         let captain: String
         switch phase {
         case .starting: return false
         case .registered(let id), .launched(let id): captain = id
         }
         return channel == channelID && senderKind == "captain" && sender == captain &&
-            sequence.map { $0 > firstSequence } == true
+            inReplyTo == messageID && sequence.map { $0 > firstSequence } == true
     }
 }
 
@@ -975,7 +975,8 @@ final class CrewdWorkspace: ObservableObject {
     private func observeFirstCaptainReply(_ message: CrewdValue) {
         guard let channel = message["channelId"].string, let progress = firstCaptainReplies[channel],
               progress.isReply(channel: channel, senderKind: message["senderKind"].string,
-                               sender: message["senderSessionId"].string, sequence: message["seq"].int) else { return }
+                               sender: message["senderSessionId"].string, sequence: message["seq"].int,
+                               inReplyTo: message["inReplyTo"].string) else { return }
         firstCaptainReplies[channel] = nil
     }
     @discardableResult func startCaptainForCreatedCrew(_ id: String, executor: String = "codex", brief: String = "读取本机组群聊与待办，回应人类需求；没有任务时待命。",

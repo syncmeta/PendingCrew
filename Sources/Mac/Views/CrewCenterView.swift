@@ -525,7 +525,7 @@ private struct CrewdCaptainStartNotice: View {
         switch phase {
         case .starting: "首条消息已发送，正在确认机长启动…"
         case .registered: "机长已登记，运行尚未确认"
-        case .launched: "机长已启动，尚未在本群回复"
+        case .launched: "机长已启动，尚未回复首条消息"
         }
     }
 }
