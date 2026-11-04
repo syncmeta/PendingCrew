@@ -151,6 +151,7 @@ final class CrewdWorkStore: ObservableObject {
         capabilities=[]
         invalidateCustodyReads()
         legacyIntents=[]
+        requirements.removeAll()
         generation = UUID(); refreshID = UUID(); pendingDetails.removeAll(); loading = false
         hasLoaded = false; readScope = UUID()
     }
@@ -244,6 +245,37 @@ final class CrewdWorkStore: ObservableObject {
                   case .object(let counts)? = record["counts"],
                   scanned.values.allSatisfy({ ($0.int ?? -1) >= 0 }),
                   counts.values.allSatisfy({ ($0.int ?? -1) >= 0 }) else { throw CrewdClientError(message:"后台巡检记录不完整。") }
+        }
+        return value
+    }
+    func similarRequirementPage(after: String?) async throws -> CrewdValue {
+        let token = generation, crew = selectedCrew
+        guard !crew.isEmpty else { throw CrewdClientError(message: "请先选择机组。") }
+        var params: [String: CrewdValue] = ["crewId": .string(crew), "limit": .integer(20)]
+        if let after { params["after"] = .string(after) }
+        let value = try await call("adminCase.similarRequirements", .object(params))
+        try check(token)
+        guard value["crewId"] == .string(crew), case .bool = value["enabled"],
+              case .array(let rows) = value["items"], rows.count <= 20,
+              case .object(let fields) = value, let next = fields["nextAfter"],
+              next == .null || (next.string?.isEmpty == false && next.string != after),
+              value["enabled"] == .bool(true) || (rows.isEmpty && next == .null) else {
+            throw CrewdClientError(message: "相近需求结果不完整或范围不符。")
+        }
+        for row in rows {
+            let score: Double?
+            switch row["probability"] {
+            case .number(let value): score = value
+            case .integer(1), .unsigned(1): score = 1
+            default: score = nil
+            }
+            guard let first = row["firstId"].string, let second = row["secondId"].string,
+                  first != second, CrewdWorkID(first, kind: .requirement) != nil,
+                  CrewdWorkID(second, kind: .requirement) != nil,
+                  let score, score.isFinite,
+                  (0.8...1).contains(score), let observed = row["observedAtMs"].int, observed >= 0 else {
+                throw CrewdClientError(message: "相近需求建议的编号或证据不完整。")
+            }
         }
         return value
     }
@@ -741,20 +773,47 @@ final class CrewdWorkStore: ObservableObject {
             "id": .string(id.raw), "expectedStatus": .string(expectedStatus), "note": .string(note)
         ]))
     }
-    @discardableResult func requirementDetail(_ id: CrewdWorkID) async throws -> CrewdValue {
+    @discardableResult func requirementDetail(_ id: CrewdWorkID, expectedCrew: String? = nil) async throws -> CrewdValue {
         guard id.kind == .requirement else { throw CrewdClientError(message: "需求必须使用公共 # 编号。") }
         let token = generation, epoch = requirementEpoch, request = UUID(); pendingDetails[id] = request
         defer { if pendingDetails[id] == request { pendingDetails[id] = nil } }
         let value = try await call("todo.get", .object(["id": .string(id.raw)]))
         try check(token)
         guard pendingDetails[id] == request, epoch == requirementEpoch else { throw CancellationError() }
-        guard try parseRequirement(value) == id else { throw CrewdClientError(message: "需求详情返回了其他对象。") }
+        guard try parseRequirement(value) == id,
+              expectedCrew == nil || value["crewId"].string == expectedCrew else {
+            throw CrewdClientError(message: "需求详情返回了其他对象或机组。")
+        }
         if requirements[id]?["status"] == .string("closed"), value["status"] != .string("closed") {
             throw CrewdClientError(message: "需求详情过期，已关闭的需求不能恢复为待处理。")
         }
         requirementEpoch = UUID()
         requirements[id] = withoutAssociation(value)
         return value
+    }
+    nonisolated static func requirementBlocksPlan(_ value: CrewdValue) -> Bool {
+        value["status"] == .string("closed") || value["todo"]["manualState"] == .string("done")
+    }
+    func requirePlanSource(_ id: CrewdWorkID, sourceCrew: String, in crew: String) async throws {
+        guard !crew.isEmpty, selectedCrew == crew, !sourceCrew.isEmpty else {
+            throw CrewdClientError(message: "请切回发起计划的机组后核对需求。", kind: .notSubmitted)
+        }
+        let detail: CrewdValue
+        do {
+            detail = try await requirementDetail(id, expectedCrew: sourceCrew)
+        } catch {
+            throw CrewdClientError(message: "无法核对原始需求：" + error.localizedDescription, kind: .notSubmitted)
+        }
+        if Self.requirementBlocksPlan(detail) {
+            throw CrewdClientError(message: "原始需求已人工办结或关闭，无法新建计划。", kind: .notSubmitted)
+        }
+        let manual = detail["todo"]["manualState"]
+        guard manual == .null || manual == .string("open"),
+              let status = detail["status"].string,
+              ["unclaimed", "in_progress", "open", "done", "needs_ruling"].contains(status),
+              status != "done" || detail["derivedStatus"] == .string("done") else {
+            throw CrewdClientError(message: "后台未能确认当前需求可新建计划。", kind: .notSubmitted)
+        }
     }
     @discardableResult func withdrawTransfer(_ id:CrewdWorkID,expectedRevision:String) async throws -> CrewdValue {
         guard id.kind == .plan else {throw CrewdClientError(message:"交接必须使用公共计划编号。",code:-32602)}
@@ -904,7 +963,13 @@ final class CrewdWorkStore: ObservableObject {
         }
         return try await mutate("work.close",.object(["id":.string(id.raw),"expectedRevision":.string(expectedRevision),"kind":.string(kind),"evidence":.object(["kind":.string(evidenceKind),"value":.string(evidence.trimmingCharacters(in:.whitespacesAndNewlines))]),"note":.string(note.trimmingCharacters(in:.whitespacesAndNewlines))]))
     }
-    @discardableResult func mutate(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
+    @discardableResult func mutate(
+        _ method: String, _ params: CrewdValue, planSourceCrew: String? = nil,
+        confirmingOriginalPlan: Bool = false, scopeIsCurrent: @MainActor () -> Bool = { true }
+    ) async throws -> CrewdValue {
+        guard scopeIsCurrent(), !Task.isCancelled else {
+            throw CrewdClientError(message: "表单的会话或连接已变化。", kind: .notSubmitted)
+        }
         guard ["work.close", "work.create", "work.update", "work.assign", "work.block", "work.transferWithdraw", "work.reassignLost", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
             throw CrewdClientError(message: "不支持的工作写入操作。",kind:.notSubmitted)
         }
@@ -912,7 +977,24 @@ final class CrewdWorkStore: ObservableObject {
         if params["channelId"] != .null {
             guard capabilities.contains("channelWork"),let request=params["requestId"].string,UUID(uuidString:request) != nil else{throw CrewdClientError(message:"当前后台尚未开放具有稳定请求编号的群内创建。",kind:.notSubmitted)}
         }
+        if confirmingOriginalPlan,
+           method != "work.create" || params["channelId"].string?.isEmpty != false {
+            throw CrewdClientError(message: "只有原始群内创建请求可以核对。", kind: .notSubmitted)
+        }
         guard activeMutations == 0 else { throw CrewdClientError(message: "工作操作正在提交，请稍后再试。",kind:.notSubmitted) }
+        if method == "work.create", !confirmingOriginalPlan, !params["sources"].array.isEmpty {
+            let crew = params["crewId"].string ?? ""
+            let scope = generation
+            for source in params["sources"].array {
+                guard let raw = source.string, let id = CrewdWorkID(raw, kind: .requirement) else {
+                    throw CrewdClientError(message: "计划必须关联公共需求编号。", kind: .notSubmitted)
+                }
+                try await requirePlanSource(id, sourceCrew: planSourceCrew ?? crew, in: crew)
+            }
+            guard generation == scope, scopeIsCurrent(), !Task.isCancelled, activeMutations == 0 else {
+                throw CrewdClientError(message: "会话或操作状态已变化，请重新核对需求。", kind: .notSubmitted)
+            }
+        }
         let target = params["id"].string.flatMap { CrewdWorkID($0, kind: .plan) }
         if let target, plans[target]?.frozen == true { throw CrewdClientError(message: "已归档工作只读。", code: -32009, data: .object(["refusal": .string("crew.removed")])) }
         generation = UUID(); refreshID = UUID(); loading = false; pendingDetails.removeAll()

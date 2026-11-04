@@ -764,6 +764,7 @@ mod tests {
                 model: "fake".into(),
                 choice_min: 0.5,
                 wake_yes: 0.5,
+                similar_requirements: None,
                 credential_source: "file".into(),
             }),
         };

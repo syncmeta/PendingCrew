@@ -958,6 +958,7 @@ pub(crate) mod tests {
                 model: "fake".into(),
                 choice_min: 0.8,
                 wake_yes: 0.8,
+                similar_requirements: None,
                 credential_source: "file".into(),
             }),
         };

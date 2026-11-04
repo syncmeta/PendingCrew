@@ -182,6 +182,7 @@ pub mod methods {
         crate::admin_cases::LEGACY_PREVIEW,
         crate::admin_cases::LEGACY_CONFIRM,
         crate::admin_cases::LEGACY_RECEIPT,
+        crate::admin_cases::SIMILAR_REQUIREMENTS,
         crate::channel_archive::CHECK,
         crate::channel_archive::ARCHIVE,
         crate::channel_archive::RESTORE,
@@ -811,6 +812,13 @@ pub fn api_schema() -> Value {
         (
             admin_cases::GET,
             m(sub::<AdminCaseGetParams>(g), sub::<AdminCaseView>(g)),
+        ),
+        (
+            admin_cases::SIMILAR_REQUIREMENTS,
+            m(
+                sub::<admin_cases::SimilarRequirementsParams>(g),
+                sub::<admin_cases::SimilarRequirementsPage>(g),
+            ),
         ),
         (
             admin_cases::LEGACY_LIST,

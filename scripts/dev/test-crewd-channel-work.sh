@@ -9,7 +9,10 @@ for file in CrewdClient.swift CrewdLocalIPC.swift CrewdWorkStore.swift CrewdPlan
  if [ -n "${PENDINGCREW_QA_REF:-}" ]; then git -C "$root" show "$PENDINGCREW_QA_REF:Sources/Mac/Crewd/$file" > "$fixture/source/$file"; else cp "$root/Sources/Mac/Crewd/$file" "$fixture/source/$file"; fi
 done
 cp "$root/scripts/dev/fixtures/crewd-channel-work.swift" "$fixture/source/fixture.swift"
-shasum -a 256 "$fixture"/source/*.swift > "$fixture/input-sha256.txt"
+mv "$fixture/source/CrewdPlanActions.swift" "$fixture/CrewdPlanActions.original.swift"
+# Exercise the command and draft types without compiling their app-only SwiftUI view.
+sed '/^struct CrewdPlanActions:View/,$d' "$fixture/CrewdPlanActions.original.swift" > "$fixture/source/CrewdPlanActions.swift"
+shasum -a 256 "$fixture"/source/*.swift "$fixture/CrewdPlanActions.original.swift" > "$fixture/input-sha256.txt"
 set --
 if [ "${PENDINGCREW_QA_ACTIVE_OWNER_CONTROLS:-0}" = 1 ]; then set -- -D QA_ACTIVE_OWNER_CONTROLS; fi
 xcrun swiftc "$@" -module-cache-path "${PENDINGCREW_QA_MODULE_CACHE:-$fixture/cache}" -parse-as-library "$fixture"/source/*.swift -o "$fixture/test"

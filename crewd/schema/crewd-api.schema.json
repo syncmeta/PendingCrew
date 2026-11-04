@@ -9676,6 +9676,13 @@
         "provider": {
           "type": "string"
         },
+        "similarRequirements": {
+          "description": "Explicit opt-in for comparing current same-channel Human requirements.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "wakeYes": {
           "format": "double",
           "type": "number"
@@ -14843,6 +14850,86 @@
       ],
       "type": "string"
     },
+    "SimilarRequirement": {
+      "properties": {
+        "firstId": {
+          "type": "string"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "probability": {
+          "format": "double",
+          "type": "number"
+        },
+        "secondId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "firstId",
+        "secondId",
+        "probability",
+        "observedAtMs"
+      ],
+      "type": "object"
+    },
+    "SimilarRequirementsPage": {
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/SimilarRequirement"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "enabled",
+        "items"
+      ],
+      "type": "object"
+    },
+    "SimilarRequirementsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
     "SubscribeParams": {
       "additionalProperties": false,
       "properties": {
@@ -17502,6 +17589,14 @@
       },
       "result": {
         "$ref": "#/$defs/AdminCaseList"
+      }
+    },
+    "adminCase.similarRequirements": {
+      "params": {
+        "$ref": "#/$defs/SimilarRequirementsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/SimilarRequirementsPage"
       }
     },
     "ask.answer": {

@@ -1,6 +1,34 @@
 //! Administrative escalation evidence. Observation does not imply intervention.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+pub const SIMILAR_REQUIREMENTS: &str = "adminCase.similarRequirements";
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SimilarRequirementsParams {
+    pub crew_id: String,
+    pub after: Option<String>,
+    pub limit: Option<u16>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SimilarRequirementsPage {
+    pub crew_id: String,
+    pub enabled: bool,
+    pub items: Vec<SimilarRequirement>,
+    pub next_after: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SimilarRequirement {
+    pub first_id: String,
+    pub second_id: String,
+    pub probability: f64,
+    pub observed_at_ms: i64,
+}
 pub const LIST: &str = "adminCase.list";
 pub const GET: &str = "adminCase.get";
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

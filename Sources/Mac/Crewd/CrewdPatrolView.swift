@@ -10,6 +10,7 @@ struct CrewdPatrolView: View {
     @State private var scan = "work"
     @State private var archiveTarget:String?
     @State private var casesPresented=false
+    @State private var similarPresented = false
     @State private var archived:[CrewdValue]=[]
     @State private var archivedLoaded=false
     @State private var rows: [CrewdValue] = []
@@ -26,6 +27,9 @@ struct CrewdPatrolView: View {
                 .font(.caption).foregroundStyle(.secondary)
             backgroundSection
             Button("行政处理记录") {casesPresented=true}
+            if store.capabilities.contains("adminCase.similarRequirements") {
+                Button("审阅相近需求") { similarPresented = true }
+            }
             Button("读取当前机组已归档群") {readArchived()}
             if archivedLoaded && archived.isEmpty {Text("当前机组没有已归档群。")}
             if !archived.isEmpty {
@@ -68,8 +72,9 @@ struct CrewdPatrolView: View {
             if let channel=archiveTarget {CrewdChannelArchiveView(store:store,channel:channel,crew:store.selectedCrew)}
         }
         .sheet(isPresented:$casesPresented) {CrewdAdminCasesView(store:store)}
+        .sheet(isPresented: $similarPresented) { CrewdSimilarRequirementsView(store: store) }
         .onChange(of: scan) { _, _ in reset() }
-        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; archived=[]; archivedLoaded=false; readStatus() }
+        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; archived=[]; archivedLoaded=false; readStatus() }
         .onAppear { readStatus() }
         .onDisappear { cancel(); clearStatus() }
     }
@@ -189,5 +194,101 @@ struct CrewdPatrolView: View {
         if !row["longWaits"].array.isEmpty { facts.append("有人类决定等待较久") }
         if row["longWaitsTruncated"] == .bool(true) { facts.append("等待项仅显示部分") }
         return facts.isEmpty ? "本次未发现上述运转问题" : facts.joined(separator: "；")
+    }
+}
+
+private struct CrewdSimilarRequirementsView: View {
+    @ObservedObject var store: CrewdWorkStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var rows: [CrewdValue] = []
+    @State private var next: String?
+    @State private var enabled: Bool?
+    @State private var originals: [(String, String)] = []
+    @State private var failure: String?
+    @State private var busy = false
+    @State private var task: Task<Void, Never>?
+    @State private var request = UUID()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("相近原始需求").font(.headline)
+                Spacer()
+                Button("关闭") { dismiss() }
+            }
+            Text("后台对同一公开群内的近期候选作有限比较。建议供人工审阅，原需求和计划仍各自保留。")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("重新读取") { load() }
+                if next != nil { Button("下一页") { load(after: next) } }
+                if busy { ProgressView().controlSize(.small) }
+            }.disabled(busy)
+            if let failure { Text(failure).foregroundStyle(.orange) }
+            if enabled == false {
+                Text("当前后台未启用相近需求判断。")
+            } else if enabled == true, rows.isEmpty {
+                Text("目前没有可审阅的建议。")
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        Button("\(row["firstId"].string ?? "") 与 \(row["secondId"].string ?? "")") {
+                            inspect(row)
+                        }.disabled(busy)
+                    }
+                    ForEach(Array(originals.enumerated()), id: \.offset) { _, original in
+                        Text(original.0).font(.subheadline.weight(.semibold))
+                        Text(verbatim: original.1).textSelection(.enabled)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.padding().frame(width: 570, height: 440)
+        .task { load() }
+        .onChange(of: store.readScope) { _, _ in dismiss() }
+        .onDisappear { request = UUID(); task?.cancel() }
+    }
+
+    private func read(_ operation: @escaping @MainActor (UUID, UUID) async throws -> Void) {
+        let token = UUID(), scope = store.readScope
+        request = token
+        busy = true
+        failure = nil
+        originals = []
+        task = Task { @MainActor in
+            defer { if request == token { busy = false; task = nil } }
+            do { try await operation(token, scope) }
+            catch {
+                if request == token, store.readScope == scope, !(error is CancellationError) {
+                    failure = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func load(after: String? = nil) {
+        read { token, scope in
+            let page = try await store.similarRequirementPage(after: after)
+            guard request == token, store.readScope == scope else { return }
+            rows = page["items"].array
+            next = page["nextAfter"].string
+            enabled = page["enabled"] == .bool(true)
+        }
+    }
+
+    private func inspect(_ row: CrewdValue) {
+        let crew = store.selectedCrew
+        read { token, scope in
+            var pair: [(String, String)] = []
+            for key in ["firstId", "secondId"] {
+                guard let raw = row[key].string, let id = CrewdWorkID(raw, kind: .requirement) else { return }
+                let value = try await store.requirementDetail(id)
+                guard request == token, store.readScope == scope else { return }
+                guard value["crewId"] == .string(crew), let text = value["text"].string else {
+                    throw CrewdClientError(message: "原始需求已不可核对。请重新读取建议。")
+                }
+                pair.append((raw, text))
+            }
+            originals = pair
+        }
     }
 }

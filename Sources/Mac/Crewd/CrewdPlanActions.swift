@@ -45,7 +45,15 @@ struct CrewdPlanDrafts {
 }
 struct CrewdPlanTarget:Identifiable {
     let key:CrewdPlanDrafts.Key
+    let sourceCrew: String?
+    let scopeIsCurrent: @MainActor () -> Bool
     var id:String {"\(key.crew)/\(key.object)/\(key.source)/\(key.channel)"}
+
+    init(key: CrewdPlanDrafts.Key, sourceCrew: String? = nil, scopeIsCurrent: @escaping @MainActor () -> Bool) {
+        self.key = key
+        self.sourceCrew = sourceCrew
+        self.scopeIsCurrent = scopeIsCurrent
+    }
 }
 /// Typed forms become ordinary human RPC commands. No raw JSON editor or inferred IDs.
 enum CrewdPlanCommand {
@@ -111,6 +119,7 @@ struct CrewdPlanActions:View {
     @State private var reading=false
     @State private var reviewedUnknown=false
     private var key:CrewdPlanDrafts.Key {target.key}
+    private var sourceIsCurrent: Bool { store.selectedCrew == key.crew && target.scopeIsCurrent() }
     private var fields:CrewdPlanDrafts.Fields {drafts.fields(key)}
     private var currentHasOwner:Bool {
         guard let id=CrewdWorkID(key.object,kind:.plan),let owner=store.plans[id]?.value["owner"].string else{return false}
@@ -153,7 +162,7 @@ struct CrewdPlanActions:View {
                         Text(unknownPayload(snapshot.fields)).font(.caption).textSelection(.enabled)
                         if snapshot.key.object.isEmpty,!snapshot.key.channel.isEmpty {
                             Button("确认这份原始群内创建请求") {if drafts.confirm(snapshot){submit(snapshot)}}
-                                .disabled(drafts.busy(key) || !store.capabilities.contains("channelWork") || store.selectedCrew != key.crew)
+                                .disabled(drafts.busy(key) || !store.capabilities.contains("channelWork") || !sourceIsCurrent)
                         }
                     }
                 }
@@ -163,7 +172,7 @@ struct CrewdPlanActions:View {
                 Button("读取当前状态") {Task {do {try await store.refresh();if !key.object.isEmpty {await load()}} catch {failure=describe(error)}}}
                 Toggle("我已核对当前计划与关联事项，再继续提交",isOn:$reviewedUnknown).font(.caption)
             }
-            if store.selectedCrew != key.crew {Text("当前已切换机组，请切回原机组后再提交。").foregroundStyle(.orange)}
+            if !sourceIsCurrent {Text("表单的会话或连接已变化。请从当前页面重新打开表单。").foregroundStyle(.orange)}
             Divider()
             ScrollView {
                 VStack(alignment:.leading,spacing:16) {
@@ -206,7 +215,7 @@ struct CrewdPlanActions:View {
                 }.disabled(drafts.busy(key)).padding(.vertical,12)
             }
             Divider()
-            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":key.object.isEmpty ? "创建计划":fields.action.rawValue){submit()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(drafts.busy(key) || reading || ownerRequired || checkpointRequired || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || store.selectedCrew != key.crew || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
+            HStack {Button("关闭"){dismiss()};Spacer();Button(drafts.busy(key) ? "提交中":key.object.isEmpty ? "创建计划":fields.action.rawValue){submit()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(drafts.busy(key) || reading || ownerRequired || checkpointRequired || (fields.action == .reassignLost && !store.capabilities.contains("work.reassignLost")) || !sourceIsCurrent || (!key.object.isEmpty && revision == nil) || (drafts.uncertain(key) && !reviewedUnknown))}
         }.padding(20).textFieldStyle(.roundedBorder).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:560,height:640)).task {if !key.object.isEmpty {await load()}}
     }
     private var ownerPicker:some View {
@@ -251,7 +260,7 @@ struct CrewdPlanActions:View {
         guard let snapshot=original ?? drafts.begin(key) else {return}
         let expected=revision
         Task {
-            guard store.selectedCrew == key.crew else {drafts.finish(snapshot,accepted:false);return}
+            guard sourceIsCurrent else {drafts.finish(snapshot,accepted:false);return}
             var attempted = false
             var verifiedCurrent:CrewdValue?
             do {
@@ -263,19 +272,20 @@ struct CrewdPlanActions:View {
                     verifiedCurrent=latest.value
                 }
                 let (method,params)=try CrewdPlanCommand.build(key,snapshot.fields,revision:expected,requestID:snapshot.version,current:verifiedCurrent)
-                guard store.selectedCrew == key.crew else {throw CancellationError()}
+                guard sourceIsCurrent else {throw CancellationError()}
                 attempted = true
-                let receipt = try await store.mutate(method,params)
+                let receipt = try await store.mutate(method, params, planSourceCrew: target.sourceCrew,
+                                                     confirmingOriginalPlan: original != nil, scopeIsCurrent: target.scopeIsCurrent)
                 let wasCurrent=drafts.isCurrent(snapshot)
                 drafts.finish(snapshot,accepted:true)
-                if store.selectedCrew == key.crew {
+                if sourceIsCurrent {
                     if receipt["channelAssociation"]["linked"] == .bool(false) {failure="原计划已确认，但此前群关联已解除；确认原请求不会重新关联。"}
                     else if wasCurrent {dismiss()} else {failure="原提交已确认，当前编辑草稿仍保留。"}
                 }
             } catch {
                 drafts.finish(snapshot,accepted:false,uncertain:attempted && CrewdClientError.isUncertainSubmission(error))
                 if attempted && CrewdClientError.isUncertainSubmission(error) {reviewedUnknown=false}
-                failure=describe(error)
+                if sourceIsCurrent { failure=describe(error) }
             }
         }
     }

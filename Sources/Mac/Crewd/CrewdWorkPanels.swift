@@ -32,6 +32,7 @@ struct CrewdWorkPanels: View {
     @State private var actionTarget: CrewdPlanTarget?
     @State private var humanTarget:CrewdHumanTarget?
     @State private var selectedRequirement: CrewdWorkID?
+    @State private var openingPlan = false
     @State private var closing:Set<CrewdWorkID>=[]
     @State private var closeNotes:[CrewdWorkID:String]=[:]
     private var folderView:CrewdResourceView{progressOnly ? .progress:.todo}
@@ -143,7 +144,8 @@ struct CrewdWorkPanels: View {
                     selectedRequirement = selectedRequirement == id ? nil:id
                     if selectedRequirement != nil {Task {do {_ = try await store.requirementDetail(id)} catch {failure=describe(error)}}}
                 }
-                Button("建计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:"",source:id.raw))}
+                Button("建计划") {openPlan(id)}
+                    .disabled(openingPlan || CrewdWorkStore.requirementBlocksPlan(value))
                 CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:.todo,object:CrewdFolderFilter.object("requirement",id.raw))
             }.font(CrewdType.caption).buttonStyle(.plain)
             MarkdownText(text:value["text"].string ?? "需求",variant:.todo,dimmed:status == "closed" || status == "done")
@@ -152,6 +154,27 @@ struct CrewdWorkPanels: View {
             if selectedRequirement == id { VStack(alignment:.leading,spacing:8) {requirementDetail(id)}.padding(.leading,22) }
         }.padding(10).frame(maxWidth:.infinity,alignment:.leading)
             .background(Theme.Palette.surface,in:RoundedRectangle(cornerRadius:8))
+    }
+    private func planScope() -> @MainActor () -> Bool {
+        let store = store
+        let scope = store.readScope
+        return { store.readScope == scope }
+    }
+    private func openPlan(_ id: CrewdWorkID) {
+        let crew = store.selectedCrew
+        let target = CrewdPlanTarget(key: .init(crew: crew, object: "", source: id.raw), scopeIsCurrent: planScope())
+        openingPlan = true
+        failure = nil
+        Task {
+            defer { openingPlan = false }
+            do {
+                try await store.requirePlanSource(id, sourceCrew: crew, in: crew)
+                guard target.scopeIsCurrent() else { return }
+                actionTarget = target
+            } catch {
+                if target.scopeIsCurrent() { failure = describe(error) }
+            }
+        }
     }
     private func humanRow(_ id:CrewdWorkID)->some View {
         let ask=store.humanTasks[id]?["ask"] ?? .null
@@ -217,7 +240,10 @@ struct CrewdWorkPanels: View {
                         CrewdWorkCloseView(store:store,id:id,detail:detail)
                         CrewdHandoffView(store:store,id:id,members:members).id(store.selectedCrew+":"+id.raw)
                         HStack {
-                            Button("更新计划") {actionTarget=CrewdPlanTarget(key:.init(crew:store.selectedCrew,object:id.raw,source:""))}.disabled(plan.frozen || ["done","dropped"].contains(plan.status))
+                            Button("更新计划") {
+                                actionTarget = CrewdPlanTarget(key: .init(crew: store.selectedCrew, object: id.raw, source: ""),
+                                                               scopeIsCurrent: planScope())
+                            }.disabled(plan.frozen || ["done","dropped"].contains(plan.status))
                             Spacer()
                             CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:folderView,object:CrewdFolderFilter.object("work",id.raw))
                         }.font(CrewdType.label)

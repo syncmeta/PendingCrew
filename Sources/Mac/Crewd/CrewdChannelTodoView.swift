@@ -51,6 +51,7 @@ struct CrewdChannelTodoView:View {
     @State private var selected:CrewdValue?
     @State private var detail:CrewdValue = .null
     @State private var reading=false
+    @State private var openingPlan=false
     @State private var detailToken=UUID()
     @State private var failure:String?
     @State private var planTarget:CrewdPlanTarget?
@@ -300,12 +301,16 @@ struct CrewdChannelTodoView:View {
             if let reason=detail["withdrawReason"].string { MarkdownText(text: "撤回理由：" + reason, variant: .todoNote).textSelection(.enabled) }
             if id.kind == .requirement {
                 CrewdJudgmentInspectionView(store: work, crew: row["crewId"].string ?? crew, kind: "requirement", sourceID: id.raw, members: members)
-                Button("新建计划"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:"",source:id.raw,channel:channel))}.font(.caption).disabled(busy || detail["status"] == .string("closed"))
+                Button("新建计划"){openPlan(id, row: row)}.font(.caption)
+                    .disabled(busy || openingPlan || CrewdWorkStore.requirementBlocksPlan(row)
+                        || CrewdWorkStore.requirementBlocksPlan(work.requirements[id] ?? detail))
             }else if id.kind == .plan,row["crewId"] == .string(crew) {
                 CrewdCoordinationView(store:work,crew:crew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
                 CrewdReassignmentView(store:work,crew:crew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
                 CrewdWorkCloseView(store:work,id:id,detail:detail)
-                Button("计划操作"){planTarget=CrewdPlanTarget(key:.init(crew:crew,object:id.raw,source:""))}.font(.caption).disabled(detail["frozen"] == .bool(true) || ["done","dropped"].contains(detail["status"].string ?? ""))
+                Button("计划操作"){
+                    planTarget = CrewdPlanTarget(key: .init(crew: crew, object: id.raw, source: ""), scopeIsCurrent: planScope())
+                }.font(.caption).disabled(detail["frozen"] == .bool(true) || ["done","dropped"].contains(detail["status"].string ?? ""))
                 ForEach(detail["blockedOn"].array.compactMap{$0.string.flatMap{CrewdWorkID($0,kind:.human)}},id:\.self){wait in
                     Button("答复卡点 "+wait.raw){openBlocker(wait)}.font(.caption).disabled(busy)
                 }
@@ -315,6 +320,29 @@ struct CrewdChannelTodoView:View {
         }
         if let owner=row["crewId"].string,owner != crew {Button("打开所属机组处理"){openCrew(owner)}.font(.caption)}
         Button("解除本会话关联"){association=true}.font(.caption).disabled(busy)
+    }
+    private func planScope() -> @MainActor () -> Bool {
+        let work = work, group = group
+        let workScope = work.readScope, channelScope = group.readScope
+        return { work.readScope == workScope && group.readScope == channelScope }
+    }
+    private func openPlan(_ id: CrewdWorkID, row: CrewdValue) {
+        guard let sourceCrew = row["crewId"].string else { return }
+        let selectedToken = detailToken
+        let target = CrewdPlanTarget(key: .init(crew: crew, object: "", source: id.raw, channel: channel),
+                                     sourceCrew: sourceCrew, scopeIsCurrent: planScope())
+        openingPlan = true
+        failure = nil
+        Task {
+            defer { openingPlan = false }
+            do {
+                try await work.requirePlanSource(id, sourceCrew: sourceCrew, in: target.key.crew)
+                guard target.scopeIsCurrent(), detailToken == selectedToken else { return }
+                planTarget = target
+            } catch {
+                if target.scopeIsCurrent(), detailToken == selectedToken { failure = error.localizedDescription }
+            }
+        }
     }
 }
 

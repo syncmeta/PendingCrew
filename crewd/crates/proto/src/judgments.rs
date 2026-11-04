@@ -11,6 +11,9 @@ pub struct JudgmentConfig {
     pub model: String,
     pub choice_min: f64,
     pub wake_yes: f64,
+    /// Explicit opt-in for comparing current same-channel Human requirements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub similar_requirements: Option<bool>,
     /// Storage implementation, scoped to this database and an explicitly written secret slot.
     #[serde(default = "platform")]
     pub credential_source: String,

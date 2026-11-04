@@ -29,6 +29,7 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
         "adminCase.legacyPreview",
         "adminCase.legacyConfirm",
         "adminCase.legacyReceipt",
+        "adminCase.similarRequirements",
     ] {
         assert!(
             hello["capabilities"]
@@ -108,6 +109,7 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
                 "adminCase.legacyReceipt",
                 json!({"requestId":unknown_request}),
             ),
+            ("adminCase.similarRequirements", json!({"crewId":f.crew})),
         ] {
             assert_eq!(
                 call(&mut agent, method, params).await.unwrap_err().0,

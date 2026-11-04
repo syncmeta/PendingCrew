@@ -1018,6 +1018,7 @@ fn allowed_method(method: &str) -> bool {
             | "adminCase.legacyPreview"
             | "adminCase.legacyConfirm"
             | "adminCase.legacyReceipt"
+            | "adminCase.similarRequirements"
             | "executor.list"
             | "data.workspace.get"
             | "data.submit"

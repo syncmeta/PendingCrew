@@ -44,6 +44,14 @@ private struct CrewdJudgmentSettingsPane: View {
             }
             Section("配置") {
                 Toggle("启用判断模型", isOn: $model.draft.enabled)
+                if client.capabilities.contains("adminCase.similarRequirements") {
+                    Toggle("发现相近原始需求", isOn: Binding(
+                        get: { model.draft.similarRequirements == true },
+                        set: { model.draft.similarRequirements = $0 ? true : nil }
+                    )).disabled(!model.draft.enabled)
+                    Text("开启后，后台也会检查已有的未认领需求。判断服务只收到同一机组、同一公开群中有限的原始需求摘要，用于提示人工审阅。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text("提供方：TypeSafe")
                 TextField("HTTPS 服务端点", text: $model.draft.baseUrl)
                 TextField("模型", text: $model.draft.model)

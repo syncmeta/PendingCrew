@@ -18,9 +18,12 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
     var held: CheckedContinuation<CrewdValue, Error>?
     var readError: CrewdClientError?
     var emptyPlans = false
+    var sourceDetails: CrewdValue?
+    var delayRequirementDetail = false
     func call(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         calls.append((method,params))
         if delayNext && method == "work.list" { delayNext = false; return try await withCheckedThrowingContinuation { held = $0 } }
+        if delayRequirementDetail && method == "todo.get" { delayRequirementDetail = false; return try await withCheckedThrowingContinuation { held = $0 } }
         let crew = params["crewId"].string ?? "a"
         switch method {
         case "work.list":
@@ -34,6 +37,7 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
             return .array([.object(source)])
         case "todo.create", "todo.get", "todo.close":
             if let error { throw error }
+            if method == "todo.get", let sourceDetails { return sourceDetails }
             return .object(["id":.string("raw-created"),"requirementId":.string("#42"),"crewId":.string("a"),"text":.string("  exact original\n"),"status":.string(method == "todo.close" ? "closed":"unclaimed"),"closure":method == "todo.close" ? .object(["note":.string("reason"),"at":.string("2026-10-13T00:00:00Z")]):.null])
         case "ask.list": return value("[{\"ask\":{\"ask\":\"H9007199254740996\",\"crewId\":\"b\",\"question\":\"global question\",\"item\":\"W9007199254740993\"},\"items\":[\"W9007199254740993\"],\"tier\":\"future_tier\"}]")
         case "work.get":
@@ -42,6 +46,11 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
             return full
         case "work.update", "work.assign", "work.create":
             if let error { throw error }
+            if method == "work.create", let channel=params["channelId"].string,
+               case .object(var fields) = plan(revision:"9007199254740994",full:true) {
+                fields["channelAssociation"] = .object(["channelId":.string(channel),"linked":.bool(false),"linkRevision":.string("1")])
+                return .object(fields)
+            }
             changed = true; return plan(revision:"9007199254740994",status:"done",full:true)
         case "work.block":
             if let error { throw error }
@@ -132,6 +141,58 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
         let writeCount=rf.calls.filter {$0.0 == "todo.create"}.count
         rs.invalidateConnection(); rf.error=nil; try await rs.refresh()
         precondition(rf.calls.filter {$0.0 == "todo.create"}.count == writeCount, "uncertain requirement write never automatically replayed")
+        let pf=Fixture(), ps=CrewdWorkStore(call:{try await pf.call($0,$1)})
+        ps.selectCrew("a")
+        let createPlan=value(##"{"crewId":"a","sources":["#42"],"title":"follow-up"}"##)
+        let manualDone=value(##"{"requirementId":"#42","crewId":"a","text":"original","status":"done","derivedStatus":"in_progress","todo":{"manualState":"done"}}"##)
+        let derivedDone=value(##"{"requirementId":"#42","crewId":"a","text":"original","status":"done","derivedStatus":"done","todo":{}}"##)
+        pf.sourceDetails=manualDone
+        do {
+            _ = try await ps.mutate("work.create",createPlan)
+            preconditionFailure("human-resolved source submitted a work.create")
+        } catch let error as CrewdClientError { precondition(error.kind == .notSubmitted) }
+        precondition(pf.calls.map(\.0) == ["todo.get"],"resolved source must be checked before any write")
+        pf.sourceDetails=derivedDone
+        _ = try await ps.mutate("work.create",createPlan)
+        precondition(pf.calls.filter{$0.0 == "work.create"}.count == 1,"derived done may create follow-up")
+        pf.sourceDetails=value(##"{"requirementId":"#42","crewId":"a","text":"original","status":"closed","derivedStatus":"closed","todo":{},"closure":{"note":"final","at":"2026-10-13T00:00:00Z"}}"##)
+        do {
+            _ = try await ps.mutate("work.create",createPlan)
+            preconditionFailure("closed source submitted a work.create")
+        } catch let error as CrewdClientError { precondition(error.kind == .notSubmitted) }
+        precondition(pf.calls.filter{$0.0 == "work.create"}.count == 1)
+        ps.configureCapabilities(["channelWork"])
+        let originalRequest=UUID().uuidString.lowercased()
+        let retry=CrewdValue.object(["crewId":.string("a"),"sources":.array([.string("#42")]),"title":.string("original plan"),"channelId":.string("one"),"requestId":.string(originalRequest)])
+        let beforeRetry=pf.calls.count
+        _ = try await ps.mutate("work.create",retry,confirmingOriginalPlan:true)
+        precondition(pf.calls[beforeRetry].0 == "work.create" && pf.calls[beforeRetry].1 == retry,
+                     "explicit original receipt confirmation keeps its channel and request after the source closes")
+        ps.invalidateConnection()
+        pf.sourceDetails=derivedDone
+        _ = try await ps.mutate("work.create",createPlan)
+        precondition(ps.requirements[rid]?["status"] != .string("closed"),
+                     "an old authority's closed cache must not block the new authority's source")
+        let xf=Fixture(), xs=CrewdWorkStore(call:{try await xf.call($0,$1)})
+        xs.selectCrew("a")
+        xf.sourceDetails=derivedDone
+        do {
+            _ = try await xs.mutate("work.create",createPlan,planSourceCrew:"b")
+            preconditionFailure("a different source crew qualified plan creation")
+        } catch let error as CrewdClientError { precondition(error.kind == .notSubmitted) }
+        precondition(xf.calls.map(\.0) == ["todo.get"] && xs.requirements[rid] == nil)
+        xf.sourceDetails=value(##"{"requirementId":"#42","crewId":"b","text":"cross-crew original","status":"open","derivedStatus":"done","todo":{"manualState":"open"}}"##)
+        _ = try await xs.mutate("work.create",createPlan,planSourceCrew:"b")
+        precondition(xf.calls.filter{$0.0 == "work.create"}.count == 1,
+                     "a verified reopened source may serve a plan in another crew")
+        let lf=Fixture(), ls=CrewdWorkStore(call:{try await lf.call($0,$1)})
+        ls.selectCrew("a"); lf.delayRequirementDetail=true
+        let late=Task {try await ls.mutate("work.create",createPlan)}
+        while lf.held == nil {await Task.yield()}
+        ls.selectCrew("b"); ls.selectCrew("a")
+        lf.held!.resume(returning:derivedDone); lf.held=nil
+        do {_ = try await late.value; preconditionFailure("old scope qualified a new write")} catch {}
+        precondition(lf.calls.map(\.0) == ["todo.get"])
         let f=Fixture(), s=CrewdWorkStore(call: {try await f.call($0,$1)})
         s.selectCrew("a"); try await s.refresh()
         let id=CrewdWorkID("W9007199254740993",kind:.plan)!, source=CrewdWorkID("#9007199254740995",kind:.requirement)!

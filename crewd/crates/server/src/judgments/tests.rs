@@ -146,6 +146,7 @@ impl Fixture {
             model: "fake-native".into(),
             choice_min: 0.5,
             wake_yes: 0.5,
+            similar_requirements: None,
             credential_source: "file".into(),
         }
     }
@@ -224,6 +225,84 @@ impl Fixture {
         self.stop_db().await;
     }
 }
+
+#[tokio::test]
+async fn similar_requirements_tick_exposes_only_current_scoped_human_review() {
+    use crewd_proto::admin_cases::SIMILAR_REQUIREMENTS;
+    let answer = Reply::ok(
+        json!({"model":"fake-native","answers":{"same_requirement":{"type":"noul","noul":0.91}}})
+            .to_string(),
+    );
+    let fake = FakeJev::start(vec![answer]).await;
+    let f = Fixture::new().await;
+    let crew = f.crew.clone();
+    let secret = concat!("sk-p", "roj-0123456789abcdefghijABCDEFGHIJ");
+    let pair = f.state.collab(move |tx| {
+        ["Refresh the report with monthly data", "Refresh the report with monthly data using OPENAI_API_KEY="]
+            .into_iter()
+            .enumerate()
+            .map(|(index, text)| {
+                let text = if index == 1 { format!("{text}{secret}") } else { text.into() };
+                requirements::create(tx, &Sender::Human, crewd_proto::TodoCreateParams {
+                    crew_id: crew.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    channel_id: Some(format!("{crew}/lobby")),
+                    text,
+                }).map(|result| result.todo.requirement_id.unwrap())
+            })
+            .collect::<crewd_collab::Result<Vec<_>>>()
+    }).await.unwrap();
+    let scope = json!({"crewId": f.crew});
+    let initial = f.rpc(SIMILAR_REQUIREMENTS, scope.clone()).await.unwrap();
+    assert_eq!(initial["enabled"], false);
+    assert_eq!(initial["items"], json!([]));
+    assert!(fake.requests().is_empty());
+    let prior = f.configure(&fake.base_url).await;
+    let before = f.state.db.call(|store| {
+        store.conn().query_row("SELECT count(*) FROM wakes", [], |row| row.get::<_, i64>(0)).unwrap()
+    }).await.unwrap();
+    let mut config = Fixture::config(&fake.base_url);
+    config.similar_requirements = Some(true);
+    f.rpc(SETTINGS_SET, serde_json::to_value(JudgmentSettingsSet {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: prior.view.settings.revision,
+        config: Some(config),
+        credential_update: CredentialUpdate::Keep,
+    }).unwrap()).await.unwrap();
+    let review = tokio::time::timeout(std::time::Duration::from_secs(16), async {
+        loop {
+            let value = f.rpc(SIMILAR_REQUIREMENTS, scope.clone()).await.unwrap();
+            if value["items"].as_array().is_some_and(|rows| !rows.is_empty()) {
+                break value;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }).await.expect("the real periodic runtime should produce a scoped suggestion");
+    let row = &review["items"][0];
+    assert_eq!(review["crewId"], f.crew);
+    assert_eq!(review["items"].as_array().unwrap().len(), 1);
+    assert_eq!(row["firstId"], pair[0]);
+    assert_eq!(row["secondId"], pair[1]);
+    assert_eq!(row["probability"], 0.91);
+    assert_eq!(row.as_object().unwrap().len(), 4);
+    let captured = fake.requests();
+    assert_eq!(captured.len(), 1);
+    let body = String::from_utf8_lossy(&captured[0].body);
+    assert!(body.contains("[REDACTED]") && !body.contains(secret));
+    assert!(!body.contains(&f.crew));
+    for id in &pair {
+        assert_eq!(f.rpc("todo.get", json!({"id": id})).await.unwrap()["status"], "unclaimed");
+    }
+    let after = f.state.db.call(|store| {
+        store.conn().query_row("SELECT count(*) FROM wakes", [], |row| row.get::<_, i64>(0)).unwrap()
+    }).await.unwrap();
+    assert_eq!(before, after);
+    f.rpc("todo.close", json!({"id": pair[0], "expectedStatus":"unclaimed", "note":"already addressed"}))
+        .await.unwrap();
+    assert_eq!(f.rpc(SIMILAR_REQUIREMENTS, scope).await.unwrap()["items"], json!([]));
+    f.close().await;
+}
+
 #[tokio::test]
 async fn production_runtime_routes_wakes_attributes_and_recovery_does_not_redispatch() {
     let fake=FakeJev::start(vec![Reply::ok(json!({"model":"fake-native","answers":{"route":{"type":"choice","choice":"s1","confidence":0.9,"probabilities":{"s0":0.1,"s1":0.9}}},"usage":{"input_tokens":7,"output_tokens":2}}).to_string()),Reply::ok(json!({"model":"fake-native","answers":{"wake_s0":{"type":"noul","noul":0.1},"wake_s1":{"type":"noul","noul":0.9},"attribute":{"type":"choice","choice":"o0","confidence":0.8,"probabilities":{"o0":0.8,"none":0.2}}}}).to_string())]).await;

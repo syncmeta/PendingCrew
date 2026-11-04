@@ -18,6 +18,7 @@ import Combine
     @Published private(set) var failure:CrewdClientError?
     private let call:Call
     private var generation=UUID(),query=UUID()
+    var readScope: UUID { generation }
     private var activeOwners=Set<UUID>()
     private let defaultActiveOwner=UUID()
     func setActive(_ value:Bool,owner:UUID?=nil){

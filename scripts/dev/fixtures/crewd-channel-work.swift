@@ -77,10 +77,12 @@ func page(_ items:[CrewdValue],channel:String="group-a",links:String="1",source:
         precondition(command.1["requestId"] == .string(original.version.uuidString.lowercased()) && command.1["channelId"] == .string("group-a") && command.1["title"] == .string("original grouped plan"))
         plans.finish(original,accepted:true);precondition(plans.fields(pa).title == "edited later grouped plan" && plans.busy(pb));plans.finish(newer,accepted:true)
         var transport:[(String,CrewdValue)]=[]
+        var pendingSource: CheckedContinuation<CrewdValue,Error>?
         let association=CrewdValue.object(["channelId":.string("group-a"),"linkRevision":.string("4"),"linked":.bool(false)])
         let workStore=CrewdWorkStore {method,params in
             transport.append((method,params))
             switch method {
+            case "todo.get":return try await withCheckedThrowingContinuation{pendingSource=$0}
             case "work.create":return .object(["id":.string("W12"),"crewId":.string("a"),"revision":.string("1"),"status":.string("ready"),"sources":.array([.string("#1")]),"channelAssociation":association])
             case "todo.create":return .object(["requirementId":.string("#11"),"crewId":.string("a"),"text":params["text"],"status":.string("unclaimed"),"closure":.null,"channelAssociation":association])
             case "work.list":return .object(["items":.array([]),"next":.null])
@@ -92,7 +94,30 @@ func page(_ items:[CrewdValue],channel:String="group-a",links:String="1",source:
         await rejects{_ = try await workStore.mutate(command.0,command.1)}
         precondition(transport.isEmpty,"group UUID create must reject before transport when capability is absent")
         workStore.configureCapabilities(["channelWork"])
-        let made=try await workStore.mutate(command.0,command.1)
+        store.selectChannel(crew:"a",channel:"group-a")
+        let formChannel = store.readScope, formConnection = workStore.readScope
+        let currentForm: @MainActor () -> Bool = { store.readScope == formChannel && workStore.readScope == formConnection }
+        let checkedCreate=Task{try await workStore.mutate(command.0,command.1,scopeIsCurrent:currentForm)}
+        while pendingSource == nil {await Task.yield()}
+        store.selectChannel(crew:"a",channel:"group-b")
+        store.selectChannel(crew:"a",channel:"group-a")
+        pendingSource!.resume(returning:.object(["requirementId":.string("#1"),"crewId":.string("a"),"text":.string("original"),"status":.string("unclaimed")]))
+        pendingSource=nil
+        do {
+            _ = try await checkedCreate.value
+            preconditionFailure("an old channel form wrote after a delayed source read")
+        } catch let e as CrewdClientError {precondition(e.kind == .notSubmitted)}
+        precondition(transport.map(\.0) == ["todo.get"])
+        let oldConnection = workStore.readScope
+        workStore.invalidateConnection()
+        workStore.configureCapabilities(["channelWork"])
+        do {
+            _ = try await workStore.mutate(command.0, command.1, confirmingOriginalPlan: true,
+                                           scopeIsCurrent: { workStore.readScope == oldConnection })
+            preconditionFailure("an old form confirmed an original request after reconnect")
+        } catch let e as CrewdClientError { precondition(e.kind == .notSubmitted) }
+        precondition(transport.map(\.0) == ["todo.get"], "stale forms do not make read or write calls")
+        let made=try await workStore.mutate(command.0,command.1,confirmingOriginalPlan:true)
         precondition(made["channelAssociation"]["linked"] == .bool(false) && workStore.plans[CrewdWorkID("W12",kind:.plan)!]!.value["channelAssociation"] == .null,"unlinked confirmation remains a transient creation receipt, never canonical lifecycle/cache authority")
         let confirmed=try await workStore.createRequirement(requestID:ra.requestID,text:ra.text,channel:ra.channel)
         precondition(confirmed["channelAssociation"]["linked"] == .bool(false) && workStore.requirements[CrewdWorkID("#11",kind:.requirement)!]!["channelAssociation"] == .null)

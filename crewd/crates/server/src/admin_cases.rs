@@ -21,6 +21,24 @@ async fn route(
     let owner = state.clone();
     let by = actor.clone();
     match req.method.as_str() {
+        SIMILAR_REQUIREMENTS => {
+            let p: SimilarRequirementsParams = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), SIMILAR_REQUIREMENTS)?;
+                    crewd_collab::requirement_similarity::list(
+                        store.conn(),
+                        &p.crew_id,
+                        p.after,
+                        p.limit.unwrap_or(20),
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
         LEGACY_LIST => {
             let p: AdminCaseLegacyListParams = crewd_proto::parse_params(req.params)?;
             let view = state

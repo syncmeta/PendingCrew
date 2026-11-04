@@ -5,6 +5,7 @@ mod configuration;
 mod coordination;
 mod reassignment;
 mod retirement;
+mod requirement_similarity;
 pub(crate) use configuration::handle;
 use crewd_collab::judgments::InputSnapshot;
 use crewd_jev::provider::{
@@ -194,6 +195,7 @@ pub(crate) struct Runtime {
     admin_launch_cursor: Mutex<Option<String>>,
     admin_launch_pending: Mutex<std::collections::VecDeque<crewd_collab::admin_cases::CaseRef>>,
     admin_launch_inflight: Mutex<std::collections::BTreeSet<String>>,
+    similarity_slot: Arc<Semaphore>,
 }
 fn provider_config(c: &JudgmentConfig) -> DecisionConfig {
     DecisionConfig {
@@ -251,6 +253,7 @@ impl Runtime {
             admin_launch_cursor: Mutex::new(None),
             admin_launch_pending: Mutex::new(Default::default()),
             admin_launch_inflight: Mutex::new(Default::default()),
+            similarity_slot: Arc::new(Semaphore::new(1)),
         });
         // Settle old pending attempts without invoking a provider. A restored DB
         // has a different dbId and is historical instead of a new dispatch.
@@ -263,6 +266,9 @@ impl Runtime {
         this.recover_reassignment().await?;
         this.recover_retirement().await?;
         this.recover_admin_cases().await?;
+        if let Err(error) = this.recover_similarity().await {
+            eprintln!("crewd: requirement similarity recovery failed closed: {error}");
+        }
         // Import failures are visible discovery failures, not a reason to stop
         // the daemon or restart unknown administrative dispatches.
         if let Err(error) = this.scan_legacy_admin_cases().await {
@@ -278,6 +284,7 @@ impl Runtime {
                     event = rx.recv() => event,
                     _ = pending_tick.tick() => {
                         let Some(runtime) = weak.upgrade() else { break };
+                        runtime.schedule_similarity().await;
                         if let Err(e) = runtime.resume_pending_coordination().await {
                             eprintln!("crewd: coordination pending scan failed: {e}");
                         }
