@@ -61,6 +61,7 @@ struct CrewdKnowledgeWorkspaceView: View {
     @State private var showArchived = false
     @State private var confirmArchive: CrewdDataObject?
     @State private var editTarget: CrewdDataObjectDetail?
+    @State private var historyTarget: CrewdDataObjectDetail?
     @State private var previewToken = ""
     @State private var confirmingPreview = false
     var body: some View {
@@ -109,6 +110,10 @@ struct CrewdKnowledgeWorkspaceView: View {
                    editTarget.context.authorityId != current.authorityId || editTarget.context.crewId != current.crewId || editTarget.context.namespace != current.namespace {
                     self.editTarget = nil
                 }
+                if let current, let historyTarget,
+                   historyTarget.context.authorityId != current.authorityId || historyTarget.context.crewId != current.crewId || historyTarget.context.namespace != current.namespace {
+                    self.historyTarget = nil
+                }
             }
             // Native confirmations bind the state the user actually reviewed.
             confirmArchive = nil; restoreTarget = nil; confirmingPreview = false
@@ -127,6 +132,11 @@ struct CrewdKnowledgeWorkspaceView: View {
         .sheet(isPresented: Binding(get:{editTarget != nil},set:{if !$0 {editTarget=nil}})) {
             if let editTarget {
                 CrewdNativeDocumentEditor(store:store,parent:editTarget,scopeCurrent:{ true },onSaved:{ await reload() })
+            }
+        }
+        .sheet(isPresented: Binding(get:{historyTarget != nil},set:{if !$0 {historyTarget=nil}})) {
+            if let historyTarget {
+                CrewdNativeDocumentHistory(store:store,parent:historyTarget,scopeCurrent:{ true },onRestored:{ await reload() })
             }
         }
     }
@@ -167,6 +177,7 @@ struct CrewdKnowledgeWorkspaceView: View {
                 Text(detail.object.displayTitle).font(CrewdType.title)
                 Spacer()
                 if collection == .documents, store.canPrepareNativeDocumentEdit(detail) {
+                    Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = detail }.disabled(store.busy)
                     Button("编辑文档",systemImage:"pencil") { editTarget = detail }.disabled(store.busy || store.hasBlockingPending)
                 }
             }.padding(.horizontal,24).padding(.top,20).padding(.bottom,8)
@@ -312,13 +323,14 @@ private struct CrewdGroupKnowledgeView:View {
     @State private var reading=false
     @State private var failure:String?
     @State private var retry=UUID()
-    private struct EditTarget: Identifiable {
+    private struct DocumentTarget: Identifiable {
         let id = UUID()
         let parent: CrewdDataObjectDetail
         let channel: String
         let link: String
     }
-    @State private var editTarget: EditTarget?
+    @State private var editTarget: DocumentTarget?
+    @State private var historyTarget: DocumentTarget?
     init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){self.workspace=workspace;self.group=workspace.channelKnowledge;self.resources=workspace.channelResources;self.content=workspace.linkedKnowledge;self.library=workspace.knowledge;self.collection=collection}
     private var folder:Binding<String>{Binding(get:{workspace.resourceDrafts.selection(resources.crew,.documents,channel:resources.channel)},set:{workspace.resourceDrafts.select(resources.crew,.documents,$0,channel:resources.channel)})}
     private func folderObject(_ source:CrewdChannelKnowledgeReference)->CrewdValue {
@@ -378,15 +390,15 @@ private struct CrewdGroupKnowledgeView:View {
         .sheet(isPresented:$linking,onDismiss:{retry=UUID()}){CrewdKnowledgeLinkPicker(workspace:workspace,collection:collection)}
         .sheet(isPresented:$creating){CrewdNativeDocumentCreation(workspace:workspace)}
         .sheet(item:$editTarget){ target in
-            CrewdNativeDocumentEditor(store:content,parent:target.parent,scopeCurrent:{
-                group.crew == target.parent.context.crewId && group.channel == target.channel &&
-                    chosen?.id == target.link && chosen?.state == "ready"
-            },onSaved:{await refreshAfterEdit()})
+            CrewdNativeDocumentEditor(store:content,parent:target.parent,scopeCurrent:{ isCurrent(target) },onSaved:{await refreshAfterEdit()})
+        }
+        .sheet(item:$historyTarget){ target in
+            CrewdNativeDocumentHistory(store:content,parent:target.parent,scopeCurrent:{ isCurrent(target) },onRestored:{await refreshAfterEdit()})
         }
         .onChange(of:content.pending){_,_ in if collection == .documents {library.synchronizePending()}}
         .onChange(of:library.pending){_,pending in if collection == .documents && pending.isEmpty {library.synchronizePending()}}
-        .onChange(of:group.crew+group.channel){_,_ in selected=nil;linking=false;creating=false;editTarget=nil;failure=nil}
-        .onChange(of:collection){_,_ in selected=nil;editTarget=nil;content.renderer.revoke()}
+        .onChange(of:group.crew+group.channel){_,_ in selected=nil;linking=false;creating=false;editTarget=nil;historyTarget=nil;failure=nil}
+        .onChange(of:collection){_,_ in selected=nil;editTarget=nil;historyTarget=nil;content.renderer.revoke()}
         .onChange(of:chosen?.id){_,id in if id == nil{content.renderer.revoke()}}
         .controlSize(.small).tint(.gray)
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
@@ -435,8 +447,12 @@ private struct CrewdGroupKnowledgeView:View {
                 if chosen.state == "ready",let detail=content.detail,detail.object.identity == chosen.source.reference.id,
                    detail.resolvedContext.crewId == chosen.source.context.crewId {
                     if collection == .documents, group.crew == chosen.source.context.crewId, content.canPrepareNativeDocumentEdit(detail) {
-                        Button("编辑原文",systemImage:"pencil") { editTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
-                            .disabled(content.busy || content.hasBlockingPending).padding(.horizontal,24)
+                        HStack {
+                            Button("编辑原文",systemImage:"pencil") { editTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
+                                .disabled(content.busy || content.hasBlockingPending)
+                            Button("版本记录",systemImage:"clock.arrow.circlepath") { historyTarget = .init(parent:detail,channel:group.channel,link:chosen.id) }
+                                .disabled(content.busy)
+                        }.padding(.horizontal,24)
                     }
                     CrewdKnowledgeObjectSurface(store:content,detail:detail)
                 }else{CrewdEmptySurface(title:"原内容尚不可读",detail:chosen.state == "contextChanged" ? "原知识上下文已变化，引用保留；不会把历史对象当作当前正文。":"请核对当前权限与源机组状态。",symbol:"doc.questionmark")}
@@ -448,10 +464,154 @@ private struct CrewdGroupKnowledgeView:View {
     private func refreshAfterEdit() async {
         do { try await group.refresh(); retry = UUID() } catch { failure = error.localizedDescription }
     }
+    private func isCurrent(_ target: DocumentTarget) -> Bool {
+        group.crew == target.parent.context.crewId && group.channel == target.channel &&
+            chosen?.id == target.link && chosen?.state == "ready"
+    }
     private func unlink(_ item:CrewdChannelKnowledgeItem){
         guard !pendingLinks.contains(where: { $0.source.identity == item.id }),
               let revision=group.linkRevision,let snapshot=workspace.knowledgeLinkDrafts.begin(crew:group.crew,channel:group.channel,source:item.source,revision:revision,linked:false) else{return}
         Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if selected == item.id{selected=nil}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure=error.localizedDescription}}
+    }
+}
+
+private struct CrewdNativeDocumentHistory: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: CrewdKnowledgeStore
+    let parent: CrewdDataObjectDetail
+    let scopeCurrent: @MainActor () -> Bool
+    let onRestored: @MainActor () async -> Void
+    @State private var target: CrewdKnowledgeStore.NativeDocumentHistoryTarget?
+    @State private var current: CrewdKnowledgeStore.NativeDocumentEdit?
+    @State private var items: [CrewdKnowledgeStore.NativeDocumentRevision] = []
+    @State private var next: String?
+    @State private var selected: String?
+    @State private var preview: CrewdKnowledgeStore.NativeDocumentRevisionSnapshot?
+    @State private var working = true
+    @State private var confirming = false
+    @State private var attempted = false
+    @State private var failure: String?
+
+    private var currentScope: Bool { scopeCurrent() && store.canPrepareNativeDocumentEdit(parent) }
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            HStack { Text("文档版本记录").font(CrewdType.title); Spacer(); Button("关闭") { dismiss() }.disabled(working) }
+            if let target, currentScope {
+                Text("当前原文版本 \(target.head)。选择版本查看当时保存的正文。").font(CrewdType.caption)
+                ScrollView {
+                    LazyVStack(alignment:.leading,spacing:6) {
+                        ForEach(items) { item in
+                            Button { inspect(item,target:target) } label: { revisionRow(item) }
+                                .buttonStyle(.plain).accessibilityAddTraits(selected == item.revision ? .isSelected:[])
+                        }
+                        if let next { Button("读取更多版本") { loadMore(target,after:next) } }
+                    }.padding(4)
+                }.frame(maxHeight:180).disabled(working || store.busy)
+                if let preview {
+                    Text("版本 \(preview.revision.revision) · " + preview.revision.title).font(CrewdType.label)
+                    ScrollView { Text(preview.body).frame(maxWidth:.infinity,alignment:.leading).textSelection(.enabled) }
+                        .frame(minHeight:60,maxHeight:160)
+                    if let current {
+                        DisclosureGroup("对照当前原文") {
+                            Text(current.title).font(CrewdType.label)
+                            ScrollView { Text(current.body).frame(maxWidth:.infinity,alignment:.leading).textSelection(.enabled) }.frame(maxHeight:120)
+                        }
+                        if preview.revision.revision != target.head {
+                            Button("恢复为新版本…") { confirming = true }.buttonStyle(.borderedProminent)
+                                .disabled(working || attempted || store.busy || store.hasBlockingPending ||
+                                          !current.hasChanges(title:preview.revision.title,body:preview.body))
+                        }
+                    }
+                }
+            } else if !working && !currentScope {
+                Text("当前文档或连接已变化，请关闭并重新打开版本记录。").font(CrewdType.caption).foregroundStyle(.secondary)
+            }
+            if scopeCurrent() {
+                ForEach(store.pendingNativeDocumentEdits(viewID:parent.object.identity)) { intent in
+                    Button("查询原文档请求结果") { lookup(intent.id) }.disabled(working || store.busy)
+                }
+            }
+            if let failure { Text(failure).font(CrewdType.caption).foregroundStyle(.orange).textSelection(.enabled) }
+            if working { ProgressView().controlSize(.small) }
+        }.padding(20)
+        #if os(macOS)
+        .frame(minWidth:540)
+        #endif
+        .interactiveDismissDisabled(working)
+        .task { await loadInitial() }
+        .confirmationDialog("把所选版本的标题与正文保存为当前文档的新版本？",isPresented:$confirming) {
+            Button("恢复为新版本") { if let preview, let current { restore(preview,replacing:current) } }
+            Button("取消",role:.cancel) {}
+        } message: { Text("现有版本和群引用都会保留。") }
+    }
+    private func revisionRow(_ item: CrewdKnowledgeStore.NativeDocumentRevision) -> some View {
+        HStack(alignment:.top) {
+            VStack(alignment:.leading,spacing:4) {
+                Text("版本 \(item.revision) · " + item.title).font(CrewdType.label)
+                Text(item.updatedAt + (item.author == "human" ? " · 人类" : item.author == "session" ? " · Agent" : "") + (item.archived ? " · 当时已归档" : ""))
+                    .font(CrewdType.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if selected == item.revision { Image(systemName:"checkmark").accessibilityHidden(true) }
+        }.contentShape(Rectangle())
+    }
+    private func loadInitial() async {
+        defer { working = false }
+        do {
+            guard currentScope else { throw CrewdKnowledgeStore.Failure.stale }
+            let source = try store.nativeDocumentHistoryTarget(parent)
+            let live = try await store.prepareNativeDocumentEdit(parent)
+            let page = try await store.loadNativeDocumentRevisions(source)
+            guard currentScope else { throw CrewdKnowledgeStore.Failure.stale }
+            target = source; current = live; items = page.items; next = page.next
+        } catch { failure = "无法读取当前纯文本文档的版本记录。" }
+    }
+    private func loadMore(_ target: CrewdKnowledgeStore.NativeDocumentHistoryTarget, after: String) {
+        working = true
+        Task {
+            defer { working = false }
+            do {
+                let page = try await store.loadNativeDocumentRevisions(target,after:after)
+                guard currentScope else { throw CrewdKnowledgeStore.Failure.stale }
+                items.append(contentsOf:page.items); next = page.next; failure = nil
+            } catch { failure = "后续版本未读取，当前列表仍不完整。" }
+        }
+    }
+    private func inspect(_ item: CrewdKnowledgeStore.NativeDocumentRevision, target: CrewdKnowledgeStore.NativeDocumentHistoryTarget) {
+        working = true; selected = item.revision; preview = nil
+        Task {
+            defer { working = false }
+            do {
+                let snapshot = try await store.inspectNativeDocumentRevision(target,revision:item)
+                guard currentScope else { throw CrewdKnowledgeStore.Failure.stale }
+                preview = snapshot; failure = nil
+            } catch { failure = "该版本的原正文不可用。" }
+        }
+    }
+    private func restore(_ snapshot: CrewdKnowledgeStore.NativeDocumentRevisionSnapshot, replacing live: CrewdKnowledgeStore.NativeDocumentEdit) {
+        working = true; attempted = true
+        Task {
+            defer { working = false }
+            do {
+                guard currentScope else { throw CrewdKnowledgeStore.Failure.stale }
+                let result = try await store.restoreNativeDocumentRevision(snapshot,replacing:live)
+                if result?.phase == .committed { if scopeCurrent() { await onRestored() }; dismiss(); return }
+                if result == nil { await store.refresh() }
+                failure = store.hasBlockingPending ? "恢复结果待核对，请查询原文档请求。" : "恢复未确认，请重新打开文档核对。"
+            } catch let error as CrewdClientError { failure = error.localizedDescription }
+            catch { failure = "当前文档已变化，请重新打开后核对版本。" }
+        }
+    }
+    private func lookup(_ id: UUID) {
+        working = true
+        Task {
+            defer { working = false }
+            guard scopeCurrent() else { return }
+            await store.lookup(id)
+            if store.result.flatMap({ UUID(uuidString:$0.requestId) }) == id, store.result?.phase == .committed {
+                if scopeCurrent() { await onRestored() }; dismiss()
+            } else { failure = store.status }
+        }
     }
 }
 

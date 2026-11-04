@@ -14,6 +14,8 @@ import Foundation
     var rejectCAS = false
     var untypedConflict = false
     var beforeSubmitReply: (() async throws -> Void)?
+    var missingHistoricalCapture = false
+    var observedHistoricalReads: [(CrewdDataRef,String)] = []
     var protected = false
     var pinned = false
     var title = "原题"
@@ -40,13 +42,35 @@ import Foundation
         return .init(context:context,resolvedContext:context,generation:context.generation,object:object,references:references,affectedLiveViews:[view],affectedTruncated:false)
     }
 
+    func historicalView(_ revision: String) -> CrewdDataObjectDetail {
+        let visible = CrewdDataRefState.visible(reference:body)
+        let position = CrewdDataPlacement(id:placement,block:visible,atRevision:"3",layout:.object([:]))
+        let object = CrewdDataObject.view(id:view.id,revision:revision,title:"旧版\(revision)",definition:.document(placements:[position],layout:.object([:])),archived:false,provenance:provenance)
+        let references: [CrewdDataResolvedRef] = missingHistoricalCapture ? [] : [
+            .init(anchor:"placement:"+placement,target:visible,commit:nil,revision:"3",live:false,complete:true)
+        ]
+        return .init(context:context,resolvedContext:context,generation:context.generation,object:object,references:references,affectedLiveViews:[],affectedTruncated:false)
+    }
+
     func call(_ method: String, _ value: CrewdValue) async throws -> CrewdValue {
         switch method {
         case "data.workspace.get": return try CrewdKnowledgeStore.encode(info)
         case "data.object.list": return try CrewdKnowledgeStore.encode(CrewdDataObjectPage(context:context,generation:context.generation,items:[detail(view).object],next:nil))
         case "data.object.get":
             let reference = try CrewdKnowledgeStore.decode(value["reference"],CrewdDataRef.self)
+            if let revision = value["atRevision"].string {
+                observedHistoricalReads.append((reference,revision))
+                if reference == view { return try CrewdKnowledgeStore.encode(historicalView(revision)) }
+                precondition(reference == body && revision == "3")
+            }
             return try CrewdKnowledgeStore.encode(detail(reference))
+        case "data.history":
+            let input = try CrewdKnowledgeStore.decode(value,CrewdDataHistoryParams.self)
+            precondition(input.context == context && input.reference == view)
+            let start = (input.after.flatMap(Int.init) ?? 0) + 1
+            let end = min(start + Int(input.limit) - 1,Int(viewRevision)!)
+            let items = (start...end).map { historicalView(String($0)).object }
+            return try CrewdKnowledgeStore.encode(CrewdDataHistory(context:context,items:items,next:end < Int(viewRevision)! ? String(end):nil))
         case "data.submit":
             let attempt = try CrewdKnowledgeStore.decode(value,CrewdDataSubmitParams.self)
             sends.append(attempt)
@@ -114,10 +138,56 @@ import Foundation
             await store.refresh()
             await store.open(wire.view)
         }
+        let mode = CommandLine.arguments[1]
+        if mode == "history-paging" { wire.viewRevision = "26" }
         await read(store)
         let original = try await store.prepareNativeDocumentEdit(store.detail!)
-        let mode = CommandLine.arguments[1]
-        if mode == "title" {
+        if mode == "history-paging" {
+            let target = try store.nativeDocumentHistoryTarget(store.detail!)
+            let first = try await store.loadNativeDocumentRevisions(target)
+            precondition(first.items.count == 25 && first.next == "25")
+            let last = try await store.loadNativeDocumentRevisions(target,after:first.next)
+            precondition(last.items.map(\.revision) == ["26"] && last.next == nil && wire.sends.isEmpty)
+        } else if mode.hasPrefix("history-") {
+            let target = try store.nativeDocumentHistoryTarget(store.detail!)
+            let page = try await store.loadNativeDocumentRevisions(target)
+            precondition(page.items.map(\.revision) == ["1","2","3","4"] && page.next == nil)
+            wire.missingHistoricalCapture = mode == "history-missing"
+            if wire.missingHistoricalCapture {
+                do {
+                    _ = try await store.inspectNativeDocumentRevision(target,revision:page.items[0])
+                    preconditionFailure("missing capture cannot fall back to current body")
+                } catch {}
+                precondition(wire.observedHistoricalReads.count == 1 && wire.sends.isEmpty)
+            } else {
+                let old = try await store.inspectNativeDocumentRevision(target,revision:page.items[0])
+                precondition(old.revision.revision == "1" && old.body == "原文🌙")
+                precondition(wire.observedHistoricalReads.map(\.1) == ["1","3"])
+                precondition(store.detail?.object.revision == "4" && wire.sends.isEmpty)
+                if mode == "history-stale" {
+                    store.handleEvent("data.changed",.object(["crewId":.string("crew")]))
+                    do {
+                        _ = try await store.restoreNativeDocumentRevision(old,replacing:original)
+                        preconditionFailure("stale history cannot restore into a changed authority")
+                    } catch CrewdKnowledgeStore.Failure.stale {}
+                    precondition(wire.sends.isEmpty)
+                } else if mode == "history-restore" || mode == "history-lost" {
+                    wire.loseReply = mode == "history-lost"
+                    let receipt = try await store.restoreNativeDocumentRevision(old,replacing:original)
+                    precondition(wire.title == "旧版1" && wire.sends.count == 1)
+                    guard case .apply(let message,let edits) = wire.sends[0].change else { preconditionFailure("expected one atomic batch") }
+                    precondition(message == "恢复文档版本" && edits.count == 2)
+                    if wire.loseReply {
+                        precondition(receipt == nil)
+                        let reopened = try newStore(); await read(reopened)
+                        let id = reopened.pending.first!.id
+                        await reopened.lookup(id)
+                        precondition(!reopened.hasBlockingPending && reopened.result?.phase == .committed)
+                        precondition(wire.lookups == [wire.sends[0].requestId] && wire.sends.count == 1)
+                    } else { precondition(receipt?.phase == .committed) }
+                }
+            }
+        } else if mode == "title" {
             let result = try await store.submitNativeDocumentEdit(original,title:"新题",body:original.body)
             precondition(result?.phase == .committed && wire.sends.count == 1 && wire.title == "新题" && wire.text == original.body)
         } else if mode == "stale" {
@@ -225,8 +295,19 @@ import Foundation
         await store.open(view)
         guard let parent = store.detail else { throw CrewdKnowledgeStore.Failure.unavailable }
         let original = try await store.prepareNativeDocumentEdit(parent)
-        precondition(original.title == "原题" && original.body == "原文🌙")
-        let saved = try await store.submitNativeDocumentEdit(original,title:"新题",body:"新的正文 e\u{301}🌙")
+        let saved: CrewdDataChangeResult?
+        if let revision = config["restoreRevision"].string {
+            precondition(original.title == "新题" && original.body.utf8.elementsEqual("新的正文 e\u{301}🌙".utf8))
+            let target = try store.nativeDocumentHistoryTarget(parent)
+            let history = try await store.loadNativeDocumentRevisions(target)
+            guard let selected = history.items.first(where:{$0.revision == revision}) else { preconditionFailure("required original revision missing") }
+            let old = try await store.inspectNativeDocumentRevision(target,revision:selected)
+            precondition(old.revision.title == "原题" && old.body == "原文🌙")
+            saved = try await store.restoreNativeDocumentRevision(old,replacing:original)
+        } else {
+            precondition(original.title == "原题" && original.body == "原文🌙")
+            saved = try await store.submitNativeDocumentEdit(original,title:"新题",body:"新的正文 e\u{301}🌙")
+        }
         precondition(saved?.phase == .committed)
         try send(.object(["finished":try CrewdKnowledgeStore.encode(saved!)]))
     }

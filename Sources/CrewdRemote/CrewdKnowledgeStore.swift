@@ -56,6 +56,31 @@ import CryptoKit
             return result.created.isEmpty && result.changed == [view]
         }
     }
+    struct NativeDocumentHistoryTarget: Equatable {
+        var head: String { parent.object.revision }
+        fileprivate let origin: Origin
+        fileprivate let parent: CrewdDataObjectDetail
+        fileprivate let reference: CrewdDataRef
+    }
+    struct NativeDocumentRevision: Equatable, Identifiable {
+        var id: String { revision }
+        let revision: String
+        let title: String
+        let updatedAt: String
+        let author: String?
+        let archived: Bool
+    }
+    struct NativeDocumentRevisionPage {
+        let items: [NativeDocumentRevision]
+        let next: String?
+    }
+    struct NativeDocumentRevisionSnapshot {
+        let revision: NativeDocumentRevision
+        let body: String
+        fileprivate let target: NativeDocumentHistoryTarget
+        fileprivate let source: CrewdDataRef
+        fileprivate let sourceRevision: String
+    }
     enum Failure: Error { case unavailable, invalid, stale, unresolved, unsupported }
     typealias RPC = (String, CrewdValue) async throws -> CrewdValue
     @Published private(set) var workspace: CrewdDataWorkspaceInfo?
@@ -224,9 +249,9 @@ import CryptoKit
               value.resolvedContext.restoreEpoch == c.restoreEpoch, cut == nil || value.object.revision == cut else { throw Failure.invalid }
         return value
     }
-    private func call<P: Encodable, R: Decodable>(_ method: String, _ params: P) async throws -> R {
+    private func call<P: Encodable, R: Decodable>(_ method: String, _ params: P, preservingPresentation: Bool = false) async throws -> R {
         let input = try Self.encode(params)
-        let output = try await perform(method, input)
+        let output = try await (preservingPresentation ? rpc(method,input) : perform(method,input))
         if case .object = input["context"], case .object = output["context"] {
             let expected = try Self.decode(input["context"], CrewdDataContext.self)
             let actual = try Self.decode(output["context"], CrewdDataContext.self)
@@ -417,6 +442,88 @@ import CryptoKit
         guard let detail else { throw Failure.unavailable }
         return try await prepareNativeDocumentEdit(detail)
     }
+    func nativeDocumentHistoryTarget(_ parent: CrewdDataObjectDetail) throws -> NativeDocumentHistoryTarget {
+        guard canPrepareNativeDocumentEdit(parent), let active, let reference = detailReference,
+              Self.positiveRevision(parent.object.revision) != nil else { throw Failure.unsupported }
+        return .init(origin:active,parent:parent,reference:reference)
+    }
+    private static func positiveRevision(_ raw: String) -> Int64? {
+        guard let revision = Int64(raw), revision > 0, String(revision) == raw else { return nil }
+        return revision
+    }
+    private func checkNativeHistoryTarget(_ target: NativeDocumentHistoryTarget) throws {
+        guard active == target.origin, detailReference == target.reference,
+              canPrepareNativeDocumentEdit(target.parent) else { throw Failure.stale }
+    }
+    private func readNativeHistory<T>(_ target: NativeDocumentHistoryTarget, _ read: () async throws -> T) async throws -> T {
+        try checkNativeHistoryTarget(target)
+        let (o, token) = try begin()
+        defer { finish(o,token) }
+        let value = try await read()
+        guard current(o,token) else { throw Failure.stale }
+        try checkNativeHistoryTarget(target)
+        return value
+    }
+    private func nativeRevision(_ object: CrewdDataObject, target: NativeDocumentHistoryTarget) throws -> NativeDocumentRevision {
+        guard case .view(let id,let revision,let title,_,let archived,let provenance) = object,
+              id == target.reference.id, Self.positiveRevision(revision) != nil else { throw Failure.invalid }
+        return .init(revision:revision,title:title,updatedAt:provenance.updatedAt,author:provenance.updatedBy["kind"].string,archived:archived)
+    }
+    func loadNativeDocumentRevisions(_ target: NativeDocumentHistoryTarget, after: String? = nil) async throws -> NativeDocumentRevisionPage {
+        try await readNativeHistory(target) {
+            guard let head = Self.positiveRevision(target.head) else { throw Failure.invalid }
+            let start: Int64
+            if let after {
+                guard let cursor = Self.positiveRevision(after), cursor < head else { throw Failure.invalid }
+                start = cursor
+            } else { start = 0 }
+            let params = CrewdDataHistoryParams(context:target.parent.context,reference:target.reference,after:after,limit:25)
+            let page: CrewdDataHistory = try await call("data.history",params,preservingPresentation:true)
+            guard page.context == params.context, !page.items.isEmpty, page.items.count <= Int(params.limit) else { throw Failure.invalid }
+            let items = try page.items.map { try nativeRevision($0,target:target) }
+            var last = start
+            for item in items {
+                guard last < head, Self.positiveRevision(item.revision) == last + 1 else { throw Failure.invalid }
+                last += 1
+            }
+            guard page.next == (last < head ? String(last) : nil) else { throw Failure.invalid }
+            return .init(items:items,next:page.next)
+        }
+    }
+    func inspectNativeDocumentRevision(_ target: NativeDocumentHistoryTarget, revision: NativeDocumentRevision) async throws -> NativeDocumentRevisionSnapshot {
+        try await readNativeHistory(target) {
+            let context = target.parent.context
+            guard let requested = Self.positiveRevision(revision.revision), let head = Self.positiveRevision(target.head),
+                  requested <= head else { throw Failure.invalid }
+            let params = CrewdDataObjectGetParams(context:context,reference:target.reference,atRevision:revision.revision)
+            let historical: CrewdDataObjectDetail = try await call("data.object.get",params,preservingPresentation:true)
+            try checkNativeHistoryTarget(target)
+            let observed = try nativeRevision(historical.object,target:target)
+            guard historical.context == context, historical.resolvedContext == context, historical.generation == context.generation,
+                  observed == revision, observed.title.utf8.elementsEqual(revision.title.utf8),
+                  case .view(_,_,_,.document(let placements,_),_,_) = historical.object,
+                  placements.count == 1, let placement = placements.first,
+                  case .visible(let source) = placement.block, source.kind == "block", source.namespace == context.namespace,
+                  let pinned = placement.atRevision, Self.positiveRevision(pinned) != nil else { throw Failure.unsupported }
+            let captures = historical.references.filter { $0.anchor == "placement:" + placement.id }
+            guard captures.count == 1, let captured = captures.first, captured.complete, !captured.live,
+                  captured.target == placement.block, captured.revision == pinned else { throw Failure.unavailable }
+            let block: CrewdDataObjectDetail = try await call("data.object.get",
+                CrewdDataObjectGetParams(context:context,reference:source,atRevision:pinned),preservingPresentation:true)
+            guard block.context == context, block.resolvedContext == context, block.generation == context.generation,
+                  case .block(let id,let actual,"text/plain",.string(let body),_,_) = block.object,
+                  id == source.id, actual == pinned else { throw Failure.unavailable }
+            return .init(revision:observed,body:body,target:target,source:source,sourceRevision:pinned)
+        }
+    }
+    func restoreNativeDocumentRevision(_ snapshot: NativeDocumentRevisionSnapshot, replacing edit: NativeDocumentEdit) async throws -> CrewdDataChangeResult? {
+        try checkNativeHistoryTarget(snapshot.target)
+        guard snapshot.target.origin == edit.origin, snapshot.target.parent == edit.parent,
+              snapshot.target.reference == edit.view,
+              let revision = Self.positiveRevision(snapshot.revision.revision),
+              let head = Self.positiveRevision(snapshot.target.head), revision < head else { throw Failure.stale }
+        return try await submitNativeDocumentChange(edit,title:snapshot.revision.title,body:snapshot.body,restoring:snapshot)
+    }
     func pendingNativeDocumentEdits(viewID: String? = nil, crew: String? = nil) -> [Intent] {
         guard let active, origin() == active, crew == nil || crew == active.crew else { return [] }
         return pending.filter { intent in
@@ -430,18 +537,22 @@ import CryptoKit
         finish(o,token)
     }
     func submitNativeDocumentEdit(_ edit: NativeDocumentEdit, title: String, body: String) async throws -> CrewdDataChangeResult? {
+        try await submitNativeDocumentChange(edit,title:title,body:body)
+    }
+    private func submitNativeDocumentChange(_ edit: NativeDocumentEdit, title: String, body: String, restoring snapshot: NativeDocumentRevisionSnapshot? = nil) async throws -> CrewdDataChangeResult? {
         guard !busy, active == edit.origin, canPrepareNativeDocumentEdit(edit.parent) else { throw Failure.stale }
         let revision = edit.parent.object.revision
         guard !title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, title.utf8.count <= 512, body.utf8.count <= 1_048_576,
               edit.hasChanges(title:title,body:body), let currentRevision = Int64(revision), currentRevision > 0,
               currentRevision < Int64.max else { throw Failure.invalid }
-        let bodyChanged = !body.utf8.elementsEqual(edit.body.utf8)
+        let bodyChanged = snapshot != nil || !body.utf8.elementsEqual(edit.body.utf8)
         let placement: CrewdDataPlacementEdit
         var edits: [CrewdDataEdit] = []
         if bodyChanged {
-            // Existing live consumers continue to read the old block. The new body
-            // keeps a pinned provenance link to the exact original revision.
-            let source = CrewdDataSourceInput(reference:.existing(reference:edit.bodyRef),atRevision:edit.bodyRevision,attributes:.object([:]))
+            // Keep the exact historical source on restore, or the edited body
+            // on a regular edit. Other views keep their original live block.
+            let source = CrewdDataSourceInput(reference:.existing(reference:snapshot?.source ?? edit.bodyRef),
+                                             atRevision:snapshot?.sourceRevision ?? edit.bodyRevision,attributes:.object([:]))
             edits.append(.createBlock(alias:"replacementBody",contentType:"text/plain",content:.string(body),sources:[source],attributes:edit.bodyAttributes))
             placement = .set(id:edit.placement.id,alias:nil,block:.created(alias:"replacementBody"),atRevision:nil,layout:edit.placement.layout)
         } else {
@@ -450,7 +561,7 @@ import CryptoKit
         edits.append(.updateView(id:edit.view.id,expectedRevision:revision,title:title,
                                  definition:.document(placements:[placement],layout:edit.layout),sources:nil,attributes:edit.viewAttributes))
         let witness = NativeDocumentEditReceipt(view:.init(reference:edit.view,revision:String(currentRevision + 1)),replacedBody:bodyChanged ? edit.bodyRef:nil)
-        return try await submitNativeChange(.apply(message:"编辑文档",edits:edits),documentEdit:witness)
+        return try await submitNativeChange(.apply(message:snapshot == nil ? "编辑文档" : "恢复文档版本",edits:edits),documentEdit:witness)
     }
     func nativeDocumentStage(channel:String)throws->CrewdPresentationJournal.DocumentStage? {
         guard let o=active,origin() == o else{throw Failure.stale}
