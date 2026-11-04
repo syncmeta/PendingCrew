@@ -264,6 +264,7 @@ fn sql_effect(
     tx: &mut collab::Tx<'_>,
     command: PublicCommand,
     actor: &Actor,
+    request_id: &str,
 ) -> collab::Result<Value> {
     let value = match command {
         PublicCommand::LocalClientTrust(p) => {
@@ -326,6 +327,9 @@ fn sql_effect(
         PublicCommand::RequirementReview(p) => serde_json::to_value(collab::requirement_review::apply(tx, p)?),
         PublicCommand::WorkDuplicateClose(p) => serde_json::to_value(collab::work_duplicate_review::close(tx, p)?),
         PublicCommand::AskResolve(p) => serde_json::to_value(collab::ask_resolution::resolve(tx, p)?),
+        PublicCommand::RequirementRuleClose(p) => serde_json::to_value(
+            collab::requirement_ruling::close(tx, &Sender::Human, request_id, p)?,
+        ),
         _ => {
             return Err(crewd_store::StoreError::Invalid(
                 "external command requires production scheduler".into(),
@@ -358,6 +362,7 @@ async fn submit(
         | PublicCommand::RequirementReview(_)
         | PublicCommand::WorkDuplicateClose(_)
         | PublicCommand::AskResolve(_)
+        | PublicCommand::RequirementRuleClose(_)
         | PublicCommand::MessagePost(_) => submit_sql(state, actor, p).await,
         PublicCommand::CodexConfigure(_)
         | PublicCommand::CodexCompact(_)
@@ -439,6 +444,7 @@ async fn submit_sql_with_home(
             | PublicCommand::RequirementReview(_)
             | PublicCommand::WorkDuplicateClose(_)
             | PublicCommand::AskResolve(_)
+            | PublicCommand::RequirementRuleClose(_)
             | PublicCommand::MessagePost(_)
     ) {
         return Err(RpcError::new(
@@ -470,7 +476,7 @@ async fn submit_sql_with_home(
                         p.command.clone(),
                         service_home.as_deref(),
                     )?;
-                    let result = sql_effect(tx, command, &own_actor)?;
+                    let result = sql_effect(tx, command, &own_actor, &p.request_id)?;
                     // Existing receipts return above without any filesystem effect.
                     if let Some(directory) = directory {
                         create_first_message_directory(&directory)?;

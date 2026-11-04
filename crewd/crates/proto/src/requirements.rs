@@ -23,6 +23,107 @@ pub struct TodoCloseParams {
     pub expected_status: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementRulingParams {
+    pub crew_id: String,
+    pub id: String,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementRulingCheckParams {
+    pub crew_id: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequirementRulingState {
+    Ready,
+    NotNeedsRuling,
+    ReviewIncomplete,
+    Stale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementRulingCheck {
+    pub crew_id: String,
+    pub id: String,
+    pub state: RequirementRulingState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_revision: Option<String>,
+    pub linked_work_count: usize,
+    pub work: Vec<RequirementRulingWork>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_after: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequirementRulingDrop {
+    Duplicate,
+    Superseded,
+    NotNeeded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementRulingWork {
+    pub id: String,
+    pub crew_id: String,
+    pub title: String,
+    pub revision: String,
+    pub drop_kind: RequirementRulingDrop,
+    pub drop_note: String,
+    pub drop_note_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementRuleCloseParams {
+    pub crew_id: String,
+    pub id: String,
+    pub expected_revision: String,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequirementRulingBy {
+    Human,
+    Captain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementRulingReceipt {
+    pub crew_id: String,
+    pub id: String,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub note: String,
+    pub closed_at_ms: i64,
+    pub event_seq: String,
+    pub by: RequirementRulingBy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captain: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequirementRulingResult {
+    pub crew_id: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<RequirementRulingReceipt>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RequirementClosure {
     pub note: String,

@@ -185,6 +185,8 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "admin_case_handoff_accept" => admin_cases::accept(&cx, args).await,
         "my_work_items" => work::mine(&cx, args).await,
         "todo_get" => work::todo_get(&cx, args).await,
+        crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL => work::todo_ruling_check(&cx, args).await,
+        crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL => work::todo_ruling_close(&cx, args).await,
         "work_item_get" => work::get(&cx, args).await,
         "work_item_history" => work::history(&cx, args).await,
         "work_item_create" => work::create(&cx, args).await,

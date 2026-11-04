@@ -1116,6 +1116,33 @@ true 也查看已移除机组中的工作，默认 false。返回 frozen:true �
 
 已发放的原始需求编号，例如 #7。
 
+## todo_ruling_check
+核对需求直接关联的工作为何被放弃。仅当前机组机长可用。请以同一修订逐页读完，最后一页提供明确关闭需求所需的 closeRevision。
+
+## todo_ruling_check.id
+原始需求的全局 # 编号。
+
+## todo_ruling_check.after
+填写同一次核对前一页的 nextAfter。
+
+## todo_ruling_check.expected_revision
+继续同一次核对时，填写第一页的 revision。
+
+## todo_ruling_close
+在直接关联的工作均被放弃后，记录机长明确结束该需求的裁定。使用最后一页的 closeRevision 和原请求编号，原需求及工作历史仍可查阅。
+
+## todo_ruling_close.id
+原始需求的全局 # 编号。
+
+## todo_ruling_close.expected_revision
+填写当前核对最后一页的 closeRevision。
+
+## todo_ruling_close.request_id
+为本次裁定生成规范 UUID，精确重试时沿用原编号。
+
+## todo_ruling_close.note
+写明为何结束此需求，最多 4096 个 UTF-8 字节。
+
 ## work_item_transfer_request
 
 由当前负责人向真实分机提出交接；目标接受前负责人不变。

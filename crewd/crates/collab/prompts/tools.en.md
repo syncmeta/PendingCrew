@@ -1086,6 +1086,33 @@ Read one original requirement by its issued public # ID. Returns the unchanged h
 
 Issued requirement ID, for example #7.
 
+## todo_ruling_check
+Review why the direct work for a requirement was dropped. Only the current captain of the requirement's crew may use this tool. Read every page at the same revision. The final page provides closeRevision for an explicit decision to end the requirement.
+
+## todo_ruling_check.id
+Original public requirement # ID.
+
+## todo_ruling_check.after
+Copy nextAfter from the preceding page of the same review.
+
+## todo_ruling_check.expected_revision
+Copy revision from the first page when continuing the same review.
+
+## todo_ruling_close
+Record the captain's explicit decision to end a requirement after all direct work was dropped. Use the final page's closeRevision and the original request ID. The requirement and work history remain available.
+
+## todo_ruling_close.id
+Original public requirement # ID.
+
+## todo_ruling_close.expected_revision
+Use closeRevision from the final page of this requirement's current review.
+
+## todo_ruling_close.request_id
+Create a canonical UUID for this decision and retain it for an exact retry.
+
+## todo_ruling_close.note
+Explain why work on this requirement is ending, in up to 4096 UTF-8 bytes.
+
 ## work_item_transfer_request
 
 Offer this work to another session; only its current owner can request. Ownership changes only after the target accepts.

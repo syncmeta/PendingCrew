@@ -84,7 +84,11 @@ final class CrewdPublicCommands: ObservableObject {
             try finish(prepared, unresolved ? "unknown" : "replyObserved", nil)
             return receipt
         } catch {
-            let uncertain = CrewdClientError.isUncertainSubmission(error) || (error as? CrewdClientError)?.code == -32603
+            let failure = error as? CrewdClientError
+            // This named refusal rolls back both the receipt reservation and ruling.
+            let rulingWithoutReceipt = envelope.operation == .requirementRuleClose && failure?.kind != .notSubmitted &&
+                !CrewdRequirementRulingWire.requiresFreshReview(error)
+            let uncertain = rulingWithoutReceipt || CrewdClientError.isUncertainSubmission(error) || failure?.code == -32603
             observations[envelope.requestID]?.failure = error.localizedDescription
             // If receipt decoding/presentation persistence failed, the single
             // submitted identity stays unresolved even if SQL may have committed.

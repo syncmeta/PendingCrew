@@ -847,6 +847,16 @@ async fn request_step(
             *forwarder = Some(task);
             return RequestStep::Continue;
         }
+        Ok(req) if crate::requirement_ruling::handles(&req.method) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(req.id, crate::dispatch::refused(
+                    RpcError::FORBIDDEN,
+                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::TodoHumanOnly),
+                )))
+            } else {
+                ServerFrame::Response(crate::requirement_ruling::handle(state, &peer.command_actor(), req).await)
+            }
+        }
         Ok(req)
             if matches!(
                 req.method.as_str(),
@@ -904,7 +914,6 @@ async fn request_step(
                         | methods::FOLDER_DELETE
                         | methods::FOLDER_ASSIGN
                         | methods::TODO_CREATE
-                        | methods::TODO_CLOSE
                         | methods::WORK_CLOSE
                         | methods::WORK_CREATE
                         | methods::WORK_UPDATE
@@ -923,7 +932,7 @@ async fn request_step(
                     crewd_collab::refusal::Refusal::new(
                         if matches!(
                             req.method.as_str(),
-                            methods::TODO_CREATE | methods::TODO_CLOSE
+                            methods::TODO_CREATE
                         ) {
                             crewd_collab::refusal::Code::TodoHumanOnly
                         } else if req.method.starts_with("work.") {

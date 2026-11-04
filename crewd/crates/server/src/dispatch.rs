@@ -324,6 +324,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     admin_cases::WORK_DUPLICATE_HISTORY,
                     methods::ASK_RESOLVE_CHECK,
                     crewd_proto::commands::ASK_RESOLVE,
+                    methods::TODO_RULING_CHECK,
+                    methods::TODO_RULING_RESULT,
+                    crewd_proto::commands::TODO_RULE_CLOSE,
                 ]
                 .into_iter()
                 .map(str::to_owned),
@@ -875,12 +878,15 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let p: TodoGetParams = parse_params(p)?;
             read(state, move |c| crewd_collab::requirements::get(c, &p.id)).await
         }
+        #[cfg(test)]
         methods::TODO_CLOSE => {
             let p: TodoCloseParams = parse_params(p)?;
-            write(state, move |tx| {
-                crewd_collab::requirements::close(tx, &Sender::Human, p)
-            })
-            .await
+            write(state, move |tx| crewd_collab::requirement_ruling::close_legacy(tx, p)).await
+        }
+        method if crate::requirement_ruling::handles(method) => {
+            Err(refused(RpcError::FORBIDDEN, crewd_collab::refusal::Refusal::new(
+                crewd_collab::refusal::Code::TodoHumanOnly,
+            )))
         }
         methods::TODO_LIST => {
             let p: TodoListParams = parse_params(p)?;

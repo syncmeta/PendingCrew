@@ -466,6 +466,9 @@ expectedStatus 必须是原始需求状态。
 
 原始需求 {id} 已从 {expected} 变成 {actual}；刷新后再裁定。
 
+## todo.ruling_review_required
+请重新核对需求 {id} 当前关联的工作，再作裁定。
+
 ## resource.invalid
 {field}无效，请修正该字段后重试。
 

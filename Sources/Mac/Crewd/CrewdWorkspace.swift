@@ -1193,7 +1193,8 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements", "adminCase.requirementReviews",
-            "adminCase.workDuplicates", "adminCase.workDuplicateHistory", "ask.resolveCheck", "work.coordinationStatus"].contains(method) { return true }
+            "adminCase.workDuplicates", "adminCase.workDuplicateHistory", "ask.resolveCheck", "work.coordinationStatus",
+            "todo.rulingCheck", "todo.rulingResult"].contains(method) { return true }
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
         return method.hasSuffix(".list") || method.hasSuffix(".get") || method.hasSuffix(".inspect") || method.hasSuffix(".live") || method.hasSuffix(".history") || method.hasSuffix(".pending") || method.hasSuffix(".receipts") || method.hasSuffix(".usage") || ["remote.status", "remote.grants", "system.hello", "events.subscribe", "todo.attributesGet", "resource.requestLookup", "channel.knowledgeList", "session.codex.models", "session.codex.tools", "session.codex.permissionProfiles", "session.codex.inputLookup", "session.claude.taskGet", "session.claude.recoveryInspect"].contains(method)
     }
@@ -1385,6 +1386,20 @@ final class CrewdWorkspace: ObservableObject {
                           $0.envelope.params["crewId"] == .string(crew) && $0.envelope.params["ask"] == .string(ask)
                   }) else { throw CrewdClientError(message:"此问题已有原请求待核对，或当前连接尚未具备回执资格。",kind:.notSubmitted) }
         }
+        if operation == .requirementRuleClose {
+            guard workStore.supportsRequirementRuling, originalJournalReady, let journal = originalJournal,
+                  !crew.isEmpty, crew == crewID, crew == workStore.selectedCrew,
+                  params["crewId"] == .string(crew), let id = params["id"].string else {
+                throw CrewdClientError(message:"当前连接或机组尚未具备需求裁定资格。",kind:.notSubmitted)
+            }
+            do { durableUnknown = try journal.unknownRecords() }
+            catch { throw CrewdClientError(message:"无法核对原裁定历史，本次尚未发送。",kind:.notSubmitted) }
+            guard originalRequirementRulingRecords(crew:crew,id:id).isEmpty,
+                  !publicCommands.observations.values.contains(where:{
+                      publicCommands.pending.contains($0.id) && $0.envelope.operation == .requirementRuleClose &&
+                          $0.envelope.params["crewId"] == .string(crew) && $0.envelope.params["id"] == .string(id)
+                  }) else { throw CrewdClientError(message:"该需求已有原裁定请求待核对。",kind:.notSubmitted) }
+        }
         if operation.isCodex {
             let session=params["target"]["sessionId"].string
             guard client.capabilities.contains("session.codex"),session != nil else{throw CrewdClientError(message:"当前后台未接入 Codex 会话控制。",kind:.notSubmitted)}
@@ -1446,6 +1461,35 @@ final class CrewdWorkspace: ObservableObject {
         let receipt = try await lookupOriginalCommand(record)
         if let receipt, [.committed,.rejected,.suppressed].contains(receipt.phase) {
             try acknowledgeOriginalCommand(record,receipt:receipt)
+            if receipt.phase == .committed { workDirty = true; scheduleSync() }
+        }
+        return receipt
+    }
+    func originalRequirementRulingRecords(crew: String, id: String? = nil) -> [CrewdPresentationJournal.Prepared] {
+        durableUnknown.filter { record in
+            let command = record.params["command"], params = command["params"]
+            return isCurrentOriginalObservation(record) && record.method == "command.submit" &&
+                command["operation"] == .string(CrewdPublicOperation.requirementRuleClose.rawValue) &&
+                params["crewId"] == .string(crew) && (id == nil || params["id"].string == id)
+        }
+    }
+    func submitRequirementRuling(_ review: CrewdRequirementRulingWire.Review, note: String, scope: UUID) async throws -> CrewdPublicReceipt {
+        guard !Task.isCancelled, review.crew == crewID, workStore.readScope == scope else { throw CancellationError() }
+        let receipt = try await submitPublicCommand(.requirementRuleClose,params:try review.parameters(note:note),crew:review.crew)
+        if receipt.phase == .committed { workDirty = true; scheduleSync() }
+        return receipt
+    }
+    func recoverRequirementRuling(_ original: CrewdPresentationJournal.Prepared, crew: String, id: String, scope: UUID) async throws -> CrewdPublicReceipt? {
+        func current() -> Bool {
+            !Task.isCancelled && crewID == crew && workStore.selectedCrew == crew && workStore.readScope == scope
+        }
+        guard current(), originalRequirementRulingRecords(crew:crew,id:id).contains(where:{ $0.id == original.id }) else {
+            throw CrewdPublicWire.invalid()
+        }
+        let receipt = try await lookupOriginalCommand(original)
+        guard current() else { throw CancellationError() }
+        if let receipt, [.committed,.rejected,.suppressed].contains(receipt.phase) {
+            try acknowledgeOriginalCommand(original,receipt:receipt)
             if receipt.phase == .committed { workDirty = true; scheduleSync() }
         }
         return receipt
@@ -1642,7 +1686,8 @@ final class CrewdWorkspace: ObservableObject {
         let operation = record.params["command"]["operation"].string
         let historicalRecordedRequest = receipt.historical &&
             [CrewdPublicOperation.patrolStart.rawValue, CrewdPublicOperation.requirementReview.rawValue,
-             CrewdPublicOperation.workDuplicateClose.rawValue,CrewdPublicOperation.askResolve.rawValue].contains(operation ?? "") &&
+             CrewdPublicOperation.workDuplicateClose.rawValue,CrewdPublicOperation.askResolve.rawValue,
+             CrewdPublicOperation.requirementRuleClose.rawValue].contains(operation ?? "") &&
             [.committed, .rejected, .suppressed].contains(receipt.phase)
         guard record.scope == presentationScope, !receipt.historical || historicalRecordedRequest,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,

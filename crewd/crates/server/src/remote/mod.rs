@@ -1125,6 +1125,9 @@ fn allowed_method(method: &str) -> bool {
             | "todo.create"
             | "todo.get"
             | "todo.close"
+            | crewd_proto::methods::TODO_RULING_CHECK
+            | crewd_proto::methods::TODO_RULING_RESULT
+            | crewd_proto::commands::TODO_RULE_CLOSE
             | "work.list"
             | "work.get"
             | "work.create"

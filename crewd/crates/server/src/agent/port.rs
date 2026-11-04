@@ -2175,6 +2175,41 @@ pub async fn todo_get(st: &AppState, id: &str) -> PortResult<crewd_proto::Requir
     read(st, move |c| crewd_collab::requirements::get(c, &id)).await
 }
 
+pub(crate) async fn todo_ruling_check(
+    st: &AppState,
+    by: &Identity,
+    mut p: crewd_proto::RequirementRulingCheckParams,
+) -> PortResult<crewd_proto::RequirementRulingCheck> {
+    let authority = scoped_actor(st, by)?;
+    let by = by.clone();
+    read(st, move |c| {
+        validate_scoped_actor(c, &authority, &by)?;
+        if !authority.state.admission.contains(&by.session_id) {
+            return Err(scoped_actor_denied());
+        }
+        p.crew_id = crewd_collab::requirement_ruling::subject_crew(c, &p.id)?;
+        crewd_collab::requirement_ruling::check(c, &Sender::Session(by.session_id), &p)
+    }).await
+}
+
+pub(crate) async fn todo_ruling_close(
+    st: &AppState,
+    by: &Identity,
+    request: String,
+    mut p: crewd_proto::RequirementRuleCloseParams,
+) -> PortResult<crewd_proto::RequirementRulingReceipt> {
+    let authority = scoped_actor(st, by)?;
+    let by = by.clone();
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &authority, &by)?;
+        if !authority.state.admission.contains(&by.session_id) {
+            return Err(scoped_actor_denied());
+        }
+        p.crew_id = crewd_collab::requirement_ruling::subject_crew(tx.conn(), &p.id)?;
+        crewd_collab::requirement_ruling::close(tx, &Sender::Session(by.session_id), &request, p)
+    }).await
+}
+
 pub async fn work_transfer_request(
     st: &AppState,
     session: &str,

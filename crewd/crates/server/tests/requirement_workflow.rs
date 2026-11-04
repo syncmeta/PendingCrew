@@ -209,8 +209,17 @@ async fn public_requirement_create_retry_cross_crew_source_done_and_agent_read_a
 }
 
 #[tokio::test]
-async fn all_dropped_requirement_needs_human_ruling_and_retains_exact_closure_note() {
+async fn all_dropped_requirement_ruling_uses_exact_evidence_and_recovers_original_receipt() {
     let f = Fixture::new().await;
+    f.enable_public_command_identity().await;
+    let other = f.add_crew("second implementing crew", None).await;
+    f.add_session(
+        &other,
+        "other-implementation-owner",
+        Role::Worker,
+        "Other owner",
+    )
+    .await;
     let (stop, stopping) = tokio::sync::oneshot::channel();
     let task = f.spawn_owned_socket(stopping).await;
     let socket = f.data_dir().join("crewd.sock");
@@ -224,12 +233,13 @@ async fn all_dropped_requirement_needs_human_ruling_and_retains_exact_closure_no
     )
     .await;
     let mut owner = attach(&f, &socket, &f.worker).await;
+    let first_reason = "first implementation was superseded";
     let dropped = tool(
         &mut owner,
         "work_item_update",
         json!({
             "id":plan["id"],"expected_revision":plan["revision"],"status":"dropped",
-            "note":"superseded synthetic implementation"
+            "note":first_reason
         }),
     )
     .await;
@@ -238,29 +248,165 @@ async fn all_dropped_requirement_needs_human_ruling_and_retains_exact_closure_no
     assert_eq!(ruling["status"], "needs_ruling");
     assert!(ruling["closure"].is_null());
     let before = snapshot(&f).await;
-    assert!(
-        call(
-            &mut human,
+    let target = json!({"crewId":f.crew,"id":id});
+    let first = rpc(&mut human, "todo.rulingCheck", target.clone()).await;
+    assert_eq!(first["state"], "ready");
+    assert_eq!(first["linkedWorkCount"], 1);
+    assert!(first["closeRevision"].is_string());
+    assert_eq!(first["work"][0]["id"], plan["id"]);
+    assert_eq!(first["work"][0]["revision"], dropped["revision"]);
+    assert_eq!(first["work"][0]["dropKind"], "not_needed");
+    assert_eq!(first["work"][0]["dropNote"], first_reason);
+    assert!(rpc(&mut human, "todo.rulingResult", target.clone()).await["receipt"].is_null());
+    for (method, params) in [
+        (
             "todo.close",
-            json!({"id":id,"expectedStatus":"unclaimed","note":"stale ruling"})
-        )
-        .await
-        .is_err()
-    );
+            json!({"id":id,"expectedStatus":"needs_ruling","note":"legacy bypass"}),
+        ),
+        ("todo.rulingCheck", json!({"crewId":other,"id":id})),
+    ] {
+        assert!(call(&mut human, method, params).await.is_err());
+    }
+    for method in ["todo.rulingCheck", "todo.rulingResult"] {
+        assert!(call(&mut owner, method, target.clone()).await.is_err());
+    }
     assert_eq!(snapshot(&f).await, before);
-    let note =
-        "Human chose to retire original requirement after its implementation was superseded.";
-    let closed = rpc(
+
+    // A legal cross-crew link returns the # to the very same displayed
+    // status after it is dropped. The first witness must still be stale.
+    let second = rpc(
         &mut human,
-        "todo.close",
-        json!({"id":id,"expectedStatus":"needs_ruling","note":note}),
+        "work.create",
+        json!({"crewId":other,"title":"other implementation","owner":"other-implementation-owner","sources":[id]}),
     )
     .await;
+    let mut other_owner = attach(&f, &socket, "other-implementation-owner").await;
+    tool(
+        &mut other_owner,
+        "work_item_update",
+        json!({"id":second["id"],"expected_revision":second["revision"],"status":"dropped","note":"other approach withdrawn"}),
+    )
+    .await;
+    assert_eq!(
+        rpc(&mut human, "todo.get", json!({"id":id})).await["status"],
+        "needs_ruling"
+    );
+    for n in 0..31 {
+        let extra = rpc(
+            &mut human,
+            "work.create",
+            json!({"crewId":f.crew,"title":format!("withdrawn alternative {n}"),"sources":[id]}),
+        )
+        .await;
+        rpc(
+            &mut human,
+            "work.update",
+            json!({"id":extra["id"],"expectedRevision":extra["revision"],"status":"dropped","note":"alternative discarded"}),
+        )
+        .await;
+    }
+    let current = rpc(&mut human, "todo.rulingCheck", target.clone()).await;
+    assert_eq!(current["state"], "ready");
+    assert_eq!(current["linkedWorkCount"], 33);
+    assert_eq!(current["work"].as_array().unwrap().len(), 32);
+    assert_ne!(current["revision"], first["revision"]);
+    assert_eq!(current["nextAfter"], current["work"][31]["id"]);
+    assert!(current["closeRevision"].is_null());
+    let foreign = current["work"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == second["id"])
+        .unwrap();
+    assert_eq!(foreign["crewId"], other);
+    assert_eq!(foreign["dropNote"], "other approach withdrawn");
+    let stale_page = rpc(
+        &mut human,
+        "todo.rulingCheck",
+        json!({"crewId":f.crew,"id":id,"after":current["nextAfter"],"expectedRevision":first["revision"]}),
+    )
+    .await;
+    assert_eq!(stale_page["state"], "stale");
+    assert!(stale_page["closeRevision"].is_null());
+    let final_page = rpc(
+        &mut human,
+        "todo.rulingCheck",
+        json!({"crewId":f.crew,"id":id,"after":current["nextAfter"],"expectedRevision":current["revision"]}),
+    )
+    .await;
+    assert_eq!(final_page["revision"], current["revision"]);
+    assert_eq!(final_page["linkedWorkCount"], 33);
+    assert_eq!(final_page["work"].as_array().unwrap().len(), 1);
+    assert_ne!(final_page["work"][0]["id"], current["nextAfter"]);
+    assert!(final_page["nextAfter"].is_null());
+    assert!(final_page["closeRevision"].is_string());
+
+    let hello = rpc(&mut human, "system.hello", json!({})).await;
+    let identity = &hello["runtimeIdentity"];
+    let note =
+        "Human chose to retire original requirement after its implementation was superseded.";
+    let packet = |revision: &Value| {
+        json!({
+            "requestId":uuid::Uuid::new_v4().to_string(),
+            "dbId":identity["dbId"],
+            "runtimeBindingId":identity["runtimeBindingId"],
+            "command":{
+                "operation":"todo.ruleClose",
+                "params":{"crewId":f.crew,"id":id,"expectedRevision":revision,"note":note}
+            }
+        })
+    };
+    for invalid in [&first["closeRevision"], &current["revision"]] {
+        let packet = packet(invalid);
+        let lookup = json!({"requestId":packet["requestId"],"dbId":packet["dbId"]});
+        let denied = call(&mut human, "command.submit", packet).await.unwrap_err();
+        assert_eq!(denied.0, -32009);
+        assert!(rpc(&mut human, "command.lookup", lookup).await.is_null());
+    }
+    assert!(rpc(&mut human, "todo.rulingResult", target.clone()).await["receipt"].is_null());
+    assert_eq!(
+        rpc(&mut human, "todo.get", json!({"id":id})).await["status"],
+        "needs_ruling"
+    );
+
+    let command = packet(&final_page["closeRevision"]);
+    let denied = call(&mut owner, "command.submit", command.clone()).await;
+    assert!(denied.is_err() || denied.unwrap()["phase"] == "rejected");
+    // Rejected requests may receive a terminal journal receipt, but none
+    // can change the source review or close the original requirement.
+    assert_eq!(
+        rpc(&mut human, "todo.rulingCheck", target.clone()).await,
+        current
+    );
+    let receipt = rpc(&mut human, "command.submit", command.clone()).await;
+    assert_eq!(receipt["phase"], "committed");
+    let result = &receipt["result"];
+    assert_eq!(result["id"], id);
+    assert_eq!(result["crewId"], f.crew);
+    assert_eq!(result["requestId"], command["requestId"]);
+    assert_eq!(result["expectedRevision"], final_page["closeRevision"]);
+    assert_eq!(result["by"], "human");
+    assert_eq!(result["note"], note);
+    let closed = rpc(&mut human, "todo.get", json!({"id":id})).await;
     assert_eq!(closed["status"], "closed");
     assert_eq!(closed["closure"]["note"], note);
     assert!(closed["closure"]["at"].is_string());
-    assert_eq!(rpc(&mut human, "todo.get", json!({"id":id})).await, closed);
-    drop((human, owner));
+    let before = snapshot(&f).await;
+    drop(human);
+    let mut reopened = RpcClient::connect(&socket).await;
+    let lookup = json!({"requestId":command["requestId"],"dbId":command["dbId"]});
+    assert_eq!(rpc(&mut reopened, "command.lookup", lookup).await, receipt);
+    assert_eq!(rpc(&mut reopened, "command.submit", command).await, receipt);
+    assert_eq!(
+        rpc(&mut reopened, "todo.rulingResult", target).await["receipt"],
+        *result
+    );
+    assert_eq!(
+        snapshot(&f).await,
+        before,
+        "receipt recovery must be read-only"
+    );
+    drop((reopened, owner, other_owner));
     close_socket(task, stop).await;
 }
 

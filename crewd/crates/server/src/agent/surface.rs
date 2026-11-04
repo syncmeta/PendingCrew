@@ -66,7 +66,7 @@ mod tests {
                 "hash must cover the golden, not a constant"
             );
             assert_eq!(value["worker"].as_array().unwrap().len(), 53);
-            assert_eq!(value["captain"].as_array().unwrap().len(), 67);
+            assert_eq!(value["captain"].as_array().unwrap().len(), 69);
             let instructions = value["instructions"].as_str().unwrap();
             assert!(!instructions.is_empty() && instructions.lines().count() <= 3);
         }

@@ -188,6 +188,7 @@ struct CrewdWorkPanels: View {
     @State private var actionTarget: CrewdPlanTarget?
     @State private var humanTarget:CrewdHumanTarget?
     @State private var documentTarget: CrewdWorkDocumentTarget?
+    @State private var rulingTarget: CrewdRequirementRulingTarget?
     @State private var selectedRequirement: CrewdWorkID?
     @State private var openingPlan = false
     @State private var closing:Set<CrewdWorkID>=[]
@@ -288,6 +289,9 @@ struct CrewdWorkPanels: View {
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
         .sheet(item: $documentTarget) { target in
             if let workspace = patrolWorkspace { CrewdWorkDocumentSheet(workspace: workspace, work: store, target: target) }
+        }
+        .sheet(item:$rulingTarget) { target in
+            if let workspace = patrolWorkspace { CrewdRequirementRulingView(store:store,workspace:workspace,target:target) }
         }
     }
     private var pageBackground:Color {
@@ -511,7 +515,16 @@ struct CrewdWorkPanels: View {
         if raw["closure"] != .null {
             Text("关闭理由：" + (raw["closure"]["note"].string ?? "")).textSelection(.enabled)
         }
-        if status == "unclaimed" || status == "needs_ruling" {
+        if store.offersRequirementRuling && (status == "needs_ruling" || status == "closed") {
+            if patrolWorkspace != nil, store.supportsRequirementRuling, let crew = raw["crewId"].string,
+               crew == store.selectedCrew {
+                Button(status == "closed" ? "核对裁定回执" : "核对需求裁定") {
+                    rulingTarget = .init(workID:id,crew:crew,scope:store.readScope)
+                }
+            } else if status == "needs_ruling" {
+                Text("当前连接尚未具备完整的需求裁定核对。")
+            }
+        } else if status == "unclaimed" || status == "needs_ruling" {
             TextField("如果不再继续，请写明关闭理由",text:Binding(get:{closeNotes[id] ?? ""},set:{closeNotes[id]=$0}),axis:.vertical).lineLimit(2...4).disabled(closing.contains(id))
             Button(closing.contains(id) ? "提交中":"有理由关闭需求") {
                 let original=note, crew=store.selectedCrew

@@ -536,7 +536,7 @@ enum CrewdAskResolutionWire {
         guard let text = value.string, text.utf8.count == 64 else { return false }
         return text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
-    private static func trim(_ text: String) -> String {
+    fileprivate static func trim(_ text: String) -> String {
         // Rust uses the Unicode White_Space property for str::trim.
         let start = text.unicodeScalars.drop(while:{ $0.properties.isWhitespace })
         return String(String.UnicodeScalarView(start.reversed().drop(while:{ $0.properties.isWhitespace }).reversed()))
@@ -551,6 +551,173 @@ enum CrewdAskResolutionWire {
     }
     static func invalid() -> CrewdClientError {
         .init(message:"原问题、版本或处理回执不符。请核对原请求。")
+    }
+}
+
+enum CrewdRequirementRulingWire {
+    static let methods = ["todo.rulingCheck", "todo.ruleClose", "todo.rulingResult"]
+    enum State: String { case ready, stale, notNeedsRuling = "not_needs_ruling", incomplete = "review_incomplete" }
+    enum DropKind: String { case duplicate, superseded, notNeeded = "not_needed" }
+    enum Actor: String { case human, captain }
+
+    struct Review: Equatable {
+        struct Work: Equatable, Identifiable {
+            let id: String
+            let crew: String
+            let title: String
+            let revision: String
+            let drop: DropKind
+            let dropNote: String
+            let dropNoteTruncated: Bool
+        }
+        let crew: String
+        let id: String
+        let state: State
+        let revision: String?
+        let closeRevision: String?
+        let linkedWorkCount: Int
+        let work: [Work]
+        let nextAfter: String?
+        var complete: Bool { state == .ready && closeRevision != nil && nextAfter == nil && work.count == linkedWorkCount }
+
+        init(_ value: CrewdValue, crew: String, id: String, after: String? = nil, expectedRevision: String? = nil) throws {
+            guard case .object(let fields) = value,
+                  Set(fields.keys).isSubset(of:["crewId","id","state","revision","closeRevision","linkedWorkCount","work","nextAfter"]),
+                  identity(value,crew:crew,id:id), let rawState = value["state"].string,
+                  let state = State(rawValue:rawState), let count = value["linkedWorkCount"].int, count >= 0,
+                  case .array(let rows) = value["work"] else { throw invalid() }
+            let revision = fields["revision"]?.string
+            let next = fields["nextAfter"]?.string
+            let closeRevision = fields["closeRevision"]?.string
+            guard state != .stale || after != nil else { throw invalid() }
+            if state == .ready {
+                guard let revision, digest(revision), expectedRevision.map({ $0 == revision }) ?? true,
+                      (1...32).contains(rows.count), rows.count <= count,
+                      fields["nextAfter"] == nil || next != nil else { throw invalid() }
+                if next == nil {
+                    guard let closeRevision, digest(closeRevision), closeRevision != revision else { throw invalid() }
+                } else if fields["closeRevision"] != nil { throw invalid() }
+            } else {
+                guard fields["revision"] == nil, fields["closeRevision"] == nil,
+                      fields["nextAfter"] == nil, rows.isEmpty else { throw invalid() }
+            }
+            let work = try rows.map { row -> Work in
+                guard case .object(let fields) = row,
+                      Set(fields.keys) == ["id","crewId","title","revision","dropKind","dropNote","dropNoteTruncated"],
+                      let id = row["id"].string, publicID(id,prefix:"W"), let title = row["title"].string,
+                      title.unicodeScalars.count <= 200,
+                      let crew = row["crewId"].string, token(crew),
+                      let revision = row["revision"].string, positive(revision),
+                      let rawDrop = row["dropKind"].string, let drop = DropKind(rawValue:rawDrop),
+                      let note = row["dropNote"].string, note.unicodeScalars.count <= 500,
+                      case .bool(let truncated) = row["dropNoteTruncated"] else { throw invalid() }
+                return .init(id:id,crew:crew,title:title,revision:revision,drop:drop,dropNote:note,dropNoteTruncated:truncated)
+            }
+            let ids = Set(work.map(\.id))
+            guard ids.count == work.count, next == nil || next == work.last?.id else { throw invalid() }
+            if let after, state == .ready {
+                guard publicID(after,prefix:"W"), !ids.contains(after) else { throw invalid() }
+            } else if state == .ready {
+                guard next == nil ? work.count == count : work.count < count else { throw invalid() }
+            }
+            self.crew = crew; self.id = id; self.state = state; self.revision = revision; self.closeRevision = closeRevision
+            linkedWorkCount = count; self.work = work; nextAfter = next
+        }
+
+        private init(_ previous: Self, page: Self) {
+            crew = previous.crew; id = previous.id; state = previous.state; revision = previous.revision; closeRevision = page.closeRevision
+            linkedWorkCount = previous.linkedWorkCount; work = previous.work + page.work; nextAfter = page.nextAfter
+        }
+
+        func appending(_ page: Self) throws -> Self {
+            guard state == .ready, page.state == .ready, crew == page.crew, id == page.id,
+                  revision == page.revision, linkedWorkCount == page.linkedWorkCount, nextAfter != nil,
+                  Set(work.map(\.id)).isDisjoint(with:page.work.map(\.id)) else { throw invalid() }
+            let combined = Self(self,page:page)
+            guard combined.nextAfter == nil ? combined.complete : combined.work.count < linkedWorkCount else { throw invalid() }
+            return combined
+        }
+
+        func parameters(note: String) throws -> CrewdValue {
+            guard complete, let closeRevision else { throw invalid() }
+            return try canonical(.object(["crewId":.string(crew),"id":.string(id),
+                "expectedRevision":.string(closeRevision),"note":.string(note)]))
+        }
+    }
+
+    struct Receipt: Equatable {
+        let id: String
+        let requestID: UUID
+        let revision: String
+        let note: String
+        let closedAtMs: Int
+        let eventSequence: String
+        let actor: Actor
+        let captain: String?
+
+        init(_ value: CrewdValue, crew: String, id: String) throws {
+            guard case .object(let fields) = value,
+                  Set(fields.keys).isSubset(of:["crewId","id","requestId","expectedRevision","note","closedAtMs","eventSeq","by","captain"]),
+                  identity(value,crew:crew,id:id), let request = value["requestId"].string,
+                  let uuid = UUID(uuidString:request), request == uuid.uuidString.lowercased(),
+                  let revision = value["expectedRevision"].string, digest(revision),
+                  let note = value["note"].string, validNote(note), trimmed(note).utf8.elementsEqual(note.utf8),
+                  let time = value["closedAtMs"].int, time >= 0,
+                  let seq = value["eventSeq"].string, positive(seq),
+                  let rawActor = value["by"].string, let actor = Actor(rawValue:rawActor) else { throw invalid() }
+            let captain = fields["captain"]?.string
+            switch actor {
+            case .human: guard fields["captain"] == nil else { throw invalid() }
+            case .captain: guard let captain, token(captain) else { throw invalid() }
+            }
+            self.id = id; requestID = uuid; self.revision = revision; self.note = note
+            closedAtMs = time; eventSequence = seq; self.actor = actor; self.captain = captain
+        }
+    }
+
+    static func result(_ value: CrewdValue, crew: String, id: String) throws -> Receipt? {
+        guard case .object(let fields) = value, Set(fields.keys).isSubset(of:["crewId","id","receipt"]),
+              identity(value,crew:crew,id:id) else { throw invalid() }
+        return try fields["receipt"].map { try Receipt($0,crew:crew,id:id) }
+    }
+
+    static func canonical(_ params: CrewdValue) throws -> CrewdValue {
+        guard case .object(let fields) = params, Set(fields.keys) == ["crewId","id","expectedRevision","note"],
+              let crew = params["crewId"].string, token(crew), let id = params["id"].string, publicID(id,prefix:"#"),
+              let revision = params["expectedRevision"].string, digest(revision),
+              let note = params["note"].string, validNote(note) else { throw invalid() }
+        return params
+    }
+
+    static func validateResult(_ value: CrewdValue, params: CrewdValue, request: UUID) throws {
+        _ = try canonical(params)
+        let receipt = try Receipt(value,crew:params["crewId"].string ?? "",id:params["id"].string ?? "")
+        guard receipt.actor == .human, receipt.requestID == request,
+              receipt.revision == params["expectedRevision"].string,
+              let note = params["note"].string, receipt.note.utf8.elementsEqual(trimmed(note).utf8) else { throw invalid() }
+    }
+
+    static func validNote(_ text: String) -> Bool { text.utf8.count <= 4_096 && !trimmed(text).isEmpty }
+    static func requiresFreshReview(_ error: Error) -> Bool {
+        guard let failure = error as? CrewdClientError else { return false }
+        return failure.code == -32009 && failure.refusal == "todo.ruling_review_required"
+    }
+    static func invalid() -> CrewdClientError { .init(message:"需求、关联计划或原裁决回执与本次读取不符。") }
+    private static func trimmed(_ text: String) -> String { CrewdAskResolutionWire.trim(text) }
+    private static func token(_ raw: String) -> Bool { !raw.isEmpty && raw.utf8.count <= 4_096 }
+    private static func positive(_ raw: String) -> Bool {
+        guard let number = UInt64(raw), number > 0 else { return false }
+        return String(number) == raw
+    }
+    private static func publicID(_ raw: String, prefix: Character) -> Bool {
+        guard raw.first == prefix, let number = Int64(raw.dropFirst()), number > 0 else { return false }
+        return raw == "\(prefix)\(number)"
+    }
+    private static func digest(_ raw: String) -> Bool {
+        raw.utf8.count == 64 && raw.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+    private static func identity(_ value: CrewdValue, crew: String, id: String) -> Bool {
+        token(crew) && publicID(id,prefix:"#") && value["crewId"] == .string(crew) && value["id"] == .string(id)
     }
 }
 

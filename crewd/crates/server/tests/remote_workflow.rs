@@ -1129,6 +1129,134 @@ async fn paired_and_local_manual_patrol_refuse_fresh_intent_without_scheduler() 
 }
 
 #[tokio::test]
+async fn paired_human_recovers_unread_requirement_ruling_after_restart_and_loses_access_on_revoke()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let options = || crewd_server::ServeOptions {
+        orchestra: Some(crewd_server::OrchestraServe::default()),
+        ..Default::default()
+    };
+    let mut running = service_with(dir.path(), options()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({"title":"isolated ruling crew","workingDirectory":dir.path()}),
+        )
+        .await["id"]
+        .clone();
+    let todo = remote
+        .call(
+            "todo.create",
+            json!({"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"text":"original decision after all plans dropped"}),
+        )
+        .await;
+    let id = &todo["requirementId"];
+    let work = remote
+        .call(
+            "work.create",
+            json!({"crewId":crew,"title":"withdrawn plan","sources":[id]}),
+        )
+        .await;
+    remote
+        .call(
+            "work.update",
+            json!({"id":work["id"],"expectedRevision":work["revision"],"status":"dropped","note":"alternative is unavailable"}),
+        )
+        .await;
+    let target = json!({"crewId":crew,"id":id});
+    let review = remote.call("todo.rulingCheck", target.clone()).await;
+    assert_eq!(review["state"], "ready");
+    assert_eq!(review["work"][0]["dropNote"], "alternative is unavailable");
+    let packet = draft_packet(
+        &hello,
+        "todo.ruleClose",
+        json!({"crewId":crew,"id":id,"expectedRevision":review["closeRevision"],"note":"recorded Human decision"}),
+    );
+    let lookup = json!({"dbId":packet["dbId"],"requestId":packet["requestId"]});
+    let unread = json!({"id":1000,"method":"command.submit","params":packet});
+    remote
+        .io
+        .get_mut()
+        .write_all(format!("{unread}\n").as_bytes())
+        .await
+        .unwrap();
+    // Observe commit through another authenticated connection. The
+    // submitting connection never consumes its command response.
+    let mut observer = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let original = tokio::time::timeout(LIMIT, async {
+        loop {
+            let receipt = observer.call("command.lookup", lookup.clone()).await;
+            if receipt["phase"] == "committed" {
+                break receipt;
+            }
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(original["result"]["requestId"], packet["requestId"]);
+    assert_eq!(original["result"]["note"], "recorded Human decision");
+    assert_eq!(
+        observer.call("todo.rulingResult", target.clone()).await["receipt"],
+        original["result"]
+    );
+    let (other_cert, _, _) = approved(&mut running.owner, &identity).await;
+    let mut other = RemoteRpc::connect(port, &other_cert, &identity.spki_sha256).await;
+    assert_eq!(
+        other.call("todo.rulingResult", target.clone()).await["receipt"],
+        original["result"]
+    );
+    assert!(other.call("command.lookup", lookup.clone()).await.is_null());
+    let copied = tokio::time::timeout(LIMIT, other.frame("command.submit", packet))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(copied["error"].is_object() || copied["result"]["phase"] == "rejected");
+    drop(other);
+    drop((remote, observer));
+    stopped(running).await;
+
+    let mut running = service_with(dir.path(), options()).await;
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            if local(&mut running.owner, "remote.status", json!({})).await["listening"] == true {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let reopened = remote.call("command.lookup", lookup.clone()).await;
+    assert_eq!(reopened["phase"], "committed");
+    assert_eq!(reopened["historical"], true);
+    assert_eq!(reopened["result"], original["result"]);
+    assert_eq!(
+        remote.call("todo.rulingResult", target.clone()).await["receipt"],
+        original["result"]
+    );
+    local(
+        &mut running.owner,
+        "remote.revoke",
+        json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"ruling fixture complete"}),
+    )
+    .await;
+    for (method, params) in [("todo.rulingResult", target), ("command.lookup", lookup)] {
+        let denied = tokio::time::timeout(LIMIT, remote.frame(method, params))
+            .await
+            .unwrap();
+        assert!(denied.is_err() || denied.unwrap()["error"].is_object());
+    }
+    drop(remote);
+    stopped(running).await;
+}
+
+#[tokio::test]
 async fn paired_human_manual_patrol_has_original_receipt_and_scoped_progress_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     let options = || crewd_server::ServeOptions {

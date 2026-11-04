@@ -13,6 +13,7 @@ struct CrewdPatrolView: View {
     @State private var casesPresented=false
     @State private var similarPresented = false
     @State private var duplicatePresented = false
+    @State private var rulingTarget: CrewdRequirementRulingTarget?
     @State private var archived:[CrewdValue]=[]
     @State private var archivedLoaded=false
     @State private var rows: [CrewdValue] = []
@@ -37,6 +38,9 @@ struct CrewdPatrolView: View {
             }
             if workspace != nil, store.capabilities.contains("adminCase.workDuplicates") {
                 Button("复核重复工作") { duplicatePresented = true }
+            }
+            if let workspace, store.supportsRequirementRuling {
+                requirementRulings(workspace)
             }
             Button("读取当前机组已归档群") {readArchived()}
             if archivedLoaded && archived.isEmpty {Text("当前机组没有已归档群。")}
@@ -71,6 +75,9 @@ struct CrewdPatrolView: View {
                             Text(row["id"].string ?? "未知对象").font(.headline).textSelection(.enabled)
                             Text(summary(row))
                             if scan == "channels" {Button("核实归档条件") {archiveTarget=row["id"].string}}
+                            if scan == "entries", row["needsRuling"] == .bool(true), let id = row["id"].string {
+                                rulingButton(id)
+                            }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -84,8 +91,11 @@ struct CrewdPatrolView: View {
         .sheet(isPresented: $duplicatePresented) {
             if let workspace { CrewdWorkDuplicateReviewView(store:store,workspace:workspace) }
         }
+        .sheet(item:$rulingTarget) { target in
+            if let workspace { CrewdRequirementRulingView(store:store,workspace:workspace,target:target) }
+        }
         .onChange(of: scan) { _, _ in reset() }
-        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; duplicatePresented=false; archived=[]; archivedLoaded=false; readStatus() }
+        .onChange(of: store.readScope) { _, _ in reset(); clearStatus(); archiveTarget=nil; casesPresented=false; similarPresented=false; duplicatePresented=false; rulingTarget=nil; archived=[]; archivedLoaded=false; readStatus() }
         .onAppear { readStatus() }
         .onDisappear { cancel(); clearStatus() }
         .task(id: activeManualRun) {
@@ -142,6 +152,10 @@ struct CrewdPatrolView: View {
                         }
                         if let brief = try? CrewdPatrolBrief(run: run) {
                             briefSection(brief)
+                        } else if group.kind == .needsRuling, workspace != nil, store.supportsRequirementRuling {
+                            VStack(alignment:.leading,spacing:4) {
+                                ForEach(group.references,id:\.self) { id in rulingButton(id) }
+                            }.frame(maxWidth:.infinity,alignment:.leading)
                         } else {
                             Text("本轮简报无法读取。可使用下方的实时检查。").foregroundStyle(.orange)
                         }
@@ -149,6 +163,18 @@ struct CrewdPatrolView: View {
                 }
             }
         }.font(.caption)
+    }
+    @ViewBuilder private func rulingButton(_ raw: String) -> some View {
+        if workspace != nil, store.supportsRequirementRuling, let id = CrewdWorkID(raw,kind:.requirement) {
+            Button("核对需求裁定 " + raw) { openRuling(id) }
+        }
+    }
+    private func requirementRulings(_ workspace: CrewdWorkspace) -> some View {
+        CrewdRequirementRulingAccess(workspace:workspace,crew:store.selectedCrew,open:openRuling)
+            .id(store.readScope)
+    }
+    private func openRuling(_ id: CrewdWorkID) {
+        rulingTarget = .init(workID:id,crew:store.selectedCrew,scope:store.readScope)
     }
     private func briefSection(_ brief: CrewdPatrolBrief) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -250,6 +276,237 @@ struct CrewdPatrolView: View {
         if !row["longWaits"].array.isEmpty { facts.append("有人类决定等待较久") }
         if row["longWaitsTruncated"] == .bool(true) { facts.append("等待项仅显示部分") }
         return facts.isEmpty ? "本次未发现上述运转问题" : facts.joined(separator: "；")
+    }
+}
+
+private struct CrewdRequirementRulingAccess: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    let crew: String
+    let open: (CrewdWorkID) -> Void
+    @State private var raw = ""
+    private var id: CrewdWorkID? { CrewdWorkID(raw.trimmingCharacters(in:.whitespacesAndNewlines),kind:.requirement) }
+
+    var body: some View {
+        DisclosureGroup("需求裁定与回执") {
+            HStack {
+                TextField("需求编号 #…",text:$raw).textFieldStyle(.roundedBorder)
+                Button("读取裁定") { if let id { open(id) } }.disabled(id == nil || crew.isEmpty)
+            }
+            ForEach(workspace.originalRequirementRulingRecords(crew:crew)) { original in
+                if let raw = original.params["command"]["params"]["id"].string,
+                   let id = CrewdWorkID(raw,kind:.requirement) {
+                    Button("核对原裁定请求 " + raw) { open(id) }
+                }
+            }
+        }.font(.caption)
+    }
+}
+
+struct CrewdRequirementRulingTarget: Identifiable {
+    let workID: CrewdWorkID
+    let crew: String
+    let scope: UUID
+    var id: CrewdWorkID { workID }
+}
+
+struct CrewdRequirementRulingView: View {
+    typealias Wire = CrewdRequirementRulingWire
+    @ObservedObject var store: CrewdWorkStore
+    @ObservedObject var workspace: CrewdWorkspace
+    let target: CrewdRequirementRulingTarget
+    @Environment(\.dismiss) private var dismiss
+    @State private var open = false
+    @State private var work: Task<Void,Never>?
+    @State private var readID = UUID()
+    @State private var writing = false
+    @State private var review: Wire.Review?
+    @State private var text: String?
+    @State private var currentReceipt: Wire.Receipt?
+    @State private var historicalReceipt: Wire.Receipt?
+    @State private var note = ""
+    @State private var confirm = false
+    @State private var failure: String?
+    @State private var notice: String?
+
+    private var id: CrewdWorkID { target.workID }
+    private var crew: String { target.crew }
+    private var scope: UUID { target.scope }
+    private var current: Bool {
+        open && !crew.isEmpty && crew == store.selectedCrew && crew == workspace.crewID &&
+            scope == store.readScope && store.supportsRequirementRuling && workspace.client.readyForWork
+    }
+    private var originals: [CrewdPresentationJournal.Prepared] {
+        workspace.originalRequirementRulingRecords(crew:crew,id:id.raw)
+    }
+    private var canClose: Bool {
+        current && workspace.originalJournalReady && !writing && work == nil && originals.isEmpty &&
+            currentReceipt == nil && review?.complete == true && Wire.validNote(note)
+    }
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            HStack {
+                Text("需求裁定 " + id.raw).font(.headline)
+                Spacer()
+                Button("重新读取") { read() }.disabled(!current || writing || work != nil)
+                Button("关闭") { dismiss() }.disabled(writing)
+            }
+            if writing || work != nil { ProgressView().controlSize(.small) }
+            if let failure { Text(failure).foregroundStyle(.orange) }
+            if let notice { Text(notice).foregroundStyle(.secondary) }
+            if current {
+                ScrollView {
+                    VStack(alignment:.leading,spacing:10) {
+                        if let text { Text(verbatim:text).textSelection(.enabled) }
+                        ForEach(originals) { original in
+                            Text("原请求 " + (original.params["requestId"].string ?? "")).textSelection(.enabled)
+                            Button("只读查询原请求") { recover(original) }.disabled(writing || work != nil)
+                        }
+                        if let currentReceipt { receipt(currentReceipt,title:"已核实裁定回执") }
+                        if let historicalReceipt { receipt(historicalReceipt,title:"原请求的历史裁定回执") }
+                        if let review { facts(review) }
+                    }.frame(maxWidth:.infinity,alignment:.leading)
+                }
+            } else { Text("当前机组连接尚未就绪。") }
+        }
+        .padding().modifier(CrewdAdaptiveFormFrame(width:540,height:470,scrolls:false))
+        .interactiveDismissDisabled(writing)
+        .onAppear { open = true; read() }
+        .onChange(of:store.readScope) { _,_ in dismiss() }
+        .onDisappear { open = false; cancelRead() }
+        .onReceive(workspace.authorityEvents) { event in
+            let (name,data) = event
+            guard current, !writing, work != nil || review != nil,
+                  name.hasPrefix("work.") || name.hasPrefix("todo.") || name == "crew.changed" || name == "events.lagged" else { return }
+            if !name.hasPrefix("work."), let changedCrew = data["crewId"].string, changedCrew != crew { return }
+            cancelRead(); review = nil; confirm = false
+            notice = "关联事实已变化，请重新读取后裁定。"
+        }
+        .confirmationDialog("确认有理由关闭需求？",isPresented:$confirm) {
+            Button("关闭需求 " + id.raw,role:.destructive) { submit() }.disabled(!canClose)
+            Button("取消",role:.cancel) {}
+        } message: { Text("将记录原需求、复核依据和裁定理由。关联计划保留原状。") }
+    }
+
+    @ViewBuilder private func facts(_ value: Wire.Review) -> some View {
+        switch value.state {
+        case .ready:
+            Text(value.complete ? "已核实 \(value.linkedWorkCount) 项关联计划均已作废" :
+                "已读取 \(value.work.count) / \(value.linkedWorkCount) 项关联计划").font(.subheadline.weight(.semibold))
+            ForEach(value.work) { row in
+                VStack(alignment:.leading,spacing:3) {
+                    Text(verbatim:row.id + " · " + row.title).textSelection(.enabled)
+                    Text("版本 " + row.revision + " · " + dropLabel(row.drop)).foregroundStyle(.secondary)
+                    if row.crew != crew { Text("所属机组 " + row.crew).font(.caption).textSelection(.enabled) }
+                    Text(verbatim:row.dropNote).textSelection(.enabled)
+                    if row.dropNoteTruncated { Text("以上为作废理由摘录。").font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+            Text("如需继续，可返回此需求的新建计划入口。")
+                .font(.caption).foregroundStyle(.secondary)
+            if value.complete {
+                TextField("裁定理由（必填）",text:$note,axis:.vertical).lineLimit(2...4)
+                    .disabled(writing || !originals.isEmpty)
+                Button("复核并确认关闭…") { confirm = true }.disabled(!canClose)
+            } else {
+                Button("读取其余关联计划") { read(continuing:value) }.disabled(work != nil || writing)
+            }
+        case .notNeedsRuling:
+            if currentReceipt == nil { Text("该需求当前无需裁定。") }
+        case .incomplete:
+            Text("当前无法完整核对 \(value.linkedWorkCount) 项关联计划，暂不可关闭。")
+                .foregroundStyle(.orange)
+        case .stale:
+            Text("关联计划在读取期间发生变化，请重新从第一页读取。").foregroundStyle(.orange)
+        }
+    }
+
+    private func receipt(_ value: Wire.Receipt, title: String) -> some View {
+        VStack(alignment:.leading,spacing:4) {
+            Text(title).font(.subheadline.weight(.semibold))
+            Text(value.actor == .human ? "由人裁定" : "由机长 " + (value.captain ?? "") + " 裁定")
+            Text(verbatim:value.note)
+            Text("事件 " + value.eventSequence + " · " + Date(timeIntervalSince1970:Double(value.closedAtMs) / 1000).formatted())
+            Text("原请求 " + value.requestID.uuidString.lowercased()).font(.caption)
+        }.textSelection(.enabled)
+    }
+
+    private func dropLabel(_ kind: Wire.DropKind) -> String {
+        switch kind {
+        case .duplicate: "重复"
+        case .superseded: "已被替代"
+        case .notNeeded: "决定不再执行"
+        }
+    }
+
+    private func cancelRead() { readID = UUID(); work?.cancel(); work = nil }
+
+    private func read(continuing previous: Wire.Review? = nil) {
+        guard current, !writing else { return }
+        cancelRead(); confirm = false; failure = nil; notice = nil
+        if previous == nil { review = nil; currentReceipt = nil; text = nil }
+        let request = readID
+        work = Task { @MainActor in
+            defer { if readID == request { work = nil } }
+            do {
+                if previous == nil {
+                    let recorded = try await store.requirementRulingResult(id,crew:crew)
+                    guard current, readID == request, !Task.isCancelled else { return }
+                    currentReceipt = recorded
+                    let detail = try await store.requirementDetail(id,expectedCrew:crew)
+                    guard current, readID == request, !Task.isCancelled else { return }
+                    text = detail["text"].string
+                    if recorded != nil { return }
+                }
+                let check = try await store.requirementRulingCheck(id,crew:crew,continuing:previous)
+                guard current, readID == request, !Task.isCancelled else { return }
+                review = check
+            } catch is CancellationError {} catch {
+                if current && readID == request { failure = error.localizedDescription }
+            }
+        }
+    }
+
+    private func submit() {
+        guard canClose, let review else { return }
+        let reason = note
+        writing = true; failure = nil; notice = nil; self.review = nil
+        Task { @MainActor in
+            defer { writing = false }
+            guard current else { return }
+            do { try observe(await workspace.submitRequirementRuling(review,note:reason,scope:scope)) }
+            catch {
+                if current {
+                    failure = Wire.requiresFreshReview(error) ? "裁定依据已变化。请重新读取需求及关联计划。" : error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func recover(_ original: CrewdPresentationJournal.Prepared) {
+        guard current, !writing, work == nil else { return }
+        writing = true; failure = nil; notice = nil
+        Task { @MainActor in
+            defer { writing = false }
+            guard current else { return }
+            do { try observe(await workspace.recoverRequirementRuling(original,crew:crew,id:id.raw,scope:scope)) }
+            catch { if current { failure = error.localizedDescription } }
+        }
+    }
+
+    private func observe(_ original: CrewdPublicReceipt?) throws {
+        guard current else { return }
+        review = nil
+        switch original?.phase {
+        case .committed:
+            guard let original else { throw Wire.invalid() }
+            let value = try Wire.Receipt(original.value["result"],crew:crew,id:id.raw)
+            if original.historical { historicalReceipt = value }
+            else { currentReceipt = value }
+            note = ""
+        case .rejected, .suppressed: notice = "原关闭请求未被采纳。可重新读取当前需求与关联计划。"
+        default: notice = "原请求结果仍待确认，请继续只读核对。"
+        }
     }
 }
 

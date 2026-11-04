@@ -356,6 +356,17 @@ pub const CATALOG: &[ToolSpec] = &[
         &[p("id", Str, true), p("expected_revision", Str, true)],
     )),
     ro(all("todo_get", &[p("id", Str, true)])),
+    ro(cap(crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL, &[
+        p("id", Str, true),
+        p("after", Str, false),
+        p("expected_revision", Str, false),
+    ])),
+    idempotent(cap(crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL, &[
+        p("id", Str, true),
+        p("expected_revision", Str, true),
+        p("request_id", Str, true),
+        p("note", Str, true),
+    ])),
     ro(all(
         "work_closure_history",
         &[
@@ -983,6 +994,7 @@ mod tests {
                 "document_list",
                 "view_folder_list",
                 "todo_get",
+                crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL,
                 "work_closure_history",
                 "work_item_get",
                 "work_item_history",
@@ -1029,6 +1041,7 @@ mod tests {
                 "work_item_transfer_request",
                 "work_item_transfer_accept",
                 "work_item_transfer_withdraw",
+                crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL,
                 "work_item_close",
                 "admin_case_work_unlink",
                 "work_item_update",
@@ -1057,6 +1070,7 @@ mod tests {
                 "document_list",
                 "view_folder_list",
                 "todo_get",
+                crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL,
                 "work_closure_history",
                 "work_item_get",
                 "work_item_history",

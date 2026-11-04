@@ -466,6 +466,9 @@ expectedStatus must name a requirement state.
 
 Requirement {id} changed from {expected} to {actual}; refresh before closing.
 
+## todo.ruling_review_required
+Read and review the current linked work before ruling on requirement {id}.
+
 ## resource.invalid
 Invalid {field}; correct this field and retry.
 

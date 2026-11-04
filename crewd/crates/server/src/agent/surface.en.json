@@ -1008,6 +1008,75 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Review why the direct work for a requirement was dropped. Only the current captain of the requirement's crew may use this tool. Read every page at the same revision. The final page provides closeRevision for an explicit decision to end the requirement.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Copy nextAfter from the preceding page of the same review.",
+            "type": "string"
+          },
+          "expected_revision": {
+            "description": "Copy revision from the first page when continuing the same review.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Original public requirement # ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "todo_ruling_check"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Record the captain's explicit decision to end a requirement after all direct work was dropped. Use the final page's closeRevision and the original request ID. The requirement and work history remain available.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "description": "Use closeRevision from the final page of this requirement's current review.",
+            "type": "string"
+          },
+          "id": {
+            "description": "Original public requirement # ID.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Explain why work on this requirement is ending, in up to 4096 UTF-8 bytes.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Create a canonical UUID for this decision and retain it for an exact retry.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "expected_revision",
+          "request_id",
+          "note"
+        ],
+        "type": "object"
+      },
+      "name": "todo_ruling_close"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read authoritative factual closure events for the original work, newest first. This is separate from owner-change history. A recorded evidence claim is not independent verification.",
       "inputSchema": {
         "additionalProperties": false,

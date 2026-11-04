@@ -206,6 +206,7 @@ refusal_codes! {
     TodoIdInvalid = "todo.id_invalid" [],
     TodoStatusInvalid = "todo.status_invalid" [],
     TodoStatusConflict = "todo.status_conflict" ["id","expected","actual"],
+    TodoRulingReviewRequired = "todo.ruling_review_required" ["id"],
     TodoResponseEmpty = "todo.response_empty" [],
     TodoNotFound = "todo.not_found" ["number"],
     // wake

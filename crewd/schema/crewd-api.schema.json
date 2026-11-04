@@ -13516,6 +13516,23 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "todo.ruleClose",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/RequirementRuleCloseParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "session.start",
               "type": "string"
             },
@@ -14764,6 +14781,258 @@
       },
       "required": [
         "crewId"
+      ],
+      "type": "object"
+    },
+    "RequirementRuleCloseParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id",
+        "expectedRevision",
+        "note"
+      ],
+      "type": "object"
+    },
+    "RequirementRulingBy": {
+      "enum": [
+        "human",
+        "captain"
+      ],
+      "type": "string"
+    },
+    "RequirementRulingCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "closeRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "linkedWorkCount": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/RequirementRulingState"
+        },
+        "work": {
+          "items": {
+            "$ref": "#/$defs/RequirementRulingWork"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "crewId",
+        "id",
+        "state",
+        "linkedWorkCount",
+        "work"
+      ],
+      "type": "object"
+    },
+    "RequirementRulingCheckParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "RequirementRulingDrop": {
+      "enum": [
+        "duplicate",
+        "superseded",
+        "not_needed"
+      ],
+      "type": "string"
+    },
+    "RequirementRulingParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "RequirementRulingReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/RequirementRulingBy"
+        },
+        "captain": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "closedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "eventSeq": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id",
+        "requestId",
+        "expectedRevision",
+        "note",
+        "closedAtMs",
+        "eventSeq",
+        "by"
+      ],
+      "type": "object"
+    },
+    "RequirementRulingResult": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequirementRulingReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "id"
+      ],
+      "type": "object"
+    },
+    "RequirementRulingState": {
+      "enum": [
+        "ready",
+        "not_needs_ruling",
+        "review_incomplete",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "RequirementRulingWork": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "dropKind": {
+          "$ref": "#/$defs/RequirementRulingDrop"
+        },
+        "dropNote": {
+          "type": "string"
+        },
+        "dropNoteTruncated": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "title",
+        "revision",
+        "dropKind",
+        "dropNote",
+        "dropNoteTruncated"
       ],
       "type": "object"
     },
@@ -20078,6 +20347,22 @@
           "$ref": "#/$defs/Todo"
         },
         "type": "array"
+      }
+    },
+    "todo.rulingCheck": {
+      "params": {
+        "$ref": "#/$defs/RequirementRulingCheckParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RequirementRulingCheck"
+      }
+    },
+    "todo.rulingResult": {
+      "params": {
+        "$ref": "#/$defs/RequirementRulingParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RequirementRulingResult"
       }
     },
     "todo.setState": {

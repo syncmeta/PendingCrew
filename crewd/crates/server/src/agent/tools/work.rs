@@ -23,6 +23,43 @@ fn receipt_with<T: serde::Serialize>(
         Err(e) => cx.fail(e),
     }
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RulingCheck {
+    id: String,
+    after: Option<String>,
+    expected_revision: Option<String>,
+}
+
+pub async fn todo_ruling_check(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: RulingCheck = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    receipt(cx, port::todo_ruling_check(cx.st, cx.me, crewd_proto::RequirementRulingCheckParams {
+        crew_id: cx.me.crew_id.clone(), id: a.id, after: a.after, expected_revision: a.expected_revision,
+    }).await)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RulingClose {
+    id: String,
+    expected_revision: String,
+    request_id: String,
+    note: String,
+}
+
+pub async fn todo_ruling_close(cx: &Ctx<'_>, v: Value) -> CallResult {
+    let a: RulingClose = match parse_args(cx, v) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    receipt(cx, port::todo_ruling_close(cx.st, cx.me, a.request_id, crewd_proto::RequirementRuleCloseParams {
+        crew_id: cx.me.crew_id.clone(), id: a.id, expected_revision: a.expected_revision, note: a.note,
+    }).await)
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Mine {

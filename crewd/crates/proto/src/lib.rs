@@ -164,6 +164,8 @@ pub mod methods {
     pub const TODO_CREATE: &str = "todo.create";
     pub const TODO_GET: &str = "todo.get";
     pub const TODO_CLOSE: &str = "todo.close";
+    pub const TODO_RULING_CHECK: &str = "todo.rulingCheck";
+    pub const TODO_RULING_RESULT: &str = "todo.rulingResult";
     pub const TODO_LIST: &str = "todo.list";
     pub const SUBSCRIBE: &str = "events.subscribe";
     // M3b / M3c 的方法常量写在各自的段落里，并加进 ALL（契约 json 由后合者重新生成）。
@@ -299,6 +301,8 @@ pub mod methods {
         TODO_CREATE,
         TODO_GET,
         TODO_CLOSE,
+        TODO_RULING_CHECK,
+        TODO_RULING_RESULT,
         TODO_LIST,
         SUBSCRIBE,
         // M3c（编排，`crate::orchestra::methods`）。
@@ -1448,6 +1452,14 @@ pub fn api_schema() -> Value {
         (
             methods::TODO_CLOSE,
             m(sub::<TodoCloseParams>(g), sub::<RequirementDetail>(g)),
+        ),
+        (
+            methods::TODO_RULING_CHECK,
+            m(sub::<RequirementRulingCheckParams>(g), sub::<RequirementRulingCheck>(g)),
+        ),
+        (
+            methods::TODO_RULING_RESULT,
+            m(sub::<RequirementRulingParams>(g), sub::<RequirementRulingResult>(g)),
         ),
         (
             methods::TODO_LIST,

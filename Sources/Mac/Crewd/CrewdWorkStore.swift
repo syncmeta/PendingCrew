@@ -1093,6 +1093,40 @@ final class CrewdWorkStore: ObservableObject {
             "id": .string(id.raw), "expectedStatus": .string(expectedStatus), "note": .string(note)
         ]))
     }
+    var offersRequirementRuling: Bool { CrewdRequirementRulingWire.methods.contains(where:capabilities.contains) }
+    var supportsRequirementRuling: Bool {
+        (CrewdRequirementRulingWire.methods + ["command.receipts"]).allSatisfy(capabilities.contains)
+    }
+    func requirementRulingCheck(_ id: CrewdWorkID, crew: String,
+                                continuing previous: CrewdRequirementRulingWire.Review? = nil) async throws -> CrewdRequirementRulingWire.Review {
+        var paging: [String:CrewdValue] = [:]
+        if let previous {
+            guard previous.crew == crew, previous.id == id.raw, let after = previous.nextAfter,
+                  let revision = previous.revision else { throw CrewdRequirementRulingWire.invalid() }
+            paging = ["after":.string(after),"expectedRevision":.string(revision)]
+        }
+        let value = try await readRequirementRuling("todo.rulingCheck",id:id,crew:crew,paging:paging)
+        let page = try CrewdRequirementRulingWire.Review(value,crew:crew,id:id.raw,
+            after:previous?.nextAfter,expectedRevision:previous?.revision)
+        if let previous, page.state == .ready { return try previous.appending(page) }
+        return page
+    }
+    func requirementRulingResult(_ id: CrewdWorkID, crew: String) async throws -> CrewdRequirementRulingWire.Receipt? {
+        let value = try await readRequirementRuling("todo.rulingResult",id:id,crew:crew)
+        return try CrewdRequirementRulingWire.result(value,crew:crew,id:id.raw)
+    }
+    private func readRequirementRuling(_ method: String, id: CrewdWorkID, crew: String,
+                                       paging: [String:CrewdValue] = [:]) async throws -> CrewdValue {
+        guard id.kind == .requirement, !crew.isEmpty, crew == selectedCrew, supportsRequirementRuling else {
+            throw CrewdClientError(message:"当前后台或机组不支持需求裁定核对。",kind:.notSubmitted)
+        }
+        let token = generation
+        var params = paging
+        params["crewId"] = .string(crew); params["id"] = .string(id.raw)
+        let value = try await call(method,.object(params))
+        try check(token)
+        return value
+    }
     @discardableResult func requirementDetail(_ id: CrewdWorkID, expectedCrew: String? = nil) async throws -> CrewdValue {
         guard id.kind == .requirement else { throw CrewdClientError(message: "需求必须使用公共 # 编号。") }
         let token = generation, epoch = requirementEpoch, request = UUID(); pendingDetails[id] = request

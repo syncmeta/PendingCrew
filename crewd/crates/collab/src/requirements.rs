@@ -22,7 +22,7 @@ fn human(by: &Sender) -> Result<()> {
         Err(CollabError::Forbidden(Refusal::new(Code::TodoHumanOnly)))
     }
 }
-fn reference(conn: &Connection, id: &str) -> Result<ObjectReference> {
+pub(crate) fn reference(conn: &Connection, id: &str) -> Result<ObjectReference> {
     let n = id
         .strip_prefix('#')
         .and_then(|s| s.parse::<i64>().ok())
@@ -32,7 +32,7 @@ fn reference(conn: &Connection, id: &str) -> Result<ObjectReference> {
         CollabError::NotFound(Refusal::new(Code::TodoNotFound).arg("number", n.to_string()))
     })
 }
-fn core(conn: &Connection, r: &ObjectReference) -> Result<EntryNo> {
+pub(crate) fn core(conn: &Connection, r: &ObjectReference) -> Result<EntryNo> {
     crewd_store::work_organization::core_for_reference(conn, ObjectKind::Requirement, r.number)?
         .ok_or_else(|| StoreError::Invalid("requirement lacks organization identity".into()))?
         .parse()
@@ -42,6 +42,13 @@ fn core(conn: &Connection, r: &ObjectReference) -> Result<EntryNo> {
 }
 pub fn get(conn: &Connection, id: &str) -> Result<RequirementDetail> {
     let r = reference(conn, id)?;
+    detail(conn, &r, &asks::load_org(conn)?)
+}
+pub(crate) fn detail(
+    conn: &Connection,
+    r: &ObjectReference,
+    book: &crewd_work::WorkBook,
+) -> Result<RequirementDetail> {
     let raw: Option<String> = conn.query_row(
         "SELECT raw_todo_id FROM object_refs WHERE number=?1",
         [r.number],
@@ -55,8 +62,7 @@ pub fn get(conn: &Connection, id: &str) -> Result<RequirementDetail> {
             StoreError::Invalid("requirement original source identity mismatch".into()).into(),
         );
     }
-    let book = asks::load_org(conn)?;
-    let no = core(conn, &r)?;
+    let no = core(conn, r)?;
     let view = book
         .entry_view(no)
         .ok_or_else(|| StoreError::Invalid("requirement lacks authoritative entry".into()))?;
