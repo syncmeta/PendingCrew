@@ -47,6 +47,62 @@ import Foundation
         let origin = CrewdKnowledgeStore.Origin(scope:scope,observation:UUID(),connection:UUID(),crew:"crew")
         let rpc = FakeRPC()
         func store() -> CrewdKnowledgeStore { CrewdKnowledgeStore(origin:{origin},rpc:{ try rpc.call($0,$1) },journal:{journal}) }
+        if CommandLine.arguments.dropFirst().first == "document-link-recovery" {
+            rpc.committed = true
+            let first = store()
+            await first.refresh()
+            let saved = await first.submitNativeDocument(title:"原文标题",body:"原文内容🌙",channel:"group")
+            guard let saved, case .object(let view)? = saved.created["document"] else {
+                preconditionFailure("original document stage did not commit")
+            }
+            let source = CrewdChannelKnowledgeReference(context:saved.context,reference:view.reference)
+            let id = UUID()
+            let original = CrewdValue.object([
+                "requestId":.string(id.uuidString.lowercased()),"channelId":.string("group"),
+                "expectedLinkRevision":.string("0"),"source":try CrewdKnowledgeStore.encode(source)
+            ])
+            var sends = 0
+            do {
+                _ = try await journal.performResourceMutation("channel.knowledgeLink",params:original,crew:"crew") { _,_ in
+                    sends += 1; throw NSError(domain:"committed, reply dropped",code:1)
+                }
+            } catch {}
+            let reopened = try CrewdPresentationJournal(root:root,scope:scope)
+            let reopenedStage = try reopened.currentDocumentStage(crew:"crew",channel:"group")
+            precondition(reopenedStage?.body == "原文内容🌙")
+            let records = try reopened.unknownRecords()
+            let pending = CrewdPendingKnowledgeLink.inChannel(records,scope:scope,crew:"crew",channel:"group")
+            precondition(pending.count == 1 && pending[0].requestID == id)
+            precondition(pending[0].source == source && pending[0].linked)
+            precondition(CrewdPendingKnowledgeLink.inChannel(records,scope:nil,crew:"crew",channel:"group").isEmpty)
+            precondition(CrewdPendingKnowledgeLink.inChannel(records,scope:scope,crew:"other",channel:"group").isEmpty)
+            precondition(CrewdPendingKnowledgeLink.inChannel(records,scope:scope,crew:"crew",channel:"other").isEmpty)
+            let group = CrewdChannelKnowledgeStore { method, params in
+                if method == "resource.requestLookup" {
+                    precondition(params["requestId"] == original["requestId"])
+                    return .object(["requestId":original["requestId"],"status":.string("committed"),
+                        "operation":.string("channel.knowledgeLink"),"result":.object([
+                            "channelId":original["channelId"],"source":original["source"],
+                            "linkRevision":.string("1"),"linked":.bool(true)
+                        ])])
+                }
+                precondition(method == "channel.knowledgeList")
+                return .object(["channelId":.string("group"),"linkRevision":.string("1"),"sourceRevision":.string("1"),"items":.array([])])
+            }
+            group.selectChannel(crew:"crew",channel:"group")
+            let reply = try await group.lookup(pending[0].snapshot)
+            let receipt = try CrewdKnowledgeStore.decode(reply!["result"],CrewdChannelKnowledgeReceipt.self)
+            precondition(receipt.source == source && receipt.linked)
+            try reopened.finishDocumentStage(reopenedStage!)
+            try reopened.acknowledge(pending[0].record,detail:"Verified original receipt")
+            let final = try CrewdPresentationJournal(root:root,scope:scope)
+            let remaining = try final.unknownRecords()
+            let stage = try final.currentDocumentStage(crew:"crew",channel:"group")
+            precondition(CrewdPendingKnowledgeLink.inChannel(remaining,scope:scope,crew:"crew",channel:"group").isEmpty)
+            precondition(stage == nil && sends == 1 && rpc.submitted == 1)
+            print("PASS document link reopen: durable original UUID, scope isolation, read-only exact receipt and finished original stage")
+            return
+        }
         if CommandLine.arguments.dropFirst().first == "document-first-save" {
             let first = store()
             precondition(!first.canSaveNativeDocument)
@@ -201,7 +257,7 @@ import Foundation
         let absent=try await group.lookup(link);precondition(absent == nil && groupCalls == ["resource.requestLookup"])
         let result=CrewdChannelKnowledgeReceipt(channelId:"group",linkRevision:"1",source:source,linked:true)
         lookupResult = .object(["requestId":.string(link.id.uuidString.lowercased()),"status":.string("committed"),"operation":.string("channel.knowledgeLink"),"result":try CrewdKnowledgeStore.encode(result)])
-        let found=try await group.lookup(link);precondition(found == result)
+        let found=try await group.lookup(link);precondition(found == lookupResult)
         precondition(!groupCalls.contains("data.submit") && !groupCalls.contains("channel.knowledgeLink"),"joining an already saved source must not recreate content or resend Unknown")
         group.selectChannel(crew:"crew",channel:"other")
         let before=groupCalls.count

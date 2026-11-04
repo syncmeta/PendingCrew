@@ -305,6 +305,9 @@ private struct CrewdGroupKnowledgeView:View {
         return (item.state != "ready" || item.viewKind == type) && CrewdFolderFilter.includes(folderObject(item.source),selection:folder.wrappedValue,snapshot:resources.folders[.documents])
     }}
     private var chosen:CrewdChannelKnowledgeItem?{rows.first{$0.id == selected}}
+    private var pendingLinks: [CrewdPendingKnowledgeLink] {
+        CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:workspace.presentationScope,crew:group.crew,channel:group.channel)
+    }
     private var readKey:String{(chosen?.id ?? "")+"/"+(chosen?.source.context.generation ?? "")+"/"+(chosen?.revision ?? "")+"/"+retry.uuidString}
     var body:some View {
         VStack(spacing:0){
@@ -313,6 +316,8 @@ private struct CrewdGroupKnowledgeView:View {
                 VStack(alignment:.leading,spacing:6){documentActions;documentFolders}
             }.font(CrewdType.label).frame(maxWidth:.infinity,alignment:.leading)
                 .padding(.horizontal,16).padding(.bottom,10)
+            CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:group.crew,channel:group.channel)
+                .padding(.horizontal,16)
             if let error=group.failure ?? failure{Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(8)}
             if group.loading || reading{ProgressView().controlSize(.small)}
             if group.loaded,!group.loading,!reading,group.failure == nil,failure == nil,rows.isEmpty {
@@ -381,18 +386,86 @@ private struct CrewdGroupKnowledgeView:View {
                    detail.resolvedContext.crewId == chosen.source.context.crewId {
                     CrewdKnowledgeObjectSurface(store:content,detail:detail)
                 }else{CrewdEmptySurface(title:"原内容尚不可读",detail:chosen.state == "contextChanged" ? "原知识上下文已变化，引用保留；不会把历史对象当作当前正文。":"请核对当前权限与源机组状态。",symbol:"doc.questionmark")}
-                Button("解除本群引用"){unlink(chosen)}.font(.caption).foregroundStyle(.secondary).padding(.horizontal,14).padding(.vertical,8).disabled(group.writing)
-                ForEach(workspace.knowledgeLinkDrafts.unknown.filter{$0.channel == group.channel && $0.source.identity == chosen.id}){snapshot in
-                    Button("查询原引用请求结果"){lookup(snapshot)}.font(.caption).padding(.horizontal,12)
-                }
+                Button("解除本群引用"){unlink(chosen)}.font(.caption).foregroundStyle(.secondary).padding(.horizontal,14).padding(.vertical,8)
+                    .disabled(group.writing || pendingLinks.contains { $0.source.identity == chosen.id })
             }
         }else{Text("选择资料查看内容").font(.callout).foregroundStyle(.secondary).frame(maxWidth:.infinity,maxHeight:.infinity)}
     }
     private func unlink(_ item:CrewdChannelKnowledgeItem){
-        guard let revision=group.linkRevision,let snapshot=workspace.knowledgeLinkDrafts.begin(crew:group.crew,channel:group.channel,source:item.source,revision:revision,linked:false) else{return}
+        guard !pendingLinks.contains(where: { $0.source.identity == item.id }),
+              let revision=group.linkRevision,let snapshot=workspace.knowledgeLinkDrafts.begin(crew:group.crew,channel:group.channel,source:item.source,revision:revision,linked:false) else{return}
         Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if selected == item.id{selected=nil}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure=error.localizedDescription}}
     }
-    private func lookup(_ snapshot:CrewdChannelKnowledgeDrafts.Snapshot){Task{do{if try await group.lookup(snapshot) != nil{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);failure=nil}else{failure="原请求当前没有已提交回执；引用和输入保留，不会自动重发。"}}catch{failure=error.localizedDescription}}}
+}
+
+/// Recovery is available even if an unlink already removed the selected row.
+private struct CrewdKnowledgeLinkRecovery: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    @ObservedObject var group: CrewdChannelKnowledgeStore
+    let crew: String
+    let channel: String
+    var originalSource: CrewdChannelKnowledgeReference? = nil
+    var onCommitted: (CrewdPendingKnowledgeLink) -> Void = { _ in }
+    @State private var checking: UUID?
+    @State private var message: String?
+
+    private var pending: [CrewdPendingKnowledgeLink] {
+        CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:workspace.presentationScope,crew:crew,channel:channel)
+            .filter { attempt in
+                guard let originalSource else { return true }
+                return attempt.source.identity == originalSource.identity
+            }
+    }
+    var body: some View {
+        VStack(alignment:.leading,spacing:6) {
+            if !pending.isEmpty {
+                DisclosureGroup("有 \(pending.count) 条原引用结果待核对") {
+                    ScrollView {
+                        VStack(alignment:.leading,spacing:8) {
+                            ForEach(pending) { attempt in
+                                HStack {
+                                    Text(verbatim:(attempt.linked ? "加入 " : "解除 ") + attempt.source.reference.id)
+                                        .textSelection(.enabled)
+                                    Spacer()
+                                    Button(checking == attempt.id ? "正在核对…" : "查询原请求") { lookup(attempt) }
+                                        .disabled(checking != nil || group.writing)
+                                }
+                            }
+                        }
+                    }.frame(maxHeight:130)
+                }
+            }
+            if let message { Text(message).foregroundStyle(.secondary).textSelection(.enabled) }
+        }.font(.caption)
+        .onChange(of:group.readScope) { _,_ in checking=nil;message=nil }
+        .onDisappear { checking=nil }
+    }
+    private func lookup(_ attempt: CrewdPendingKnowledgeLink) {
+        guard checking == nil, group.crew == crew, group.channel == channel else { return }
+        checking=attempt.id;message=nil
+        let readScope=group.readScope, scope=workspace.presentationScope
+        Task { @MainActor in
+            @MainActor func current() -> Bool {
+                group.readScope == readScope && workspace.presentationScope == scope &&
+                    !workspace.isRetired && checking == attempt.id
+            }
+            defer { if current() { checking=nil } }
+            do {
+                let value=try await group.lookup(attempt.snapshot)
+                guard current() else { return }
+                guard let value else {
+                    message="原请求尚无已提交回执；保留原输入和编号。"
+                    return
+                }
+                try workspace.acknowledgeOriginalResource(attempt.record,receipt:value)
+                message=attempt.linked ? "已核实原加入请求。" : "已核实原解除请求。"
+                onCommitted(attempt)
+                try? await group.refresh()
+            } catch {
+                if current(), !(error is CancellationError) { message=error.localizedDescription }
+            }
+        }
+    }
 }
 
 private struct CrewdKnowledgeLinkPicker:View {
@@ -408,6 +481,16 @@ private struct CrewdKnowledgeLinkPicker:View {
     @State private var failure:String?
     init(workspace:CrewdWorkspace,collection:CrewdKnowledgeCollection){self.workspace=workspace;self.library=workspace.linkedKnowledge;self.group=workspace.channelKnowledge;self.collection=collection}
     private var current:Bool{group.crew == targetCrew && group.channel == targetChannel && !workspace.isRetired}
+    private var chosenSource:CrewdChannelKnowledgeReference? {
+        guard let context=library.workspace?.context,context.crewId == sourceCrew,
+              library.objects.contains(where: { $0.identity == chosen }) else { return nil }
+        return .init(context:context,reference:.init(namespace:context.namespace,kind:"view",id:chosen))
+    }
+    private var linkPending:Bool {
+        guard let chosenSource else { return false }
+        return CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:workspace.presentationScope,crew:targetCrew,channel:targetChannel)
+            .contains { $0.source.identity == chosenSource.identity }
+    }
     var body:some View {
         VStack(alignment:.leading,spacing:0){
             CrewdPanelHeader(title:"引用已有资料").padding(20)
@@ -420,20 +503,16 @@ private struct CrewdKnowledgeLinkPicker:View {
                 Button{chosen=object.identity}label:{Text(object.displayTitle).padding(10).frame(maxWidth:.infinity,alignment:.leading).background(chosen == object.identity ? Theme.Palette.surfaceMuted:Color.clear,in:RoundedRectangle(cornerRadius:6))}.buttonStyle(.plain)
             }}
             if let failure{CrewdInlineNotice(title:"引用尚未完成",detail:failure,warning:true)}
-            ForEach(workspace.knowledgeLinkDrafts.unknown.filter{$0.channel == targetChannel}){snapshot in
-                Text("原引用结果未确认，不会重发："+snapshot.source.reference.id).font(.caption).foregroundStyle(.orange)
-                Button("查询原引用请求"){Task{do{if try await group.lookup(snapshot) != nil{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);dismiss()}else{failure="原请求当前未找到已提交回执，输入保留。"}}catch{failure=error.localizedDescription}}}
-            }
+            CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:targetCrew,channel:targetChannel)
             }.padding(20)}
             Divider()
-            HStack{Button("关闭"){dismiss()};Spacer();Button(group.writing ? "正在加入…":"引用到本群"){link()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || chosen.isEmpty || group.writing || library.busy)}.padding(16)
+            HStack{Button("关闭"){dismiss()};Spacer();Button(group.writing ? "正在加入…":"引用到本群"){link()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || chosenSource == nil || group.writing || library.busy || linkPending)}.padding(16)
         }.modifier(CrewdAdaptiveFormFrame(width:560,height:580,scrolls:false))
         .onAppear{targetCrew=group.crew;targetChannel=group.channel;sourceCrew=group.crew}
         .task(id:sourceCrew){guard !sourceCrew.isEmpty else{return};chosen="";do{try await workspace.readKnowledgeLibrary(crew:sourceCrew);try await group.refresh();failure=nil}catch{failure=error.localizedDescription}}
     }
     private func link(){
-        guard current,let context=library.workspace?.context,library.objects.contains(where:{$0.identity == chosen}),let revision=group.linkRevision else{return}
-        let source=CrewdChannelKnowledgeReference(context:context,reference:.init(namespace:context.namespace,kind:"view",id:chosen))
+        guard current,!linkPending,let source=chosenSource,let revision=group.linkRevision else{return}
         guard let snapshot=workspace.knowledgeLinkDrafts.begin(crew:targetCrew,channel:targetChannel,source:source,revision:revision,linked:true) else{return}
         Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if current{dismiss()}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure=error.localizedDescription}}
     }
@@ -455,6 +534,15 @@ private struct CrewdNativeDocumentCreation:View {
     private var key:CrewdResourceDrafts.Key{.init(crew:crew,view:.documents,object:"",operation:"knowledge.create",domain:.document,channel:channel)}
     private var fields:CrewdResourceDrafts.Fields{workspace.resourceDrafts.fields(key)}
     private var current:Bool{workspace.crewID == crew && workspace.channelID == channel && !workspace.isRetired}
+    private var linkPending:Bool {
+        guard let saved else { return false }
+        return CrewdPendingKnowledgeLink.inChannel(workspace.durableUnknown,scope:workspace.presentationScope,crew:crew,channel:channel)
+            .contains { $0.source.identity == saved.identity }
+    }
+    private var alreadyLinked:Bool {
+        guard let saved, group.loaded, group.crew == crew, group.channel == channel else { return false }
+        return group.items.contains { $0.source.identity == saved.identity && $0.state == "ready" }
+    }
     private func field(_ path:WritableKeyPath<CrewdResourceDrafts.Fields,String>)->Binding<String>{Binding(get:{if let stage{return path == \CrewdResourceDrafts.Fields.title ? stage.title:stage.body};return fields[keyPath:path]},set:{value in var f=fields;f[keyPath:path]=value;workspace.resourceDrafts.edit(key,f)})}
     var body:some View {
         VStack(alignment:.leading,spacing:0){
@@ -470,19 +558,35 @@ private struct CrewdNativeDocumentCreation:View {
                         .disabled(stage != nil || store.busy || submission != nil)
                 }
             }
-            if saved != nil { Text("原文已保存，加入本群后即可在此阅读。").font(CrewdType.label).foregroundStyle(.secondary) }
+            if saved != nil {
+                Text(alreadyLinked ? "已核对当前群引用，可结束本次新建。" : "原文已保存，加入本群后即可在此阅读。")
+                    .font(CrewdType.label).foregroundStyle(.secondary)
+            }
             if store.hasBlockingPending || (stage != nil && saved == nil) { Text(store.status).font(CrewdType.caption).foregroundStyle(.orange).textSelection(.enabled) }
             if saved != nil{Button("重新核对已保存原文"){Task{await store.refresh();guard current,let original=saved,let context=store.workspace?.context else{return};let refreshed=CrewdChannelKnowledgeReference(context:context,reference:original.reference);guard refreshed.identity == original.identity else{failure="知识来源已换代，原文引用保留，不自动重新绑定。";return};await store.open(original.reference);if store.detail?.object.identity == original.reference.id{saved=refreshed;failure=nil}}}.disabled(store.busy)}
             if let failure{CrewdInlineNotice(title:"需要核对保存状态",detail:failure,warning:true)}
             if let stage,saved == nil{Button("查询原保存结果"){Task{_ = await store.lookupNativeDocument(stage);restoreStage()}}.disabled(store.busy)}
-            ForEach(workspace.knowledgeLinkDrafts.unknown.filter{$0.channel == channel && $0.source.identity == saved?.identity}){snapshot in
-                Button("查询原加入请求"){Task{do{if try await group.lookup(snapshot) != nil{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);finishDraft()}else{failure="原加入请求当前未找到已提交回执；已保存原文保留。"}}catch{failure=error.localizedDescription}}}
+            if let saved {
+                CrewdKnowledgeLinkRecovery(workspace:workspace,group:group,crew:crew,channel:channel,originalSource:saved) { attempt in
+                    if current, attempt.linked, attempt.source.identity == self.saved?.identity { finishDraft() }
+                }
             }
             if refused{Button("原保存已明确拒绝，修改后另存"){reviseRefusedDraft()}}
-            if saved != nil{Button("仅保留已保存原文，结束本次新建"){finishDraft()}}
+            if saved != nil,!alreadyLinked{Button("仅保留已保存原文，结束本次新建"){finishDraft()}.disabled(group.writing || linkPending)}
             }.padding(20)}
             Divider()
-            HStack{Button("关闭"){dismiss()};Spacer();if saved == nil{Button(store.busy ? "正在保存…":"保存原文"){save()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || store.busy || store.hasBlockingPending || !store.canSaveNativeDocument || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || submission != nil)}else{Button(group.writing ? "正在加入…":"加入本群"){join()}.buttonStyle(CrewdPrimaryButtonStyle()).disabled(!current || group.writing || store.busy)}}.padding(16)
+            HStack {
+                Button("关闭"){dismiss()};Spacer()
+                if saved == nil {
+                    Button(store.busy ? "正在保存…":"保存原文"){save()}.buttonStyle(CrewdPrimaryButtonStyle())
+                        .disabled(!current || store.busy || store.hasBlockingPending || !store.canSaveNativeDocument || fields.title.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || submission != nil)
+                } else {
+                    Button(alreadyLinked ? "完成" : group.writing ? "正在加入…" : "加入本群") {
+                        if alreadyLinked { finishDraft() } else { join() }
+                    }.buttonStyle(CrewdPrimaryButtonStyle())
+                        .disabled(!current || group.writing || group.loading || !group.loaded || store.busy || linkPending)
+                }
+            }.padding(16)
         }.modifier(CrewdAdaptiveFormFrame(width:600,height:680,scrolls:false))
         .task{crew=workspace.crewID;channel=workspace.channelID;await store.refresh();restoreStage();try? await group.refresh()}
     }
@@ -528,7 +632,7 @@ private struct CrewdNativeDocumentCreation:View {
         }catch{failure=error.localizedDescription}
     }
     private func join(){
-        guard current,let saved,let revision=group.linkRevision,
+        guard current,!alreadyLinked,!linkPending,group.loaded,!group.loading,let saved,let revision=group.linkRevision,
               let snapshot=workspace.knowledgeLinkDrafts.begin(crew:crew,channel:channel,source:saved,revision:revision,linked:true) else{return}
         Task{do{_ = try await group.submit(snapshot);workspace.knowledgeLinkDrafts.finish(snapshot,accepted:true);if current{finishDraft()}}catch{workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error));failure="原文已保存，未加入本群："+error.localizedDescription}}
     }

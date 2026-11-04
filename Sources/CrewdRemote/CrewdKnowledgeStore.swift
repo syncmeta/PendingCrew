@@ -539,6 +539,7 @@ extension CrewdDataObject {
     @Published private(set) var failure:String?
     @Published private(set) var activationEpoch=UUID()
     private var generation=UUID(),query=UUID()
+    var readScope: UUID { generation }
     private var owners:Set<UUID>=[]
     private var refreshTask:Task<Void,Never>?
     private let call:Call
@@ -591,18 +592,53 @@ extension CrewdDataObject {
         do{try await refresh()}catch{}
         return receipt
     }
-    func lookup(_ snapshot:CrewdChannelKnowledgeDrafts.Snapshot)async throws->CrewdChannelKnowledgeReceipt? {
+    func lookup(_ snapshot:CrewdChannelKnowledgeDrafts.Snapshot)async throws->CrewdValue? {
         guard snapshot.crew == crew,snapshot.channel == channel else{throw CancellationError()}
         let token=generation
         let value=try await call("resource.requestLookup",.object(["requestId":.string(snapshot.id.uuidString.lowercased())]));try check(token)
         guard value["requestId"].string.flatMap(UUID.init(uuidString:)) == snapshot.id else{throw CrewdClientError(message:"原知识引用请求身份不符。")}
         if value["status"] == .string("notFound") {guard value["operation"] == .null,value["result"] == .null else{throw CrewdClientError(message:"未找到知识引用请求却附带结果。")};return nil}
         guard value["status"] == .string("committed"),value["operation"] == .string(snapshot.operation) else{throw CrewdClientError(message:"原知识引用请求状态或操作不符。")}
-        let receipt=try validate(value["result"],snapshot:snapshot);do{try await refresh()}catch{};return receipt
+        try CrewdPresentationJournal.validateResourceResult(
+            value["result"], method:snapshot.operation,
+            params:.object(["channelId":.string(snapshot.channel),"source":try CrewdKnowledgeStore.encode(snapshot.source)])
+        )
+        return value
     }
     private func validate(_ value:CrewdValue,snapshot:CrewdChannelKnowledgeDrafts.Snapshot)throws->CrewdChannelKnowledgeReceipt {
         let result=try CrewdKnowledgeStore.decode(value,CrewdChannelKnowledgeReceipt.self)
         guard result.channelId == snapshot.channel,result.source == snapshot.source,result.linked == snapshot.linked,!result.linkRevision.isEmpty else{throw CrewdClientError(message:"原知识引用回执与原输入不符。")}
         return result
+    }
+}
+
+/// A document sheet can recover the original resource mutation after the App
+/// reopens. Its journal record is only evidence to query, never a send intent.
+struct CrewdPendingKnowledgeLink: Identifiable {
+    let record: CrewdPresentationJournal.Prepared
+    let snapshot: CrewdChannelKnowledgeDrafts.Snapshot
+    var id: UUID { record.id }
+    var requestID: UUID { snapshot.id }
+    var source: CrewdChannelKnowledgeReference { snapshot.source }
+    var linked: Bool { snapshot.linked }
+
+    @MainActor static func inChannel(_ records: [CrewdPresentationJournal.Prepared],
+                                     scope: CrewdPresentationJournal.Scope?,
+                                     crew: String, channel: String) -> [Self] {
+        guard let scope, !crew.isEmpty, !channel.isEmpty else { return [] }
+        return records.compactMap { record in
+            guard record.scope == scope, record.crew == crew,
+                  record.params["channelId"] == .string(channel),
+                  ["channel.knowledgeLink", "channel.knowledgeUnlink"].contains(record.method),
+                  let id = record.params["requestId"].string.flatMap(UUID.init(uuidString:)),
+                  let revision = record.params["expectedLinkRevision"].string, !revision.isEmpty,
+                  let source = try? CrewdKnowledgeStore.decode(record.params["source"], CrewdChannelKnowledgeReference.self),
+                  source.valid else { return nil }
+            let snapshot = CrewdChannelKnowledgeDrafts.Snapshot(
+                id: id, crew: crew, channel: channel, source: source, revision: revision,
+                linked: record.method == "channel.knowledgeLink"
+            )
+            return Self(record: record, snapshot: snapshot)
+        }
     }
 }
