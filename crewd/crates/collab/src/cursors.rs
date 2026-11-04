@@ -67,10 +67,9 @@ pub fn badge(conn: &Connection, channel: &str) -> Result<Badge> {
 /// 每个群一次最多带多少条未读（再多就是该 `read_channel` 主动拉的量了）。
 pub const UNREAD_CAP: u32 = 200;
 
-/// 注入面：该 session 所在的群 + 正在收听的群里，游标之后、不是它自己发的消息（@ 只决定叫醒谁，不收窄
-/// 可见范围——群里的每条消息群成员都看得见，N1 裁定 8）。
+/// 注入面：该 session 所在或正在收听的群里，游标之后可自动投递的消息。人工专用提醒仍保存在可读历史中。
 /// 缺游标行的群先钉末尾、本次不返回。除此之外只读，唯一的写：游标之后**开头**那一段自己发的消息
-/// 被游标越过——那段里没有任何东西可投递，跳过永远安全，否则一整个窗口的自己发的消息会把后面的消息永远堵住。
+/// 和人工专用提醒被游标越过——那段里没有任何东西可投递，跳过永远安全，否则一整个窗口会把后面的消息堵住。
 ///
 /// 窗口规则（裁定 R6）：每个群在游标之后按 seq 升序翻页扫描，收满最旧的 `UNREAD_CAP` 条可投递消息
 /// 或扫到群末尾为止（绝不丢旧留新）。调用方只能把游标推进到**实际带上**的那批里最大的 seq——
@@ -164,7 +163,7 @@ pub(crate) fn scan_unread(
         };
         let full = page.len() >= UNREAD_CAP as usize;
         for m in page {
-            if m.sender_session_id.as_deref() != Some(session) {
+            if crate::messages::eligible_for_automatic_context(&m, session) {
                 got.push(m);
                 if got.len() >= UNREAD_CAP as usize {
                     break 'scan;

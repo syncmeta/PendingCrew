@@ -8,25 +8,16 @@ use serde::{Deserialize, Serialize};
 const SOURCE: &str = "patrol-brief:";
 const INTERVAL_MS: i64 = 30 * 60 * 1_000;
 const MAX_SAMPLE: usize = 8;
-const CATEGORIES: [(&str, &str, &str); 7] = [
-    ("unowned", "无人负责的工作", "Unowned work"),
-    ("lost", "负责人失联的工作", "Work with a lost owner"),
-    ("stop_escalated", "停止检查已升级", "Escalated stop checks"),
-    (
-        "long_waits",
-        "等待人类决定的工作",
-        "Work awaiting a Human decision",
-    ),
-    ("unclaimed", "尚未认领的需求", "Unclaimed requirements"),
-    (
-        "needs_ruling",
-        "需要裁定的需求",
-        "Requirements awaiting a ruling",
-    ),
+const CATEGORIES: [(&str, &str); 7] = [
+    ("unowned", "notice.patrol.category.unowned"),
+    ("lost", "notice.patrol.category.lost"),
+    ("stop_escalated", "notice.patrol.category.stop_escalated"),
+    ("long_waits", "notice.patrol.category.long_waits"),
+    ("unclaimed", "notice.patrol.category.unclaimed"),
+    ("needs_ruling", "notice.patrol.category.needs_ruling"),
     (
         "idle_archive_candidates",
-        "可复查归档条件的群",
-        "Channels to review for archival",
+        "notice.patrol.category.idle_archive_candidates",
     ),
 ];
 
@@ -86,7 +77,7 @@ fn findings(run: &PatrolRun) -> Findings<'_> {
     CATEGORIES
         .iter()
         .enumerate()
-        .filter_map(|(i, (key, _, _))| {
+        .filter_map(|(i, (key, _))| {
             let count = run.counts.get(*key).copied()?;
             let refs = run.findings.get(*key)?;
             (count > 0 && !refs.is_empty()).then_some((i, count, refs.as_slice()))
@@ -310,19 +301,12 @@ pub(crate) fn render(c: &Connection, wake: &wakes::WakeRow) -> Result<FollowupNo
     {
         return Ok(FollowupNote::Stale);
     }
-    let chinese = crate::settings::locale(c)? == crate::Locale::Zh;
+    let prompts = crate::prompts::render_file(crate::settings::locale(c)?);
     let time = crewd_store::ts_from_ms(completed);
-    let mut text = if chinese {
-        format!("本机组行政巡检简报（观察结束于 {time}）。以下为历史观察，处理前请核对当前事实。")
-    } else {
-        format!(
-            "Administrative patrol brief for this crew (observed through {time}). Check current facts before taking action."
-        )
-    };
+    let mut text = crate::prompts::fill(prompts.get("notice.patrol.header"), &[("time", &time)]);
     for (i, count, refs) in report {
-        let (_, zh, en) = CATEGORIES[i];
         let sample = &refs[..refs.len().min(MAX_SAMPLE)];
-        let label = if chinese { zh } else { en };
+        let label = prompts.get(CATEGORIES[i].1);
         let detail = if (sample.len() as u64) < count {
             " …"
         } else {

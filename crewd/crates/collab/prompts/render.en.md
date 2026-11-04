@@ -100,3 +100,57 @@ Background progress update; full text at #{seq}.
 
 ## wake.background_ack
 Background acknowledgement; full text at #{seq}.
+
+## notice.admin.handoff
+行政事项请求你明确承接。request_id={request}；原范围工作：{targets}（正文最多50项，完整范围请用 admin_case_handoff_get）。原因：{reason}。通知送达不代表承接或工作完成；查看后使用 admin_case_handoff_accept 和当前 revision 明确承接。
+
+## notice.admin.custody
+用户提议你接管一项尚未解决的行政责任。case_id={case} crew_id={crew} request_id={request}；原工作范围（最多显示50项）：{targets}。原因：{reason}。用 admin_case_custody_get 查看完整事实及 pending.revision，再用 admin_case_custody_accept 明确接受。送达不等于承接，承接不等于业务完成；原工作owner不变。
+
+## notice.work.coordination
+请核实并协调 {work} 的进展；模型建议需要协调，不代表任务卡死或已经完成协调。请读取当前工作和报告，再决定下一步。
+
+## notice.work.reassignment
+{work} 的原负责人已核实失联，调度已将同一项工作重派给 {owner}。请查看当前负责人和进展；重派与通知不代表工作完成。
+
+## notice.admin.title
+行政事项
+
+## notice.patrol.unreadable
+巡检状态不可读取
+
+## notice.patrol.retry
+巡检读取失败；原进度保留，稍后重试
+
+## notice.patrol.error_unreadable
+巡检错误记录不可读取；原记录已保留
+
+## notice.patrol.receipt_unreadable
+机长简报回执不可读取
+
+## notice.ask.still_wanted
+{public} has been waiting for a Human decision for at least 72 hours. Is this work still wanted? Please review the original question in your inbox.
+
+## notice.patrol.category.unowned
+Unowned work
+
+## notice.patrol.category.lost
+Work with a lost owner
+
+## notice.patrol.category.stop_escalated
+Escalated stop checks
+
+## notice.patrol.category.long_waits
+Work awaiting a Human decision
+
+## notice.patrol.category.unclaimed
+Unclaimed requirements
+
+## notice.patrol.category.needs_ruling
+Requirements awaiting a ruling
+
+## notice.patrol.category.idle_archive_candidates
+Channels to review for archival
+
+## notice.patrol.header
+Administrative patrol brief for this crew (observed through {time}). Check current facts before taking action.

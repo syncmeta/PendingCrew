@@ -19,6 +19,7 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
     var readError: CrewdClientError?
     var emptyPlans = false
     var sourceDetails: CrewdValue?
+    var askRows: CrewdValue?
     var delayRequirementDetail = false
     func call(_ method: String, _ params: CrewdValue) async throws -> CrewdValue {
         calls.append((method,params))
@@ -39,7 +40,7 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
             if let error { throw error }
             if method == "todo.get", let sourceDetails { return sourceDetails }
             return .object(["id":.string("raw-created"),"requirementId":.string("#42"),"crewId":.string("a"),"text":.string("  exact original\n"),"status":.string(method == "todo.close" ? "closed":"unclaimed"),"closure":method == "todo.close" ? .object(["note":.string("reason"),"at":.string("2026-10-13T00:00:00Z")]):.null])
-        case "ask.list": return value("[{\"ask\":{\"ask\":\"H9007199254740996\",\"crewId\":\"b\",\"question\":\"global question\",\"item\":\"W9007199254740993\"},\"items\":[\"W9007199254740993\"],\"tier\":\"future_tier\"}]")
+        case "ask.list": return askRows ?? value("[{\"ask\":{\"ask\":\"H9007199254740996\",\"crewId\":\"b\",\"question\":\"global question\",\"item\":\"W9007199254740993\"},\"items\":[\"W9007199254740993\"],\"tier\":\"future_tier\"}]")
         case "work.get":
             var full = plan(params["id"].string!,revision:revisionAdvance ? "9007199254740995" : changed ? "9007199254740994":"9007199254740993",full:true)
             if frozen, case .object(var fields) = full { fields["frozen"] = .bool(true); full = .object(fields) }
@@ -60,7 +61,36 @@ func plan(_ id: String = "W9007199254740993", crew: String = "a", revision: Stri
     }
 }
 @main struct Test {
+    @MainActor static func checkHumanWaits() async throws {
+        let source = Fixture()
+        let store = CrewdWorkStore(call: { try await source.call($0, $1) })
+        store.selectCrew("a")
+        let pinned = value(#"{"ask":{"ask":"H9","crewId":"a","question":"original"},"waitedMs":86400000,"tier":"pinned"}"#)
+        let otherCrew = value(#"{"ask":{"ask":"H2","crewId":"b"},"waitedMs":7200000,"tier":"future"}"#)
+        let fresh = value(#"{"ask":{"ask":"H10","crewId":"a"},"waitedMs":3540000,"tier":"fresh"}"#)
+        let olderBackend = value(#"{"ask":{"ask":"H11","crewId":"a"}}"#)
+        source.askRows = .array([pinned, otherCrew, fresh, olderBackend])
+        try await store.refresh()
+        precondition(store.humanTaskIDs.map(\.raw) == ["H9", "H2", "H10", "H11"])
+        let filtered = store.humanTaskIDs.filter { store.humanTasks[$0]?["ask"]["crewId"].string == store.selectedCrew }
+        precondition(filtered.map(\.raw) == ["H9", "H10", "H11"], "crew filtering preserves authoritative wait order")
+        precondition(CrewdHumanWaitPresentation.summary(pinned) == "已等待 1 天 · 已置顶")
+        precondition(CrewdHumanWaitPresentation.summary(fresh) == "已等待 59 分钟")
+        precondition(CrewdHumanWaitPresentation.summary(otherCrew) == "已等待 2 小时")
+        precondition(CrewdHumanWaitPresentation.summary(olderBackend) == nil)
+        precondition(CrewdHumanWaitPresentation.summary(value(#"{"waitedMs":-1,"tier":"future"}"#)) == nil)
+        let escalated = value(#"{"ask":{"ask":"H9","crewId":"a","question":"original"},"waitedMs":259200000,"tier":"still_wanted"}"#)
+        source.askRows = .array([escalated, fresh])
+        try await store.refresh()
+        let updated = store.humanTasks[filtered[0]]!
+        precondition(updated["ask"] == pinned["ask"], "wait escalation leaves the original question untouched")
+        precondition(CrewdHumanWaitPresentation.summary(updated) == "已等待 3 天 · 还要吗？")
+        precondition(source.calls.allSatisfy { ["ask.list", "todo.list", "work.list"].contains($0.0) })
+        print("PASS: Human wait order, 24h pin, 72h review of the original H, and optional field compatibility")
+    }
+
     @MainActor static func main() async throws {
+        try await checkHumanWaits()
         let reads=Fixture(), ledger=CrewdWorkStore(call:{try await reads.call($0,$1)})
         ledger.selectCrew("a")
         precondition(!ledger.hasLoaded && !ledger.loading && ledger.lastFailure == nil,

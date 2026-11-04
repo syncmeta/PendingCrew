@@ -90,8 +90,17 @@ struct CrewdWorkPanels: View {
                     }
                     }
                     if compact {
-                        ForEach(store.humanTasks.keys.filter {store.humanTasks[$0]?["ask"]["crewId"].string == store.selectedCrew}.sorted(by:{$0.raw < $1.raw}),id:\.self) {id in
-                            HStack(alignment:.top) {Image(systemName:"questionmark.circle"); Text("\(id.raw)  \(store.humanTasks[id]?["ask"]["question"].string ?? "")").font(.caption).lineLimit(2)}
+                        ForEach(store.humanTaskIDs.filter {store.humanTasks[$0]?["ask"]["crewId"].string == store.selectedCrew},id:\.self) { id in
+                            let row = store.humanTasks[id] ?? .null
+                            HStack(alignment:.top) {
+                                Image(systemName:"questionmark.circle")
+                                VStack(alignment:.leading,spacing:4) {
+                                    Text("\(id.raw)  \(row["ask"]["question"].string ?? "")").lineLimit(2)
+                                    if let summary = CrewdHumanWaitPresentation.summary(row) {
+                                        Text(summary).foregroundStyle(.secondary)
+                                    }
+                                }.font(.caption)
+                            }
                         }
                     }
                     if domain == .all && visibleProgress.isEmpty && !progressOnly {Text("尚无计划").foregroundStyle(CrewdChatStyle.muted(colorScheme))}
@@ -119,10 +128,10 @@ struct CrewdWorkPanels: View {
         #endif
     }
     private var visibleHumanIDs:[CrewdWorkID] {
-        store.humanTasks.keys.filter { id in
+        store.humanTaskIDs.filter { id in
             (!humanCrewOnly || store.humanTasks[id]?["ask"]["crewId"].string == store.selectedCrew) &&
             (store.humanTasks[id]?["ask"]["crewId"].string != resources.crew || includes("humanTask",id.raw))
-        }.sorted {$0.raw < $1.raw}
+        }
     }
     private func statusMark(_ status:String,human:Bool=false)->some View {
         let finished=["done","closed","answered"].contains(status)
@@ -177,7 +186,8 @@ struct CrewdWorkPanels: View {
         }
     }
     private func humanRow(_ id:CrewdWorkID)->some View {
-        let ask=store.humanTasks[id]?["ask"] ?? .null
+        let row=store.humanTasks[id] ?? .null
+        let ask=row["ask"]
         let state=ask["state"].string ?? ""
         return VStack(alignment:.leading,spacing:6) {
             HStack(spacing:8) {
@@ -189,6 +199,9 @@ struct CrewdWorkPanels: View {
                     if crew == resources.crew {CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:.todo,object:CrewdFolderFilter.object("humanTask",id.raw))}
                 }
             }.font(CrewdType.caption).buttonStyle(.plain)
+            if let summary = CrewdHumanWaitPresentation.summary(row) {
+                Text(summary).font(CrewdType.caption).foregroundStyle(.secondary).padding(.leading,22)
+            }
             MarkdownText(text:ask["question"].string ?? "",variant:.todo,dimmed:state == "answered" || state == "withdrawn")
                 .textSelection(.enabled).padding(.leading,22)
             Text(ask["item"].string.map{"关联计划："+$0} ?? (crews.first(where:{$0["id"] == ask["crewId"]})?["title"].string ?? "机组资料尚未加载"))

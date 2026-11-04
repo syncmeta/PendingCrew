@@ -10,6 +10,9 @@ use crewd_work::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
+const ESCALATION_CURSOR: &str = "ask.wait.escalation.cursor.v1";
+const ESCALATIONS_PER_TICK: usize = 4;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OpenAsk {
     pub question: String,
@@ -614,6 +617,128 @@ pub fn apply_due_defaults(tx: &mut Tx<'_>, crew: &str) -> Result<Vec<String>> {
 pub fn apply_all_due_defaults(tx: &mut Tx<'_>) -> Result<Vec<String>> {
     apply_defaults(tx, None)
 }
+
+fn due_wait(book: &WorkBook, wait: &crewd_work::HumanWait, now: Ts) -> bool {
+    let ask = book.ask(wait.ask).expect("wait has an authoritative ask");
+    !ask.human_task
+        && !wait.items.is_empty()
+        && wait.tier > ask.escalated
+        && wait.default_due_at.is_none_or(|deadline| deadline > now)
+}
+
+pub struct DueWait {
+    ask: AskId,
+    crew: String,
+    public_number: i64,
+    epoch: String,
+}
+
+/// Select one bounded page and commit the scan frontier before any individual
+/// delivery. A failed/unknown delivery cannot prevent later IDs being examined;
+/// a skipped turn is reconsidered after wrap if its authoritative tier is due.
+pub fn due_escalation_page(tx: &mut Tx<'_>) -> Result<Vec<DueWait>> {
+    use crewd_store::{StoreError, meta_get, meta_set};
+    let c = tx.conn();
+    let after = meta_get(c, ESCALATION_CURSOR)?
+        .filter(|cursor| !cursor.is_empty())
+        .map(|cursor| {
+            cursor
+                .parse::<AskId>()
+                .map_err(|_| StoreError::Invalid("invalid Human wait escalation cursor".into()))
+        })
+        .transpose()?;
+    let book = load_org(c)?;
+    let now = Ts(tx.now_ms()).max(book.state().clock);
+    let mut due = book
+        .human_waits(now)
+        .into_iter()
+        .filter(|wait| after.is_none_or(|after| wait.ask > after) && due_wait(&book, wait, now))
+        .map(|wait| wait.ask)
+        .collect::<Vec<_>>();
+    due.sort_unstable();
+    due.truncate(ESCALATIONS_PER_TICK);
+    if let Some(last) = due.last() {
+        meta_set(c, ESCALATION_CURSOR, &last.to_string())?;
+    } else if after.is_some() {
+        meta_set(c, ESCALATION_CURSOR, "")?;
+    }
+    if due.is_empty() {
+        return Ok(Vec::new());
+    }
+    let epoch = crewd_store::judgment_state::epoch(c)?;
+    due.into_iter()
+        .map(|ask| {
+            let r = public_ask(c, ask)?;
+            Ok(DueWait {
+                ask,
+                crew: r.crew_id,
+                public_number: r.number,
+                epoch: epoch.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Revalidate a selected ask in the same transaction as its tier receipt and
+/// Human-channel message. It is never an answer, default execution, or new H.
+pub fn escalate_wait(tx: &mut Tx<'_>, selected: DueWait) -> Result<()> {
+    if crewd_store::judgment_state::epoch(tx.conn())? != selected.epoch {
+        return Ok(());
+    }
+    let id = selected.ask;
+    let r = public_ask(tx.conn(), id)?;
+    let crew = &r.crew_id;
+    if *crew != selected.crew
+        || r.number != selected.public_number
+        || crews::is_archived(tx.conn(), crew)?
+    {
+        return Ok(());
+    }
+    let public = r.id();
+    let scope = CrewId::new(crew);
+    let advanced = with_book(tx, crew, |book, now| {
+        let observed = now.max(book.state().clock);
+        let Some(wait) = book
+            .human_waits(observed)
+            .into_iter()
+            .find(|wait| wait.ask == id)
+        else {
+            return Ok(None);
+        };
+        if !due_wait(book, &wait, observed)
+            || book.state().ask_crew(id) != Some(&scope)
+            || !wait
+                .items
+                .iter()
+                .any(|item| book.state().item_crew(*item) == Some(&scope))
+        {
+            return Ok(None);
+        }
+        let already = book.ask(id).expect("qualified wait has its ask").escalated;
+        for tier in [WaitTier::Pinned, WaitTier::StillWanted] {
+            if already < tier && tier <= wait.tier {
+                book.note_escalation(&Actor::System, now, id, tier)?;
+            }
+        }
+        Ok(Some(wait.tier))
+    })?;
+    let Some(tier) = advanced else { return Ok(()) };
+    if tier == WaitTier::StillWanted {
+        let home = crews::home_of(tx.conn(), crew)?;
+        let text = crate::prompts::fill(
+            crate::prompts::render_file(crate::settings::locale(tx.conn())?)
+                .get("notice.ask.still_wanted"),
+            &[("public", &public)],
+        );
+        messages::announce_to_human(tx, &home, Sender::System, text, messages::ASK_WAIT_REMINDER)?;
+    }
+    tx.note(Change::AskChanged {
+        crew_id: crew.clone(),
+        ask: public,
+    });
+    Ok(())
+}
+
 fn apply_defaults(tx: &mut Tx<'_>, only: Option<&str>) -> Result<Vec<String>> {
     let active: std::collections::BTreeSet<_> = crews::list(tx.conn(), false)?
         .into_iter()
@@ -701,13 +826,19 @@ pub fn waits(conn: &Connection, now_ms: i64, home: Option<&str>) -> Result<Vec<H
         });
     }
     out.sort_by(|a, b| {
-        b.waited_ms
-            .cmp(&a.waited_ms)
+        let pinned = |wait: &HumanWait| !wait.items.is_empty() && wait.tier != WaitTierView::Fresh;
+        pinned(b)
+            .cmp(&pinned(a))
+            .then(b.waited_ms.cmp(&a.waited_ms))
             .then(a.ask.crew_id.cmp(&b.ask.crew_id))
             .then(a.ask.ask.cmp(&b.ask.ask))
     });
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "asks_wait_tests.rs"]
+mod human_wait_escalation;
 
 #[cfg(test)]
 mod tests {

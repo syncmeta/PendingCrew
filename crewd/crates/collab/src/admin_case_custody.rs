@@ -1064,9 +1064,9 @@ pub(crate) fn render(
         .take(50)
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(crate::work::FollowupNote::Current(format!(
-        "用户提议你接管一项尚未解决的行政责任。case_id={} crew_id={} request_id={}；原工作范围（最多显示50项）：{}。原因：{}。用 admin_case_custody_get 查看完整事实及 pending.revision，再用 admin_case_custody_accept 明确接受。送达不等于承接，承接不等于业务完成；原工作owner不变。",
-        t.view.case_id, t.view.crew_id, id, targets, t.view.request_reason
+    Ok(crate::work::FollowupNote::Current(crate::prompts::fill(
+        crate::prompts::render_file(crate::Locale::Zh).get("notice.admin.custody"),
+        &[("case", &t.view.case_id), ("crew", &t.view.crew_id), ("request", id), ("targets", &targets), ("reason", &t.view.request_reason)],
     )))
 }
 pub fn propose(

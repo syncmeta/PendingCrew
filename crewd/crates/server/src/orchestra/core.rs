@@ -4126,6 +4126,11 @@ impl<P: Port> Core<P> {
                 None
             }
         };
+        if !self.shutting_down {
+            // This is a Human-only notification, independent of executor admission.
+            // A due default is filtered by the authoritative ask in the delivery transaction.
+            log_err(self.port.advance_human_waits().await);
+        }
         if self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
             return Ok(());
         }

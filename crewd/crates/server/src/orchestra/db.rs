@@ -1367,6 +1367,18 @@ impl Port for DbPort {
         self.write(|tx| collab::asks::apply_all_due_defaults(tx).map(|_| ()))
             .await
     }
+    async fn advance_human_waits(&self) -> Result<()> {
+        let due = self.write(collab::asks::due_escalation_page).await?;
+        for ask in due {
+            if let Err(error) = self
+                .write(move |tx| collab::asks::escalate_wait(tx, ask))
+                .await
+            {
+                eprintln!("crewd: Human wait escalation failed closed: {error}");
+            }
+        }
+        Ok(())
+    }
 
     async fn prune_wakes(&self, before: Ms, limit: usize) -> Result<usize> {
         let limit = u32::try_from(limit).unwrap_or(u32::MAX);
@@ -1404,7 +1416,9 @@ impl Port for DbPort {
         self.read(move |c| {
             // seq 全库唯一（M3a.1）；群对不上 = 不是这条。
             opt(collab::messages::get_by_seq(c, r.seq))?
-                .filter(|m| m.channel_id == r.channel)
+                .filter(|m| {
+                    m.channel_id == r.channel && !collab::messages::is_human_wait_reminder(m)
+                })
                 .map(|m| facts_with_provenance(c, &m, now).map(|f| (f, m.text.clone())))
                 .transpose()
         })
@@ -2069,6 +2083,179 @@ mod tests {
     use super::*;
     use crewd_wake::breaker;
     use crewd_wake::source;
+
+    #[tokio::test]
+    async fn human_wait_escalation_tick_reaches_the_client_hub_without_executor_admission() {
+        use super::super::{
+            OrchestraConfig,
+            clock::ManualClock,
+            core::{Input, Origin},
+            exec::Executors,
+            hooks::Hooks,
+            testkit::StandIn,
+        };
+        use crewd_proto::{
+            WorkBlockOn, WorkBlockParams, WorkContinuation, WorkCreateParams, events,
+        };
+        let (state, port, _dir) = seeded().await;
+        let now = crewd_store::now_ms();
+        let (ask, _) = state
+            .db
+            .call_result(move |store| {
+                collab::run(store, now - 73 * 60 * 60 * 1000, |tx| {
+                    let item = collab::work::create(
+                        tx,
+                        &collab::Sender::Human,
+                        WorkCreateParams {
+                            crew_id: "c-2".into(),
+                            title: "isolated human wait fixture".into(),
+                            owner: Some("cap-2".into()),
+                            ..Default::default()
+                        },
+                    )?;
+                    let reply = collab::work_block::block(
+                        tx,
+                        &collab::Sender::Human,
+                        WorkBlockParams {
+                            id: item.id,
+                            expected_revision: item.revision,
+                            on: vec![WorkBlockOn::NewHuman {
+                                question: "private isolated original ask".into(),
+                                default: None,
+                            }],
+                            can_continue: WorkContinuation::Nothing,
+                        },
+                    )?;
+                    collab::listens::set(
+                        tx,
+                        "cap-1",
+                        "c-1/human",
+                        Some(now + 60_000),
+                        vec!["system".into()],
+                    )?;
+                    Ok(reply.human_tasks[0].clone())
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut public = state.hub.subscribe();
+        let clock = Arc::new(ManualClock::new(Ms(now)));
+        let exec = StandIn::default();
+        let port = Arc::new(port);
+        let (handle, actor) = super::super::spawn(
+            port.clone(),
+            Executors::new().with("claude", Arc::new(exec.clone())),
+            Hooks::default(),
+            clock,
+            OrchestraConfig {
+                admission: Some(state.admission.clone()),
+                ..OrchestraConfig::for_tests()
+            },
+        )
+        .await
+        .unwrap();
+        handle.tx.send(Input::Tick).unwrap();
+        handle.latches().await.unwrap();
+        let mut notified = None;
+        let mut refresh = false;
+        while let Ok(event) = public.try_recv() {
+            if event.event == events::ASK_CHANGED && event.data["ask"] == ask {
+                assert_eq!(event.data["crewId"], "c-2");
+                refresh = true;
+            }
+            if event.event == events::MESSAGE_APPENDED
+                && event.data["category"] == "ask_wait_reminder"
+            {
+                assert!(notified.replace(event.data).is_none());
+            }
+        }
+        let notice = notified.expect("actual public Human-channel event");
+        assert_eq!(notice["channelId"], "c-1/human");
+        assert_eq!(notice["mentions"], serde_json::json!([{"kind":"human"}]));
+        assert!(notice["text"].as_str().unwrap().contains(&ask) && refresh);
+        for _ in 0..6 {
+            handle.tx.send(Input::Tick).unwrap();
+            handle.latches().await.unwrap();
+        }
+        assert!(!state.admission.any());
+        while let Ok(event) = public.try_recv() {
+            assert_ne!(event.data["category"], "ask_wait_reminder");
+        }
+
+        handle.resume("cap-1", Origin::Human).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            while !handle.live("cap-1").await.unwrap().running {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(state.admission.contains("cap-1"));
+        let channel = "c-1/human";
+        let ctx = port.channel_ctx(channel, Ms(now)).await.unwrap().unwrap();
+        assert!(
+            ctx.listens
+                .iter()
+                .any(|l| l.session == "cap-1" && l.senders == Some(vec!["system".into()]))
+        );
+        let original = CollabFact::MessageAppended {
+            channel: channel.into(),
+            seq: notice["seq"].as_i64().unwrap(),
+        };
+        handle.tx.send(Input::Collab(original)).unwrap();
+        handle.tx.send(Input::Collab(CollabFact::Lagged)).unwrap();
+        handle.latches().await.unwrap();
+        assert!(port.pending("cap-1").await.unwrap().is_empty());
+        assert!(exec.sent("cap-1").is_empty());
+
+        // Positive control: this same listener does receive an ordinary System message.
+        let control = port
+            .write(move |tx| {
+                collab::messages::post(
+                    tx,
+                    collab::Sender::System,
+                    collab::messages::NewPost {
+                        channel_id: channel.into(),
+                        text: "ordinary system notice control".into(),
+                        ..Default::default()
+                    },
+                )
+            })
+            .await
+            .unwrap()
+            .message;
+        handle.tx.send(Input::Collab(CollabFact::Lagged)).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                handle.latches().await.unwrap();
+                if exec
+                    .sent("cap-1")
+                    .iter()
+                    .any(|text| text.contains(&control.text))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let rows = port.read(|c| cw::list(c, Some("cap-1"), 20)).await.unwrap();
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.source == format!("msg:{}", notice["id"].as_str().unwrap()))
+        );
+        assert!(
+            exec.sent("cap-1")
+                .iter()
+                .all(|text| !text.contains(notice["text"].as_str().unwrap()))
+        );
+        assert!(handle.shutdown(std::time::Duration::from_secs(3)).await);
+        actor.finished().await.unwrap();
+    }
 
     #[tokio::test]
     async fn patrol_brief_actual_delivery_matches_its_live_captain_and_cannot_spawn_a_runner() {

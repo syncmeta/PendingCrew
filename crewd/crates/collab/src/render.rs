@@ -474,7 +474,7 @@ fn batch_window(
             if m.seq > max {
                 break 'scan;
             }
-            if m.sender_session_id.as_deref() != Some(session) {
+            if crate::messages::eligible_for_automatic_context(&m, session) {
                 got.push(m);
                 if got.len() >= cap {
                     break 'scan;
@@ -550,8 +550,13 @@ pub fn build_batch_after(
                     continue;
                 };
                 // 与 `cursors::unread_for` 同一个「可投递」判据：入队方叫错了人也不投给它。
-                if m.sender_session_id.as_deref() == Some(session) {
-                    unusable.push((r.id, format!("message {id} is its own message")));
+                if !crate::messages::eligible_for_automatic_context(&m, session) {
+                    let reason = if crate::messages::is_human_wait_reminder(&m) {
+                        "is a Human-only reminder"
+                    } else {
+                        "is its own message"
+                    };
+                    unusable.push((r.id, format!("message {id} {reason}")));
                     continue;
                 }
                 // 注入跟着成员资格走（裁定 10；读得到 ≠ 成员）：入队之后它已不在这个群（被移出、群归档、机组挪走后的

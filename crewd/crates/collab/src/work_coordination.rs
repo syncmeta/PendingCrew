@@ -409,9 +409,9 @@ pub(crate) fn render(c: &Connection, row: &wakes::WakeRow) -> Result<work::Follo
     {
         return Ok(work::FollowupNote::Stale);
     }
-    Ok(work::FollowupNote::Current(format!(
-        "请核实并协调 {} 的进展；模型建议需要协调，不代表任务卡死或已经完成协调。请读取当前工作和报告，再决定下一步。",
-        id
+    Ok(work::FollowupNote::Current(crate::prompts::fill(
+        crate::prompts::render_file(crate::Locale::Zh).get("notice.work.coordination"),
+        &[("work", id)],
     )))
 }
 /// Existing durable notification identities for guarded channel lifecycle checks.

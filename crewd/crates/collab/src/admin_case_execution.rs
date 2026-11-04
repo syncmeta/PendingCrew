@@ -525,7 +525,7 @@ pub fn register_and_bind(tx: &mut Tx<'_>, permit: &AdminLaunchPermit) -> Result<
             model: source.model,
             effort: source.effort,
             working_directory: crew.working_directory,
-            title: Some("行政事项".into()),
+            title: Some(crate::prompts::render_file(crate::Locale::Zh).get("notice.admin.title").into()),
             brief: Some(format!(
                 "Administrative case {}. Inspect only its original in-scope work. Use factual evidence for closure or verified lost-owner reassignment. A tool result is not case resolution.",
                 permit.case

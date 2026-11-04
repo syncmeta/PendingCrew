@@ -159,7 +159,19 @@ pub(crate) fn announce_to_human(
 /// 正文上限（字节）。
 const MAX_BODY_BYTES: usize = 256 * 1024;
 /// 只有 collab 自己的公告（`post_internal`）能用的 `category`。
-const RESERVED_CATEGORIES: [&str; 2] = ["ask", "restart"];
+pub(crate) const ASK_WAIT_REMINDER: &str = "ask_wait_reminder";
+const RESERVED_CATEGORIES: [&str; 3] = ["ask", "restart", ASK_WAIT_REMINDER];
+
+/// Internal @Human-only notice, still available as ordinary retained chat history.
+pub fn is_human_wait_reminder(message: &Message) -> bool {
+    message.sender_kind == SenderKind::System
+        && message.category.as_deref() == Some(ASK_WAIT_REMINDER)
+        && message.channel_id.ends_with("/human")
+}
+
+pub(crate) fn eligible_for_automatic_context(message: &Message, session: &str) -> bool {
+    message.sender_session_id.as_deref() != Some(session) && !is_human_wait_reminder(message)
+}
 
 /// 空白与零宽字符（U+200B/200C/200D/FEFF）：只含这些的正文等于空。
 fn is_blank(c: char) -> bool {
@@ -1516,7 +1528,7 @@ mod tests {
         };
         assert_eq!(why.code, Code::MessageTooLong);
         assert_eq!(why.value("max"), Some("262144"), "错误里写明上限：{why}");
-        for cat in ["ask", "restart"] {
+        for cat in RESERVED_CATEGORIES {
             assert!(
                 matches!(
                     err(&mut s, |tx| post(

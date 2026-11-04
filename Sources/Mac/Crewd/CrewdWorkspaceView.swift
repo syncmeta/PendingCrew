@@ -176,8 +176,9 @@ struct CrewdWorkspaceView: View {
                 DisclosureGroup("全组织等待你的答复（\(workspace.pendingAsks.count)）") {
                     ScrollView {
                         ForEach(workspace.pendingAsks.indices, id: \.self) { i in
-                            let ask = workspace.pendingAsks[i]["ask"]
-                            CrewdCrewQuestionView(workspace: workspace, ask: ask).id((ask["crewId"].string ?? "") + "/" + (ask["ask"].string ?? ""))
+                            let row = workspace.pendingAsks[i]
+                            let ask = row["ask"]
+                            CrewdCrewQuestionView(workspace: workspace, row: row).id((ask["crewId"].string ?? "") + "/" + (ask["ask"].string ?? ""))
                         }
                     }.frame(maxHeight: 180)
                 }
@@ -275,10 +276,15 @@ struct CrewdWorkspaceView: View {
 private struct CrewdCrewQuestionView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var workspace: CrewdWorkspace
-    let ask: CrewdValue
+    let row: CrewdValue
     @State private var answer = ""
     var body: some View {
+        let ask = row["ask"]
         VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if let id = ask["ask"].string { Text(id).monospacedDigit() }
+                if let summary = CrewdHumanWaitPresentation.summary(row) { Text(summary) }
+            }.font(CrewdType.caption).foregroundStyle(.secondary)
             Text(ask["question"].string ?? "机组的问题").textSelection(.enabled)
             HStack {
                 TextField("你的答复", text: $answer)

@@ -953,9 +953,9 @@ pub(crate) fn render(
         .take(50)
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(crate::work::FollowupNote::Current(format!(
-        "行政事项请求你明确承接。request_id={}；原范围工作：{}（正文最多50项，完整范围请用 admin_case_handoff_get）。原因：{}。通知送达不代表承接或工作完成；查看后使用 admin_case_handoff_accept 和当前 revision 明确承接。",
-        id, targets, r.view.request_reason
+    Ok(crate::work::FollowupNote::Current(crate::prompts::fill(
+        crate::prompts::render_file(crate::Locale::Zh).get("notice.admin.handoff"),
+        &[("request", id), ("targets", &targets), ("reason", &r.view.request_reason)],
     )))
 }
 

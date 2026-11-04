@@ -42,20 +42,24 @@ fn load(c: &Connection, crew: &str) -> Result<Option<Saved>> {
 }
 pub fn status(c: &Connection, crew: &str) -> Result<PatrolStatus> {
     crate::crews::refuse_archived(c, crew)?;
+    let prompts = crate::prompts::render_file(crate::Locale::Zh);
     let observed = load(c, crew);
     let error = if observed.is_err() {
-        Some("巡检状态不可读取".into())
+        Some(prompts.get("notice.patrol.unreadable").into())
     } else {
         match error_saved(c, crew) {
-            Ok(e) => e.map(|_| "巡检读取失败；原进度保留，稍后重试".into()),
-            Err(_) => Some("巡检错误记录不可读取；原记录已保留".into()),
+            Ok(e) => e.map(|_| prompts.get("notice.patrol.retry").into()),
+            Err(_) => Some(prompts.get("notice.patrol.error_unreadable").into()),
         }
     };
     let run = observed.ok().flatten().map(|s| s.run);
     let (captain_brief, brief_error) = match run.as_ref() {
         Some(run) => match crate::patrol_brief::status(c, crew, run) {
             Ok(receipt) => (receipt, None),
-            Err(_) => (None, Some("机长简报回执不可读取".into())),
+            Err(_) => (
+                None,
+                Some(prompts.get("notice.patrol.receipt_unreadable").into()),
+            ),
         },
         None => (None, None),
     };

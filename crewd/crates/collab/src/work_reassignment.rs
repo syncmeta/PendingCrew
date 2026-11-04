@@ -498,9 +498,9 @@ pub(crate) fn render(c: &Connection, row: &wakes::WakeRow) -> Result<work::Follo
     if r.post.is_none() || post(c, &r.snapshot, owner)? != r.post {
         return Ok(work::FollowupNote::Stale);
     }
-    Ok(work::FollowupNote::Current(format!(
-        "{} 的原负责人已核实失联，调度已将同一项工作重派给 {}。请查看当前负责人和进展；重派与通知不代表工作完成。",
-        id, owner
+    Ok(work::FollowupNote::Current(crate::prompts::fill(
+        crate::prompts::render_file(crate::Locale::Zh).get("notice.work.reassignment"),
+        &[("work", id), ("owner", owner)],
     )))
 }
 /// Existing durable notification identities for guarded channel lifecycle checks.

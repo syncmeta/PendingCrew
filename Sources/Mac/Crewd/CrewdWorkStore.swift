@@ -59,6 +59,30 @@ struct CrewdWorkID: Hashable, Sendable {
     }
 }
 
+/// Present the server's wait tiers without inferring them from the local clock.
+enum CrewdHumanWaitPresentation {
+    static func summary(_ row: CrewdValue) -> String? {
+        let elapsed = row["waitedMs"].int.flatMap { $0 >= 0 ? elapsedLabel(minutes: $0 / 60_000) : nil }
+        let tier: String?
+        switch row["tier"].string {
+        case "pinned": tier = "已置顶"
+        case "still_wanted": tier = "还要吗？"
+        default: tier = nil
+        }
+        let parts = [elapsed, tier].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func elapsedLabel(minutes: Int) -> String {
+        let days = minutes / 1_440, hours = (minutes / 60) % 24
+        let remainingMinutes = minutes % 60
+        if days > 0 { return hours == 0 ? "已等待 \(days) 天" : "已等待 \(days) 天 \(hours) 小时" }
+        if hours > 0 { return remainingMinutes == 0 ? "已等待 \(hours) 小时" : "已等待 \(hours) 小时 \(remainingMinutes) 分钟" }
+        if minutes > 0 { return "已等待 \(minutes) 分钟" }
+        return "已等待不到 1 分钟"
+    }
+}
+
 /// User-facing vocabulary only. Raw backend states stay untouched for CAS and actions.
 enum CrewdWorkStatusLabel {
     static func display(_ value:String)->String {
@@ -108,7 +132,7 @@ final class CrewdWorkStore: ObservableObject {
     typealias Call = @MainActor (String, CrewdValue) async throws -> CrewdValue
     @Published private(set) var plans: [CrewdWorkID: CrewdPlan] = [:]
     @Published private(set) var requirements: [CrewdWorkID: CrewdValue] = [:]
-    @Published private(set) var humanTasks: [CrewdWorkID: CrewdValue] = [:]
+    @Published private var humanInbox: (ids: [CrewdWorkID], tasks: [CrewdWorkID: CrewdValue]) = ([], [:])
     @Published private(set) var selectedCrew = ""
     @Published private(set) var planIDs: [CrewdWorkID] = []
     @Published private(set) var requirementIDs: [CrewdWorkID] = []
@@ -133,6 +157,8 @@ final class CrewdWorkStore: ObservableObject {
     func configureCapabilities(_ value:Set<String>) {capabilities=value}
     var progress: [CrewdPlan] { planIDs.compactMap { plans[$0] } }
     var todoPlans: [CrewdPlan] { progress }
+    var humanTaskIDs: [CrewdWorkID] { humanInbox.ids }
+    var humanTasks: [CrewdWorkID: CrewdValue] { humanInbox.tasks }
     func plans(from requirement: CrewdWorkID) -> [CrewdPlan] {
         plans.values.filter { $0.value["sources"].array.contains(.string(requirement.raw)) }
             .sorted { $0.id.raw < $1.id.raw }
@@ -926,12 +952,14 @@ final class CrewdWorkStore: ObservableObject {
             let waits = try await call("ask.list", .object([:])); try check(token, current)
             guard case .array(let items) = waits else { throw CrewdClientError(message: "待人类事项列表契约无效。") }
             var humans: [CrewdWorkID: CrewdValue] = [:]
+            var humanIDs: [CrewdWorkID] = []
             for value in items {
                 guard let raw = value["ask"]["ask"].string, let id = CrewdWorkID(raw, kind: .human),
                       value["ask"]["crewId"].string != nil, humans[id] == nil else {
                     throw CrewdClientError(message: "待人类事项的全局身份无效或重复。")
                 }
                 humans[id] = value
+                humanIDs.append(id)
             }
             try check(token, current)
             guard sourceEpoch == requirementEpoch else { throw CancellationError() }
@@ -946,7 +974,7 @@ final class CrewdWorkStore: ObservableObject {
                 }
                 requirements[id] = next
             }
-            planIDs = rows.map(\.id); requirementIDs = sources.map { $0.0 }; humanTasks = humans
+            planIDs = rows.map(\.id); requirementIDs = sources.map { $0.0 }; humanInbox = (humanIDs, humans)
             hasLoaded = true
         } catch {
             if token == generation && refreshID == current && !(error is CancellationError) { lastFailure = failure(error) }
