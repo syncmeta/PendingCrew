@@ -14,6 +14,7 @@ pub struct RuntimeIdentity {
 }
 
 pub const LOCAL_CLIENT_TRUST_STATUS: &str = "local.clientTrust.status";
+pub const ASK_RESOLVE: &str = "ask.resolve";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocalClientTrustStatusParams {}
@@ -151,6 +152,8 @@ pub enum PublicCommand {
     RequirementReview(crate::admin_cases::RequirementReviewParams),
     #[serde(rename = "adminCase.workDuplicateClose")]
     WorkDuplicateClose(crate::WorkDuplicateCloseParams),
+    #[serde(rename = "ask.resolve")]
+    AskResolve(crate::AskResolutionParams),
     #[serde(rename = "session.start")]
     SessionStart(orchestra::SessionStartParams),
     #[serde(rename = "session.codex.configure")]
@@ -236,6 +239,7 @@ impl PublicCommand {
             Self::PatrolStart(_) => &[crate::PATROL_START],
             Self::RequirementReview(_) => &[crate::admin_cases::REQUIREMENT_REVIEW],
             Self::WorkDuplicateClose(_) => &[crate::admin_cases::WORK_DUPLICATE_CLOSE],
+            Self::AskResolve(_) => &[ASK_RESOLVE],
             Self::SessionStart(_) => &["session.start"],
             Self::CodexConfigure(_) => &["session.codex.configure"],
             Self::CodexCompact(_) => &["session.codex.compact"],
@@ -275,6 +279,7 @@ impl PublicCommand {
             Self::PatrolStart(_) => crate::PATROL_START,
             Self::RequirementReview(_) => crate::admin_cases::REQUIREMENT_REVIEW,
             Self::WorkDuplicateClose(_) => crate::admin_cases::WORK_DUPLICATE_CLOSE,
+            Self::AskResolve(_) => ASK_RESOLVE,
             Self::SessionStart(_) => "session.start",
             Self::CodexConfigure(_) => "session.codex.configure",
             Self::CodexCompact(_) => "session.codex.compact",

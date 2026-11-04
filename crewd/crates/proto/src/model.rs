@@ -516,6 +516,42 @@ pub struct Ask {
     pub message_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AskResolutionCheck {
+    pub ask: Ask,
+    pub resolution_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AskResolutionDisposition {
+    Answer,
+    Withdraw,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AskResolutionParams {
+    pub crew_id: String,
+    pub ask: String,
+    pub expected_resolution_revision: String,
+    pub disposition: AskResolutionDisposition,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AskResolutionReceipt {
+    pub crew_id: String,
+    pub ask: String,
+    pub original_resolution_revision: String,
+    pub disposition: AskResolutionDisposition,
+    pub event_seq: String,
+    pub resolved_at_ms: i64,
+    pub resolved: Ask,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HumanWait {

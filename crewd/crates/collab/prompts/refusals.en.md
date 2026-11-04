@@ -543,3 +543,6 @@ The candidate or its review changed. Reload the original requirements and curren
 
 ## work.duplicate_candidate_changed
 The work items or their evidence changed. Reload both plans and verify which one should remain.
+
+## ask.resolution_changed
+The original question or its state changed. Reload the question before answering or withdrawing it.

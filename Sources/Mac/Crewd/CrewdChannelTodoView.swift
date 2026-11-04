@@ -15,6 +15,7 @@ struct CrewdChannelTodoView:View {
     var externalQuery: Binding<String>? = nil
     var externalTag: Binding<String>? = nil
     var mutationDrafts: Binding<CrewdTodoMutationDrafts>? = nil
+    var workspace: CrewdWorkspace? = nil
     @State private var selectedTags: [String:String] = [:]
     @State private var metadataTarget: CrewdTodoMetadataTarget?
     @State private var creatingHuman = false
@@ -107,6 +108,9 @@ struct CrewdChannelTodoView:View {
                 }
                 ScrollView {
                     LazyVStack(alignment:.leading,spacing:10) {
+                        if let workspace, !showTodoKinds || selectedKind == .human {
+                            CrewdHumanResolutionRecovery(workspace:workspace,crew:crew)
+                        }
                         if group.loaded,!group.loading,group.failure == nil,visibleItems.isEmpty {
                             if !query.wrappedValue.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || !tag.wrappedValue.isEmpty {
                                 HStack {
@@ -138,7 +142,7 @@ struct CrewdChannelTodoView:View {
         .task(id:crew+channel+group.capabilities.sorted().joined(separator:",")+group.activationEpoch.uuidString){if group.capabilities.contains("channelWork"),!channel.isEmpty{await refreshReferences()}}
         .sheet(isPresented:$association){CrewdChannelAssociation(group:group,work:work,drafts:$linkDrafts,initial:selected?["object"])}
         .sheet(item:$planTarget){target in CrewdPlanActions(store:work,drafts:$planDrafts,target:target,members:members,crews:crews)}
-        .sheet(item:$humanTarget){target in CrewdHumanActions(store:work,drafts:$humanDrafts,target:target)}
+        .sheet(item:$humanTarget){target in CrewdHumanActions(store:work,drafts:$humanDrafts,target:target,workspace:workspace)}
         .sheet(item:$metadataTarget){target in
             if let mutationDrafts {CrewdTodoMetadataEditor(group:group,drafts:mutationDrafts,target:target,members:members)}
         }

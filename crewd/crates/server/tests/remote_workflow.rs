@@ -439,6 +439,251 @@ async fn approved(
 }
 
 #[tokio::test]
+async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() {
+    use crewd_collab::{asks, sessions};
+    use crewd_proto::{Role, commands::ASK_RESOLVE, methods::ASK_RESOLVE_CHECK};
+
+    fn resolve_packet(hello: &Value, checked: &Value, disposition: &str, text: &str) -> Value {
+        draft_packet(
+            hello,
+            ASK_RESOLVE,
+            json!({
+                "crewId":checked["ask"]["crewId"],"ask":checked["ask"]["ask"],
+                "expectedResolutionRevision":checked["resolutionRevision"],
+                "disposition":disposition,"text":text
+            }),
+        )
+    }
+    fn lookup(packet: &Value) -> Value {
+        json!({"dbId":packet["dbId"],"requestId":packet["requestId"]})
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
+    let crew = local(
+        &mut running.owner,
+        "crew.create",
+        json!({
+            "title":"Paired Ask fixture","workingDirectory":dir.path()
+        }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    stopped(running).await;
+    let questions = {
+        let mut store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
+        crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+            let asker = sessions::register(
+                tx,
+                sessions::NewSession {
+                    crew_id: crew.clone(),
+                    role: Role::Worker,
+                    executor: "codex".into(),
+                    title: Some("fixture worker".into()),
+                    ..Default::default()
+                },
+            )?;
+            [
+                "original Answer fixture",
+                "original Withdraw fixture",
+                "original revoked fixture",
+                "original legacy reply fixture",
+            ]
+            .into_iter()
+            .map(|question| {
+                asks::open(
+                    tx,
+                    &asker.id,
+                    asks::OpenAsk {
+                        question: question.into(),
+                        default: None,
+                        resume_note: None,
+                    },
+                )
+            })
+            .collect::<crewd_collab::Result<Vec<_>>>()
+        })
+        .unwrap()
+        .0
+    };
+    let mut running = service(dir.path()).await;
+    assert_eq!(
+        local(&mut running.owner, "remote.status", json!({})).await["listening"],
+        true
+    );
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert_eq!(hello["remoteBinding"]["grantId"], accepted.grant.id);
+    for method in [ASK_RESOLVE_CHECK, ASK_RESOLVE] {
+        assert!(
+            hello["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == method)
+        );
+    }
+    let mut checks = Vec::new();
+    for q in &questions {
+        let checked = remote
+            .call(ASK_RESOLVE_CHECK, json!({"crewId":crew,"ask":q.ask}))
+            .await;
+        assert_eq!(checked["ask"], serde_json::to_value(q).unwrap());
+        assert_eq!(checked["resolutionRevision"].as_str().unwrap().len(), 64);
+        checks.push(checked);
+    }
+    let wrong = resolve_packet(&hello, &checks[0], "answer", "must not apply");
+    let mut wrong_target = wrong.clone();
+    wrong_target["command"]["params"]["ask"] = json!(questions[1].ask);
+    let refused = tokio::time::timeout(LIMIT, remote.frame("command.submit", wrong_target))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refused["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    assert!(
+        remote
+            .call("command.lookup", lookup(&wrong))
+            .await
+            .is_null()
+    );
+
+    let answer = resolve_packet(&hello, &checks[0], "answer", " paired original answer ");
+    let receipt = remote.call("command.submit", answer.clone()).await;
+    assert_eq!(receipt["phase"], "committed");
+    assert_eq!(
+        receipt["command"]["params"]["text"],
+        " paired original answer "
+    );
+    assert_eq!(receipt["result"]["resolved"]["state"], "answered");
+    assert_eq!(
+        receipt["result"]["resolved"]["answer"],
+        "paired original answer"
+    );
+    assert_eq!(
+        receipt["result"]["originalResolutionRevision"],
+        checks[0]["resolutionRevision"]
+    );
+    assert_eq!(remote.call("command.submit", answer.clone()).await, receipt);
+    let mut changed = answer.clone();
+    changed["command"]["params"]["text"] = json!("different replay");
+    let refused = tokio::time::timeout(LIMIT, remote.frame("command.submit", changed))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refused["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    drop(remote);
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert_eq!(
+        remote.call("command.lookup", lookup(&answer)).await,
+        receipt
+    );
+    let resolved_check = remote
+        .call(
+            ASK_RESOLVE_CHECK,
+            json!({"crewId":crew,"ask":questions[0].ask}),
+        )
+        .await;
+    assert!(resolved_check["resolutionRevision"].is_null());
+    assert_eq!(resolved_check["ask"], receipt["result"]["resolved"]);
+
+    let withdraw = resolve_packet(&hello, &checks[1], "withdraw", "paired original reason");
+    let withdrawn = remote.call("command.submit", withdraw.clone()).await;
+    assert_eq!(withdrawn["result"]["resolved"]["state"], "withdrawn");
+    assert_eq!(
+        withdrawn["result"]["resolved"]["withdrawReason"],
+        "paired original reason"
+    );
+    assert_eq!(
+        remote.call("command.lookup", lookup(&withdraw)).await,
+        withdrawn
+    );
+    let channel = crewd_store::channels::human_id(&crew);
+    let reply = remote
+        .call(
+            "message.post",
+            json!({
+                "channelId":channel,"inReplyTo":questions[3].message_id,
+                "text":"legacy paired reply still answers the original question"
+            }),
+        )
+        .await;
+    assert_eq!(reply["senderKind"], "human");
+    assert_eq!(reply["inReplyTo"], json!(questions[3].message_id));
+    let answered = remote
+        .call("ask.get", json!({"crewId":crew,"ask":questions[3].ask}))
+        .await;
+    assert_eq!(answered["state"], "answered");
+    assert_eq!(answered["answer"], reply["text"]);
+    let revoked = resolve_packet(
+        &hello,
+        &checks[2],
+        "answer",
+        "must remain open after revoke",
+    );
+    let revoked_id = revoked["requestId"].as_str().unwrap().to_owned();
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"revoke Ask fixture"
+    })).await;
+    for (method, params) in [
+        ("command.submit", revoked),
+        (
+            ASK_RESOLVE_CHECK,
+            json!({"crewId":crew,"ask":questions[2].ask}),
+        ),
+        ("command.lookup", lookup(&answer)),
+        (
+            "ask.answer",
+            json!({"crewId":crew,"ask":questions[2].ask,"text":"legacy after revoke"}),
+        ),
+        (
+            "ask.withdraw",
+            json!({"crewId":crew,"ask":questions[2].ask,"reason":"legacy after revoke"}),
+        ),
+        (
+            "message.post",
+            json!({"channelId":channel,"inReplyTo":questions[2].message_id,"text":"legacy reply after revoke"}),
+        ),
+    ] {
+        if let Ok(frame) = tokio::time::timeout(LIMIT, remote.frame(method, params))
+            .await
+            .unwrap()
+        {
+            assert_eq!(
+                frame["error"]["code"],
+                crewd_proto::RpcError::FORBIDDEN,
+                "revoked TLS used {method}"
+            );
+        }
+    }
+    assert_eq!(
+        local(
+            &mut running.owner,
+            "ask.get",
+            json!({"crewId":crew,"ask":questions[2].ask})
+        )
+        .await["state"],
+        "open"
+    );
+    drop(remote);
+    stopped(running).await;
+    let store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
+    let receipts: i64 = store
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM public_command_receipts WHERE request_id=?1",
+            [revoked_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(receipts, 0);
+}
+
+#[tokio::test]
 async fn paired_human_factual_duplicate_close_keeps_receipt_scope_and_revocation() {
     use crewd_proto::admin_cases::{WORK_DUPLICATE_CLOSE, WORK_DUPLICATE_HISTORY, WORK_DUPLICATES};
 

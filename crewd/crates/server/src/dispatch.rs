@@ -322,6 +322,8 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     admin_cases::WORK_DUPLICATES,
                     admin_cases::WORK_DUPLICATE_CLOSE,
                     admin_cases::WORK_DUPLICATE_HISTORY,
+                    methods::ASK_RESOLVE_CHECK,
+                    crewd_proto::commands::ASK_RESOLVE,
                 ]
                 .into_iter()
                 .map(str::to_owned),
@@ -507,24 +509,12 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             })
             .await
         }
+        // Direct in-process fixture calls do not enter the authenticated
+        // socket router. Ordinary production dispatch has no raw post arm.
+        #[cfg(any(test, feature = "testkit"))]
         methods::MESSAGE_POST => {
             let p: MessagePostParams = parse_params(p)?;
-            write(state, move |tx| {
-                messages::post(
-                    tx,
-                    Sender::Human,
-                    messages::NewPost {
-                        channel_id: p.channel_id,
-                        text: p.text,
-                        in_reply_to: p.in_reply_to,
-                        mentions: p.mentions.into_iter().map(Into::into).collect(),
-                        attachments: p.attachments.into_iter().map(Into::into).collect(),
-                        category: None,
-                    },
-                )
-                .map(|posted| posted.message)
-            })
-            .await
+            write(state, move |tx| crate::ask_resolution::post_human(tx, p)).await
         }
         methods::MESSAGE_SEARCH => {
             let p: MessageSearchParams = parse_params(p)?;
@@ -859,20 +849,6 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             let now = crewd_store::now_ms();
             read(state, move |c| {
                 asks::waits(c, now, p.home_crew_id.as_deref())
-            })
-            .await
-        }
-        methods::ASK_ANSWER => {
-            let p: AskAnswerParams = parse_params(p)?;
-            write(state, move |tx| {
-                asks::answer(tx, &p.crew_id, &p.ask, &p.text)
-            })
-            .await
-        }
-        methods::ASK_WITHDRAW => {
-            let p: AskWithdrawParams = parse_params(p)?;
-            write(state, move |tx| {
-                asks::withdraw(tx, &Sender::Human, &p.crew_id, &p.ask, &p.reason)
             })
             .await
         }

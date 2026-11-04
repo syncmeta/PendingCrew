@@ -1003,6 +1003,21 @@ final class CrewdWorkStore: ObservableObject {
         guard id.kind == .human,!crew.isEmpty,!text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {throw CrewdClientError(message:"请填写公共问题编号与答复或撤回理由。",code:-32602)}
         return try await mutate(withdraw ? "ask.withdraw":"ask.answer",.object(["crewId":.string(crew),"ask":.string(id.raw),withdraw ? "reason":"text":.string(text)]))
     }
+    var offersAskResolution: Bool {
+        capabilities.contains("ask.resolve") || capabilities.contains("ask.resolveCheck")
+    }
+    var supportsAskResolution: Bool {
+        ["ask.resolve","ask.resolveCheck","command.receipts"].allSatisfy(capabilities.contains)
+    }
+    func humanResolutionCheck(_ id:CrewdWorkID,crew:String) async throws -> CrewdAskResolutionWire.Review {
+        guard id.kind == .human, !crew.isEmpty, supportsAskResolution else {
+            throw CrewdClientError(message:"当前后台未具备完整的问题复核与原请求回执。",kind:.notSubmitted)
+        }
+        let token = generation
+        let value = try await call("ask.resolveCheck",.object(["crewId":.string(crew),"ask":.string(id.raw)]))
+        try check(token)
+        return try .init(value,crew:crew,id:id.raw)
+    }
     func humanTodoAttributes(_ id:CrewdWorkID)async throws->CrewdValue {
         let token=generation
         let value=try await call("todo.attributesGet",.object(["object":.object(["kind":.string("humanTask"),"id":.string(id.raw)])]))
@@ -1192,6 +1207,9 @@ final class CrewdWorkStore: ObservableObject {
         }
         guard ["work.close", "work.create", "work.update", "work.assign", "work.block", "work.transferWithdraw", "work.reassignLost", "ask.answer", "ask.withdraw", "todo.create", "todo.close"].contains(method) else {
             throw CrewdClientError(message: "不支持的工作写入操作。",kind:.notSubmitted)
+        }
+        if ["ask.answer","ask.withdraw"].contains(method), offersAskResolution {
+            throw CrewdClientError(message:"请从原问题复核界面使用可核对的提交。",kind:.notSubmitted)
         }
         if method == "work.reassignLost",!capabilities.contains(method) {throw CrewdClientError(message:"配套后台尚未开放核实失联后的重派操作。",kind:.notSubmitted)}
         if params["channelId"] != .null {

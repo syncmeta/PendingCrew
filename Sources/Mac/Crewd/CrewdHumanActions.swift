@@ -163,8 +163,8 @@ struct CrewdHumanDrafts {
     func uncertain(_ key:Key)->[Snapshot] {unknown[key] ?? []}
     var allUnknownSnapshots:[Snapshot] {unknown.values.flatMap{$0}.sorted{$0.version.uuidString < $1.version.uuidString}}
     mutating func edit(_ key:Key,_ fields:Fields) {if self.fields(key) != fields {entries[key]=Snapshot(key:key,fields:fields,version:UUID())}}
-    mutating func begin(_ key:Key)->Snapshot? {
-        guard !busy(key),!fields(key).text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else {return nil}
+    mutating func begin(_ key:Key,validText:(String)->Bool = { !$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty })->Snapshot? {
+        guard !busy(key),validText(fields(key).text) else {return nil}
         if entries[key] == nil {return nil}
         let snapshot=entries[key]!;pending[key]=snapshot.version;return snapshot
     }
@@ -181,6 +181,231 @@ struct CrewdHumanTarget:Identifiable {
     var id:String {key.scope+":"+key.crew+":"+key.ask}
 }
 struct CrewdHumanActions:View {
+    @ObservedObject var store: CrewdWorkStore
+    @Binding var drafts: CrewdHumanDrafts
+    let target: CrewdHumanTarget
+    var readExactly = false
+    var workspace: CrewdWorkspace? = nil
+
+    var body: some View {
+        if store.offersAskResolution || workspace?.originalAskResolutionRecords(crew:target.key.crew,ask:target.key.ask).isEmpty == false {
+            if let workspace {
+                CrewdTypedHumanActions(workspace:workspace,store:store,drafts:$drafts,target:target)
+            } else {
+                Text("当前入口尚未具备原问题的提交与回执作用域。").padding()
+            }
+        } else {
+            CrewdLegacyHumanActions(store:store,drafts:$drafts,target:target,readExactly:readExactly)
+        }
+    }
+}
+
+private struct CrewdTypedHumanActions: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    @ObservedObject var store: CrewdWorkStore
+    @Binding var drafts: CrewdHumanDrafts
+    let target: CrewdHumanTarget
+    @Environment(\.dismiss) private var dismiss
+    @State private var scope: UUID?
+    @State private var readID = UUID()
+    @State private var review: CrewdAskResolutionWire.Review?
+    @State private var reading = false
+    @State private var active = false
+    @State private var failure: String?
+
+    private var key: CrewdHumanDrafts.Key { target.key }
+    private var id: CrewdWorkID? { CrewdWorkID(key.ask,kind:.human) }
+    private var fields: CrewdHumanDrafts.Fields { drafts.fields(key) }
+    private var current: Bool {
+        active && store.readScope == scope && store.selectedCrew == key.scope && workspace.crewID == key.scope
+    }
+    private var canSubmit: Bool {
+        current && workspace.originalJournalReady && store.supportsAskResolution && review?.revision != nil &&
+            !reading && !drafts.busy(key) && workspace.originalAskResolutionRecords(crew:key.crew,ask:key.ask).isEmpty &&
+            CrewdAskResolutionWire.validInput(fields.text)
+    }
+    private func input<T>(_ path: WritableKeyPath<CrewdHumanDrafts.Fields,T>) -> Binding<T> {
+        .init(get:{drafts.fields(key)[keyPath:path]},set:{
+            var value = drafts.fields(key)
+            value[keyPath:path] = $0
+            drafts.edit(key,value)
+        })
+    }
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            CrewdPanelHeader(title:"处理人工待办",detail:"核对原问题后答复或撤回。",symbol:"person.crop.circle.badge.questionmark")
+            Text(key.ask + " · " + (target.crewTitle ?? key.crew)).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            if let review, current {
+                Text(verbatim:review.ask["question"].string ?? "").textSelection(.enabled)
+                if let item = review.ask["item"].string { Text("关联计划 " + item).font(.caption).textSelection(.enabled) }
+                if let original = review.ask["default"]["text"].string {
+                    Text("预设答复 " + original).font(.caption).textSelection(.enabled)
+                }
+                if review.revision == nil {
+                    let state = review.ask["state"].string ?? ""
+                    let label = state == "defaulted" ? "已按预设答复" : CrewdWorkStatusLabel.display(state)
+                    Text(state == "open" ? "当前问题仅供查看。" : "当前问题状态 " + label)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            CrewdHumanResolutionRecovery(workspace:workspace,crew:key.crew,ask:key.ask) {
+                await refresh()
+            }
+            if reading { ProgressView("正在核对原问题…").controlSize(.small) }
+            if !workspace.originalJournalReady || !store.supportsAskResolution {
+                Text("当前连接尚未具备完整的原问题复核和提交回执。").font(.caption).foregroundStyle(.secondary)
+            }
+            if review?.revision != nil {
+                Picker("操作",selection:input(\.action)) {
+                    ForEach(CrewdHumanDrafts.Action.allCases,id:\.self) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.segmented).disabled(drafts.busy(key))
+                CrewdFormField(title:fields.action == .answer ? "你的答复" : "撤回理由") {
+                    TextField(fields.action == .answer ? "写下处理意见" : "说明撤回的原因",text:input(\.text),axis:.vertical)
+                        .lineLimit(4...10).disabled(drafts.busy(key))
+                }
+                if fields.action == .withdraw {
+                    Text("仍阻塞活跃计划的问题需要负责人先调整计划。").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
+            HStack {
+                Button("关闭") { dismiss() }.disabled(drafts.busy(key))
+                Button("重新核对当前问题") { Task { await refresh() } }
+                    .disabled(!current || !store.supportsAskResolution || reading || drafts.busy(key))
+                Spacer()
+                Button(drafts.busy(key) ? "提交中" : "提交") { submit() }
+                    .buttonStyle(CrewdPrimaryButtonStyle()).disabled(!canSubmit)
+            }
+        }
+        .padding(20).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:540,height:580))
+        .interactiveDismissDisabled(drafts.busy(key))
+        .task(id:target.id) {
+            scope = store.readScope; active = true
+            await refresh()
+        }
+        .onChange(of:store.readScope) { _,_ in review = nil; dismiss() }
+        .onDisappear { active = false; readID = UUID(); reading = false }
+    }
+
+    private func refresh() async {
+        guard let id, current, !reading, store.supportsAskResolution else { return }
+        let token = UUID(); readID = token; reading = true; failure = nil
+        review = nil
+        defer { if readID == token { reading = false } }
+        do {
+            let fresh = try await store.humanResolutionCheck(id,crew:key.crew)
+            guard current && readID == token else { return }
+            review = fresh
+        } catch {
+            if current && readID == token { failure = error.localizedDescription }
+        }
+    }
+
+    private func submit() {
+        guard canSubmit, let shown = review, let id, let scope,
+              let snapshot = drafts.begin(key,validText:CrewdAskResolutionWire.validInput) else { return }
+        failure = nil
+        Task { @MainActor in
+            var committed = false
+            defer {
+                drafts.finish(snapshot,accepted:committed)
+                if committed && current { dismiss() }
+            }
+            do {
+                let fresh = try await store.humanResolutionCheck(id,crew:key.crew)
+                guard current, !Task.isCancelled, review == shown else { throw CancellationError() }
+                guard fresh == shown else {
+                    review = fresh
+                    failure = "原问题已变化。请核对当前内容后重新决定。"
+                    return
+                }
+                let disposition: CrewdAskResolutionWire.Disposition = snapshot.fields.action == .answer ? .answer : .withdraw
+                let receipt = try await workspace.submitAskResolution(fresh,disposition:disposition,text:snapshot.fields.text,
+                    selectedCrew:key.scope,scope:scope)
+                if receipt.phase == .committed && !receipt.historical { committed = true }
+                else if current {
+                    if [.rejected,.suppressed].contains(receipt.phase) {
+                        review = nil
+                        failure = "后台已拒绝此次处理。请重新核对当前问题。"
+                    } else { failure = "结果待确认。请查询原请求。" }
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                if current { failure = error.localizedDescription }
+            }
+        }
+    }
+}
+
+struct CrewdHumanResolutionRecovery: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    var crew: String? = nil
+    var ask: String? = nil
+    var onSettled: (@MainActor () async -> Void)? = nil
+    @State private var checking = false
+    @State private var feedback: String?
+    @State private var lookupID = UUID()
+
+    var body: some View {
+        let originals = workspace.originalAskResolutionRecords(crew:crew,ask:ask)
+        if !originals.isEmpty || feedback != nil {
+            VStack(alignment:.leading,spacing:6) {
+                ForEach(originals) { record in
+                    let params = record.params["command"]["params"]
+                    let action = params["disposition"] == .string("answer") ? "答复" : "撤回"
+                    VStack(alignment:.leading,spacing:3) {
+                        Text((params["ask"].string ?? "") + " · 原" + action + "待核对")
+                        Text(record.params["requestId"].string ?? "").textSelection(.enabled)
+                        Text(verbatim:params["text"].string ?? "").textSelection(.enabled)
+                        Button("查询原请求") { recover(record.id) }
+                            .disabled(checking || !workspace.client.readyForWork || !workspace.client.capabilities.contains("command.receipts"))
+                    }
+                }
+                if let feedback { Text(feedback).foregroundStyle(.secondary).textSelection(.enabled) }
+            }.font(.caption)
+                .onChange(of:workspace.workStore.readScope) { _,_ in resetLookup() }
+                .onChange(of:workspace.channelID) { _,_ in resetLookup() }
+                .onDisappear { resetLookup() }
+        }
+    }
+
+    private func resetLookup() { lookupID = UUID(); checking = false; feedback = nil }
+
+    private func recover(_ id: UUID) {
+        guard !checking else { return }
+        let scope = workspace.presentationScope, epoch = workspace.observationGeneration
+        let route = workspace.workStore.readScope, channel = workspace.channelID, lookup = UUID()
+        lookupID = lookup
+        checking = true; feedback = nil
+        Task { @MainActor in
+            func current() -> Bool {
+                lookupID == lookup && workspace.presentationScope == scope && workspace.acceptsObservation(epoch) &&
+                    workspace.workStore.readScope == route && workspace.channelID == channel
+            }
+            defer { if lookupID == lookup { checking = false } }
+            do {
+                let receipt = try await workspace.recoverAskResolution(id)
+                guard current() else { return }
+                switch receipt?.phase {
+                case .committed:
+                    feedback = receipt?.historical == true ? "已核实原历史回执。当前问题另行读取。" : "已核实原请求已提交。"
+                    await onSettled?()
+                case .rejected, .suppressed:
+                    feedback = "已核实后台拒绝了原请求。"
+                    await onSettled?()
+                default:
+                    feedback = "原结果仍待确认，请保留原请求编号。"
+                }
+            } catch {
+                if current() { feedback = error.localizedDescription }
+            }
+        }
+    }
+}
+
+private struct CrewdLegacyHumanActions:View {
     @ObservedObject var store:CrewdWorkStore
     @Binding var drafts:CrewdHumanDrafts
     let target:CrewdHumanTarget

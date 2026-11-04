@@ -848,6 +848,31 @@ async fn request_step(
             return RequestStep::Continue;
         }
         Ok(req)
+            if matches!(
+                req.method.as_str(),
+                methods::ASK_RESOLVE_CHECK
+                    | methods::ASK_ANSWER
+                    | methods::ASK_WITHDRAW
+                    | methods::MESSAGE_POST
+            ) =>
+        {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::ask_resolution::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
+        Ok(req)
             if agent.is_attached()
                 && matches!(
                     req.method.as_str(),
@@ -865,8 +890,6 @@ async fn request_step(
                         | methods::CHANNEL_WORK_TAGS_SET
                         | methods::RESOURCE_REQUEST_LOOKUP
                         | methods::ASK_GET
-                        | methods::ASK_ANSWER
-                        | methods::ASK_WITHDRAW
                         | methods::CHANNEL_WORK_LIST
                         | methods::CHANNEL_WORK_LINK
                         | methods::CHANNEL_WORK_UNLINK

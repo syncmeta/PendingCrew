@@ -186,7 +186,7 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             openCrew: { crewStore.selectCrew($0) }, showTodoKinds: true, humanOnly: human,
             externalQuery: Binding(get: { todoQueries[key] ?? "" }, set: { todoQueries[key] = $0 }),
             externalTag: Binding(get: { todoTags[key] ?? "" }, set: { todoTags[key] = $0 }),
-            mutationDrafts: $workspace.todoMutationDrafts)
+            mutationDrafts: $workspace.todoMutationDrafts,workspace:workspace)
     }
 }
 

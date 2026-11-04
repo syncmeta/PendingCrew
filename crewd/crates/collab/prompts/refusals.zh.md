@@ -543,3 +543,6 @@ expectedStatus 必须是原始需求状态。
 
 ## work.duplicate_candidate_changed
 工作项或相关事实已有变化。请重新读取两个计划，核实应保留哪一项。
+
+## ask.resolution_changed
+原问题或其状态已有变化。请重新读取问题，再决定答复或撤回。

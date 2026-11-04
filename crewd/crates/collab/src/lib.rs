@@ -13,6 +13,7 @@ pub mod admin_case_handoff;
 pub mod admin_case_custody;
 pub mod admin_case_outcome;
 pub mod asks;
+pub mod ask_resolution;
 pub mod causal;
 pub mod channel_archive;
 mod channel_archive_discovery;

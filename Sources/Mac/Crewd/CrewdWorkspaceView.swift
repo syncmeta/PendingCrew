@@ -123,7 +123,7 @@ struct CrewdWorkspaceView: View {
             }.frame(minWidth:350)
             VStack(alignment:.leading,spacing:8) {
                 DisclosureGroup("本群 Todo",isExpanded:$todoExpanded) {
-                    CrewdChannelTodoView(group:workspace.channelWork,work:workspace.workStore,linkDrafts:$workspace.channelLinkDrafts,requirementDrafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,openCrew:{id in workspace.selectCrew(id);tab = .todo}).frame(minHeight:100,maxHeight:.infinity)
+                    CrewdChannelTodoView(group:workspace.channelWork,work:workspace.workStore,linkDrafts:$workspace.channelLinkDrafts,requirementDrafts:$workspace.requirementDrafts,planDrafts:$workspace.planDrafts,humanDrafts:$workspace.humanDrafts,members:Array(workspace.knownSessions.values).sorted(by:{($0["id"].string ?? "") < ($1["id"].string ?? "")}),crews:workspace.crews,openCrew:{id in workspace.selectCrew(id);tab = .todo},workspace:workspace).frame(minHeight:100,maxHeight:.infinity)
                 }
                 Divider()
                 DisclosureGroup("本群成员",isExpanded:$membersExpanded) {
@@ -172,6 +172,7 @@ struct CrewdWorkspaceView: View {
                 Text(channelName(workspace.channels.first(where:{$0["id"].string == workspace.channelID}) ?? .null)).font(.headline)
                 Spacer();if !workspace.channelID.isEmpty{CrewdFolderAssignmentButton(store:workspace.resources,drafts:$workspace.resourceDrafts,view:.messages,object:CrewdFolderFilter.object("channel",workspace.channelID))}
             }
+            CrewdHumanResolutionRecovery(workspace:workspace)
             if !workspace.pendingAsks.isEmpty {
                 DisclosureGroup("全组织等待你的答复（\(workspace.pendingAsks.count)）") {
                     ScrollView {
@@ -278,6 +279,7 @@ private struct CrewdCrewQuestionView: View {
     @ObservedObject var workspace: CrewdWorkspace
     let row: CrewdValue
     @State private var answer = ""
+    @State private var resolutionTarget: CrewdHumanTarget?
     var body: some View {
         let ask = row["ask"]
         VStack(alignment: .leading, spacing: 6) {
@@ -286,16 +288,28 @@ private struct CrewdCrewQuestionView: View {
                 if let summary = CrewdHumanWaitPresentation.summary(row) { Text(summary) }
             }.font(CrewdType.caption).foregroundStyle(.secondary)
             Text(ask["question"].string ?? "机组的问题").textSelection(.enabled)
-            HStack {
-                TextField("你的答复", text: $answer)
-                Button("答复") {
-                    let text = answer
-                    Task {
-                        if await workspace.perform("ask.answer", .object(["crewId": ask["crewId"], "ask": ask["ask"], "text": .string(text)])), answer == text { answer = "" }
+            if workspace.workStore.offersAskResolution ||
+                !workspace.originalAskResolutionRecords(crew:ask["crewId"].string,ask:ask["ask"].string).isEmpty {
+                if let crew = ask["crewId"].string, let id = ask["ask"].string {
+                    Button("核对原问题") {
+                        resolutionTarget = .init(key:.init(scope:workspace.crewID,crew:crew,ask:id))
                     }
-                }.disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy)
+                }
+            } else {
+                HStack {
+                    TextField("你的答复", text: $answer)
+                    Button("答复") {
+                        let text = answer
+                        Task {
+                            if await workspace.perform("ask.answer", .object(["crewId": ask["crewId"], "ask": ask["ask"], "text": .string(text)])), answer == text { answer = "" }
+                        }
+                    }.disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.busy)
+                }
             }
         }.padding(.vertical, 6)
+            .sheet(item:$resolutionTarget) { target in
+                CrewdHumanActions(store:workspace.workStore,drafts:$workspace.humanDrafts,target:target,workspace:workspace)
+            }
     }
 }
 

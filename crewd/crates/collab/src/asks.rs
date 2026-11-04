@@ -336,6 +336,62 @@ pub fn get(conn: &Connection, crew: &str, ask: &str) -> Result<Ask> {
     view(conn, crew, a)
 }
 
+pub(crate) struct ResolutionSubject {
+    pub id: AskId,
+    pub before_seq: u64,
+    pub view: Ask,
+    pub revision: Option<String>,
+}
+
+pub(crate) fn resolution_subject(
+    conn: &Connection,
+    crew: &str,
+    ask: &str,
+) -> Result<ResolutionSubject> {
+    let id = resolve_ask(conn, crew, ask)?;
+    let reference = public_ask(conn, id)?;
+    if reference.crew_id != crew || reference.id() != ask {
+        return Err(CollabError::Invalid(
+            Refusal::new(Code::AskBadId).arg("input", ask),
+        ));
+    }
+    let crew = crews::get(conn, crew)?;
+    let book = load_org(conn)?;
+    let question = book.ask(id).ok_or_else(|| unknown_id(&crew.id, ask))?;
+    let view = view(conn, &crew.id, question)?;
+    let revision = if !crews::is_archived(conn, &crew.id)?
+        && question.state == AskState::Open
+        && !question.human_task
+    {
+        // Bind the authoritative original facts, independent of reminder
+        // tiers, wall-clock passage, and the next worker to wake.
+        Some(crate::judgments::fingerprint(&(
+            crewd_store::judgment_state::epoch(conn)?,
+            &crew.id,
+            &crew.created_at,
+            &reference.source_id,
+            reference.number,
+            id,
+            &question.asked_by,
+            question.asked_at,
+            &question.question,
+            &question.default,
+            question.item,
+            question.standalone,
+            &view.message_id,
+            &view.resume_note,
+        ))?)
+    } else {
+        None
+    };
+    Ok(ResolutionSubject {
+        id,
+        before_seq: book.state().last_seq,
+        view,
+        revision,
+    })
+}
+
 pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     let s = sessions::get(tx.conn(), asker)?;
     let crew = crews::get(tx.conn(), &s.crew_id)?;

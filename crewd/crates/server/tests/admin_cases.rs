@@ -207,6 +207,18 @@ async fn external_human_lineage_socket_cannot_use_raw_ask_after_agent_attach() {
     for (method, params) in [
         ("ask.answer", answer.clone()),
         ("ask.withdraw", withdraw.clone()),
+        (
+            "ask.resolveCheck",
+            json!({"crewId":f.crew,"ask":other_question.ask}),
+        ),
+        (
+            "message.post",
+            json!({
+                "channelId":crewd_store::channels::human_id(&f.crew),
+                "inReplyTo":other_question.message_id,
+                "text":"attached reply must not answer this question"
+            }),
+        ),
     ] {
         assert_eq!(
             call(&mut attached, method, params).await.unwrap_err().0,

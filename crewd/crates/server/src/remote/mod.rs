@@ -1145,6 +1145,8 @@ fn allowed_method(method: &str) -> bool {
             | "ask.get"
             | "ask.answer"
             | "ask.withdraw"
+            | crewd_proto::methods::ASK_RESOLVE_CHECK
+            | crewd_proto::commands::ASK_RESOLVE
             | "restart.pending"
             | "restart.answer"
             | "directory.list"

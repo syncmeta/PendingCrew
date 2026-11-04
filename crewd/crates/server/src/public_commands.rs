@@ -319,24 +319,13 @@ fn sql_effect(
             )?;
             Ok(serde_json::json!({"crew":crew,"message":message.message}))
         }
-        PublicCommand::MessagePost(p) => serde_json::to_value(
-            messages::post(
-                tx,
-                Sender::Human,
-                messages::NewPost {
-                    channel_id: p.channel_id,
-                    text: p.text,
-                    in_reply_to: p.in_reply_to,
-                    mentions: p.mentions.into_iter().map(Into::into).collect(),
-                    attachments: p.attachments.into_iter().map(Into::into).collect(),
-                    category: None,
-                },
-            )?
-            .message,
-        ),
+        PublicCommand::MessagePost(p) => {
+            serde_json::to_value(crate::ask_resolution::post_human(tx, p)?)
+        }
         PublicCommand::PatrolStart(p) => serde_json::to_value(collab::patrol_manual::start(tx, &p.crew_id)?),
         PublicCommand::RequirementReview(p) => serde_json::to_value(collab::requirement_review::apply(tx, p)?),
         PublicCommand::WorkDuplicateClose(p) => serde_json::to_value(collab::work_duplicate_review::close(tx, p)?),
+        PublicCommand::AskResolve(p) => serde_json::to_value(collab::ask_resolution::resolve(tx, p)?),
         _ => {
             return Err(crewd_store::StoreError::Invalid(
                 "external command requires production scheduler".into(),
@@ -368,6 +357,7 @@ async fn submit(
         | PublicCommand::PatrolStart(_)
         | PublicCommand::RequirementReview(_)
         | PublicCommand::WorkDuplicateClose(_)
+        | PublicCommand::AskResolve(_)
         | PublicCommand::MessagePost(_) => submit_sql(state, actor, p).await,
         PublicCommand::CodexConfigure(_)
         | PublicCommand::CodexCompact(_)
@@ -448,6 +438,7 @@ async fn submit_sql_with_home(
             | PublicCommand::PatrolStart(_)
             | PublicCommand::RequirementReview(_)
             | PublicCommand::WorkDuplicateClose(_)
+            | PublicCommand::AskResolve(_)
             | PublicCommand::MessagePost(_)
     ) {
         return Err(RpcError::new(

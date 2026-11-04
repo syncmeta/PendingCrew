@@ -459,6 +459,101 @@ enum CrewdConversationProjection {
     }
 }
 
+enum CrewdAskResolutionWire {
+    enum Disposition: String { case answer, withdraw }
+    struct Review: Equatable {
+        let ask: CrewdValue
+        let revision: String?
+        var crewID: String { ask["crewId"].string ?? "" }
+        var askID: String { ask["ask"].string ?? "" }
+
+        init(_ value: CrewdValue, crew: String, id: String) throws {
+            guard case .object(let fields) = value, Set(fields.keys) == ["ask","resolutionRevision"],
+                  validAsk(value["ask"],crew:.string(crew),id:.string(id)),
+                  value["resolutionRevision"] == .null || (digest(value["resolutionRevision"]) &&
+                      value["ask"]["state"] == .string("open")) else { throw invalid() }
+            ask = value["ask"]; revision = value["resolutionRevision"].string
+        }
+
+        func parameters(_ disposition: Disposition, text: String) throws -> CrewdValue {
+            guard let revision else { throw invalid() }
+            return try canonical(.object(["crewId":.string(crewID),"ask":.string(askID),
+                "expectedResolutionRevision":.string(revision),"disposition":.string(disposition.rawValue),"text":.string(text)]))
+        }
+    }
+
+    static func canonical(_ params: CrewdValue) throws -> CrewdValue {
+        guard case .object(let fields) = params,
+              Set(fields.keys) == ["crewId","ask","expectedResolutionRevision","disposition","text"],
+              let crew = params["crewId"].string, !crew.isEmpty, crew.utf8.count <= 4_096,
+              canonicalID(params["ask"]), digest(params["expectedResolutionRevision"]),
+              params["disposition"].string.flatMap(Disposition.init(rawValue:)) != nil,
+              let text = params["text"].string, validInput(text) else { throw invalid() }
+        return params
+    }
+
+    static func validInput(_ text: String) -> Bool { text.utf8.count <= 65_536 && !trim(text).isEmpty }
+
+    static func validateResult(_ value: CrewdValue, params: CrewdValue, review: Review? = nil) throws {
+        _ = try canonical(params)
+        let resolved = value["resolved"]
+        guard case .object(let fields) = value,
+              Set(fields.keys) == ["crewId","ask","originalResolutionRevision","disposition","eventSeq","resolvedAtMs","resolved"],
+              value["crewId"] == params["crewId"], value["ask"] == params["ask"],
+              value["originalResolutionRevision"] == params["expectedResolutionRevision"], value["disposition"] == params["disposition"],
+              let seq = value["eventSeq"].string, let number = Int64(seq), number > 0, String(number) == seq,
+              let time = value["resolvedAtMs"].int, time >= 0,
+              validAsk(resolved,crew:params["crewId"],id:params["ask"]),
+              let at = resolved["closedAt"].string, dateMatches(at,milliseconds:time),
+              let text = params["text"].string, let disposition = params["disposition"].string.flatMap(Disposition.init(rawValue:)) else { throw invalid() }
+        switch disposition {
+        case .answer:
+            guard resolved["state"] == .string("answered"), resolved["answer"].string?.utf8.elementsEqual(trim(text).utf8) == true,
+                  resolved["withdrawReason"] == .null else { throw invalid() }
+        case .withdraw:
+            guard resolved["state"] == .string("withdrawn"), resolved["withdrawReason"].string?.utf8.elementsEqual(trim(text).utf8) == true,
+                  resolved["answer"] == .null else { throw invalid() }
+        }
+        if let review {
+            let changed: Set<String> = ["state","answer","withdrawReason","closedAt"]
+            guard let revision = review.revision, .string(revision) == params["expectedResolutionRevision"],
+                  case .object(let before) = review.ask, case .object(let after) = resolved,
+                  before.filter({ !changed.contains($0.key) }) == after.filter({ !changed.contains($0.key) }) else { throw invalid() }
+        }
+    }
+
+    private static func validAsk(_ value: CrewdValue, crew: CrewdValue, id: CrewdValue) -> Bool {
+        value["crewId"] == crew && value["ask"] == id && canonicalID(id) &&
+            crew.string?.isEmpty == false && value["question"].string?.isEmpty == false &&
+            value["askedAt"].string?.isEmpty == false &&
+            ["open","answered","withdrawn","defaulted"].contains(value["state"].string ?? "")
+    }
+    private static func canonicalID(_ value: CrewdValue) -> Bool {
+        guard let id = value.string, id.first == "H", let number = Int64(id.dropFirst()), number > 0 else { return false }
+        return id == "H\(number)"
+    }
+    private static func digest(_ value: CrewdValue) -> Bool {
+        guard let text = value.string, text.utf8.count == 64 else { return false }
+        return text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+    private static func trim(_ text: String) -> String {
+        // Rust uses the Unicode White_Space property for str::trim.
+        let start = text.unicodeScalars.drop(while:{ $0.properties.isWhitespace })
+        return String(String.UnicodeScalarView(start.reversed().drop(while:{ $0.properties.isWhitespace }).reversed()))
+    }
+    private static func dateMatches(_ raw: String, milliseconds: Int) -> Bool {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
+        let precise = parser.date(from:raw)
+        parser.formatOptions = [.withInternetDateTime]
+        guard let date = precise ?? parser.date(from:raw) else { return false }
+        return abs(date.timeIntervalSince1970 * 1_000 - Double(milliseconds)) < 0.5
+    }
+    static func invalid() -> CrewdClientError {
+        .init(message:"原问题、版本或处理回执不符。请核对原请求。")
+    }
+}
+
 enum CrewdWorkDuplicateWire {
     struct Candidate: Equatable, Identifiable {
         let duplicate: String

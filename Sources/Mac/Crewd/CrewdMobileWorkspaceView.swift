@@ -163,7 +163,7 @@ private struct CrewdMobileConversation: View {
             CrewdChannelTodoView(group: workspace.channelWork, work: workspace.workStore,
                                  linkDrafts: $workspace.channelLinkDrafts, requirementDrafts: $workspace.requirementDrafts,
                                  planDrafts: $workspace.planDrafts, humanDrafts: $workspace.humanDrafts,
-                                 members: Array(workspace.knownSessions.values), crews: workspace.crews, openCrew: workspace.selectCrew)
+                                 members: Array(workspace.knownSessions.values), crews: workspace.crews, openCrew: workspace.selectCrew,workspace:workspace)
                 .frame(maxHeight: 260)
         }
         if showMembers {

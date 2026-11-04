@@ -68,6 +68,7 @@ refusal_codes! {
     AskWithdrawForbidden = "ask.withdraw_forbidden" ["ask"],
     AskReasonEmpty = "ask.reason_empty" [],
     AskNotOpen = "ask.not_open" ["ask"],
+    AskResolutionChanged = "ask.resolution_changed" [],
     AskInUse = "ask.in_use" ["ask"],
     AskQuestionEmpty = "ask.question_empty" [],
     // channel

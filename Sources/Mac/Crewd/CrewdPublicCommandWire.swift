@@ -68,6 +68,11 @@ struct CrewdPublicReceipt {
         if originalCommand["operation"] == .string(CrewdPublicOperation.workDuplicateClose.rawValue), phase == .committed {
             try CrewdWorkDuplicateWire.validateResult(value["result"],params:originalCommand["params"])
         }
+        if originalCommand["operation"] == .string(CrewdPublicOperation.askResolve.rawValue), phase == .committed {
+            guard let text = originalCommand["params"]["text"].string,
+                  value["command"]["params"]["text"].string?.utf8.elementsEqual(text.utf8) == true else { throw CrewdPublicWire.invalid() }
+            try CrewdAskResolutionWire.validateResult(value["result"],params:originalCommand["params"])
+        }
         if originalCommand["operation"].string?.hasPrefix("personalDraft.")==true,phase == .committed{try CrewPersonalCoreWire.validateResult(value["result"],command:originalCommand)}
         if originalCommand["operation"].string?.hasPrefix("session.codex.") == true,phase == .confirmed {
             try CrewdCodexWire.validateResult(value["result"],command:originalCommand)
@@ -211,6 +216,7 @@ enum CrewdPublicOperation: String, Codable {
     case patrolStart = "work.patrolStart"
     case requirementReview = "adminCase.requirementReview"
     case workDuplicateClose = "adminCase.workDuplicateClose"
+    case askResolve = "ask.resolve"
     case messagePost = "message.post"
     case sessionStart = "session.start"
     case sessionStop = "session.stop"
@@ -315,6 +321,8 @@ private enum CrewdPublicParameters {
             return try CrewdRequirementReviewWire.canonical(value)
         case .workDuplicateClose:
             return try CrewdWorkDuplicateWire.canonical(value)
+        case .askResolve:
+            return try CrewdAskResolutionWire.canonical(value)
         case .firstMessage:
             required = ["crew", "text"]
             guard case .object(var crew) = fields["crew"], crew["title"] != nil,

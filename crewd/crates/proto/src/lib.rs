@@ -154,6 +154,7 @@ pub mod methods {
     pub const WORK_LIST: &str = "work.list";
     pub const WORK_GET: &str = "work.get";
     pub const ASK_GET: &str = "ask.get";
+    pub const ASK_RESOLVE_CHECK: &str = "ask.resolveCheck";
     pub const ASK_LIST: &str = "ask.list";
     pub const ASK_ANSWER: &str = "ask.answer";
     pub const ASK_WITHDRAW: &str = "ask.withdraw";
@@ -288,6 +289,7 @@ pub mod methods {
         WORK_LIST,
         WORK_GET,
         ASK_GET,
+        ASK_RESOLVE_CHECK,
         ASK_LIST,
         ASK_ANSWER,
         ASK_WITHDRAW,
@@ -687,6 +689,7 @@ pub fn api_schema() -> Value {
     let mut generator = schemars::SchemaGenerator::default();
     let g = &mut generator;
     let _ = sub::<notifications::NotificationOpenContext>(g);
+    let _ = sub::<AskResolutionReceipt>(g);
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
         (
@@ -1406,6 +1409,10 @@ pub fn api_schema() -> Value {
             m(sub::<WorkGetParams>(g), sub::<WorkPlan>(g)),
         ),
         (methods::ASK_GET, m(sub::<AskGetParams>(g), sub::<Ask>(g))),
+        (
+            methods::ASK_RESOLVE_CHECK,
+            m(sub::<AskGetParams>(g), sub::<AskResolutionCheck>(g)),
+        ),
         (
             methods::ASK_LIST,
             m(sub::<AskListParams>(g), many(sub::<HumanWait>(g))),

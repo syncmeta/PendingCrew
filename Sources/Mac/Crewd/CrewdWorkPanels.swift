@@ -6,6 +6,7 @@ private struct CrewdHumanBriefView: View {
     @ObservedObject var store: CrewdWorkStore
     @Binding var drafts: CrewdHumanDrafts
     let crewTitle: String?
+    let workspace: CrewdWorkspace?
     @Environment(\.dismiss) private var dismiss
     @State private var brief: CrewdHumanBrief?
     @State private var failure: String?
@@ -24,6 +25,7 @@ private struct CrewdHumanBriefView: View {
             }
             Text(crewTitle ?? "当前机组").font(.subheadline)
             if let failure { Text(failure).foregroundStyle(.orange) }
+            if let workspace { CrewdHumanResolutionRecovery(workspace:workspace,crew:store.selectedCrew) { reload = UUID() } }
             if loading { ProgressView("正在核对当前事项…").controlSize(.small) }
             if let brief {
                 Text("事项核对时间  " + timestamp(brief.observedAt)).font(.caption).foregroundStyle(.secondary)
@@ -41,7 +43,7 @@ private struct CrewdHumanBriefView: View {
             .task(id: reload) { await read(reload) }
             .onChange(of: store.readScope) { _, _ in brief = nil; dismiss() }
             .sheet(item: $humanTarget, onDismiss: { reload = UUID() }) {
-                CrewdHumanActions(store: store, drafts: $drafts, target: $0, readExactly: true)
+                CrewdHumanActions(store:store,drafts:$drafts,target:$0,readExactly:true,workspace:workspace)
             }
             .sheet(isPresented: Binding(get: { caseID != nil }, set: { if !$0 { caseID = nil } })) {
                 if let caseID { CrewdAdminCasesView(store: store, initialCaseID: caseID) }
@@ -264,6 +266,9 @@ struct CrewdWorkPanels: View {
                     if domain == .all && visibleProgress.isEmpty && !progressOnly {Text("尚无计划").foregroundStyle(CrewdChatStyle.muted(colorScheme))}
                     if !progressOnly && !compact && domain != .requirements {
                         if domain == .all { Divider() }
+                        if let workspace = patrolWorkspace {
+                            CrewdHumanResolutionRecovery(workspace:workspace,crew:humanCrewOnly ? store.selectedCrew : nil)
+                        }
                         ForEach(visibleHumanIDs,id:\.self) { id in humanRow(id) }
                         if visibleHumanIDs.isEmpty && !store.loading {
                             Text("暂无待人处理事项").font(CrewdType.label).foregroundStyle(.secondary).padding(.vertical,12)
@@ -277,9 +282,9 @@ struct CrewdWorkPanels: View {
         .sheet(isPresented: $patrolPresented) { CrewdPatrolView(store: store, workspace: patrolWorkspace) }
         .sheet(isPresented: $humanBriefPresented) {
             CrewdHumanBriefView(store: store, drafts: $humanDrafts,
-                crewTitle: crews.first { $0["id"] == .string(store.selectedCrew) }?["title"].string)
+                crewTitle: crews.first { $0["id"] == .string(store.selectedCrew) }?["title"].string,workspace:patrolWorkspace)
         }
-        .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target)}
+        .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target,workspace:patrolWorkspace)}
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
         .sheet(item: $documentTarget) { target in
             if let workspace = patrolWorkspace { CrewdWorkDocumentSheet(workspace: workspace, work: store, target: target) }

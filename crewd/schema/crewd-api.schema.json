@@ -2092,6 +2092,96 @@
         "null"
       ]
     },
+    "AskResolutionCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "$ref": "#/$defs/Ask"
+        },
+        "resolutionRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ask"
+      ],
+      "type": "object"
+    },
+    "AskResolutionDisposition": {
+      "enum": [
+        "answer",
+        "withdraw"
+      ],
+      "type": "string"
+    },
+    "AskResolutionParams": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/AskResolutionDisposition"
+        },
+        "expectedResolutionRevision": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "ask",
+        "expectedResolutionRevision",
+        "disposition",
+        "text"
+      ],
+      "type": "object"
+    },
+    "AskResolutionReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "disposition": {
+          "$ref": "#/$defs/AskResolutionDisposition"
+        },
+        "eventSeq": {
+          "type": "string"
+        },
+        "originalResolutionRevision": {
+          "type": "string"
+        },
+        "resolved": {
+          "$ref": "#/$defs/Ask"
+        },
+        "resolvedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "crewId",
+        "ask",
+        "originalResolutionRevision",
+        "disposition",
+        "eventSeq",
+        "resolvedAtMs",
+        "resolved"
+      ],
+      "type": "object"
+    },
     "AskStateView": {
       "enum": [
         "open",
@@ -13246,6 +13336,23 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "ask.resolve",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/AskResolutionParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "session.start",
               "type": "string"
             },
@@ -18641,6 +18748,14 @@
           "$ref": "#/$defs/HumanWait"
         },
         "type": "array"
+      }
+    },
+    "ask.resolveCheck": {
+      "params": {
+        "$ref": "#/$defs/AskGetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/AskResolutionCheck"
       }
     },
     "ask.withdraw": {
