@@ -7,6 +7,29 @@ import AppKit
 import UIKit
 #endif
 
+struct CrewdFirstCaptainReply: Equatable {
+    enum Phase: Equatable {
+        case starting
+        case registered(String)
+        case launched(String)
+    }
+
+    let crewID: String
+    let channelID: String
+    let firstSequence: Int
+    var phase: Phase = .starting
+
+    func isReply(channel: String?, senderKind: String?, sender: String?, sequence: Int?) -> Bool {
+        let captain: String
+        switch phase {
+        case .starting: return false
+        case .registered(let id), .launched(let id): captain = id
+        }
+        return channel == channelID && senderKind == "captain" && sender == captain &&
+            sequence.map { $0 > firstSequence } == true
+    }
+}
+
 @MainActor
 final class CrewdWorkspace: ObservableObject {
     let client = CrewdClient()
@@ -463,6 +486,7 @@ final class CrewdWorkspace: ObservableObject {
         }
         client.onEvent = { [weak self] name, data in
             guard let self, !self.retired else { return }
+            if name == "message.appended" { self.observeFirstCaptainReply(data) }
             if name == "message.appended", let id = data["id"].string, self.observedMessageIDs.insert(id).inserted,
                let sender = data["senderSessionId"].string, sender != self.sessionID {
                 self.originalObservedUnread[sender, default: 0] += 1
@@ -788,6 +812,7 @@ final class CrewdWorkspace: ObservableObject {
         try Task.checkCancellation()
         guard !retired else { throw CrewdClientError(message: "连接已切换，旧作用域不能重新提交。", kind: .notSubmitted) }
         clearExecutorProfiles()
+        firstCaptainReplies.removeAll()
         knowledge.invalidate(); linkedKnowledge.invalidate(); closeKnowledgeLinkPicker(); channelKnowledge.invalidate(); resources.invalidateConnection(); channelResources.invalidateConnection(); channelWork.invalidateConnection(); workStore.invalidateConnection(); workDirty = true; activityDirty = true
         closeTerminalDisplays()
         generation = UUID(); let current = generation; sync?.cancel(); sync = nil
@@ -881,11 +906,40 @@ final class CrewdWorkspace: ObservableObject {
     /// A startup failure must not turn a successful creation into a retry that
     /// creates a second crew. No appearance/reconnect hook calls this method.
     @Published private(set) var captainStartFailures: [String: String] = [:]
+    @Published private var firstCaptainReplies: [String: CrewdFirstCaptainReply] = [:]
     private var openingCaptains = Set<String>()
-    @discardableResult func startCaptainForCreatedCrew(_ id: String, executor: String = "codex", brief: String = "读取本机组群聊与待办，回应人类需求；没有任务时待命。") async -> String? {
+    func firstCaptainReply(in crew: String) -> CrewdFirstCaptainReply? {
+        guard !retired, !sleeping, client.readyForWork, crewID == crew,
+              let progress = firstCaptainReplies[channelID], progress.crewID == crew else { return nil }
+        return progress
+    }
+    private func observeFirstCaptainReply(_ message: CrewdValue) {
+        guard let channel = message["channelId"].string, let progress = firstCaptainReplies[channel],
+              progress.isReply(channel: channel, senderKind: message["senderKind"].string,
+                               sender: message["senderSessionId"].string, sequence: message["seq"].int) else { return }
+        firstCaptainReplies[channel] = nil
+    }
+    @discardableResult func startCaptainForCreatedCrew(_ id: String, executor: String = "codex", brief: String = "读取本机组群聊与待办，回应人类需求；没有任务时待命。",
+                                                     firstMessage: CrewdFirstCaptainReply? = nil) async -> String? {
         guard !openingCaptains.contains(id), !isRetired else { return nil }
-        openingCaptains.insert(id); defer { openingCaptains.remove(id) }
+        openingCaptains.insert(id)
         let epoch = observationGeneration, connection = client.connectionEpoch
+        let firstMessage = firstMessage.flatMap { $0.crewID == id ? $0 : nil }
+        if let firstMessage, acceptsObservation(epoch) { firstCaptainReplies[firstMessage.channelID] = firstMessage }
+        defer {
+            openingCaptains.remove(id)
+            if let firstMessage, acceptsObservation(epoch), client.connectionEpoch == connection,
+               firstCaptainReplies[firstMessage.channelID]?.phase == .starting {
+                firstCaptainReplies[firstMessage.channelID] = nil
+            }
+        }
+        func recordCaptain(_ captain: String, launched: Bool) {
+            guard !captain.isEmpty, let firstMessage, acceptsObservation(epoch), client.connectionEpoch == connection,
+                  var progress = firstCaptainReplies[firstMessage.channelID] else { return }
+            progress.phase = launched ? .launched(captain) : .registered(captain)
+            firstCaptainReplies[firstMessage.channelID] = progress
+            if crewID == id && channelID == firstMessage.channelID { messages.forEach(observeFirstCaptainReply) }
+        }
         selectCrew(id)
         let route = selection
         await refreshExecutorProfiles()
@@ -895,20 +949,29 @@ final class CrewdWorkspace: ObservableObject {
             let roster = try await readValue("session.list", .object(["crewId": .string(id)]))
             guard acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id else { return nil }
             guard case .array(let rows) = roster else { throw CrewdClientError(message: "机长名册未能确认。", kind: .notSubmitted) }
-            if let captain = rows.first(where: { $0["role"].string == "captain" }) { captainStartFailures[id] = nil; return captain["id"].string }
+            if let captain = rows.first(where: { $0["role"].string == "captain" }) {
+                captainStartFailures[id] = nil
+                if let session = captain["id"].string { recordCaptain(session, launched: false) }
+                return captain["id"].string
+            }
             guard !hasOriginalUnknown(method: "session.start", crew: id) else {
                 throw CrewdClientError(message: "机长原启动结果尚未确认，请核对原请求。", kind: .notSubmitted)
             }
             let result = try await performValue("session.start", .object([
                 "crewId": .string(id), "role": .string("captain"), "executor": .string(executor),
                 "brief": .string(brief), "isolation": .bool(false)]))
+            guard acceptsObservation(epoch), client.connectionEpoch == connection else { return nil }
             captainStartFailures[id] = nil
+            if let session = result["id"].string {
+                recordCaptain(session, launched: (result["birth"]["pid"].int ?? 0) > 0)
+            }
             return result["id"].string
         } catch {
-            if acceptsObservation(epoch), connection == client.connectionEpoch, selection == route, crewID == id {
+            if acceptsObservation(epoch), connection == client.connectionEpoch,
+               firstMessage != nil || (selection == route && crewID == id) {
                 let message = "机组及已有消息仍保留；机长尚未确认启动：" + error.localizedDescription
                 captainStartFailures[id] = message
-                self.error = message
+                if selection == route && crewID == id { self.error = message }
             }
             return nil
         }
@@ -1011,6 +1074,7 @@ final class CrewdWorkspace: ObservableObject {
             let rows = try await client.call("message.list", .object(["channelId": .string(channel), "limit": .number(200)]))
             guard !sleeping, !Task.isCancelled, current == generation, selected == selection, channelID == channel else { again = true; return }
             messages = rows.array
+            messages.forEach(observeFirstCaptainReply)
         }
     }
 

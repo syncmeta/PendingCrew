@@ -394,7 +394,13 @@ private struct PendingCrewChatView: View {
             .disabled(crewStore.pendingCrewSending || crewStore.pendingCrewDelivery != nil || crewStore.pendingCrewRollbackError != nil)
             .font(.caption).padding(.horizontal, 18)
         }
-        if crewStore.pendingCrewSending { ProgressView("正在发送…").controlSize(.small).padding(.horizontal, 18) }
+        if crewStore.pendingCrewSending {
+            if let workspace = crewStore.crewdWorkspace {
+                CrewdPendingFirstMessageProgress(workspace: workspace, draft: draft)
+            } else {
+                ProgressView("正在发送…").controlSize(.small).padding(.horizontal, 18)
+            }
+        }
     }
 
     private func send() {
@@ -489,8 +495,17 @@ private struct CrewdMessageFilterGlass: ViewModifier {
         else { content.buttonStyle(.bordered) }
     }
 }
-/// Creation can succeed while the separately submitted captain start fails.
-/// Keep that result visible only in its original workspace and crew.
+private struct CrewdPendingFirstMessageProgress: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    let draft: PendingCrewDraft
+    var body: some View {
+        let accepted = workspace.originalFirstMessages.last(where: { $0.draftID == draft.id })?.phase == .accepted
+        let label = accepted ? (draft.executor == "none" ? "首条消息已发送" : "首条消息已发送，正在确认机长启动…") : "正在发送…"
+        ProgressView(label).controlSize(.small).padding(.horizontal, 18)
+    }
+}
+
+/// Creation, captain launch and the first reply are separate observations.
 private struct CrewdCaptainStartNotice: View {
     @ObservedObject var workspace: CrewdWorkspace
     let crewID: String
@@ -499,6 +514,18 @@ private struct CrewdCaptainStartNotice: View {
             Text(message).font(.callout).foregroundStyle(.orange)
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 18).padding(.vertical, 10)
+        } else if let progress = workspace.firstCaptainReply(in: crewID) {
+            Label(label(for: progress.phase), systemImage: "clock")
+                .font(.callout).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 18).padding(.vertical, 10)
+        }
+    }
+    private func label(for phase: CrewdFirstCaptainReply.Phase) -> String {
+        switch phase {
+        case .starting: "首条消息已发送，正在确认机长启动…"
+        case .registered: "机长已登记，运行尚未确认"
+        case .launched: "机长已启动，尚未在本群回复"
         }
     }
 }

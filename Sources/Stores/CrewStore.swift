@@ -389,7 +389,10 @@ final class CrewStore: ObservableObject {
                 update(.accepted, crew: actual)
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
                 if draft.executor != "none" {
-                    await workspace.startCaptainForCreatedCrew(actual, executor: draft.executor)
+                    let first = receipt.value["result"]["message"]["seq"].int.flatMap { sequence in
+                        sequence > 0 ? CrewdFirstCaptainReply(crewID: actual, channelID: actualChannel, firstSequence: sequence) : nil
+                    }
+                    await workspace.startCaptainForCreatedCrew(actual, executor: draft.executor, firstMessage: first)
                 }
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
                 pendingCrew = nil; workspace.originalPendingCrewDraft = nil; workspace.selectCrew(actual); workspace.selectChannel(actualChannel); selectedCrewId = actual
