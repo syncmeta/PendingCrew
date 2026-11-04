@@ -13,13 +13,14 @@ def check(app):
  source=p.hexsha(manifest.get('sourceRef'),40)
  if manifest.get('sourceSelection')!='committed-archive' or proof.get('sourceRef')!=source or (base/'source-head.txt').read_text()!=source+'\n':p.fail('Native frozen source binding mismatch')
  if proof.get('inputManifestSHA256')!=p.sha(mp) or proof.get('appDirectory')!=app.name:p.fail('Native manifest/app binding mismatch')
- snapshot=base/p.basename(manifest.get('snapshotDirectory'));entries=p.files(snapshot,manifest.get('files'));paths={x for x,h in entries}
+ snapshot=base/p.basename(manifest.get('snapshotDirectory'))
+ entry_spec=importlib.util.spec_from_file_location('native_source_contract',pathlib.Path(__file__).with_name('build-crewd-native-macos.py'))
+ entry_module=importlib.util.module_from_spec(entry_spec);entry_spec.loader.exec_module(entry_module)
+ entries=entry_module.verify_source_inventory(snapshot,manifest);paths={x for x,h in entries}
  required={'Sources/CrewdRemote/CrewdNativeApp.swift','Sources/Mac/Crewd/CrewdClient.swift','Sources/Mac/Crewd/CrewdWorkspace.swift','PendingCrew.xcodeproj/project.pbxproj','PendingCrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved','scripts/dev/build-crewd-native-macos.py'}
  if not required.issubset(paths):p.fail('Native complete project inputs missing')
  entry=[x for x in paths if x.endswith('/PendingCrewEntry.swift')]
  if len(entry)!=1:p.fail('unique original candidate entry missing')
- entry_spec=importlib.util.spec_from_file_location('native_entry_contract',pathlib.Path(__file__).with_name('build-crewd-native-macos.py'))
- entry_module=importlib.util.module_from_spec(entry_spec);entry_spec.loader.exec_module(entry_module)
  entry_module.verify_candidate_entry(snapshot)
  rust=[x for x in entries if x[0].startswith('crewd/')];rd=p.digest(rust)
  if manifest.get('sourceInputDigest')!=p.digest(entries) or manifest.get('rustInputDigest')!=rd:p.fail('Native complete source digest mismatch')

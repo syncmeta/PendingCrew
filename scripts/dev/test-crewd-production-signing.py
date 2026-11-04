@@ -81,6 +81,16 @@ print('PASS secure timestamp construction for App and helper; original local def
 
 spec=importlib.util.spec_from_file_location('source_inventory',root/'scripts/dev/build-crewd-native-macos.py')
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
+with tempfile.TemporaryDirectory(prefix='pcw-native-entry-fixture-') as temporary:
+ snapshot=pathlib.Path(temporary)
+ credentials='Sources/CrewdRemote/CrewdRemoteVault.swift'
+ for name in ['Sources/PendingCrewEntry.swift','Sources/Mac/Crewd/CrewdFrontendConfiguration.swift',credentials]:
+  target_file=snapshot/name;target_file.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(root/name,target_file)
+ assert b.verify_candidate_entry(snapshot)=='original-app-candidate-factories'
+ vault=snapshot/credentials
+ vault.write_text(vault.read_text().replace('#elseif PENDINGCREW_NATIVE_CANDIDATE\n        return isolated',
+                                           '#elseif PENDINGCREW_NATIVE_CANDIDATE\n        return CrewdRemoteKeychain()'))
+ reject_call('Native candidate credential branch bypassing isolated store',lambda:b.verify_candidate_entry(snapshot))
 with tempfile.TemporaryDirectory(prefix='pcw-production-recipe-fixture-') as temporary:
  scope=pathlib.Path(temporary);repo=scope/'repo';repo.mkdir();(repo/'design').mkdir()
  payload=repo/'payload';payload.write_bytes(b'ordinary executable input\n');payload.chmod(0o755)
@@ -97,6 +107,14 @@ with tempfile.TemporaryDirectory(prefix='pcw-production-recipe-fixture-') as tem
  assert (snapshot/'payload').stat().st_mode&0o111 and not (snapshot/'design/schema-source').exists()
  assert (snapshot/'design/schema-source').is_symlink() and len(rows)==2
  print('PASS real Git120000 archive/blob and lstat/readlink inventory; dangling target never followed; executable preserved')
+ manifest={'files':rows,'sourceSymlinkInputs':links}
+ assert b.verify_source_inventory(snapshot,manifest)==[(r['path'],r['sha256']) for r in rows]
+ reject_call('Native source witness missing',lambda:b.verify_source_inventory(snapshot,{'files':rows}))
+ reject_call('Native source manifest missing the committed link',lambda:b.verify_source_inventory(snapshot,dict(manifest,files=rows[1:])))
+ alias=scope/'aliased-snapshot';alias.symlink_to(snapshot)
+ reject_call('Native source root alias',lambda:b.verify_source_inventory(alias,manifest))
+ plain=scope/'legacy-format2-snapshot';plain.mkdir();shutil.copy2(payload,plain/'payload')
+ assert b.verify_source_inventory(plain,{'files':b.regular_inventory(plain)})==[('payload',b.sha(payload))]
  reject_call('default unreviewed symlink',lambda:b.regular_inventory(snapshot))
  linkpath=snapshot/'design/schema-source';linkpath.unlink();os.symlink('changed-target',linkpath)
  reject_call('changed symlink bytes',lambda:b.regular_inventory(snapshot,links))
@@ -117,6 +135,17 @@ with tempfile.TemporaryDirectory(prefix='pcw-production-recipe-fixture-') as tem
   dest=scope/'bad-output';dest.mkdir()
   reject_call(label,lambda:b.extract_source_archive(bad,dest,links))
   assert not list(dest.iterdir());dest.rmdir()
+ scripts=repo/'scripts/dev';scripts.mkdir(parents=True)
+ native=scripts/'build-crewd-native-macos.py';shutil.copy2(root/'scripts/dev'/native.name,native)
+ (scripts/'write-codex-first-provenance.py').write_text('def requested_configuration(_): raise ValueError("fixture reached normal backend witness boundary")\n')
+ git('add','scripts')
+ git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','native entry')
+ ref=git('rev-parse','HEAD').decode().strip()
+ output=scope/'native-cli'
+ run=subprocess.run([sys.executable,str(native),str(output),'--ref',ref,'--backend','unused','--witness','unused','--spm','unused','--derived-data','unused'],capture_output=True,text=True)
+ assert run.returncode==1 and 'fixture reached normal backend witness boundary' in run.stderr,run.stderr
+ assert os.readlink(output/'source-inputs/design/schema-source')==target
+ print('PASS actual Native CLI archive accepts only committed link evidence and reaches witness boundary before Xcode')
  original=scope/'normal';original.write_bytes(b'normal payload');original.chmod(0o444)
  digest=hashlib.sha256(original.read_bytes()).hexdigest();private=scope/'private-normal'
  proof=m.copy_backend_for_archive(original,private,digest)

@@ -25,8 +25,7 @@ def main():
     spec = importlib.util.spec_from_file_location('native_builder', snapshot / 'scripts/dev/build-crewd-native-macos.py')
     builder = importlib.util.module_from_spec(spec); spec.loader.exec_module(builder)
     builder.verify_candidate_entry(snapshot)
-    if builder.regular_inventory(snapshot) != manifest['files']:
-        raise ValueError('complete committed input inventory changed')
+    builder.verify_source_inventory(snapshot, manifest)
     dd, spm = pathlib.Path(args.derived_data).resolve(strict=True), pathlib.Path(args.spm).resolve(strict=True)
     if dd.is_relative_to(root) or spm.is_relative_to(root):
         raise ValueError('existing external warm caches required')
@@ -50,8 +49,9 @@ def main():
         raise ValueError('isolated unsigned staging settings required')
     builder.run(argv + ['build'], snapshot, out / 'build.log')
     after = builder.external_dependency_inventory(spm, manifest['packagePins'])
-    if before != after or builder.regular_inventory(snapshot) != manifest['files']:
-        raise ValueError('full source/dependency inputs changed during actual build')
+    if before != after:
+        raise ValueError('full dependency inputs changed during actual build')
+    builder.verify_source_inventory(snapshot, manifest)
     app = dd / 'Build/Products' / ('NativeCandidate-' + sdk) / 'PendingCrew.app'
     before_copy = [{'path': p.relative_to(app).as_posix(), 'sha256': builder.sha(p)} for p in sorted(app.rglob('*')) if p.is_file()]
     shutil.copytree(app, out / 'PendingCrew.app', symlinks=True)

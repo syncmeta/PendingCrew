@@ -17,14 +17,14 @@ lockpath='PendingCrew.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package
 rows=inventory(snapshot);rust=[r for r in rows if r['path'].startswith('crewd/')];rd=digest(rust)
 for r in rust:put(ws,r['path'],(snapshot/r['path']).read_text())
 configuration={'toolchain':'synthetic-rustc','cargoVersion':'synthetic-cargo','target':'aarch64-apple-darwin','profile':'debug','defaultFeatures':True,'allFeatures':False,'features':[],'artifactFeatures':[],'artifactProfile':{'test':False},'workspaceFeatures':{'crewd':[]}}
-manifest={'format':2,'sourceRef':'1'*40,'sourceSelection':'committed-archive','snapshotDirectory':'source','files':rows,'sourceInputDigest':digest(rows),'rustInputDigest':rd,'dependencyDirectory':'deps','dependencyFiles':inventory(dep),'dependencyInputDigest':digest(inventory(dep)),'packagePins':pins,'backendBuildConfiguration':configuration,'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrew','configuration':'Debug','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':'synthetic Xcode','sdkVersion':'26.5'}}
+manifest={'format':2,'sourceRef':'1'*40,'sourceSelection':'committed-archive','snapshotDirectory':'source','files':rows,'sourceInputDigest':digest(rows),'rustInputDigest':rd,'dependencyDirectory':'deps','dependencyFiles':inventory(dep),'dependencyInputDigest':digest(inventory(dep)),'packagePins':pins,'backendBuildConfiguration':configuration,'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrewNativeCandidate','configuration':'NativeCandidate','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) DEBUG PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':'synthetic Xcode','sdkVersion':'26.5'}}
 put(base,'gui.pre-sign','synthetic GUI bytes');put(base,'crewd.pre-sign','synthetic backend bytes');put(wb,'binary','synthetic backend bytes')
 put(wb,'build.log','BuildConfiguration: '+json.dumps(configuration)+'\nSnapshot: source\nInputDigest: '+rd+'\nCommand: cargo build -p crewd --locked\nExit: 0\nsynthetic structural log, never claimed actual compiler execution\n')
 witness={'format':1,'sourceRef':'3'*40,'evidenceDirectory':'backend','snapshotDirectory':'source','files':inventory(ws),'rustInputDigest':rd,'buildConfiguration':configuration,'binaryFile':'binary','binarySHA256':sha(wb/'binary'),'buildLog':'build.log','buildLogSHA256':sha(wb/'build.log')};dump(base/'witness.json',witness)
-command=['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrew','-configuration','Debug','-destination','platform=macOS,arch=arm64','-derivedDataPath','/synthetic/dd','-clonedSourcePackagesDirPath','/synthetic/spm','-disableAutomaticPackageResolution','-skipPackageUpdates','ARCHS=arm64','CODE_SIGNING_ALLOWED=NO','SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) PENDINGCREW_NATIVE_CANDIDATE','build']
+command=['xcodebuild','-project',str(snapshot/'PendingCrew.xcodeproj'),'-scheme','PendingCrewNativeCandidate','-configuration','NativeCandidate','-destination','platform=macOS,arch=arm64','-derivedDataPath','/synthetic/dd','-clonedSourcePackagesDirPath','/synthetic/spm','-disableAutomaticPackageResolution','-skipPackageUpdates','ARCHS=arm64','CODE_SIGNING_ALLOWED=NO','PENDINGCREW_CANDIDATE_SOURCE_REF='+'1'*40,'build']
 put(base,'gui.log','Command: '+shlex.join(command)+'\n** BUILD SUCCEEDED **\nExit: 0\nsynthetic structural log, never claimed actual Xcode execution\n')
 put(base,'settings.log','Command: '+shlex.join(command[:-1]+['-showBuildSettings','-json'])+'\nExit: 0\n')
-dump(base/'settings.json',[{'target':'PendingCrew','buildSettings':{'CONFIGURATION':'Debug','ARCHS':'arm64','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'DEBUG PENDINGCREW_NATIVE_CANDIDATE','SDKROOT':'/synthetic/MacOSX26.5.sdk'}}])
+dump(base/'settings.json',[{'target':'PendingCrew','buildSettings':{'CONFIGURATION':'NativeCandidate','PRODUCT_BUNDLE_IDENTIFIER':'com.pendingname.pendingcrew.native-candidate','CODE_SIGNING_ALLOWED':'NO','PENDINGCREW_CANDIDATE_SOURCE_REF':'1'*40,'ARCHS':'arm64','SWIFT_ACTIVE_COMPILATION_CONDITIONS':'DEBUG PENDINGCREW_NATIVE_CANDIDATE','SDKROOT':'/synthetic/MacOSX26.5.sdk'}}])
 dump(base/'toolchain.json',{'xcodeVersion':'synthetic Xcode','sdkVersion':'26.5'});put(base,'toolchain.log','Command: xcodebuild -version\nsynthetic Xcode\nExit: 0\nCommand: xcrun --sdk macosx --show-sdk-version\n26.5\nExit: 0\n')
 put(base,'settings.log','Command: '+shlex.join(command[:-1]+['-showBuildSettings','-json'])+'\n'+(base/'settings.json').read_text()+'\nExit: 0\n')
 plist={'CFBundleExecutable':'Synthetic','CFBundleIdentifier':'com.pendingname.pendingcrew.native-candidate','CFBundleShortVersionString':'0.0.12','PendingCrewSourceRef':'1'*40,'BuildStampCommit':'1'*40,'PendingCrewNativeCandidate':True};(app/'Contents/Info.plist').write_bytes(plistlib.dumps(plist));put(app,'Contents/MacOS/Synthetic','synthetic packaged GUI');put(app,'Contents/Helpers/crewd','synthetic packaged backend');put(base,'source-head.txt','1'*40+'\n')
@@ -36,6 +36,18 @@ def run(label,want,m=None,p=None):
  m=copy.deepcopy(manifest if m is None else m);p=copy.deepcopy(proof if p is None else p);dump(base/'build-inputs.json',m);p['inputManifestSHA256']=sha(base/'build-inputs.json');dump(base/'build-provenance.json',p)
  r=subprocess.run(['python3',str(repo/'scripts/dev/check-codex-first-provenance.py'),str(app)],capture_output=True,text=True);put(base,label+'.log',r.stdout+r.stderr);assert (r.returncode==0)==want,(label,r.stdout,r.stderr)
 run('valid-structural-control',True)
+link=snapshot/'schema-source'
+target=b'../dangling-input'
+link.symlink_to(target.decode())
+blob=hashlib.sha1(b'blob '+str(len(target)).encode()+b'\0'+target).hexdigest()
+symlink_rows=sorted(rows+[{'path':'schema-source','sha256':hashlib.sha256(target).hexdigest(),'gitMode':'120000','gitBlob':blob}],key=lambda r:r['path'])
+linked=dict(manifest,files=symlink_rows,sourceInputDigest=digest(symlink_rows),sourceSymlinkInputs={'schema-source':{'blob':blob,'targetBytesHex':target.hex()}})
+run('committed-symlink-valid-control',True,m=linked)
+run('missing-committed-symlink-witness',False,m=dict(linked,sourceSymlinkInputs={}))
+link.unlink();link.symlink_to('changed-target')
+run('changed-committed-symlink-target',False,m=linked)
+link.unlink()
+print('PASS actual Native v2 checker accepts recorded link, rejects missing witness and changed target')
 bad=copy.deepcopy(manifest);bad['externalDependencyPath']='/different/spm';run('different-external-package-path',False,m=bad)
 original_inventory=(base/'dependency-build-inventory.json').read_text();value=json.loads(original_inventory);value['after'].append({'path':'artifacts/new.bin','sha256':'a'*64});dump(base/'dependency-build-inventory.json',value);bad=copy.deepcopy(proof);bad['dependencyInventorySHA256']=sha(base/'dependency-build-inventory.json');run('added-external-dependency-after-build',False,p=bad);put(base,'dependency-build-inventory.json',original_inventory)
 for label,path,value in [('wrong-profile','profile','release'),('wrong-target','target','wrong-target'),('wrong-features','features',['testkit'])]:

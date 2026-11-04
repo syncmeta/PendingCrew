@@ -68,15 +68,16 @@ def extract_source_archive(archive,root,symlink_inputs):
 
 def regular_inventory(root,symlink_inputs=None):
  root=pathlib.Path(root);symlink_inputs={} if symlink_inputs is None else symlink_inputs
+ if not isinstance(symlink_inputs,dict): raise ValueError('invalid committed symlink inventory')
  rows=[]
  def walk(directory):
   for p in sorted(directory.iterdir()):
    mode=p.lstat().st_mode
    relative=p.relative_to(root).as_posix()
-   if any(c in relative for c in '\n\r\t'): raise ValueError('control characters in evidence paths')
+   if any(c in relative for c in '\n\r\t\\'): raise ValueError('invalid evidence path characters')
    if stat.S_ISLNK(mode):
     expected=symlink_inputs.get(relative)
-    if expected is None: raise ValueError('evidence snapshot cannot contain unreviewed symlinks')
+    if not isinstance(expected,dict): raise ValueError('evidence snapshot cannot contain unreviewed symlinks')
     raw=os.readlink(os.fsencode(p));blob=hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
     if raw.hex()!=expected['targetBytesHex'] or blob!=expected['blob']: raise ValueError('committed symlink bytes changed')
     rows.append({'path':relative,'sha256':hashlib.sha256(raw).hexdigest(),'gitMode':'120000','gitBlob':blob})
@@ -87,6 +88,14 @@ def regular_inventory(root,symlink_inputs=None):
  walk(root)
  if {r['path'] for r in rows if r.get('gitMode')=='120000'}!=set(symlink_inputs): raise ValueError('committed symlink missing')
  return sorted(rows,key=lambda row:row['path'])
+
+def verify_source_inventory(snapshot,manifest):
+ snapshot=pathlib.Path(snapshot);symlink_inputs=manifest.get('sourceSymlinkInputs',{})
+ if snapshot.is_symlink() or not snapshot.is_dir() or not isinstance(symlink_inputs,dict):
+  raise ValueError('invalid Native source snapshot or symlink inventory')
+ rows=regular_inventory(snapshot,symlink_inputs)
+ if rows!=manifest.get('files'): raise ValueError('Native complete source inventory differs from manifest')
+ return [(row['path'],row['sha256']) for row in rows]
 
 def external_dependency_inventory(spm,pins):
  rows=[]
@@ -117,11 +126,16 @@ def verify_candidate_entry(snapshot):
  credentials=snapshot/'Sources/CrewdRemote/CrewdRemoteVault.swift'
  if not configuration.is_file() or not credentials.is_file(): raise ValueError('candidate authority/credential factories missing')
  storage=configuration.read_text();vault=credentials.read_text()
+ vault_lines=[line.strip() for line in vault.splitlines()]
+ isolated_vault=any(condition in ('#if PENDINGCREW_NATIVE_CANDIDATE','#elseif PENDINGCREW_NATIVE_CANDIDATE') and branch=='return isolated'
+                    for condition,branch in zip(vault_lines,vault_lines[1:]))
+ normal_vault='return CrewdRemoteKeychain()' in vault or (
+  'guard let service = keychainService(bundleIdentifier: Bundle.main.bundleIdentifier)' in vault
+  and 'return CrewdRemoteKeychain(service: service)' in vault)
  if ('CrewdFrontendIsolation.prepare()' not in body or 'PendingCrewApp.main()' not in body
      or ('#if PENDINGCREW_NATIVE_CANDIDATE && os(macOS)' not in storage and '#if PENDINGCREW_NATIVE_CANDIDATE\n' not in storage)
      or 'PendingCrewNativeCandidates' not in storage or 'PendingCrewCore' not in storage
-     or '#if PENDINGCREW_NATIVE_CANDIDATE' not in vault or 'return isolated' not in vault
-     or 'return CrewdRemoteKeychain()' not in vault):
+     or not isolated_vault or not normal_vault):
   raise ValueError('original candidate authority/credential entry contract missing')
  return 'original-app-candidate-factories'
 
@@ -132,15 +146,12 @@ def main():
  ref=git(repo,'rev-parse','--verify',args.ref+'^{commit}').decode().strip()
  out.mkdir();snapshot=out/'source-inputs';snapshot.mkdir();archive=out/'source.tar'
  git(repo,'archive','--format=tar','-o',str(archive),ref)
- with tarfile.open(archive) as t:
-  for m in t.getmembers():
-   p=pathlib.PurePosixPath(m.name)
-   if p.is_absolute() or '..' in p.parts or not (m.isfile() or m.isdir()): raise ValueError('unsafe source archive member')
-  t.extractall(snapshot)
+ symlink_inputs=committed_symlink_inputs(repo,ref)
+ extract_source_archive(archive,snapshot,symlink_inputs)
  archive.unlink()
  if (repo/'scripts/dev/build-crewd-native-macos.py').read_bytes()!=(snapshot/'scripts/dev/build-crewd-native-macos.py').read_bytes(): raise ValueError('builder must match its selected committed input')
  spec=importlib.util.spec_from_file_location('proof',snapshot/'scripts/dev/write-codex-first-provenance.py');proof=importlib.util.module_from_spec(spec);spec.loader.exec_module(proof)
- source_rows=regular_inventory(snapshot);rust_rows=[r for r in source_rows if r['path'].startswith('crewd/')]
+ source_rows=regular_inventory(snapshot,symlink_inputs);rust_rows=[r for r in source_rows if r['path'].startswith('crewd/')]
  requested=proof.requested_configuration(snapshot/'crewd')
  backend=pathlib.Path(args.backend).resolve();witness=pathlib.Path(args.witness).resolve()
  value,evidence=proof.verify_witness(witness,backend,proof.digest(rust_rows),requested,require_fresh=True)
@@ -162,6 +173,7 @@ def main():
  toolchain={'xcodeVersion':query(['xcodebuild','-version'],snapshot,out/'gui-toolchain.log'),'sdkVersion':query(['xcrun','--sdk','macosx','--show-sdk-version'],snapshot,out/'gui-toolchain.log')}
  save(out/'gui-toolchain.json',toolchain)
  manifest={'format':2,'sourceRef':ref,'sourceSelection':'committed-archive','snapshotDirectory':snapshot.name,'files':source_rows,'sourceInputDigest':proof.digest(source_rows),'rustInputDigest':proof.digest(rust_rows),'dependencyDirectory':deps.name,'dependencyFiles':dependency_rows,'dependencyInputDigest':proof.digest(dependency_rows),'packagePins':pins,'externalDependencyPath':str(spm),'backendBuildConfiguration':value['buildConfiguration'],'guiBuildConfiguration':{'buildSystem':'xcodebuild','scheme':'PendingCrewNativeCandidate','configuration':'NativeCandidate','destination':'platform=macOS,arch=arm64','compileCondition':'PENDINGCREW_NATIVE_CANDIDATE','swiftActiveCompilationConditions':'$(inherited) DEBUG PENDINGCREW_NATIVE_CANDIDATE','packageResolution':'locked-pre-resolved','xcodeVersion':toolchain['xcodeVersion'],'sdkVersion':toolchain['sdkVersion']}}
+ manifest['sourceSymlinkInputs']=symlink_inputs
  save(out/'build-inputs.json',manifest);(out/'source-head.txt').write_text(ref+'\n');(out/'source-changes.patch').write_text('')
  if not args.execute:
   print('PREPARED only (no compilation or application launch):',out);return
@@ -175,7 +187,7 @@ def main():
  if actual.get('CONFIGURATION')!='NativeCandidate' or actual.get('PRODUCT_BUNDLE_IDENTIFIER')!='com.pendingname.pendingcrew.native-candidate' or actual.get('PENDINGCREW_CANDIDATE_SOURCE_REF')!=ref or 'PENDINGCREW_NATIVE_CANDIDATE' not in conditions or 'PENDINGCREW_LOCAL_MAC' in conditions or actual.get('CODE_SIGNING_ALLOWED')!='NO' or actual.get('DEVELOPMENT_TEAM') or actual.get('CODE_SIGN_ENTITLEMENTS') or actual.get('PROVISIONING_PROFILE_SPECIFIER'):
   raise ValueError('actual NativeCandidate isolation settings differ')
  run(argv,snapshot,out/'gui-build.log')
- if regular_inventory(snapshot)!=source_rows: raise ValueError('target build changed its source snapshot')
+ verify_source_inventory(snapshot,manifest)
  dependency_after=external_dependency_inventory(spm,pins)
  if dependency_after!=dependency_rows: raise ValueError('complete package inventory changed during build')
  save(out/'dependency-build-inventory.json',{'externalPath':str(spm),'before':dependency_rows,'after':dependency_after})
