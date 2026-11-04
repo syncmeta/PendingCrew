@@ -1,11 +1,12 @@
 //! One crew/source page per tick. Observations have no wake or execution effects.
-use crate::{Result, Tx};
+use crate::{Result, Tx, channel_archive_discovery as archive};
 use crewd_proto::{PatrolRun, PatrolStatus, WorkPatrolParams, WorkPatrolScan};
 use crewd_store::{StoreError, meta_get, meta_set};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 const CURSOR: &str = "patrol.cursor.v1";
+const ARCHIVE_CHECKS_PER_STEP: u8 = 2;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Saved {
@@ -154,7 +155,7 @@ fn step(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
     )?;
     *r.scanned_counts
         .entry(format!("{:?}", r.scan).to_lowercase())
-        .or_default() += (page.items.len() + page.entries.len() + page.channels.len()) as u64;
+        .or_default() += (page.items.len() + page.entries.len()) as u64;
     for i in page.items {
         if i.unowned {
             finding(r, "unowned", i.id.clone())
@@ -177,17 +178,43 @@ fn step(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
             finding(r, "needs_ruling", i.id)
         }
     }
+    r.after = page.next_after;
+    let mut verified = 0;
+    let mut checkpoint = None;
     for i in page.channels {
+        let now_ms = tx.now_ms();
+        let review = match archive::old_enough(tx.conn(), &i, now_ms) {
+            Ok(true) if verified == ARCHIVE_CHECKS_PER_STEP => {
+                // Do not consume or count this row. The next round resumes
+                // immediately after the last row actually examined.
+                r.after = checkpoint;
+                break;
+            }
+            Ok(true) => {
+                verified += 1;
+                archive::verify(tx.conn(), &i, now_ms)
+            }
+            Ok(false) => Ok(archive::Review::Ineligible),
+            Err(error) => Err(error),
+        };
+        checkpoint = Some(i.id.clone());
+        *r.scanned_counts.entry("channels".into()).or_default() += 1;
         if i.blocked_by
             .contains(&crewd_proto::WorkPatrolChannelBlocker::LinksTruncated)
         {
             finding(r, "incomplete_channels", i.id.clone());
         }
         if i.archive_candidate {
-            finding(r, "archive_candidates", i.id)
+            finding(r, "archive_candidates", i.id.clone());
+        }
+        match review {
+            Ok(archive::Review::Candidate) => finding(r, "idle_archive_candidates", i.id),
+            Ok(archive::Review::Incomplete) | Err(_) => {
+                finding(r, "archive_review_incomplete", i.id)
+            }
+            Ok(archive::Review::Ineligible) => {}
         }
     }
-    r.after = page.next_after;
     if r.after.is_none() {
         match r.scan {
             WorkPatrolScan::Work => r.scan = WorkPatrolScan::Entries,
@@ -206,7 +233,194 @@ fn step(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit::{ok, store};
+    use crate::{
+        Sender, channels, requirements,
+        testkit::{NOW, ok, store},
+        todo_attributes, work,
+    };
+    use crewd_proto::{
+        ChannelKind, HumanTaskCreateParams, ManualTodoState, TodoCreateParams, TodoSetStateParams,
+        WorkCloseParams, WorkClosureKind, WorkCreateParams, WorkEvidenceKind, WorkEvidenceParam,
+    };
+    use crewd_store::Store;
+
+    fn topic(s: &mut Store) -> String {
+        ok(s, |tx| {
+            channels::create(
+                tx,
+                &Sender::Human,
+                channels::NewChannel {
+                    crew_id: "crew-a".into(),
+                    kind: ChannelKind::Topic,
+                    name: "archive review fixture".into(),
+                    ..Default::default()
+                },
+            )
+        })
+        .id
+    }
+
+    fn finished_work(s: &mut Store, channel: Option<String>, sources: Vec<String>) {
+        let work = ok(s, |tx| {
+            work::create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    request_id: channel.as_ref().map(|_| uuid::Uuid::new_v4().to_string()),
+                    channel_id: channel,
+                    crew_id: "crew-a".into(),
+                    title: "finished archive review fixture".into(),
+                    sources,
+                    ..Default::default()
+                },
+            )
+        });
+        ok(s, |tx| {
+            work::close_factual(
+                tx,
+                &Sender::Human,
+                WorkCloseParams {
+                    id: work.id,
+                    expected_revision: work.revision,
+                    kind: WorkClosureKind::Done,
+                    note: "checked".into(),
+                    evidence: WorkEvidenceParam {
+                        kind: WorkEvidenceKind::Text,
+                        value: "finished".into(),
+                    },
+                },
+            )
+        });
+    }
+
+    fn message(s: &Store, channel: &str, at: &str) {
+        s.conn().execute(
+            "INSERT INTO messages(id,channel_id,sender_kind,text,created_at) VALUES(?1,?2,'human','fixture',?3)",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), channel, at],
+        ).unwrap();
+    }
+
+    fn advance(s: &mut Store) -> PatrolRun {
+        ok(s, |tx| step(tx, "crew-a"));
+        status(s.conn(), "crew-a").unwrap().run.unwrap()
+    }
+
+    #[test]
+    fn archive_checks_continue_from_the_last_consumed_channel_without_duplicates() {
+        let mut s = store();
+        let mut old = Vec::new();
+        for _ in 0..5 {
+            let id = topic(&mut s);
+            finished_work(&mut s, Some(id.clone()), Vec::new());
+            message(&s, &id, &crewd_store::ts_from_ms(NOW - archive::IDLE_MS));
+            old.push(id);
+        }
+        old.sort();
+        let fresh = topic(&mut s);
+        finished_work(&mut s, Some(fresh.clone()), Vec::new());
+        message(
+            &s,
+            &fresh,
+            &crewd_store::ts_from_ms(NOW - archive::IDLE_MS + 1),
+        );
+        let broken = &old[0];
+        let bad_key = format!("channel.archive.v1:{broken}");
+        meta_set(s.conn(), &bad_key, "{broken retained archive history").unwrap();
+
+        assert_eq!(advance(&mut s).scan, WorkPatrolScan::Entries);
+        assert_eq!(advance(&mut s).scan, WorkPatrolScan::Channels);
+        let first = advance(&mut s);
+        assert!(
+            first
+                .after
+                .as_deref()
+                .is_some_and(|id| id < old[2].as_str())
+        );
+        assert_eq!(first.findings["idle_archive_candidates"], old[1..2]);
+        assert_eq!(
+            first.findings["archive_review_incomplete"],
+            [broken.clone()]
+        );
+        let second = advance(&mut s);
+        assert!(second.after.is_some());
+        assert_eq!(second.findings["idle_archive_candidates"], old[1..4]);
+        let done = advance(&mut s);
+        assert!(done.completed_at_ms.is_some());
+        assert_eq!(done.scanned_counts["channels"], 6);
+        assert_eq!(done.findings["idle_archive_candidates"], old[1..]);
+        assert_eq!(done.counts["archive_candidates"], 6);
+        assert_eq!(done.counts["archive_review_incomplete"], 1);
+        assert!(
+            channels::get(s.conn(), &old[1])
+                .unwrap()
+                .archived_at
+                .is_none()
+        );
+        assert_eq!(
+            meta_get(s.conn(), &bad_key).unwrap().as_deref(),
+            Some("{broken retained archive history")
+        );
+    }
+
+    #[test]
+    fn idle_topic_with_requirement_link_and_completed_human_task_uses_canonical_facts() {
+        let mut s = store();
+        let id = topic(&mut s);
+        let requirement = ok(&mut s, |tx| {
+            requirements::create(
+                tx,
+                &Sender::Human,
+                TodoCreateParams {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    crew_id: "crew-a".into(),
+                    channel_id: Some(id.clone()),
+                    text: "completed original request".into(),
+                },
+            )
+        })
+        .todo
+        .requirement_id
+        .unwrap();
+        finished_work(&mut s, None, vec![requirement]);
+        let ask = ok(&mut s, |tx| {
+            todo_attributes::create_human(
+                tx,
+                &Sender::Human,
+                HumanTaskCreateParams {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    crew_id: "crew-a".into(),
+                    channel_id: id.clone(),
+                    text: "final human check".into(),
+                },
+            )
+        });
+        message(&s, &id, &crewd_store::ts_from_ms(NOW - archive::IDLE_MS));
+        advance(&mut s);
+        advance(&mut s);
+        let still_open = advance(&mut s);
+        assert!(still_open.completed_at_ms.is_some());
+        assert!(!still_open.findings.contains_key("idle_archive_candidates"));
+        ok(&mut s, |tx| {
+            todo_attributes::set_state(
+                tx,
+                &Sender::Human,
+                TodoSetStateParams {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    object: ask.todo.object,
+                    channel_id: id.clone(),
+                    expected_revision: ask.todo.revision,
+                    state: ManualTodoState::Done,
+                },
+            )
+        });
+        for _ in 0..3 {
+            crate::testkit::ok_at(&mut s, NOW + 30 * 60 * 1000, |tx| step(tx, "crew-a"));
+        }
+        let candidate = status(s.conn(), "crew-a").unwrap().run.unwrap();
+        assert!(candidate.completed_at_ms.is_some());
+        assert!(!candidate.findings.contains_key("archive_candidates"));
+        assert_eq!(candidate.findings["idle_archive_candidates"], [id]);
+    }
     #[test]
     fn corrupt_error_metadata_is_visible_preserved_and_does_not_starve() {
         let mut s = store();

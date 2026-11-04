@@ -10,13 +10,16 @@ import Foundation
             "scannedCounts": .object(["work": .integer(4)]),
             "counts": .object([
                 "long_waits": .integer(1), "unowned": .integer(2),
-                "unclaimed": .integer(1), "incomplete_channels": .integer(1)
+                "unclaimed": .integer(1), "incomplete_channels": .integer(1),
+                "idle_archive_candidates": .integer(1), "archive_review_incomplete": .integer(1)
             ]),
             "findings": .object([
                 "long_waits": .array([.string("W1")]),
                 "unowned": .array([.string("W1"), .string("W2")]),
                 "unclaimed": .array([.string("#1")]),
-                "incomplete_channels": .array([.string("topic-a")])
+                "incomplete_channels": .array([.string("topic-a")]),
+                "idle_archive_candidates": .array([.string("topic-b")]),
+                "archive_review_incomplete": .array([.string("topic-c")])
             ])
         ]
         let store = CrewdWorkStore { method, params in
@@ -26,10 +29,12 @@ import Foundation
         store.selectCrew("a")
         let status = try await store.patrolStatus()
         let brief = try CrewdPatrolBrief(run: status["run"])
-        precondition(brief.groups.map(\.kind) == [.longWaits, .unclaimed, .unowned, .incompleteChannels])
+        precondition(brief.groups.map(\.kind) == [.longWaits, .unclaimed, .unowned, .idleArchiveCandidates, .archiveReviewIncomplete, .incompleteChannels])
         precondition(brief.groups[0].references == ["W1"])
         precondition(brief.groups[1].references == ["#1"])
         precondition(brief.groups[2].references == ["W1", "W2"])
+        precondition(brief.groups[3].references == ["topic-b"])
+        precondition(brief.groups[4].references == ["topic-c"])
         precondition(brief.hasIncompleteChannels)
         precondition(!brief.hasPartialReferences)
 

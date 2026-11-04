@@ -1057,6 +1057,8 @@ struct CrewdPatrolBrief {
         case lost
         case stopEscalated = "stop_escalated"
         case archiveCandidates = "archive_candidates"
+        case idleArchiveCandidates = "idle_archive_candidates"
+        case archiveReviewIncomplete = "archive_review_incomplete"
         case incompleteChannels = "incomplete_channels"
 
         var title: String {
@@ -1068,13 +1070,15 @@ struct CrewdPatrolBrief {
             case .lost: "负责人失联的工作"
             case .stopEscalated: "停工检查已升级的工作"
             case .archiveCandidates: "待核实归档条件的群"
+            case .idleArchiveCandidates: "至少七天未发消息的归档候选"
+            case .archiveReviewIncomplete: "暂未核实归档条件的群"
             case .incompleteChannels: "未完整检查的群"
             }
         }
 
         var unit: String {
             switch self {
-            case .archiveCandidates, .incompleteChannels: "个群"
+            case .archiveCandidates, .idleArchiveCandidates, .archiveReviewIncomplete, .incompleteChannels: "个群"
             default: "项"
             }
         }
@@ -1083,7 +1087,7 @@ struct CrewdPatrolBrief {
             switch self {
             case .needsRuling, .unclaimed:
                 return CrewdWorkID(reference, kind: .requirement) != nil
-            case .archiveCandidates, .incompleteChannels:
+            case .archiveCandidates, .idleArchiveCandidates, .archiveReviewIncomplete, .incompleteChannels:
                 return !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     && reference.rangeOfCharacter(from: .controlCharacters) == nil
             default:

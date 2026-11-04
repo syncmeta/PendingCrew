@@ -12,6 +12,7 @@ pub mod admin_case_outcome;
 pub mod asks;
 pub mod causal;
 pub mod channel_archive;
+mod channel_archive_discovery;
 pub mod channel_work;
 pub mod channels;
 pub mod checkpoints;

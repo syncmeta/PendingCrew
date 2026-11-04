@@ -145,10 +145,19 @@ struct CrewdPatrolView: View {
                         Text("保留 \(group.references.count) 个编号")
                     }
                     ScrollView {
-                        Text(verbatim: group.references.joined(separator: "、"))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }.frame(maxHeight: 74)
+                        if group.kind == .idleArchiveCandidates {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(group.references, id: \.self) { channel in
+                                    Button("核对归档条件") { archiveTarget = channel }
+                                    Text(verbatim: channel).textSelection(.enabled)
+                                }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            Text(verbatim: group.references.joined(separator: "、"))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }.frame(maxHeight: group.kind == .idleArchiveCandidates ? 120 : 74)
                 }
             }
         }
