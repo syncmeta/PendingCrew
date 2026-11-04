@@ -1,5 +1,6 @@
 //! Actual Unix-socket projection, with synthetic data and no executor/model.
-use crewd_proto::{Crew, ServerFrame, WorkCreateParams};
+use crewd_collab::{patrol_runtime, wakes};
+use crewd_proto::{Crew, Desired, Role, ServerFrame, Session, WorkCreateParams};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -23,7 +24,22 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
             None,
         )
         .unwrap();
+        crewd_store::sessions::upsert(
+            store.conn(),
+            &Session {
+                id: format!("captain-{crew}"),
+                crew_id: crew.into(),
+                role: Role::Captain,
+                desired: Desired::Running,
+                executor: "codex".into(),
+                updated_at: "2026-10-01T00:00:00.000Z".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
         crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
+            crewd_collab::crews::set_captain(tx, crew, &format!("captain-{crew}"))?;
             crewd_collab::work::create(
                 tx,
                 &crewd_collab::Sender::Human,
@@ -36,15 +52,29 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
         })
         .unwrap();
     }
-    crewd_collab::run(&mut store, crewd_store::now_ms(), |tx| {
-        crewd_collab::patrol_runtime::tick(tx)
-    })
-    .unwrap();
-    let run_id = crewd_collab::patrol_runtime::status(store.conn(), "a")
+    let now = crewd_store::now_ms();
+    for _ in 0..8 {
+        crewd_collab::run(&mut store, now, patrol_runtime::tick).unwrap();
+    }
+    let run = patrol_runtime::status(store.conn(), "a")
         .unwrap()
         .run
-        .unwrap()
-        .run_id;
+        .unwrap();
+    assert!(run.completed_at_ms.is_some());
+    let run_id = run.run_id;
+    // This projection fixture supplies a synthetic executor receipt. Live runner
+    // admission and dispatch are exercised separately in orchestra.
+    let (wake_id, _) = crewd_collab::run(&mut store, now, |tx| {
+        patrol_runtime::enqueue_brief(tx, "a", "captain-a", "fixture-generation")?;
+        let wake = patrol_runtime::status(tx.conn(), "a")?
+            .captain_brief
+            .unwrap()
+            .wake_id;
+        wakes::claim(tx, &[wake])?;
+        wakes::ack_delivered(tx, "captain-a", &[wake], wakes::Riders::Release, &[], &[])?;
+        Ok(wake)
+    })
+    .unwrap();
     drop(store);
     let reopened = crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap();
     assert_eq!(
@@ -104,6 +134,19 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
     .await;
     assert_eq!(status["run"]["runId"], run_id);
     assert_eq!(status["crewId"], "a");
+    assert_eq!(
+        status["captainBrief"],
+        json!({"runId":run_id,"captainSessionId":"captain-a","wakeId":wake_id,"phase":"delivered"})
+    );
+    let other = call(
+        &mut wr,
+        &mut lines,
+        100,
+        "work.patrolStatus",
+        json!({"crewId":"b"}),
+    )
+    .await;
+    assert!(other.get("captainBrief").is_none());
     let first = call(&mut wr, &mut lines, 1, "work.patrol", json!({"limit":1})).await;
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
     assert_eq!(first["items"][0]["unowned"], true);

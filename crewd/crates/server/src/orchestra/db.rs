@@ -1339,8 +1339,20 @@ impl Port for DbPort {
         .await
     }
 
-    async fn advance_patrol(&self) -> Result<()> {
-        self.write(collab::patrol_runtime::tick).await
+    async fn advance_patrol(&self) -> Result<Option<(String, String)>> {
+        self.write(collab::patrol_runtime::tick).await?;
+        self.read(collab::patrol_runtime::brief_candidate).await
+    }
+    async fn enqueue_patrol_brief(
+        &self,
+        crew: String,
+        captain: String,
+        generation: String,
+    ) -> Result<()> {
+        self.write(move |tx| {
+            collab::patrol_runtime::enqueue_brief(tx, &crew, &captain, &generation)
+        })
+        .await
     }
     async fn enqueue_work_checkpoints(&self) -> Result<()> {
         self.write(|tx| {
@@ -2057,6 +2069,167 @@ mod tests {
     use super::*;
     use crewd_wake::breaker;
     use crewd_wake::source;
+
+    #[tokio::test]
+    async fn patrol_brief_actual_delivery_matches_its_live_captain_and_cannot_spawn_a_runner() {
+        use super::super::core::Input;
+        use crewd_exec::{
+            delivery::Subject,
+            session::{DeliveryOutcome, SessionEvent},
+        };
+        use crewd_proto::{Desired, PatrolCaptainBriefPhase as Phase, WorkCreateParams};
+
+        let rig = S46ActorDb::new(super::super::hooks::Hooks::default()).await;
+        let local = rig
+            .port
+            .write(|tx| {
+                let create = |tx: &mut collab::Tx<'_>, crew: &str| {
+                    collab::work::create(
+                        tx,
+                        &collab::Sender::Human,
+                        WorkCreateParams {
+                            crew_id: crew.into(),
+                            title: "synthetic unowned patrol work".into(),
+                            ..Default::default()
+                        },
+                    )
+                };
+                let local = create(tx, "c-1")?;
+                create(tx, "c-2")?;
+                create(tx, "c-9")?;
+                Ok(local.id)
+            })
+            .await
+            .unwrap();
+        let tick = async || {
+            rig.clock.set(Ms(crewd_store::now_ms() + 1_000));
+            rig.handle.tx.send(Input::Tick).unwrap();
+            rig.handle.latches().await.unwrap();
+        };
+        let state = async |crew: &'static str| {
+            rig.port
+                .read(move |c| collab::patrol_runtime::status(c, crew))
+                .await
+                .unwrap()
+        };
+        for _ in 0..20 {
+            tick().await;
+        }
+        assert!(state("c-2").await.run.unwrap().completed_at_ms.is_some());
+        assert!(state("c-2").await.captain_brief.is_none());
+        assert!(rig.exec.launches("cap-2").is_empty());
+        // A retained pending row from another physical generation cannot be a launch cause.
+        rig.port
+            .write(|tx| {
+                collab::sessions::set_desired(tx, "cap-2", Desired::Running)?;
+                collab::patrol_runtime::enqueue_brief(tx, "c-2", "cap-2", "obsolete-core:1:1")
+            })
+            .await
+            .unwrap();
+        tick().await;
+        assert_eq!(
+            state("c-2").await.captain_brief.unwrap().phase,
+            Phase::Dropped
+        );
+        assert!(rig.exec.launches("cap-2").is_empty());
+
+        rig.handle
+            .resume("cap-1", super::super::core::Origin::Human)
+            .await
+            .unwrap();
+        let sent = || {
+            rig.exec
+                .sent("cap-1")
+                .into_iter()
+                .filter(|body| body.contains("本机组行政巡检简报"))
+                .collect::<Vec<_>>()
+        };
+        let in_flight = tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                tick().await;
+                let status = state("c-1").await;
+                if let Some(receipt) = status.captain_brief
+                    && receipt.phase == Phase::Inflight
+                    && !sent().is_empty()
+                {
+                    break receipt;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(in_flight.captain_session_id, "cap-1");
+        assert_eq!(sent().len(), 1);
+        assert!(sent()[0].contains(&local));
+        rig.exec.emit(
+            "cap-1",
+            SessionEvent::Delivery {
+                id: rig.exec.last_send_id("cap-1"),
+                subject: Subject::Steer,
+                outcome: DeliveryOutcome::Delivered,
+            },
+        );
+        let delivered = tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                tick().await;
+                if let Some(receipt) = state("c-1").await.captain_brief
+                    && receipt.phase == Phase::Delivered
+                {
+                    break receipt;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(delivered.wake_id, in_flight.wake_id);
+        for _ in 0..10 {
+            tick().await;
+        }
+        assert_eq!(sent().len(), 1);
+        assert_eq!(rig.exec.launches("cap-1").len(), 1);
+
+        // Even an admitted live replacement process must not receive an old generation's row.
+        rig.handle
+            .resume("cap-9", super::super::core::Origin::Human)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(4), async {
+            loop {
+                if rig.handle.live("cap-9").await.unwrap().running {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("explicitly resumed replacement process did not spawn");
+        rig.port
+            .write(|tx| {
+                collab::patrol_runtime::enqueue_brief(
+                    tx,
+                    "c-9",
+                    "cap-9",
+                    "different-physical-core:1:1",
+                )
+            })
+            .await
+            .unwrap();
+        tick().await;
+        assert_eq!(
+            state("c-9").await.captain_brief.unwrap().phase,
+            Phase::Dropped
+        );
+        assert!(
+            rig.exec
+                .sent("cap-9")
+                .iter()
+                .all(|body| !body.contains("本机组行政巡检简报"))
+        );
+        assert_eq!(rig.exec.launches("cap-9").len(), 1);
+        rig.close().await;
+    }
 
     /// The real Hub bridge and spawned actor; only the executor/worktrees are synthetic.
     struct S46ActorDb {

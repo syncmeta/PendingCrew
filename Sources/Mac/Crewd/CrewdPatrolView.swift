@@ -118,6 +118,10 @@ struct CrewdPatrolView: View {
                         Text("后台巡检进行中。本轮结束后生成简报。")
                     } else {
                         Text("结束观察：" + time(run["completedAtMs"]))
+                        if let rawPhase = status["captainBrief"]["phase"].string,
+                           let phase = CrewdCaptainBriefPhase(rawValue: rawPhase) {
+                            Text("机长简报投递 · " + phase.label)
+                        }
                         if let brief = try? CrewdPatrolBrief(run: run) {
                             briefSection(brief)
                         } else {

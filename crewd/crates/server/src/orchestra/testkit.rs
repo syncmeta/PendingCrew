@@ -551,10 +551,10 @@ impl Port for MemPort {
         let value = self.lock().native_auth_sources.get(session).cloned();
         Box::pin(async move { Ok(value) })
     }
-    async fn advance_patrol(&self) -> Result<()> {
+    async fn advance_patrol(&self) -> Result<Option<(String, String)>> {
         self.patrol_ticks
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
+        Ok(None)
     }
 
     async fn session(&self, id: &str) -> Result<Option<SessionRow>> {

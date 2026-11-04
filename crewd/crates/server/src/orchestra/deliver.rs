@@ -471,6 +471,36 @@ impl<P: Port> Core<P> {
                 return Ok(false);
             }
             let mut pending = self.port.pending(session).await?;
+            let generation = self
+                .live
+                .contains_key(session)
+                .then(|| self.current_public_target(session).generation);
+            let mut obsolete_briefs = Vec::new();
+            pending.retain(|wake| {
+                let obsolete = crewd_collab::patrol_brief::is_brief(&wake.source)
+                    && (wake.attempts > 0
+                        || !generation.as_deref().is_some_and(|generation| {
+                            crewd_collab::patrol_brief::matches_generation(
+                                &wake.source,
+                                wake.note.as_deref(),
+                                generation,
+                            )
+                        }));
+                if obsolete {
+                    obsolete_briefs.push(wake.clone());
+                }
+                !obsolete
+            });
+            if !obsolete_briefs.is_empty() {
+                let outcome = Settle::Dropped {
+                    error: "patrol brief has no current unattempted captain process".into(),
+                };
+                self.due
+                    .touch(&self.port)
+                    .settle(&ids(&obsolete_briefs), outcome, now)
+                    .await?;
+                self.port.publish(wake_changed(session, &obsolete_briefs));
+            }
             if let Some(cut) = self
                 .live
                 .get(session)

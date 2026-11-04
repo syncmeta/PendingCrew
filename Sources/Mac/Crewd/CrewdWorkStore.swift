@@ -246,6 +246,17 @@ final class CrewdWorkStore: ObservableObject {
                   scanned.values.allSatisfy({ ($0.int ?? -1) >= 0 }),
                   counts.values.allSatisfy({ ($0.int ?? -1) >= 0 }) else { throw CrewdClientError(message:"后台巡检记录不完整。") }
         }
+        if let brief = fields["captainBrief"], brief != .null {
+            guard let runId = run["runId"].string, !runId.isEmpty,
+                  run["completedAtMs"].int != nil,
+                  brief["runId"].string == runId,
+                  brief["captainSessionId"].string?.isEmpty == false,
+                  (brief["wakeId"].int ?? 0) > 0,
+                  let phase = brief["phase"].string,
+                  CrewdCaptainBriefPhase(rawValue: phase) != nil else {
+                throw CrewdClientError(message: "机长简报的投递记录不完整或巡检轮次不符。")
+            }
+        }
         return value
     }
     func similarRequirementPage(after: String?) async throws -> CrewdValue {
@@ -1048,6 +1059,20 @@ final class CrewdWorkStore: ObservableObject {
 }
 
 /// The brief is a projection of one completed patrol, with no write or execution authority.
+enum CrewdCaptainBriefPhase: String {
+    case queued, inflight, delivered, dropped, unknown
+
+    var label: String {
+        switch self {
+        case .queued: "待投递"
+        case .inflight: "投递中"
+        case .delivered: "已送达"
+        case .dropped: "已取消"
+        case .unknown: "结果未知"
+        }
+    }
+}
+
 struct CrewdPatrolBrief {
     enum Kind: String, CaseIterable {
         case longWaits = "long_waits"

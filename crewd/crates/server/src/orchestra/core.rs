@@ -4119,9 +4119,38 @@ impl<P: Port> Core<P> {
         self.notify_drafts().await?;
         self.notifier.flush(now, self.lang()).await?;
         // 默认方案到点（控制者裁定 C7）与清旧唤醒（C6 / S28）出错只记日志：不能挡住下面的重扫。
-        log_err(self.port.advance_patrol().await);
+        let brief = match self.port.advance_patrol().await {
+            Ok(brief) => brief,
+            Err(error) => {
+                log_err(Err(error));
+                None
+            }
+        };
         if self.cfg.admission.as_ref().is_some_and(|a| !a.any()) {
             return Ok(());
+        }
+        if let Some((crew, captain)) = brief
+            && !self.shutting_down
+            && self
+                .cfg
+                .admission
+                .as_ref()
+                .is_none_or(|a| a.contains(&captain))
+            && self.live.get(&captain).is_some_and(|live| {
+                live.crew == crew
+                    && live.captain
+                    && !live.agent_session_id.is_empty()
+                    && !live.stopping
+                    && !live.halting
+                    && !live.hibernate_cut
+            })
+        {
+            let generation = self.current_public_target(&captain).generation;
+            log_err(
+                self.port
+                    .enqueue_patrol_brief(crew, captain, generation)
+                    .await,
+            );
         }
         log_err(self.port.apply_due_defaults().await);
         log_err(self.port.enqueue_work_checkpoints().await);

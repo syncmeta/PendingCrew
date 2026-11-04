@@ -51,11 +51,43 @@ pub fn status(c: &Connection, crew: &str) -> Result<PatrolStatus> {
             Err(_) => Some("巡检错误记录不可读取；原记录已保留".into()),
         }
     };
+    let run = observed.ok().flatten().map(|s| s.run);
+    let (captain_brief, brief_error) = match run.as_ref() {
+        Some(run) => match crate::patrol_brief::status(c, crew, run) {
+            Ok(receipt) => (receipt, None),
+            Err(_) => (None, Some("机长简报回执不可读取".into())),
+        },
+        None => (None, None),
+    };
     Ok(PatrolStatus {
         crew_id: crew.into(),
-        run: observed.ok().flatten().map(|s| s.run),
-        error,
+        run,
+        error: error.or(brief_error),
+        captain_brief,
     })
+}
+
+pub(crate) fn run(c: &Connection, crew: &str) -> Result<Option<PatrolRun>> {
+    Ok(load(c, crew)?.map(|saved| saved.run))
+}
+
+/// After a scan step, only inspect the same round-robin crew. Core owns live
+/// process admission and makes the separate enqueue decision.
+pub fn brief_candidate(c: &Connection) -> Result<Option<(String, String)>> {
+    let Some(crew) = meta_get(c, CURSOR)?.filter(|crew| !crew.is_empty()) else {
+        return Ok(None);
+    };
+    if run(c, &crew)?.is_none_or(|run| run.completed_at_ms.is_none()) {
+        return Ok(None);
+    }
+    Ok(crate::crews::captain_of(c, &crew)?.map(|captain| (crew, captain)))
+}
+
+pub fn enqueue_brief(tx: &mut Tx<'_>, crew: &str, captain: &str, generation: &str) -> Result<()> {
+    if let Some(run) = run(tx.conn(), crew)? {
+        crate::patrol_brief::enqueue(tx, crew, captain, generation, &run)?;
+    }
+    Ok(())
 }
 fn finding(r: &mut PatrolRun, category: &str, id: String) {
     *r.counts.entry(category.into()).or_default() += 1;

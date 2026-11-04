@@ -11502,6 +11502,40 @@
       ],
       "type": "object"
     },
+    "PatrolCaptainBrief": {
+      "properties": {
+        "captainSessionId": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/PatrolCaptainBriefPhase"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "wakeId": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runId",
+        "captainSessionId",
+        "wakeId",
+        "phase"
+      ],
+      "type": "object"
+    },
+    "PatrolCaptainBriefPhase": {
+      "enum": [
+        "queued",
+        "inflight",
+        "delivered",
+        "dropped",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "PatrolRun": {
       "properties": {
         "after": {
@@ -11574,6 +11608,16 @@
     },
     "PatrolStatus": {
       "properties": {
+        "captainBrief": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PatrolCaptainBrief"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "crewId": {
           "type": "string"
         },

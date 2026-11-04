@@ -22,9 +22,12 @@ import Foundation
                 "archive_review_incomplete": .array([.string("topic-c")])
             ])
         ]
+        var delivery: [String: CrewdValue]?
         let store = CrewdWorkStore { method, params in
             precondition(method == "work.patrolStatus" && params["crewId"] == .string("a"))
-            return .object(["crewId": .string("a"), "error": .null, "run": .object(run)])
+            var status: [String: CrewdValue] = ["crewId": .string("a"), "error": .null, "run": .object(run)]
+            if let delivery { status["captainBrief"] = .object(delivery) }
+            return .object(status)
         }
         store.selectCrew("a")
         let status = try await store.patrolStatus()
@@ -37,6 +40,21 @@ import Foundation
         precondition(brief.groups[4].references == ["topic-c"])
         precondition(brief.hasIncompleteChannels)
         precondition(!brief.hasPartialReferences)
+
+        delivery = [
+            "runId": .string("original-run"), "captainSessionId": .string("captain-a"),
+            "wakeId": .integer(7), "phase": .string("queued")
+        ]
+        let queued = try await store.patrolStatus()
+        precondition(queued["captainBrief"]["phase"] == .string("queued"))
+        delivery?["phase"] = .string("delivered")
+        let delivered = try await store.patrolStatus()
+        precondition(delivered["captainBrief"]["phase"] == .string("delivered"))
+        delivery?["runId"] = .string("another-run")
+        try await rejectsDelivery(store)
+        delivery?["runId"] = .string("original-run")
+        delivery?["phase"] = .string("not-a-phase")
+        try await rejectsDelivery(store)
 
         run["truncated"] = .bool(true)
         run["counts"] = .object(["unowned": .integer(53), "future_kind": .integer(1)])
@@ -65,6 +83,13 @@ import Foundation
         run["completedAtMs"] = .null
         precondition(throwsInvalid(run))
         print("patrol brief: completed source, categories, original references, partial and malformed states passed")
+    }
+
+    @MainActor static func rejectsDelivery(_ store: CrewdWorkStore) async throws {
+        do {
+            _ = try await store.patrolStatus()
+            preconditionFailure("accepted malformed or unrelated captain delivery")
+        } catch is CrewdClientError {}
     }
 
     static func throwsInvalid(_ run: [String: CrewdValue]) -> Bool {

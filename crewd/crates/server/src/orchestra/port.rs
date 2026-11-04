@@ -683,7 +683,15 @@ pub trait Port: Send + Sync + 'static {
     fn restart_answer(&self, id: i64) -> impl Future<Output = Result<Option<bool>>> + Send;
     /// 各机组到点的默认方案按默认办（M3a `asks::apply_due_defaults`；控制者裁定由 M3c 的定时拍调）。
     fn apply_due_defaults(&self) -> impl Future<Output = Result<()>> + Send;
-    fn advance_patrol(&self) -> impl Future<Output = Result<()>> + Send {
+    fn advance_patrol(&self) -> impl Future<Output = Result<Option<(String, String)>>> + Send {
+        async { Ok(None) }
+    }
+    fn enqueue_patrol_brief(
+        &self,
+        _crew: String,
+        _captain: String,
+        _generation: String,
+    ) -> impl Future<Output = Result<()>> + Send {
         async { Ok(()) }
     }
     fn enqueue_work_checkpoints(&self) -> impl Future<Output = Result<()>> + Send {

@@ -29,6 +29,7 @@ pub mod listens;
 pub mod message_attribution;
 pub mod message_provenance;
 pub mod messages;
+pub mod patrol_brief;
 pub mod patrol_runtime;
 pub mod prompts;
 pub mod refusal;
