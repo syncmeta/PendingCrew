@@ -33,7 +33,9 @@ Mac 修正 `3931d202` 将裁决入口放到已完成的巡检简报分组中。�
 
 同批共享界面的 iPhoneOS 编译记录见 `/private/tmp/pcw-1aaf-ios.B1vkCc/ios-debug-proof.json`。记录分别保存启动二进制和含 Swift 代码的调试动态库摘要。
 
-下一行政模块按原设计 §17 接通协作群工作无人负责的提醒。复用既有巡检、机长送达和工作指派，分别核对当前关联、通知状态和真实接手事件。后台与界面在独立检出并行实施。
+`c73fa665` 按原设计 §17 接通协作群工作无人负责的提醒。巡检核实当前直接关联的工作，向已经运行且有权读群的当前机长投递。界面分别显示提醒送达与真实接手。普通 Core 按默认节拍完成两轮巡检，重复观察沿用同一条记录，没有运行中的机长时没有投递。实际指派后立即查回账本的负责人变更，三次进程均正常退出，重开后原接手证据一致。见 `/private/tmp/pcw-resp.6djzln5t/result.json`。另用合成执行器验证机长投递与确认，本机连接、配对撤权和后台 706 项回归通过。
+
+该版 Mac 私有预览及 iPhoneOS Debug 完整构建均通过。Mac 预览核对严格签名、动态库和准确普通 Core，iPhoneOS 核对 iPhone、iPad 目标和实际 Swift 调试动态库。记录分别见 `/private/tmp/pcw-responsibility-gate.XP393w/mac-preview/candidate.json`、`/private/tmp/pcw-responsibility-gate.XP393w/ios-debug-proof.json`。窗口、安装和发布另行验收。
 
 `2cb8f0b3` 的私有 macOS Release 候选为 0.2.4，构建 `20761.71404`。应用与内嵌后台完成带安全时间戳的 Developer ID 签名，公证输入 ZIP 重新解包后通过严格签名检查。公证输入 SHA-256 为 `0c6b7b081615742004b36ca3e7e8c0a537c29ba3523cb941a759315b031af19f`。使用包中实际签名后台复测 Core 21→22 与整份旧数据回退也通过。候选及迁移记录见 `/private/tmp/pcw-split-ordinary.3WoYkW/notary-input-proof.json` 和 `/private/tmp/pcw-024-signed-core-1767AF70/result.json`。此候选待提交 Apple 公证；正式整包安装、回退和窗口验收另记。
 
