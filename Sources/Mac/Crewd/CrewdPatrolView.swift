@@ -152,10 +152,6 @@ struct CrewdPatrolView: View {
                         }
                         if let brief = try? CrewdPatrolBrief(run: run) {
                             briefSection(brief)
-                        } else if group.kind == .needsRuling, workspace != nil, store.supportsRequirementRuling {
-                            VStack(alignment:.leading,spacing:4) {
-                                ForEach(group.references,id:\.self) { id in rulingButton(id) }
-                            }.frame(maxWidth:.infinity,alignment:.leading)
                         } else {
                             Text("本轮简报无法读取。可使用下方的实时检查。").foregroundStyle(.orange)
                         }
@@ -199,6 +195,10 @@ struct CrewdPatrolView: View {
                                     Button("核对归档条件") { archiveTarget = channel }
                                     Text(verbatim: channel).textSelection(.enabled)
                                 }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        } else if group.kind == .needsRuling, workspace != nil, store.supportsRequirementRuling {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(group.references, id: \.self) { id in rulingButton(id) }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         } else {
                             Text(verbatim: group.references.joined(separator: "、"))
