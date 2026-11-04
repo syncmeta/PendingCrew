@@ -16,8 +16,31 @@ struct CrewdFirstCaptainReply: Equatable {
 
     let crewID: String
     let channelID: String
+    let messageID: String
     let firstSequence: Int
     var phase: Phase = .starting
+
+    init?(crewID: String, channelID: String, messageID: String, firstSequence: Int) {
+        guard !crewID.isEmpty,
+              crewID.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) ||
+                  (97...122).contains($0) || $0 == 45 || $0 == 95 }),
+              ["\(crewID)/human", "\(crewID)/lobby"].contains(channelID),
+              UUID(uuidString: messageID)?.uuidString.lowercased() == messageID,
+              firstSequence > 0, firstSequence < Int.max else { return nil }
+        self.crewID = crewID
+        self.channelID = channelID
+        self.messageID = messageID
+        self.firstSequence = firstSequence
+    }
+
+    var startupBrief: String {
+        """
+        本机组首次启动时，先用 mcp__crew__read_channel（channel="\(channelID)", before=\(firstSequence + 1), limit=1）读取原群首条人类消息，确认读到 #\(firstSequence)。
+        回复这条消息时，用 mcp__crew__post，同时填写 channel="\(channelID)" 和 reply_to="\(messageID)"。若原消息未读到或原群回复失败，请如实说明，勿改发大厅、其他群或私聊。结果不明时先核对原群，勿重复发。
+        这段指引只用于原首条消息。恢复已有会话时，不要因看到这段指引而重新接单或再次回复。
+        之后读取本机组群聊与待办，回应人类需求；没有任务时待命。
+        """
+    }
 
     func isReply(channel: String?, senderKind: String?, sender: String?, sequence: Int?) -> Bool {
         let captain: String
@@ -987,7 +1010,7 @@ final class CrewdWorkspace: ObservableObject {
             }
             let result = try await performValue("session.start", .object([
                 "crewId": .string(id), "role": .string("captain"), "executor": .string(executor),
-                "brief": .string(brief), "isolation": .bool(false)]))
+                "brief": .string(firstMessage?.startupBrief ?? brief), "isolation": .bool(false)]))
             guard acceptsObservation(epoch), client.connectionEpoch == connection else { return nil }
             captainStartFailures[id] = nil
             if let session = result["id"].string {

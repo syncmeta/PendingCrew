@@ -377,21 +377,30 @@ final class CrewStore: ObservableObject {
                 var fields: [String: CrewdValue] = ["title": .string(draft.title)]
                 if !directory.isEmpty { fields["workingDirectory"] = .string(directory) }
                 if let parent = draft.parentCrewId { fields["parentId"] = .string(parent) }
+                var first: CrewdFirstCaptainReply?
                 let receipt = try await workspace.submitPublicCommand(.firstMessage,
-                    params: .object(["crew": .object(fields), "text": .string(text)]), crew: "")
-                guard !receipt.historical, receipt.phase == .committed,
-                      let actual = receipt.value["result"]["crew"]["id"].string,
-                      receipt.value["result"]["message"]["text"].string == text,
-                      let actualChannel = receipt.value["result"]["message"]["channelId"].string, !actualChannel.isEmpty,
-                      let actualDirectory = receipt.value["result"]["crew"]["workingDirectory"].string, !actualDirectory.isEmpty else {
+                    params: .object(["crew": .object(fields), "text": .string(text)]), crew: "") { result in
+                    guard !result.historical, result.phase == .committed else { return }
+                    let created = result.value["result"]
+                    let original = created["message"]
+                    guard let actual = created["crew"]["id"].string,
+                          created["crew"]["workingDirectory"].string?.isEmpty == false,
+                          original["text"].string == text, original["senderKind"] == .string("human"),
+                          let channel = original["channelId"].string, let messageID = original["id"].string,
+                          let sequence = original["seq"].int,
+                          let source = CrewdFirstCaptainReply(crewID: actual, channelID: channel,
+                                                            messageID: messageID, firstSequence: sequence) else {
+                        throw CrewdPublicWire.invalid()
+                    }
+                    first = source
+                }
+                guard !receipt.historical, receipt.phase == .committed, let first else {
                     throw CrewdClientError(message: "首发原请求结果尚未确认，请只读核对；不会重发或另建机组。")
                 }
+                let actual = first.crewID, actualChannel = first.channelID
                 update(.accepted, crew: actual)
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
                 if draft.executor != "none" {
-                    let first = receipt.value["result"]["message"]["seq"].int.flatMap { sequence in
-                        sequence > 0 ? CrewdFirstCaptainReply(crewID: actual, channelID: actualChannel, firstSequence: sequence) : nil
-                    }
                     await workspace.startCaptainForCreatedCrew(actual, executor: draft.executor, firstMessage: first)
                 }
                 guard crewdWorkspace === workspace, pendingCrew?.id == draftID else { return }
