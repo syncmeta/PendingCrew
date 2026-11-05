@@ -208,25 +208,41 @@ async fn run<P: Port>(mut core: Core<P>, mut rx: mpsc::UnboundedReceiver<Input>)
     native_authority.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let wait = core.next_deadline().await.since(core.now()).max(0) as u64;
-        tokio::select! {
-            input = rx.recv() => match input {
-                Some(i) => core.handle(i).await,
-                // Core 自己拿着一个发送端（派生任务回报用），所以这里其实收不到 None；收到了也照样收尾。
-                None => return,
-            },
-            _ = tokio::time::sleep(Duration::from_millis(wait)) => {
-                core.handle(Input::Tick).await;
-                // 刚拍过：心跳从这里重新起算（9b 复审），不然两路一前一后各拍一次。
-                heartbeat.reset();
+        let exact_tick = tokio::time::sleep(Duration::from_millis(wait));
+        tokio::pin!(exact_tick);
+        loop {
+            let reschedule = tokio::select! {
+                input = rx.recv() => {
+                    match input {
+                        Some(i) => core.handle(i).await,
+                        // Core 自己拿着一个发送端（派生任务回报用），所以这里其实收不到 None；收到了也照样收尾。
+                        None => return,
+                    }
+                    true
+                },
+                _ = &mut exact_tick => {
+                    core.handle(Input::Tick).await;
+                    // 刚拍过：心跳从这里重新起算（9b 复审），不然两路一前一后各拍一次。
+                    heartbeat.reset();
+                    true
+                }
+                _ = heartbeat.tick() => {
+                    core.handle(Input::Tick).await;
+                    true
+                },
+                _ = native_authority.tick() => {
+                    core.check_admin_runtimes(32).await;
+                    core.advance_manual_patrol().await;
+                    // Internal housekeeping must not postpone the already armed timer.
+                    false
+                }
+            };
+            if core.shutdown_done() {
+                return;
             }
-            _ = heartbeat.tick() => core.handle(Input::Tick).await,
-            _ = native_authority.tick() => {
-                core.check_admin_runtimes(32).await;
-                core.advance_manual_patrol().await;
+            if reschedule {
+                break;
             }
-        }
-        if core.shutdown_done() {
-            return;
         }
     }
 }
@@ -938,10 +954,7 @@ mod tests {
         );
     }
 
-    /// 9b 复审：精确的定时拍（睡到下一个 not_before）拍过之后心跳重新起算——不会在它后面紧跟着再来一拍。
-    /// 一条 20 秒后才到点的唤醒（时钟停着，所以它一直在 20 秒后）：95 秒里只有那四拍（20/40/60/80），心跳一次都插不进来。
-    #[tokio::test(start_paused = true)]
-    async fn an_exact_tick_restarts_the_heartbeat_so_ticks_do_not_double() {
+    async fn ready_future_timer_actor() -> (Arc<MemPort>, Handle, Actor, String) {
         let port = Arc::new(MemPort::new());
         port.lock().now = T0;
         let row = port
@@ -970,7 +983,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let (_h, _actor) = spawn(
+        let (h, actor) = spawn(
             port.clone(),
             Executors::new(),
             Hooks::default(),
@@ -979,10 +992,54 @@ mod tests {
         )
         .await
         .unwrap();
+        // Establish actor readiness at paused time zero, then let it arm the wait
+        // after the observed reply; no further input should reset that wait.
+        h.live(&row.id).await.unwrap();
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        (port, h, actor, row.id)
+    }
+
+    /// 9b 复审：精确的定时拍（睡到下一个 not_before）拍过之后心跳重新起算——不会在它后面紧跟着再来一拍。
+    /// 一条 20 秒后才到点的唤醒（时钟停着，所以它一直在 20 秒后）：95 秒里只有那四拍（20/40/60/80），心跳一次都插不进来。
+    #[tokio::test(start_paused = true)]
+    async fn an_exact_tick_restarts_the_heartbeat_so_ticks_do_not_double() {
+        let (port, _h, _actor, _) = ready_future_timer_actor().await;
         let before = port.lock().defaults_applied;
         tokio::time::sleep(Duration::from_secs(95)).await;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
         let ticks = port.lock().defaults_applied - before;
         assert_eq!(ticks, 4, "20/40/60/80 秒各一拍，心跳不再紧跟着多拍");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_external_input_still_restarts_the_exact_wait() {
+        let (port, h, _actor, session) = ready_future_timer_actor().await;
+        let before = port.lock().defaults_applied;
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        h.live(&session).await.unwrap();
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        // The external input replaces the old t=20 deadline with t=30.
+        tokio::time::sleep(Duration::from_secs(11)).await;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(port.lock().defaults_applied - before, 0, "t=21");
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(port.lock().defaults_applied - before, 0, "t=29");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(port.lock().defaults_applied - before, 1, "t=31");
     }
 
     struct PanickingQuota;

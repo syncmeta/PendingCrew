@@ -319,7 +319,25 @@ async fn similar_requirements_tick_exposes_only_current_scoped_human_review() {
     assert_eq!(row["firstId"], pair[0]);
     assert_eq!(row["secondId"], pair[1]);
     assert_eq!(row["probability"], 0.91);
-    assert_eq!(row.as_object().unwrap().len(), 4);
+    assert_eq!(
+        row.as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "candidateRevision",
+            "channelId",
+            "firstId",
+            "observedAtMs",
+            "probability",
+            "reviewRevision",
+            "secondId",
+        ]
+    );
+    assert_eq!(row["channelId"], format!("{}/lobby", f.crew));
+    assert!(!row["candidateRevision"].as_str().unwrap().is_empty());
+    assert!(!row["reviewRevision"].as_str().unwrap().is_empty());
     let captured = fake.requests();
     assert_eq!(captured.len(), 1);
     let body = String::from_utf8_lossy(&captured[0].body);

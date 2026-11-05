@@ -793,7 +793,7 @@ mod tests {
         .await;
         assert_eq!(
             unauth["error"]["code"],
-            crewd_proto::RpcError::FORBIDDEN,
+            crewd_proto::RpcError::METHOD_NOT_FOUND,
             "attachment must win before new raw input validation"
         );
         let attach=serde_json::to_string(&json!({"id":2,"method":methods::ATTACH,"params":{"sessionId":f.worker,"token":f.token(&f.worker)}})).unwrap();

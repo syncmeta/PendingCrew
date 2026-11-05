@@ -325,6 +325,9 @@ async fn healthy_stopped_and_attached_human_channel_cannot_claim_loss() {
     let mut human = RpcClient::connect(&socket).await;
     let mut worker = attach(&r.f, &socket, &r.f.worker).await;
     let p = lost_plan(&r, &mut human).await;
+    // Hold the actor's periodic patrol at an actual mailbox boundary while
+    // comparing every durable table around these rejected database-only calls.
+    let paused = r.h.pause_for_test().await.unwrap();
     let before = snapshot(&r.f).await;
     let err = call(&mut human, "work.reassignLost", reassign(&p, &r.owner))
         .await
@@ -347,6 +350,7 @@ async fn healthy_stopped_and_attached_human_channel_cannot_claim_loss() {
     let denied=rpc(&mut worker,"agent.call",json!({"tool":"work_item_reassign_lost","args":{"id":p["id"],"expected_revision":p["revision"],"owner":r.owner,"note":"worker cannot use privileged loss reassignment"}})).await;
     assert_eq!(denied["isError"], true);
     assert_eq!(snapshot(&r.f).await, before);
+    drop(paused);
     close_socket(task, stop).await;
     r.close().await;
 }

@@ -151,6 +151,22 @@ async fn view(f: &Fixture, id: &str) -> serde_json::Value {
         .unwrap()
         .unwrap()
 }
+async fn answered_view(f: &Fixture, id: &str) -> serde_json::Value {
+    // The periodic runtime may claim the source before the explicit call. The
+    // caller then observes the peer's durable result, rather than assuming the
+    // returned call waited for a request owned by another task.
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            let current = view(f, id).await;
+            if current["decisionRecord"]["phase"] == "answered" {
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the original judgment must reach its durable answered phase")
+}
 async fn counts(f: &Fixture) -> (i64, i64) {
     f.state
         .db
@@ -446,7 +462,7 @@ async fn first_explicit_configuration_can_judge_preexisting_unconfigured_case() 
         .run_admin_case(f.crew.clone(), source.id.clone(), true)
         .await
         .unwrap();
-    let after = view(&f, &source.id).await;
+    let after = answered_view(&f, &source.id).await;
     assert_eq!(
         after["decisionRecord"]["phase"], "answered",
         "first legal provider configuration must not strand original case: before={before}; after={after}"
@@ -476,6 +492,7 @@ async fn provider_receives_only_scoped_summary_without_foreign_text_or_private_i
         .run_admin_case(f.crew.clone(), source.id.clone(), true)
         .await
         .unwrap();
+    answered_view(&f, &source.id).await;
     let requests = fake.requests();
     assert_eq!(requests.len(), 1);
     let body = String::from_utf8(requests[0].body.clone()).unwrap();

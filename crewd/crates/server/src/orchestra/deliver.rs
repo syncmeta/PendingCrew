@@ -3864,7 +3864,7 @@ mod tests {
     const MSG1: &str = "msg:c1/lobby#1";
 
     #[tokio::test]
-    async fn wake_list_and_try_deliver_agree_on_a_running_target() {
+    async fn wake_list_and_try_deliver_agree_on_a_working_target() {
         // 忙。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
@@ -3872,6 +3872,10 @@ mod tests {
         rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
             .await;
         agrees(&mut rig, "w1", MSG1, "working").await;
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_a_pending_decision() {
         // 卡在待决策框上。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
@@ -3887,6 +3891,10 @@ mod tests {
         rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
             .await;
         agrees(&mut rig, "w1", MSG1, "decision").await;
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_an_inflight_delivery() {
         // 上一笔还没回执。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
@@ -3903,6 +3911,10 @@ mod tests {
             "近况：在途的那一批"
         );
         assert!(t.delivery_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_a_quota_block() {
         // 额度类 health、额度唤醒没到点。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
@@ -3914,6 +3926,10 @@ mod tests {
         rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
             .await;
         agrees(&mut rig, "w1", MSG1, "quota").await;
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_required_auth() {
         // 要登录。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
@@ -3925,6 +3941,10 @@ mod tests {
         rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
             .await;
         agrees(&mut rig, "w1", MSG1, "auth_required").await;
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_a_stopping_target() {
         // crewd 正在叫停它。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
@@ -3932,6 +3952,10 @@ mod tests {
         rig.post(LOBBY, Rig::sender("cap"), at("w1"), "合成甲")
             .await;
         agrees(&mut rig, "w1", MSG1, "stopping").await;
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_on_a_future_timer() {
         // 明天的定时。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;
@@ -3946,6 +3970,10 @@ mod tests {
         };
         rig.port.enqueue(w).await.unwrap();
         agrees(&mut rig, "w1", "timer:明天", "not_due").await;
+    }
+
+    #[tokio::test]
+    async fn wake_list_and_try_deliver_agree_during_shutdown() {
         // 停机中。
         let mut rig = Rig::new().await;
         crew_with(&mut rig, &["w1"], &["w1"]).await;

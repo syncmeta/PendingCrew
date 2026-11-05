@@ -3613,6 +3613,13 @@ mod tests {
         })
         .await;
         rig.handle.resume("w-1", Origin::Human).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !rig.handle.live("w-1").await.unwrap().running {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the real executor must launch before driver events are emitted");
         for _ in 0..2 {
             rig.exec.emit(
                 "w-1",

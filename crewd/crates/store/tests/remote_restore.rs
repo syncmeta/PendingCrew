@@ -106,7 +106,7 @@ fn restoring_an_active_backup_does_not_revive_revoked_remote_trust() {
 }
 
 #[test]
-fn failed_trust_invalidation_keeps_backup_and_aside_without_creating_empty_live_db() {
+fn failed_trust_invalidation_preserves_the_existing_live_db_before_publication() {
     let root = tempfile::tempdir().unwrap().keep();
     eprintln!("Restore fault evidence: {}", root.display());
     let data = root.join("data");
@@ -125,7 +125,15 @@ fn failed_trust_invalidation_keeps_backup_and_aside_without_creating_empty_live_
     let snapshot = root.join("fault-backup.db");
     backup::backup_db(&db, &snapshot).unwrap();
     let original = std::fs::read(&snapshot).unwrap();
+    store
+        .conn()
+        .execute(
+            "INSERT INTO meta(key,value) VALUES('restore-test-live-only','kept')",
+            [],
+        )
+        .unwrap();
     drop(store);
+    let live_before = std::fs::read(&db).unwrap();
     let error = backup::restore(&data, &snapshot).unwrap_err();
     assert!(
         error
@@ -133,28 +141,31 @@ fn failed_trust_invalidation_keeps_backup_and_aside_without_creating_empty_live_
             .contains("synthetic restore trust audit failure")
     );
     assert_eq!(std::fs::read(&snapshot).unwrap(), original);
-    assert!(
-        !db.exists(),
-        "a failing trust transformation must never install an active backup"
+    assert_eq!(
+        std::fs::read(&db).unwrap(),
+        live_before,
+        "a failing staged trust transformation must not replace the active database"
     );
-    // A replaced file is recovery evidence, not a claim that live DB stayed in place.
-    let aside = std::fs::read_dir(&data)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .find(|p| {
-            let name = p.file_name().unwrap().to_string_lossy();
-            name.starts_with("crewd.db.replaced-")
-                && !name.ends_with("-wal")
-                && !name.ends_with("-shm")
-        })
-        .expect("original database must remain recoverable");
-    assert!(aside.is_file());
-    assert!(matches!(
-        Store::open_data_dir(&data),
-        Err(crewd_store::StoreError::DbMissing { .. })
-    ));
     assert!(
-        !db.exists(),
-        "reopen must refuse rather than silently create an empty library"
+        std::fs::read_dir(&data)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .all(|p| {
+                let name = p.file_name().unwrap().to_string_lossy();
+                !name.starts_with("crewd.db.replaced-")
+            }),
+        "failed private transformation must not move the original database aside"
+    );
+    let live = Store::open_data_dir(&data).unwrap();
+    assert_eq!(
+        meta_get(live.conn(), "restore-test-live-only")
+            .unwrap()
+            .as_deref(),
+        Some("kept"),
+        "reopen must retain live-only facts absent from the backup"
+    );
+    assert_eq!(
+        remote::identity(live.conn()).unwrap().unwrap().authority_id,
+        identity.authority_id
     );
 }

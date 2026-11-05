@@ -1788,20 +1788,50 @@ mod tests {
             values.sort();
             values
         };
+        let persistent = json!([
+            "adminCase.automaticExecution",
+            "adminCase.custodyGet",
+            "adminCase.custodyPropose",
+            "adminCase.custodyTransferGet",
+            "adminCase.effects",
+            "adminCase.humanBrief",
+            "adminCase.legacyConfirm",
+            "adminCase.legacyGet",
+            "adminCase.legacyList",
+            "adminCase.legacyPreview",
+            "adminCase.legacyReceipt",
+            "adminCase.legacyRecovery",
+            "adminCase.requirementReview",
+            "adminCase.requirementReviews",
+            "adminCase.similarRequirements",
+            "adminCase.workDuplicateClose",
+            "adminCase.workDuplicateHistory",
+            "adminCase.workDuplicates",
+            "ask.inboxSchedule",
+            "ask.resolve",
+            "ask.resolveCheck",
+            "channelWork",
+            "documents",
+            "hostDirectoryBrowse",
+            "hostQuota",
+            "message.attribution.history",
+            "message.deliveryExplain",
+            "todo.createLookup",
+            "todo.ruleClose",
+            "todo.rulingCheck",
+            "todo.rulingResult",
+            "viewFolders",
+            "work.channelResponsibility",
+            "work.closeWithReceipt",
+            "work.reassignLost",
+        ]);
         let st = state();
         let v = hello(&st, Value::Null).await.unwrap();
         assert_eq!(v["apiVersion"], 3);
         assert_eq!(v["minApiVersion"], crewd_proto::MIN_API_VERSION);
         assert_eq!(
             sorted(&v["capabilities"]),
-            sorted(&json!([
-                "work.reassignLost",
-                "documents",
-                "viewFolders",
-                "channelWork",
-                "hostDirectoryBrowse",
-                "hostQuota"
-            ])),
+            sorted(&persistent),
             "持久工作能力不要求编排"
         );
         let build = &v["build"];
@@ -1816,9 +1846,9 @@ mod tests {
         let st = state();
         assert!(st.orchestra.set(h).is_ok());
         let v = hello(&st, json!({})).await.unwrap();
-        assert_eq!(
-            sorted(&v["capabilities"]),
-            sorted(&json!([
+        let mut expected = persistent.clone();
+        expected.as_array_mut().unwrap().extend(
+            [
                 "orchestra",
                 "session.answer",
                 "session.respondRunnerRequest",
@@ -1827,14 +1857,10 @@ mod tests {
                 "wake.explain",
                 "message.receipts",
                 "settings",
-                "work.reassignLost",
-                "documents",
-                "viewFolders",
-                "channelWork",
-                "hostDirectoryBrowse",
-                "hostQuota"
-            ]))
+            ]
+            .map(Value::from),
         );
+        assert_eq!(sorted(&v["capabilities"]), sorted(&expected));
     }
 
     /// U1：太老的客户端被拒（-32009 + 码）；比 crewd 新的照收；hello 收未知字段（以后的客户端在这里加东西）。
