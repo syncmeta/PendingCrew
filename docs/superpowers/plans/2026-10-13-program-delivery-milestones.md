@@ -13,6 +13,10 @@
 
 0.2.5 附票整包已通过私有环境的正式交换和回退。新建的隔离数据由准确的 Core 21 写入，再用签名整包启动 Core 22，并恢复升级前的整包和数据库。两版均读回原消息回执、待办、工作和知识内容，数据库身份一致。升级后新增的回执仅保留于封存的 Core 22 副本。三次错应用路径拒绝和两版票据、Gatekeeper 检查通过，见 `/private/tmp/pcw-025-official-swap.2hkx8rvd/result.json`。
 
+`ead879a2` 按原设计 §24 接通全组织「待人类处理 → 稍后」。人类可把原问题放入稍后列表，提前恢复，或等后台持久确认到期。默认约一小时，受后台既有最早期限限制。答复、撤回、默认处理和工作卡点继续使用原账本。普通 Core 用受控执行器从真实 Agent 工具创建问题，实测错机组拒绝、重复提交只返回原回执、提前恢复和未读答复后重启。到期事件回到人类收件箱，原问题、默认方案、工作事件、消息和唤醒数一致。见 `/private/tmp/pcw-ask-inbox.g9b1io1p/result.json`。
+
+暂缓的显示和刷新仅对当前有权限的人类连接开放。实际配对测试通过原回执、重启、提前恢复和撤权。附着连接拒绝暂缓提交且收不到暂缓字段或刷新事件。时钟回拨、正式恢复、远程和 Jev 设置变更、机组永久删除回归通过。普通后台打印的协议与仓库定义一致。Mac Debug 私有预览和 iPhoneOS arm64 Debug 完整构建通过，见 `/private/tmp/pcw-ask-inbox-integration.Axl87BDQ/mac-debug-preview/candidate.json` 和 `/private/tmp/pcw-ask-inbox-integration.Axl87BDQ/ios-debug-proof.json`。
+
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
 早先 `2ef0998d` 的隔离升级及回滚也通过，Apple 回执为 `09351a3b-b20d-40e9-91fe-00c5a40eeff2`。`945cd2c6`（0.2.3，构建 `20761.65326`）通过 Apple 公证、票据及 Gatekeeper 检查，回执为 `59254362-f660-49e3-ba3c-61f331ddfddc`。首条回复的后续修正在 `9a5a6a08`。
