@@ -9,6 +9,8 @@
 | 文档数据 | 原文档编辑、搜索、恢复、回收站及待办双向链接已联调。原生端新增同机组内容块编排，可引用指定版本、排序、移除，并从历史恢复排列。实际普通 Core 与 Swift 数据层验证两份文档引用同一块，原块更新后引用仍固定在原版本。丢回执后，后台重启且文档已有后续编辑，客户端仍只查原请求及其确切版本。恢复保留后续标题和工作关联。组合 Mac Debug 编译通过。 | 从正式窗口验收文档编排和待办的双向操作，以及移动端共享入口。 |
 | iOS 与跨端 | `1aaf0876` 普通 iPhoneOS arm64 Debug 完整编译通过，与已验证的 Mac 预览同源，覆盖共享的裁决和待办恢复代码。iPhone、iPad 目标和实际 Swift 调试动态库均已核对。早先 `09ac03f5` 已用 macOS 原生传输与 `0947711d` Core 验证短链接配对、原授权回执、重连查原巡检和撤权。最近一次读取手机 PendingCrew 版本时设备明确返回锁屏。 | 真机的应用配对、读取、答复及恢复待设备解锁后独立验收。 |
 
+`d277ff08` 的 macOS Release 候选为 0.2.6，构建 `20762.03663`。Apple 公证 `82497b74-3c58-4bf0-ba82-87a7deef4bc2` 为 Accepted，开发者日志与送审 ZIP 摘要一致，记录零问题。附票 ZIP 重新解包后通过严格签名、票据和 Gatekeeper 检查，SHA-256 为 `ac39e1568e2200d6382662e4eef418ebdde7fe3fafb6ffdb083704b618920d1d`。应用包中同源签名后台实际退出并重开，按原 UUID 查回工作关闭回执，依赖解除和唤醒各发生一次，见 `/private/tmp/pcw-work-close.3eu_04nd/result.json`。本次交付为私有附票 ZIP，整包交换、正式窗口和公开交付分别验收。包和验证记录在 `/private/tmp/pcw-026-notary.MfVAmo9V/notarized-output/`。
+
 `46e6d630` 的私有 macOS Release 候选为 0.2.5，构建 `20761.84498`。Apple 回执 `c69d8e6f-311a-4af1-bdbc-b1e7a561367a` 为 Accepted，开发者日志与送审摘要一致，记录零问题。附票 ZIP 重新解包后通过严格签名、公证票据及 Gatekeeper 检查，SHA-256 为 `8cdbf7422a1680393c86345496d2048e51494e565be95db32f1ba576e75773e7`。同一签名后台两次启动并正常退出，读回全部 24 条人工归属纠正，原消息和判断保持一致。公证与后台复验分别见 `/private/tmp/pcw-025-notary.PyE84P9r/notarized-output/notarization-proof.json` 和 `/private/tmp/pcw-attr.g35xwl20/result.json`。此候选供手动安装，整包升级、正式窗口与公开交付分别验收。
 
 0.2.5 附票整包已通过私有环境的正式交换和回退。新建的隔离数据由准确的 Core 21 写入，再用签名整包启动 Core 22，并恢复升级前的整包和数据库。两版均读回原消息回执、待办、工作和知识内容，数据库身份一致。升级后新增的回执仅保留于封存的 Core 22 副本。三次错应用路径拒绝和两版票据、Gatekeeper 检查通过，见 `/private/tmp/pcw-025-official-swap.2hkx8rvd/result.json`。
