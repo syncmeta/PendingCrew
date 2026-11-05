@@ -129,6 +129,12 @@ pub fn origin(c: &Connection, decision_id: &str) -> Result<Option<View>> {
     db::read_decision(c, number(decision_id, 'D', "decisionId")?).map_err(Into::into)
 }
 
+/// Raw Ask answers accept the same historical aliases as the existing ledger.
+pub fn answer_is_structured(c: &Connection, crew: &str, ask: &str) -> Result<bool> {
+    let reference = asks::ask_reference(c, crew, ask)?;
+    Ok(db::read_ask(c, reference.number)?.is_some())
+}
+
 pub fn reply_is_structured(c: &Connection, channel: &str, reply: &str) -> Result<bool> {
     let answering = crate::messages::resolve_reply(c, &Sender::Human, channel, reply)?.answering;
     match answering {
@@ -589,7 +595,12 @@ mod tests {
                 &asks::public_ask(tx.conn(), core)?.id(),
             )
         });
-        s.conn().execute_batch("DROP TABLE decision_ask_open_receipts; DROP TABLE decision_asks; PRAGMA user_version=25;").unwrap();
+        s.conn().execute_batch(
+            "DROP TABLE public_command_purge_tombstones;
+             DROP TABLE decision_ask_open_receipts;
+             DROP TABLE decision_asks;
+             PRAGMA user_version=25;",
+        ).unwrap();
         drop(s);
         let s = Store::open_data_dir(dir.path()).unwrap();
         assert_eq!(

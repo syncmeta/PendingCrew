@@ -132,6 +132,15 @@ pub fn reserve(
         return Err(invalid("public command principal invalid"));
     }
     let (payload, hash) = input(p)?;
+    let retired: bool = c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM public_command_purge_tombstones
+          WHERE principal=?1 AND request_id=?2 AND db_id=?3)",
+        params![principal, p.request_id, p.db_id],
+        |r| r.get(0),
+    )?;
+    if retired {
+        return Err(invalid("public command immutable payload conflict"));
+    }
     if let Some(old) = lookup(c, principal, &p.db_id, &p.request_id)? {
         if old.payload_sha256 != hash
             || old.command != p.command
@@ -159,6 +168,47 @@ pub fn reserve(
             .ok_or_else(|| invalid("reserved public command missing"))?,
     ))
 }
+/// Remove structured question receipts whose authoritative owner or source
+/// channel is being purged. Keep only their request identity to fence replay.
+pub fn retire_purged_decision_asks(c: &Connection, crew: &str) -> Result<()> {
+    if c.is_autocommit() {
+        return Err(invalid("public command retirement requires a purge transaction"));
+    }
+    let retired = c.execute(
+        "INSERT INTO public_command_purge_tombstones(principal,request_id,db_id)
+         SELECT r.principal,r.request_id,r.db_id
+         FROM public_command_receipts r
+         JOIN decision_asks q ON q.crew_id=?1
+             AND json_extract(r.payload_json,'$.params.crewId')=q.crew_id
+             AND json_extract(r.payload_json,'$.params.ask')='H'||q.ask_number
+         JOIN object_refs h ON h.number=q.ask_number AND h.crew_id=q.crew_id AND h.kind='human_task'
+         WHERE r.operation='ask.resolve' AND json_extract(r.payload_json,'$.operation')=r.operation
+         UNION
+         SELECT r.principal,r.request_id,r.db_id
+         FROM public_command_receipts r
+         JOIN channels ch ON ch.crew_id=?1 AND ch.kind='human'
+             AND json_extract(r.payload_json,'$.params.channelId')=ch.id
+         JOIN messages announcement ON announcement.id=json_extract(r.payload_json,'$.params.inReplyTo')
+             AND announcement.channel_id=ch.id AND announcement.category='ask'
+         JOIN ask_meta a ON a.message_id=announcement.id
+         JOIN object_refs h ON h.crew_id=a.crew_id AND h.kind='human_task'
+             AND h.source_id=CASE WHEN substr(a.ask,1,length('organization:'))='organization:' THEN a.ask ELSE 'work:'||a.ask END
+         JOIN decision_asks q ON q.ask_number=h.number AND q.crew_id=h.crew_id
+         WHERE r.operation='message.post' AND json_extract(r.payload_json,'$.operation')=r.operation",
+        [crew],
+    )?;
+    if retired == 0 {
+        return Ok(());
+    }
+    c.execute(
+        "DELETE FROM public_command_receipts
+         WHERE (principal,request_id,db_id) IN
+             (SELECT principal,request_id,db_id FROM public_command_purge_tombstones)",
+        [],
+    )?;
+    Ok(())
+}
+
 /// A compare-and-set transition settles only the exact previous obligation.
 /// Unknown/suppressed/historical receipts never enter a dispatch phase again.
 pub fn transition(

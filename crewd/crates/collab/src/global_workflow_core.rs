@@ -407,11 +407,7 @@ fn legacy_ask_wake_preserves_receipt_source_and_renders_its_original_question() 
             },
         )
     });
-    {
-        let tx = s.conn().unchecked_transaction().unwrap();
-        authority::migrate_in_tx(&tx, "t").unwrap();
-        tx.commit().unwrap();
-    }
+    crewd_store::schema::migrate(s.conn()).unwrap();
     let rows = crate::wakes::due_for(s.conn(), "w-a1", NOW).unwrap();
     assert_eq!(rows[0].source, "ask:crew-a/H1");
     assert_eq!(rows[0].attempts, 0);

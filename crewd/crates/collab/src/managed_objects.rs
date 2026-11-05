@@ -904,7 +904,8 @@ mod tests {
         let s = Store::open_data_dir(dir.path()).unwrap();
         s.conn()
             .execute_batch(
-                "DROP TABLE decision_ask_open_receipts;
+                "DROP TABLE public_command_purge_tombstones;
+             DROP TABLE decision_ask_open_receipts;
              DROP TABLE decision_asks;
              DROP TABLE managed_lessons;
              DROP TABLE managed_risks;

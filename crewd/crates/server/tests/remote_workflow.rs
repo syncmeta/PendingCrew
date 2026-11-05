@@ -507,6 +507,7 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
                 "original Withdraw fixture",
                 "original revoked fixture",
                 "original legacy reply fixture",
+                "original legacy lowercase fixture",
             ]
             .into_iter()
             .map(|question| {
@@ -676,6 +677,12 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
         .await;
     assert_eq!(answered["state"], "answered");
     assert_eq!(answered["answer"], reply["text"]);
+    let legacy_answer = remote.call("ask.answer", json!({
+        "crewId":crew,"ask":questions[4].ask.to_ascii_lowercase(),"text":"Legacy direct answer"
+    })).await;
+    assert_eq!(legacy_answer["ask"], questions[4].ask);
+    assert_eq!(legacy_answer["state"], "answered");
+    assert_eq!(legacy_answer["answer"], "Legacy direct answer");
     let revoked = resolve_packet(
         &hello,
         &checks[2],

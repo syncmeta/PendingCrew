@@ -811,6 +811,7 @@ pub fn check_purgeable(conn: &Connection, id: &str) -> Result<()> {
 /// 别的机组群里的成员 / 群主身份先交出去（`release_sessions_of_doomed_crew`）。
 pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     check_purgeable(tx.conn(), id)?;
+    crewd_store::command_receipts::retire_purged_decision_asks(tx.conn(), id)?;
     let kids = children(tx.conn(), id)?;
     // 只有这一个父的子机组删后没有父了：按原先的次序排到顶层末尾（C1）。
     let mut orphans = Vec::new();
@@ -3276,6 +3277,216 @@ mod tests {
         crewd_store::meta_set(s.conn(), "agent.turn.unrelated", "untouched").unwrap();
         ok(&mut s, |tx| archive(tx, "crew-x"));
         (s, doomed.id, foreign.id, doomed_dm.id, foreign_dm.id)
+    }
+
+    #[test]
+    fn purge_retires_exact_structured_ask_receipts_and_keeps_parent_history() {
+        use crate::{Sender, asks, decision_asks, managed_objects, messages};
+        use crewd_proto::{
+            Ask, AskResolutionDisposition, AskResolutionParams, MessagePostParams,
+            commands::{CommandPhase, CommandSubmitParams, PublicCommand},
+            decision_asks::{Draft, Open, OptionDraft},
+            managed_objects::DecisionAbout,
+        };
+        use crewd_store::{Store, command_receipts as receipts};
+
+        const PRINCIPAL: &str = "local-fixture-owner";
+        fn open_question(s: &mut Store, session: &str, crew: &str) -> Ask {
+            let scope = managed_objects::scope(s.conn()).unwrap();
+            ok(s, |tx| {
+                let (receipt, _) = decision_asks::open(
+                    tx,
+                    session,
+                    Open {
+                        scope,
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        draft: Draft {
+                            question: "Which choice?".into(),
+                            context: "Synthetic publication.".into(),
+                            options: vec![
+                                OptionDraft {
+                                    label: "First".into(),
+                                },
+                                OptionDraft {
+                                    label: "Second".into(),
+                                },
+                            ],
+                            about: vec![DecisionAbout::Crew { id: crew.into() }],
+                            default: None,
+                            reversibility: None,
+                        },
+                    },
+                )?;
+                asks::get(tx.conn(), crew, &receipt.opened.ask)
+            })
+        }
+
+        fn commit(s: &mut Store, command: PublicCommand) -> CommandSubmitParams {
+            let request = CommandSubmitParams {
+                request_id: uuid::Uuid::new_v4().to_string(),
+                db_id: crewd_store::meta_get(s.conn(), "dbId").unwrap().unwrap(),
+                runtime_binding_id: uuid::Uuid::new_v4().to_string(),
+                command,
+            };
+            ok(s, |tx| {
+                assert!(matches!(
+                    receipts::reserve(tx.conn(), PRINCIPAL, &request, &tx.now_ts())?,
+                    receipts::Reserved::New(_)
+                ));
+                let result = match request.command.clone() {
+                    PublicCommand::AskResolve(p) => {
+                        serde_json::to_value(crate::ask_resolution::resolve(tx, p)?)
+                    }
+                    PublicCommand::MessagePost(p) => serde_json::to_value(
+                        messages::post(
+                            tx,
+                            Sender::Human,
+                            messages::NewPost {
+                                channel_id: p.channel_id,
+                                text: p.text,
+                                in_reply_to: p.in_reply_to,
+                                ..Default::default()
+                            },
+                        )?
+                        .message,
+                    ),
+                    _ => unreachable!(),
+                }
+                .map_err(crewd_store::StoreError::from)?;
+                receipts::transition(
+                    tx.conn(),
+                    PRINCIPAL,
+                    &request.db_id,
+                    &request.request_id,
+                    (CommandPhase::Reserved, CommandPhase::Committed),
+                    Some(&result),
+                    &tx.now_ts(),
+                )?;
+                Ok(())
+            });
+            request
+        }
+
+        fn answer(s: &mut Store, ask: &Ask, text: &str) -> CommandSubmitParams {
+            let revision = crate::ask_resolution::check(s.conn(), &ask.crew_id, &ask.ask, NOW)
+                .unwrap()
+                .resolution_revision
+                .unwrap();
+            commit(
+                s,
+                PublicCommand::AskResolve(AskResolutionParams {
+                    crew_id: ask.crew_id.clone(),
+                    ask: ask.ask.clone(),
+                    expected_resolution_revision: revision,
+                    disposition: AskResolutionDisposition::Answer,
+                    text: text.into(),
+                }),
+            )
+        }
+
+        fn reply(s: &mut Store, ask: &Ask, channel: &str) -> CommandSubmitParams {
+            commit(
+                s,
+                PublicCommand::MessagePost(MessagePostParams {
+                    channel_id: channel.into(),
+                    in_reply_to: ask.message_id.clone(),
+                    text: "A".into(),
+                    mentions: vec![],
+                    attachments: vec![],
+                }),
+            )
+        }
+
+        let mut s = store();
+        let doomed_direct_h = open_question(&mut s, "cap-x", "crew-x");
+        let doomed_group_h = open_question(&mut s, "cap-x", "crew-x");
+        let child_direct_h = open_question(&mut s, "w-b1", "crew-b");
+        let child_group_h = open_question(&mut s, "w-b1", "crew-b");
+        let ordinary_h = ok(&mut s, |tx| {
+            asks::open(
+                tx,
+                "cap-x",
+                asks::OpenAsk {
+                    question: "Ordinary question".into(),
+                    default: None,
+                    resume_note: None,
+                },
+            )
+        });
+        let doomed_direct = answer(&mut s, &doomed_direct_h, "A\nDoomed direct reason");
+        let doomed_group = reply(&mut s, &doomed_group_h, "crew-x/human");
+        let child_direct = answer(&mut s, &child_direct_h, "A");
+        let child_group = reply(&mut s, &child_group_h, "crew-a/human");
+        let ordinary = answer(&mut s, &ordinary_h, "Ordinary free answer");
+        let unrelated = commit(
+            &mut s,
+            PublicCommand::MessagePost(MessagePostParams {
+                channel_id: "crew-x/human".into(),
+                in_reply_to: None,
+                text: "Unrelated message".into(),
+                mentions: vec![],
+                attachments: vec![],
+            }),
+        );
+        let read = |s: &Store, p: &CommandSubmitParams| {
+            receipts::lookup(s.conn(), PRINCIPAL, &p.db_id, &p.request_id).unwrap()
+        };
+        let keep = [&child_group, &ordinary, &unrelated].map(|p| read(&s, p).unwrap());
+
+        ok(&mut s, |tx| archive(tx, "crew-x"));
+        assert!(read(&s, &doomed_direct).is_some());
+        s.conn()
+            .execute_batch(
+                "CREATE TRIGGER fail_structured_purge BEFORE DELETE ON crews
+            WHEN OLD.id='crew-x' BEGIN SELECT RAISE(ABORT,'synthetic purge fault'); END;",
+            )
+            .unwrap();
+        assert!(crate::run(&mut s, NOW, |tx| purge(tx, "crew-x")).is_err());
+        assert!(read(&s, &doomed_direct).is_some() && read(&s, &doomed_group).is_some());
+        assert_eq!(
+            count(&s, "SELECT count(*) FROM public_command_purge_tombstones"),
+            0
+        );
+        s.conn()
+            .execute_batch("DROP TRIGGER fail_structured_purge")
+            .unwrap();
+        ok(&mut s, |tx| purge(tx, "crew-x"));
+
+        ok(&mut s, |tx| archive(tx, "crew-b"));
+        ok(&mut s, |tx| purge(tx, "crew-b"));
+        for purged in [&doomed_direct, &doomed_group, &child_direct] {
+            assert!(read(&s, purged).is_none());
+            assert_eq!(
+                s.conn()
+                    .query_row(
+                        "SELECT count(*) FROM public_command_receipts WHERE request_id=?1",
+                        [&purged.request_id],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                0
+            );
+            assert!(
+                matches!(receipts::reserve(s.conn(), PRINCIPAL, purged, "after purge"),
+                Err(crewd_store::StoreError::Invalid(reason)) if reason == "public command immutable payload conflict")
+            );
+            let different = CommandSubmitParams {
+                command: unrelated.command.clone(),
+                ..purged.clone()
+            };
+            assert!(
+                matches!(receipts::reserve(s.conn(), PRINCIPAL, &different, "after purge"),
+                Err(crewd_store::StoreError::Invalid(reason)) if reason == "public command immutable payload conflict")
+            );
+        }
+        assert_eq!(
+            count(&s, "SELECT count(*) FROM public_command_purge_tombstones"),
+            3
+        );
+        assert_eq!(
+            [&child_group, &ordinary, &unrelated].map(|p| read(&s, p).unwrap()),
+            keep
+        );
     }
 
     #[test]

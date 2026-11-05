@@ -190,7 +190,7 @@ fn unknown_id(crew: &str, id: impl std::fmt::Display) -> CollabError {
     )
 }
 
-fn ask_reference(
+pub(crate) fn ask_reference(
     conn: &Connection,
     crew: &str,
     ask: &str,

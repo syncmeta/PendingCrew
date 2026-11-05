@@ -33,6 +33,12 @@ CREATE TABLE decision_ask_open_receipts (
     receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json) AND json_type(receipt_json)='object'),
     PRIMARY KEY(crew_id,session_id,request_id)
 ) WITHOUT ROWID;
+CREATE TABLE public_command_purge_tombstones (
+    principal TEXT NOT NULL CHECK(length(principal) BETWEEN 1 AND 512),
+    request_id TEXT NOT NULL,
+    db_id TEXT NOT NULL,
+    PRIMARY KEY(principal,request_id,db_id)
+);
 "#;
 
 const IDS: [&str; 8] = ["A", "B", "C", "D", "E", "F", "G", "H"];
