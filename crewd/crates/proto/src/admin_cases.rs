@@ -218,7 +218,11 @@ pub struct AdminCaseEffect {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "lowercase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AdminCaseEffectAction {
     Closed {
         closure_kind: crate::WorkClosureKind,

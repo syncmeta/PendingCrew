@@ -247,16 +247,24 @@ async fn public_pairing_actual_tls_work_flow_and_online_revoke() {
     );
     let created = remote.call("crew.create",json!({"title":"Remote-owned synthetic crew","workingDirectory":root.join("work").to_str().unwrap()})).await;
     let crew = created["id"].as_str().unwrap();
-    let missing_effect_report = remote.frame(
-        crewd_proto::admin_cases::EFFECTS,
-        json!({"crewId":crew,"id":"AC00000000000000000001"}),
-    ).await.unwrap();
+    let missing_effect_report = remote
+        .frame(
+            crewd_proto::admin_cases::EFFECTS,
+            json!({"crewId":crew,"id":"AC00000000000000000001"}),
+        )
+        .await
+        .unwrap();
     assert_eq!(
         missing_effect_report["error"]["code"],
         crewd_proto::RpcError::INVALID_PARAMS,
         "paired Human reaches the case lookup through the current grant"
     );
-    let brief = remote.call(crewd_proto::admin_cases::HUMAN_BRIEF, json!({"crewId":crew})).await;
+    let brief = remote
+        .call(
+            crewd_proto::admin_cases::HUMAN_BRIEF,
+            json!({"crewId":crew}),
+        )
+        .await;
     assert_eq!(brief["crewId"], crew);
     assert_eq!(brief["humanWaits"], json!([]));
     // Paired Human access reaches the same passive lookup as the local UI.
@@ -375,7 +383,10 @@ async fn service_with(root: &std::path::Path, options: crewd_server::ServeOption
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let owner = RpcClient::connect(&socket).await;
+    let mut owner = RpcClient::connect(&socket).await;
+    // The kernel socket can accept before persisted remote startup completes.
+    // A real dispatcher response proves initialization reached the accept loop.
+    local(&mut owner, "system.hello", json!({})).await;
     Service { owner, stop, task }
 }
 async fn stopped(service: Service) {
@@ -442,7 +453,9 @@ async fn approved(
 async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() {
     use crewd_collab::{asks, sessions};
     use crewd_proto::{
-        Role, commands::{ASK_INBOX_SCHEDULE, ASK_RESOLVE}, methods::ASK_RESOLVE_CHECK,
+        Role,
+        commands::{ASK_INBOX_SCHEDULE, ASK_RESOLVE},
+        methods::ASK_RESOLVE_CHECK,
     };
 
     fn schedule_packet(hello: &Value, checked: &Value, until: Option<i64>) -> Value {
@@ -554,7 +567,9 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
     }
     let until = crewd_store::now_ms() + 10 * 60_000;
     let defer = schedule_packet(&hello, &checks[2], Some(until));
-    remote.call("events.subscribe", json!({"topics":["ask"]})).await;
+    remote
+        .call("events.subscribe", json!({"topics":["ask"]}))
+        .await;
     let saved = remote.call("command.submit", defer.clone()).await;
     let event = match remote.events.pop() {
         Some(event) => event,
@@ -566,8 +581,12 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
     assert_eq!(saved["result"]["deferredUntilMs"], until);
     assert_eq!(remote.call("command.submit", defer.clone()).await, saved);
     let rows = remote.call("ask.list", json!({})).await;
-    let row = rows.as_array().unwrap().iter()
-        .find(|row| row["ask"]["ask"] == questions[2].ask).unwrap();
+    let row = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["ask"]["ask"] == questions[2].ask)
+        .unwrap();
     assert_eq!(row["ask"], serde_json::to_value(&questions[2]).unwrap());
     assert_eq!(row["deferredUntilMs"], until);
 
@@ -613,7 +632,10 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
     drop(remote);
     stopped(running).await;
     let mut running = service(dir.path()).await;
-    assert_eq!(local(&mut running.owner, "remote.status", json!({})).await["listening"], true);
+    assert_eq!(
+        local(&mut running.owner, "remote.status", json!({})).await["listening"],
+        true
+    );
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let hello = remote.call("system.hello", json!({})).await;
     let mut prior_answer = receipt.clone();
@@ -624,20 +646,35 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
         remote.call("command.lookup", lookup(&answer)).await,
         prior_answer
     );
-    assert_eq!(remote.call("command.lookup", lookup(&defer)).await, prior_schedule);
-    let scheduled = remote.call(
-        ASK_RESOLVE_CHECK, json!({"crewId":crew,"ask":questions[2].ask}),
-    ).await;
+    assert_eq!(
+        remote.call("command.lookup", lookup(&defer)).await,
+        prior_schedule
+    );
+    let scheduled = remote
+        .call(
+            ASK_RESOLVE_CHECK,
+            json!({"crewId":crew,"ask":questions[2].ask}),
+        )
+        .await;
     assert_eq!(scheduled["inbox"]["deferredUntilMs"], until);
     let clear = schedule_packet(&hello, &scheduled, None);
     let cleared = remote.call("command.submit", clear.clone()).await;
     assert_eq!(cleared["phase"], "committed");
     assert!(cleared["result"].get("deferredUntilMs").is_none());
-    assert_eq!(cleared["result"]["originalInboxRevision"], saved["result"]["inboxRevision"]);
-    assert_eq!(remote.call("command.lookup", lookup(&defer)).await, prior_schedule);
-    let current = remote.call(
-        ASK_RESOLVE_CHECK, json!({"crewId":crew,"ask":questions[2].ask}),
-    ).await;
+    assert_eq!(
+        cleared["result"]["originalInboxRevision"],
+        saved["result"]["inboxRevision"]
+    );
+    assert_eq!(
+        remote.call("command.lookup", lookup(&defer)).await,
+        prior_schedule
+    );
+    let current = remote
+        .call(
+            ASK_RESOLVE_CHECK,
+            json!({"crewId":crew,"ask":questions[2].ask}),
+        )
+        .await;
     assert!(current["inbox"].get("deferredUntilMs").is_none());
     let revoked_defer = schedule_packet(&hello, &current, Some(until));
     let resolved_check = remote
@@ -763,47 +800,84 @@ async fn paired_structured_ask_captures_direct_group_and_system_decisions() {
     let mut running = service(dir.path()).await;
     let (port, identity) = enabled(&mut running.owner).await;
     let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
-    let crew = local(&mut running.owner, "crew.create", json!({
-        "title":"Structured Ask fixture","workingDirectory":dir.path()
-    })).await["id"].as_str().unwrap().to_owned();
+    let crew = local(
+        &mut running.owner,
+        "crew.create",
+        json!({
+            "title":"Structured Ask fixture","workingDirectory":dir.path()
+        }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     stopped(running).await;
     let questions = {
         let now = crewd_store::now_ms();
         let mut store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
         let (questions, _) = crewd_collab::run(&mut store, now - 180_000, |tx| {
-            let worker = sessions::register(tx, sessions::NewSession {
-                crew_id: crew.clone(),
-                role: Role::Worker,
-                executor: "codex".into(),
-                title: Some("H fixture worker".into()),
-                ..Default::default()
-            })?;
+            let worker = sessions::register(
+                tx,
+                sessions::NewSession {
+                    crew_id: crew.clone(),
+                    role: Role::Worker,
+                    executor: "codex".into(),
+                    title: Some("H fixture worker".into()),
+                    ..Default::default()
+                },
+            )?;
             let scope = managed_objects::scope(tx.conn())?;
-            ["Automatic", "Direct", "Group", "Revoked"].into_iter().enumerate().map(|(index, name)| {
-                let (receipt, fresh) = domain::open(tx, &worker.id, Open {
-                    scope: scope.clone(),
-                    request_id: uuid::Uuid::new_v4().to_string(),
-                    draft: Draft {
-                        question: format!("{name} choice"),
-                        context: "Published decision context".into(),
-                        options: vec![OptionDraft { label: "First".into() }, OptionDraft { label: "Second".into() }],
-                        about: vec![DecisionAbout::Crew { id: crew.clone() }],
-                        default: (index == 0).then(|| DefaultChoice { option_id: "B".into(), after_minutes: 1 }),
-                        reversibility: None,
-                    },
-                })?;
-                assert!(fresh);
-                asks::get(tx.conn(), &crew, &receipt.opened.ask)
-            }).collect::<crewd_collab::Result<Vec<_>>>()
-        }).unwrap();
-        let (defaults, _) = crewd_collab::run(&mut store, now, asks::apply_all_due_defaults).unwrap();
+            ["Automatic", "Direct", "Group", "Revoked"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    let (receipt, fresh) = domain::open(
+                        tx,
+                        &worker.id,
+                        Open {
+                            scope: scope.clone(),
+                            request_id: uuid::Uuid::new_v4().to_string(),
+                            draft: Draft {
+                                question: format!("{name} choice"),
+                                context: "Published decision context".into(),
+                                options: vec![
+                                    OptionDraft {
+                                        label: "First".into(),
+                                    },
+                                    OptionDraft {
+                                        label: "Second".into(),
+                                    },
+                                ],
+                                about: vec![DecisionAbout::Crew { id: crew.clone() }],
+                                default: (index == 0).then(|| DefaultChoice {
+                                    option_id: "B".into(),
+                                    after_minutes: 1,
+                                }),
+                                reversibility: None,
+                            },
+                        },
+                    )?;
+                    assert!(fresh);
+                    asks::get(tx.conn(), &crew, &receipt.opened.ask)
+                })
+                .collect::<crewd_collab::Result<Vec<_>>>()
+        })
+        .unwrap();
+        let (defaults, _) =
+            crewd_collab::run(&mut store, now, asks::apply_all_due_defaults).unwrap();
         assert_eq!(defaults, [questions[0].ask.clone()]);
         questions
     };
     let mut running = service(dir.path()).await;
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let hello = remote.call("system.hello", json!({})).await;
-    assert!(hello["capabilities"].as_array().unwrap().iter().any(|cap| cap == CAPABILITY));
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == CAPABILITY)
+    );
     let key = |index: usize| json!({"crewId":crew,"ask":questions[index].ask});
 
     let defaulted = remote.call(GET, key(0)).await;
@@ -811,50 +885,110 @@ async fn paired_structured_ask_captures_direct_group_and_system_decisions() {
     assert_eq!(defaulted["capture"]["optionId"], "B");
     assert!(defaulted["capture"]["humanReason"].is_null());
     let default_id = &defaulted["capture"]["decisionId"];
-    assert!(remote.frame("managedObject.get", json!({"id":default_id})).await.unwrap()["error"].is_object());
-    assert_eq!(remote.call("managedObject.decisions", json!({})).await["items"], json!([]));
-    let default_object = remote.call("managedObject.get", json!({"id":default_id,"includeSystemDefaults":true})).await;
-    assert_eq!(default_object["decision"]["author"]["kind"], "systemDefault");
+    assert!(
+        remote
+            .frame("managedObject.get", json!({"id":default_id}))
+            .await
+            .unwrap()["error"]
+            .is_object()
+    );
+    assert_eq!(
+        remote.call("managedObject.decisions", json!({})).await["items"],
+        json!([])
+    );
+    let default_object = remote
+        .call(
+            "managedObject.get",
+            json!({"id":default_id,"includeSystemDefaults":true}),
+        )
+        .await;
+    assert_eq!(
+        default_object["decision"]["author"]["kind"],
+        "systemDefault"
+    );
     assert_eq!(default_object["decision"]["draft"]["choice"], "Second");
-    assert_eq!(remote.call(DECISION_ORIGIN, json!({"id":default_id})).await, defaulted);
+    assert_eq!(
+        remote.call(DECISION_ORIGIN, json!({"id":default_id})).await,
+        defaulted
+    );
 
     let checked = remote.call(ASK_RESOLVE_CHECK, key(1)).await;
-    let direct = draft_packet(&hello, ASK_RESOLVE, json!({
-        "crewId":crew,"ask":questions[1].ask,"expectedResolutionRevision":checked["resolutionRevision"],
-        "disposition":"answer","text":"A\nHuman reasoning"
-    }));
+    let direct = draft_packet(
+        &hello,
+        ASK_RESOLVE,
+        json!({
+            "crewId":crew,"ask":questions[1].ask,"expectedResolutionRevision":checked["resolutionRevision"],
+            "disposition":"answer","text":"A\nHuman reasoning"
+        }),
+    );
     let committed = remote.call("command.submit", direct.clone()).await;
     assert_eq!(remote.call("command.submit", direct).await, committed);
     let answered = remote.call(GET, key(1)).await;
     assert_eq!(answered["capture"]["source"], "human");
     assert_eq!(answered["capture"]["humanReason"], "Human reasoning");
-    assert_eq!(answered["capture"]["eventSeq"], committed["result"]["eventSeq"]);
+    assert_eq!(
+        answered["capture"]["eventSeq"],
+        committed["result"]["eventSeq"]
+    );
 
     let channel = crewd_store::channels::human_id(&crew);
-    let before = remote.call("message.list", json!({"channelId":channel})).await;
+    let before = remote
+        .call("message.list", json!({"channelId":channel}))
+        .await;
     let unstructured = remote.frame("message.post", json!({
         "channelId":channel,"inReplyTo":questions[2].message_id,"text":"Maybe the second one"
     })).await.unwrap();
     assert!(unstructured["error"].is_object());
-    assert_eq!(remote.call("message.list", json!({"channelId":channel})).await, before);
+    assert_eq!(
+        remote
+            .call("message.list", json!({"channelId":channel}))
+            .await,
+        before
+    );
     assert!(remote.call(GET, key(2)).await["capture"].is_null());
-    let group = draft_packet(&hello, "message.post", json!({
-        "channelId":channel,"inReplyTo":questions[2].message_id,"text":"B"
-    }));
+    let group = draft_packet(
+        &hello,
+        "message.post",
+        json!({
+            "channelId":channel,"inReplyTo":questions[2].message_id,"text":"B"
+        }),
+    );
     let group_receipt = remote.call("command.submit", group.clone()).await;
     assert_eq!(remote.call("command.submit", group).await, group_receipt);
     let group_decision = remote.call(GET, key(2)).await;
     assert_eq!(group_decision["capture"]["source"], "human");
     assert_eq!(group_decision["capture"]["optionId"], "B");
-    assert_eq!(remote.call("managedObject.decisions", json!({})).await["items"].as_array().unwrap().len(), 2);
-    assert_eq!(remote.call("managedObject.decisions", json!({"includeSystemDefaults":true})).await["items"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        remote.call("managedObject.decisions", json!({})).await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        remote
+            .call(
+                "managedObject.decisions",
+                json!({"includeSystemDefaults":true})
+            )
+            .await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
 
     local(&mut running.owner, "remote.revoke", json!({
         "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"close structured fixture"
     })).await;
-    let revoked = remote.frame("message.post", json!({
-        "channelId":channel,"inReplyTo":questions[3].message_id,"text":"A"
-    })).await;
+    let revoked = remote
+        .frame(
+            "message.post",
+            json!({
+                "channelId":channel,"inReplyTo":questions[3].message_id,"text":"A"
+            }),
+        )
+        .await;
     assert!(revoked.is_err() || revoked.unwrap()["error"].is_object());
     assert!(local(&mut running.owner, GET, key(3)).await["capture"].is_null());
     drop(remote);
@@ -1285,22 +1419,61 @@ async fn paired_and_local_manual_patrol_refuse_fresh_intent_without_scheduler() 
     let (port, identity) = enabled(&mut running.owner).await;
     let (cert, _, _) = approved(&mut running.owner, &identity).await;
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
-    let crew = local(&mut running.owner, "crew.create", json!({"title":"scheduler-less patrol fixture","workingDirectory":dir.path()})).await["id"].clone();
+    let crew = local(
+        &mut running.owner,
+        "crew.create",
+        json!({"title":"scheduler-less patrol fixture","workingDirectory":dir.path()}),
+    )
+    .await["id"]
+        .clone();
     let hello = local(&mut running.owner, "system.hello", json!({})).await;
-    assert!(!hello["capabilities"].as_array().unwrap().iter().any(|v| v == "work.patrolStart"));
+    assert!(
+        !hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "work.patrolStart")
+    );
     let packet = draft_packet(&hello, "work.patrolStart", json!({"crewId":crew}));
-    let denied = running.owner.call("command.submit", packet.clone()).await.unwrap_err();
+    let denied = running
+        .owner
+        .call("command.submit", packet.clone())
+        .await
+        .unwrap_err();
     assert_eq!(denied.0, crewd_proto::RpcError::CONFLICT);
     let lookup = json!({"dbId":packet["dbId"],"requestId":packet["requestId"]});
-    assert!(local(&mut running.owner, "command.lookup", lookup).await.is_null());
+    assert!(
+        local(&mut running.owner, "command.lookup", lookup)
+            .await
+            .is_null()
+    );
 
     let hello = remote.call("system.hello", json!({})).await;
     let packet = draft_packet(&hello, "work.patrolStart", json!({"crewId":crew}));
-    let denied = remote.frame("command.submit", packet.clone()).await.unwrap();
+    let denied = remote
+        .frame("command.submit", packet.clone())
+        .await
+        .unwrap();
     assert_eq!(denied["error"]["code"], crewd_proto::RpcError::CONFLICT);
-    assert!(remote.call("command.lookup",json!({"dbId":packet["dbId"],"requestId":packet["requestId"]})).await.is_null());
-    assert!(remote.call("work.patrolStatus",json!({"crewId":crew})).await["manualRun"].is_null());
-    let raw = remote.frame("work.patrolStart", json!({"crewId":crew})).await.unwrap();
+    assert!(
+        remote
+            .call(
+                "command.lookup",
+                json!({"dbId":packet["dbId"],"requestId":packet["requestId"]})
+            )
+            .await
+            .is_null()
+    );
+    assert!(
+        remote
+            .call("work.patrolStatus", json!({"crewId":crew}))
+            .await["manualRun"]
+            .is_null()
+    );
+    let raw = remote
+        .frame("work.patrolStart", json!({"crewId":crew}))
+        .await
+        .unwrap();
     assert!(raw["error"].is_object());
     drop(remote);
     stopped(running).await;
@@ -1558,11 +1731,15 @@ async fn paired_human_manual_patrol_has_original_receipt_and_scoped_progress_aft
         receipt["result"]
     );
     local(&mut running.owner,"remote.revoke",json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"fixture complete"})).await;
-    let denied = tokio::time::timeout(LIMIT, remote
-        .frame(
+    let denied = tokio::time::timeout(
+        LIMIT,
+        remote.frame(
             "command.submit",
             draft_packet(&hello, "work.patrolStart", json!({"crewId":foreign})),
-        )).await.unwrap();
+        ),
+    )
+    .await
+    .unwrap();
     assert!(denied.is_err() || denied.unwrap()["error"].is_object());
     stopped(running).await;
 }
@@ -1577,27 +1754,56 @@ async fn paired_artifact_natural_keys_keep_original_receipts_and_require_live_gr
     let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let hello = remote.call("system.hello", json!({})).await;
-    assert!(hello["capabilities"].as_array().unwrap().iter().any(|cap| cap == CAPABILITY));
-    let crew = remote.call("crew.create", json!({
-        "title":"Artifact owner","workingDirectory":dir.path()
-    })).await["id"].clone();
-    let other = remote.call("crew.create", json!({
-        "title":"Independent claimant","workingDirectory":dir.path()
-    })).await["id"].clone();
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == CAPABILITY)
+    );
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"Artifact owner","workingDirectory":dir.path()
+            }),
+        )
+        .await["id"]
+        .clone();
+    let other = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"Independent claimant","workingDirectory":dir.path()
+            }),
+        )
+        .await["id"]
+        .clone();
     let scope = remote.call("managedObject.scope", json!({})).await;
     let full = json!({"kind":"commit","value":"A".repeat(40),"repository":null});
-    let reference = remote.call(PREVIEW, json!({"crewId":crew,"input":full})).await;
-    assert_eq!(reference, json!({"namespace":{"kind":"global"},"key":format!("commit:{}", "a".repeat(40))}));
+    let reference = remote
+        .call(PREVIEW, json!({"crewId":crew,"input":full}))
+        .await;
+    assert_eq!(
+        reference,
+        json!({"namespace":{"kind":"global"},"key":format!("commit:{}", "a".repeat(40))})
+    );
     let unassigned = remote.call(PREVIEW, json!({
         "crewId":crew,"input":{"kind":"file","value":"Sources/Result.swift","repository":null}
     })).await;
-    assert_eq!(unassigned, json!({"namespace":{"kind":"unassigned","crewId":crew},"key":"file:Sources/Result.swift"}));
+    assert_eq!(
+        unassigned,
+        json!({"namespace":{"kind":"unassigned","crewId":crew},"key":"file:Sources/Result.swift"})
+    );
     let mut repository_refs = Vec::new();
     for repository in ["repo-a", "repo-b"] {
         let item = remote.call(PREVIEW, json!({
             "crewId":crew,"input":{"kind":"file","value":"Sources/Result.swift","repository":repository}
         })).await;
-        assert_eq!(item["namespace"], json!({"kind":"repository","id":repository}));
+        assert_eq!(
+            item["namespace"],
+            json!({"kind":"repository","id":repository})
+        );
         repository_refs.push(item);
     }
     assert_ne!(repository_refs[0], repository_refs[1]);
@@ -1608,23 +1814,38 @@ async fn paired_artifact_natural_keys_keep_original_receipts_and_require_live_gr
     assert_eq!(registered["change"], register["change"]);
     assert_eq!(registered["artifact"]["reference"], reference);
     assert_eq!(registered["artifact"]["verification"], "unverified");
-    assert_eq!(registered["effect"], json!({"kind":"registered","created":true,"claimAdded":true}));
+    assert_eq!(
+        registered["effect"],
+        json!({"kind":"registered","created":true,"claimAdded":true})
+    );
     assert_eq!(remote.call(SUBMIT, register.clone()).await, registered);
     let register_lookup = json!({"scope":scope,"crewId":crew,"requestId":register["requestId"]});
-    assert_eq!(remote.call(REQUEST_GET, register_lookup.clone()).await, json!({"status":"known","receipt":registered}));
-    assert_eq!(local(&mut running.owner, REQUEST_GET, register_lookup.clone()).await, json!({"status":"notFound"}));
+    assert_eq!(
+        remote.call(REQUEST_GET, register_lookup.clone()).await,
+        json!({"status":"known","receipt":registered})
+    );
+    assert_eq!(
+        local(&mut running.owner, REQUEST_GET, register_lookup.clone()).await,
+        json!({"status":"notFound"})
+    );
     let mut second_claim = register.clone();
     second_claim["crewId"] = other.clone();
     second_claim["requestId"] = json!(uuid::Uuid::new_v4().to_string());
     let claimed = remote.call(SUBMIT, second_claim).await;
     assert_eq!(claimed["artifact"], registered["artifact"]);
-    assert_eq!(claimed["effect"], json!({"kind":"registered","created":false,"claimAdded":true}));
+    assert_eq!(
+        claimed["effect"],
+        json!({"kind":"registered","created":false,"claimAdded":true})
+    );
     for (index, kind) in ["pullRequest", "link"].into_iter().enumerate() {
         let pr = remote.call(SUBMIT, json!({
             "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
             "change":{"kind":"register","input":{"kind":kind,"value":"https://Example.test/pull/7","repository":null}}
         })).await;
-        assert_eq!(pr["artifact"]["reference"], json!({"namespace":{"kind":"global"},"key":"url:https://example.test/pull/7"}));
+        assert_eq!(
+            pr["artifact"]["reference"],
+            json!({"namespace":{"kind":"global"},"key":"url:https://example.test/pull/7"})
+        );
         assert_eq!(pr["effect"]["created"], index == 0);
     }
     let decision = remote.call("managedObject.submit", json!({
@@ -1641,13 +1862,31 @@ async fn paired_artifact_natural_keys_keep_original_receipts_and_require_live_gr
     let edge = linked["effect"]["edge"].clone();
     assert_eq!(edge["crewId"], crew);
     assert_eq!(edge["subject"], subject);
-    assert_eq!(edge["origin"], json!({"kind":"manual","actor":{"kind":"human"}}));
-    assert_eq!(remote.call(GET, json!({"reference":reference})).await, registered["artifact"]);
-    assert_eq!(remote.call(BACKLINKS, json!({"reference":reference})).await,
-               json!({"items":[edge],"nextAfter":null}));
-    assert_eq!(remote.call(SUBJECT, json!({"subject":subject})).await,
-               json!({"items":[edge],"nextAfter":null}));
-    assert_eq!(remote.call("managedObject.get", json!({"id":decision["decision"]["id"]})).await, decision);
+    assert_eq!(
+        edge["origin"],
+        json!({"kind":"manual","actor":{"kind":"human"}})
+    );
+    assert_eq!(
+        remote.call(GET, json!({"reference":reference})).await,
+        registered["artifact"]
+    );
+    assert_eq!(
+        remote.call(BACKLINKS, json!({"reference":reference})).await,
+        json!({"items":[edge],"nextAfter":null})
+    );
+    assert_eq!(
+        remote.call(SUBJECT, json!({"subject":subject})).await,
+        json!({"items":[edge],"nextAfter":null})
+    );
+    assert_eq!(
+        remote
+            .call(
+                "managedObject.get",
+                json!({"id":decision["decision"]["id"]})
+            )
+            .await,
+        decision
+    );
     let link_lookup = json!({"scope":scope,"crewId":crew,"requestId":link["requestId"]});
     let unlink = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
         "change":{"kind":"unlink","reference":reference,"subject":subject,"relation":"relates","expectedEdgeId":edge["id"]}});
@@ -1655,17 +1894,38 @@ async fn paired_artifact_natural_keys_keep_original_receipts_and_require_live_gr
     stale_edge["requestId"] = json!(uuid::Uuid::new_v4().to_string());
     stale_edge["change"]["expectedEdgeId"] = json!(i64::MAX.to_string());
     let stale_result = remote.frame(SUBMIT, stale_edge.clone()).await.unwrap();
-    assert_eq!(stale_result["error"]["code"], crewd_proto::RpcError::CONFLICT);
-    assert_eq!(stale_result["error"]["data"]["refusal"], "artifact.edge_changed");
-    assert_eq!(remote.call(REQUEST_GET, json!({"scope":scope,"crewId":crew,"requestId":stale_edge["requestId"]})).await,
-               json!({"status":"notFound"}));
+    assert_eq!(
+        stale_result["error"]["code"],
+        crewd_proto::RpcError::CONFLICT
+    );
+    assert_eq!(
+        stale_result["error"]["data"]["refusal"],
+        "artifact.edge_changed"
+    );
+    assert_eq!(
+        remote
+            .call(
+                REQUEST_GET,
+                json!({"scope":scope,"crewId":crew,"requestId":stale_edge["requestId"]})
+            )
+            .await,
+        json!({"status":"notFound"})
+    );
     let unlinked = remote.call(SUBMIT, unlink.clone()).await;
-    assert_eq!(unlinked["effect"], json!({"kind":"unlinked","edgeId":edge["id"]}));
+    assert_eq!(
+        unlinked["effect"],
+        json!({"kind":"unlinked","edgeId":edge["id"]})
+    );
     assert_eq!(remote.call(SUBMIT, unlink.clone()).await, unlinked);
-    assert_eq!(remote.call(BACKLINKS, json!({"reference":reference})).await,
-               json!({"items":[],"nextAfter":null}));
-    assert_eq!(remote.call(REQUEST_GET, link_lookup.clone()).await,
-               json!({"status":"known","receipt":linked}), "later unlink cannot rewrite original link receipt");
+    assert_eq!(
+        remote.call(BACKLINKS, json!({"reference":reference})).await,
+        json!({"items":[],"nextAfter":null})
+    );
+    assert_eq!(
+        remote.call(REQUEST_GET, link_lookup.clone()).await,
+        json!({"status":"known","receipt":linked}),
+        "later unlink cannot rewrite original link receipt"
+    );
     let unpinned = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
         "change":{"kind":"link","input":{"kind":"link","value":"https://example.test/unpinned","repository":null},
                   "subject":subject,"relation":"relates"}});
@@ -1677,10 +1937,21 @@ async fn paired_artifact_natural_keys_keep_original_receipts_and_require_live_gr
                   "relation":"relates","expectedEdgeId":transient_edge["id"]}});
     let removed_transient = remote.call(SUBMIT, remove_transient).await;
     assert_eq!(removed_transient["artifact"], transient["artifact"]);
-    let gone = remote.frame(GET, json!({"reference":transient_ref})).await.unwrap();
+    let gone = remote
+        .frame(GET, json!({"reference":transient_ref}))
+        .await
+        .unwrap();
     assert_eq!(gone["error"]["code"], crewd_proto::RpcError::NOT_FOUND);
-    assert_eq!(remote.call(REQUEST_GET, json!({"scope":scope,"crewId":crew,"requestId":unpinned["requestId"]})).await,
-               json!({"status":"known","receipt":transient}), "anchor cleanup must preserve the exact original receipt");
+    assert_eq!(
+        remote
+            .call(
+                REQUEST_GET,
+                json!({"scope":scope,"crewId":crew,"requestId":unpinned["requestId"]})
+            )
+            .await,
+        json!({"status":"known","receipt":transient}),
+        "anchor cleanup must preserve the exact original receipt"
+    );
     let listed = remote.call(LIST, json!({})).await;
     assert_eq!(listed["items"].as_array().unwrap().len(), 2);
     drop(remote);
@@ -1689,25 +1960,45 @@ async fn paired_artifact_natural_keys_keep_original_receipts_and_require_live_gr
     let mut running = service(dir.path()).await;
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let current = remote.call("system.hello", json!({})).await;
-    assert_ne!(current["runtimeIdentity"]["runtimeBindingId"], hello["runtimeIdentity"]["runtimeBindingId"]);
-    assert_eq!(remote.call(REQUEST_GET, register_lookup.clone()).await, json!({"status":"known","receipt":registered}));
-    assert_eq!(remote.call(REQUEST_GET, link_lookup.clone()).await, json!({"status":"known","receipt":linked}));
-    assert_eq!(remote.call(GET, json!({"reference":reference})).await, registered["artifact"]);
+    assert_ne!(
+        current["runtimeIdentity"]["runtimeBindingId"],
+        hello["runtimeIdentity"]["runtimeBindingId"]
+    );
+    assert_eq!(
+        remote.call(REQUEST_GET, register_lookup.clone()).await,
+        json!({"status":"known","receipt":registered})
+    );
+    assert_eq!(
+        remote.call(REQUEST_GET, link_lookup.clone()).await,
+        json!({"status":"known","receipt":linked})
+    );
+    assert_eq!(
+        remote.call(GET, json!({"reference":reference})).await,
+        registered["artifact"]
+    );
     let mut stale = register.clone();
     stale["scope"]["restoreEpoch"] = json!(uuid::Uuid::new_v4().to_string());
     stale["requestId"] = json!(uuid::Uuid::new_v4().to_string());
     let rejected_scope = remote.frame(SUBMIT, stale.clone()).await.unwrap();
     assert!(rejected_scope["error"].is_object());
-    let old_lookup = json!({"scope":stale["scope"],"crewId":crew,"requestId":register["requestId"]});
-    assert_eq!(remote.call(REQUEST_GET, old_lookup).await, json!({"status":"historical","receipt":null}),
-               "synthetic mismatched epoch is read-only history, never permission to replay");
+    let old_lookup =
+        json!({"scope":stale["scope"],"crewId":crew,"requestId":register["requestId"]});
+    assert_eq!(
+        remote.call(REQUEST_GET, old_lookup).await,
+        json!({"status":"historical","receipt":null}),
+        "synthetic mismatched epoch is read-only history, never permission to replay"
+    );
     let mut revoked = register.clone();
     revoked["requestId"] = json!(uuid::Uuid::new_v4().to_string());
     let mut connections = Vec::new();
     for (method, params) in [
-        (PREVIEW, json!({"crewId":crew,"input":full})), (LIST, json!({})),
-        (GET, json!({"reference":reference})), (BACKLINKS, json!({"reference":reference})),
-        (SUBJECT, json!({"subject":subject})), (SUBMIT, revoked), (REQUEST_GET, link_lookup),
+        (PREVIEW, json!({"crewId":crew,"input":full})),
+        (LIST, json!({})),
+        (GET, json!({"reference":reference})),
+        (BACKLINKS, json!({"reference":reference})),
+        (SUBJECT, json!({"subject":subject})),
+        (SUBMIT, revoked),
+        (REQUEST_GET, link_lookup),
     ] {
         let mut peer = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
         peer.call("system.hello", json!({})).await;
@@ -1717,8 +2008,15 @@ async fn paired_artifact_natural_keys_keep_original_receipts_and_require_live_gr
         "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"End artifact fixture"
     })).await;
     for (method, params, mut peer) in connections {
-        if let Ok(reply) = tokio::time::timeout(LIMIT, peer.frame(method, params)).await.unwrap() {
-            assert_eq!(reply["error"]["code"], crewd_proto::RpcError::FORBIDDEN, "{method}: {reply}");
+        if let Ok(reply) = tokio::time::timeout(LIMIT, peer.frame(method, params))
+            .await
+            .unwrap()
+        {
+            assert_eq!(
+                reply["error"]["code"],
+                crewd_proto::RpcError::FORBIDDEN,
+                "{method}: {reply}"
+            );
             assert!(reply.get("result").is_none());
         }
     }
@@ -1734,11 +2032,24 @@ async fn attached_agent_cannot_use_human_artifact_methods() {
     let (stop, stopping) = tokio::sync::oneshot::channel();
     let server = fixture.spawn_owned_socket(stopping).await;
     let mut agent = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
-    local(&mut agent, "agent.attach", json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)})).await;
+    local(
+        &mut agent,
+        "agent.attach",
+        json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)}),
+    )
+    .await;
     let before = durable_state(&fixture).await;
     for method in METHODS {
-        let refusal = tokio::time::timeout(LIMIT, agent.call(method, json!({"deliberatelyInvalid":"no Human artifact oracle"})))
-            .await.unwrap().unwrap_err();
+        let refusal = tokio::time::timeout(
+            LIMIT,
+            agent.call(
+                method,
+                json!({"deliberatelyInvalid":"no Human artifact oracle"}),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
         assert_eq!(refusal.0, crewd_proto::RpcError::FORBIDDEN, "{method}");
     }
     assert_eq!(durable_state(&fixture).await, before);
@@ -1749,7 +2060,9 @@ async fn attached_agent_cannot_use_human_artifact_methods() {
 
 #[tokio::test]
 async fn paired_message_sources_keep_original_receipts_and_recheck_each_live_grant() {
-    use crewd_proto::managed_message_sources::{CAPABILITY, GET, MESSAGE_OBJECTS, RECORD, REQUEST_GET};
+    use crewd_proto::managed_message_sources::{
+        CAPABILITY, GET, MESSAGE_OBJECTS, RECORD, REQUEST_GET,
+    };
 
     let dir = tempfile::tempdir().unwrap();
     let mut running = service(dir.path()).await;
@@ -1758,18 +2071,43 @@ async fn paired_message_sources_keep_original_receipts_and_recheck_each_live_gra
     let (other_cert, _, _) = approved(&mut running.owner, &identity).await;
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let hello = remote.call("system.hello", json!({})).await;
-    assert!(hello["capabilities"].as_array().unwrap().iter().any(|cap| cap == CAPABILITY));
-    let crew = local(&mut running.owner, "crew.create", json!({
-        "title":"Paired message record","workingDirectory":dir.path()
-    })).await["id"].clone();
-    let source_crew = local(&mut running.owner, "crew.create", json!({
-        "title":"Separate source crew","workingDirectory":dir.path()
-    })).await["id"].as_str().unwrap().to_owned();
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == CAPABILITY)
+    );
+    let crew = local(
+        &mut running.owner,
+        "crew.create",
+        json!({
+            "title":"Paired message record","workingDirectory":dir.path()
+        }),
+    )
+    .await["id"]
+        .clone();
+    let source_crew = local(
+        &mut running.owner,
+        "crew.create",
+        json!({
+            "title":"Separate source crew","workingDirectory":dir.path()
+        }),
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let channel = crewd_store::channels::human_id(&source_crew);
     let text = "Synthetic message source e\u{301} preserved byte-for-byte";
-    let message = local(&mut running.owner, "message.post", json!({
-        "channelId":channel,"text":text
-    })).await;
+    let message = local(
+        &mut running.owner,
+        "message.post",
+        json!({
+            "channelId":channel,"text":text
+        }),
+    )
+    .await;
     let scope = remote.call("managedObject.scope", json!({})).await;
     let packet = json!({
         "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
@@ -1784,36 +2122,61 @@ async fn paired_message_sources_keep_original_receipts_and_recheck_each_live_gra
     assert_eq!(receipt["sourceMessageId"], message["id"]);
     assert_eq!(receipt["scope"], scope);
     assert_eq!(receipt["requestId"], packet["requestId"]);
-    assert_eq!(receipt["object"]["decision"]["author"], json!({"kind":"human"}));
-    assert!(receipt.get("excerpt").is_none(), "message body belongs only to the source projection");
+    assert_eq!(
+        receipt["object"]["decision"]["author"],
+        json!({"kind":"human"})
+    );
+    assert!(
+        receipt.get("excerpt").is_none(),
+        "message body belongs only to the source projection"
+    );
     assert_eq!(remote.call(RECORD, packet.clone()).await, receipt);
     let lookup = json!({"scope":scope,"crewId":crew,"requestId":packet["requestId"]});
-    assert_eq!(remote.call(REQUEST_GET, lookup.clone()).await, json!({"status":"known","receipt":receipt}));
-    assert_eq!(local(&mut running.owner, REQUEST_GET, lookup.clone()).await, json!({"status":"notFound"}));
+    assert_eq!(
+        remote.call(REQUEST_GET, lookup.clone()).await,
+        json!({"status":"known","receipt":receipt})
+    );
+    assert_eq!(
+        local(&mut running.owner, REQUEST_GET, lookup.clone()).await,
+        json!({"status":"notFound"})
+    );
 
     let expected_source = json!({"status":"available","crewId":source_crew,"messageId":message["id"],"channelId":channel,"excerpt":text});
     assert_eq!(remote.call(GET, json!({"id":id})).await, expected_source);
-    assert_eq!(remote.call(MESSAGE_OBJECTS, json!({"messageId":message["id"]})).await,
-               json!({"items":[receipt["object"]],"nextAfter":null}));
+    assert_eq!(
+        remote
+            .call(MESSAGE_OBJECTS, json!({"messageId":message["id"]}))
+            .await,
+        json!({"items":[receipt["object"]],"nextAfter":null})
+    );
     let ordinary = remote.call("managedObject.submit", json!({
         "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
         "change":{"kind":"recordDecision","draft":{"question":"Ordinary record",
             "choice":"Keep no inferred source","rationale":"Explicit source only","about":[{"kind":"crew","id":crew}]}}
     })).await;
-    assert_eq!(remote.call(GET, json!({"id":ordinary["object"]["decision"]["id"]})).await,
-               json!({"status":"none"}));
+    assert_eq!(
+        remote
+            .call(GET, json!({"id":ordinary["object"]["decision"]["id"]}))
+            .await,
+        json!({"status":"none"})
+    );
     let mut same_source = packet.clone();
     same_source["requestId"] = json!(uuid::Uuid::new_v4().to_string());
     let deduplicated = remote.call(RECORD, same_source.clone()).await;
     assert_eq!(deduplicated["created"], false);
     assert_eq!(deduplicated["object"], receipt["object"]);
     assert_eq!(remote.call(RECORD, same_source).await, deduplicated);
-    remote.call("managedObject.submit", json!({
-        "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
-        "change":{"kind":"withdrawDecision","decisionId":id,
-                  "expectedRevision":receipt["object"]["decision"]["revision"],
-                  "reason":"Later explicit withdrawal"}
-    })).await;
+    remote
+        .call(
+            "managedObject.submit",
+            json!({
+                "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+                "change":{"kind":"withdrawDecision","decisionId":id,
+                          "expectedRevision":receipt["object"]["decision"]["revision"],
+                          "reason":"Later explicit withdrawal"}
+            }),
+        )
+        .await;
     assert_eq!(remote.call(GET, json!({"id":id})).await, expected_source);
     drop(remote);
     stopped(running).await;
@@ -1821,16 +2184,31 @@ async fn paired_message_sources_keep_original_receipts_and_recheck_each_live_gra
     let mut running = service(dir.path()).await;
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let restarted = remote.call("system.hello", json!({})).await;
-    assert_ne!(restarted["runtimeIdentity"]["runtimeBindingId"], hello["runtimeIdentity"]["runtimeBindingId"]);
-    assert_eq!(remote.call(REQUEST_GET, lookup.clone()).await, json!({"status":"known","receipt":receipt}));
-    assert_eq!(remote.call("managedObject.get", json!({"id":id})).await["decision"]["status"], "withdrawn");
+    assert_ne!(
+        restarted["runtimeIdentity"]["runtimeBindingId"],
+        hello["runtimeIdentity"]["runtimeBindingId"]
+    );
+    assert_eq!(
+        remote.call(REQUEST_GET, lookup.clone()).await,
+        json!({"status":"known","receipt":receipt})
+    );
+    assert_eq!(
+        remote.call("managedObject.get", json!({"id":id})).await["decision"]["status"],
+        "withdrawn"
+    );
     assert_eq!(remote.call(GET, json!({"id":id})).await, expected_source);
     let mut other = RemoteRpc::connect(port, &other_cert, &identity.spki_sha256).await;
     other.call("system.hello", json!({})).await;
-    assert_eq!(other.call("managedObject.get", json!({"id":id})).await["decision"]["id"], id);
+    assert_eq!(
+        other.call("managedObject.get", json!({"id":id})).await["decision"]["id"],
+        id
+    );
     assert_eq!(other.call(GET, json!({"id":id})).await, expected_source);
-    assert_eq!(other.call(REQUEST_GET, lookup.clone()).await, json!({"status":"notFound"}),
-               "organization-wide object/source read cannot inherit another grant's original receipt");
+    assert_eq!(
+        other.call(REQUEST_GET, lookup.clone()).await,
+        json!({"status":"notFound"}),
+        "organization-wide object/source read cannot inherit another grant's original receipt"
+    );
 
     let mut denied_packet = packet.clone();
     denied_packet["requestId"] = json!(uuid::Uuid::new_v4().to_string());
@@ -1850,24 +2228,43 @@ async fn paired_message_sources_keep_original_receipts_and_recheck_each_live_gra
         "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"End paired message fixture"
     })).await;
     for (method, params, mut connection) in revoked_calls {
-        if let Ok(reply) = tokio::time::timeout(LIMIT, connection.frame(method, params)).await.unwrap() {
-            assert_eq!(reply["error"]["code"], crewd_proto::RpcError::FORBIDDEN,
-                       "revoked grant used {method}: {reply}");
+        if let Ok(reply) = tokio::time::timeout(LIMIT, connection.frame(method, params))
+            .await
+            .unwrap()
+        {
+            assert_eq!(
+                reply["error"]["code"],
+                crewd_proto::RpcError::FORBIDDEN,
+                "revoked grant used {method}: {reply}"
+            );
             assert!(reply.get("result").is_none());
         }
     }
-    assert_eq!(local(&mut running.owner, "managedObject.get", json!({"id":id})).await["decision"]["status"], "withdrawn");
-    assert_eq!(other.call(GET, json!({"id":id})).await, expected_source,
-               "revoking one device leaves the separately paired Human authorized");
+    assert_eq!(
+        local(&mut running.owner, "managedObject.get", json!({"id":id})).await["decision"]["status"],
+        "withdrawn"
+    );
+    assert_eq!(
+        other.call(GET, json!({"id":id})).await,
+        expected_source,
+        "revoking one device leaves the separately paired Human authorized"
+    );
     drop(remote);
     drop(other);
     stopped(running).await;
     let store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
-    let denied_receipts: i64 = store.conn().query_row(
-        "SELECT count(*) FROM managed_message_receipts WHERE request_id=?1",
-        [&denied_request], |row| row.get(0)
-    ).unwrap();
-    assert_eq!(denied_receipts, 0, "revoked write must not reserve an original receipt");
+    let denied_receipts: i64 = store
+        .conn()
+        .query_row(
+            "SELECT count(*) FROM managed_message_receipts WHERE request_id=?1",
+            [&denied_request],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        denied_receipts, 0,
+        "revoked write must not reserve an original receipt"
+    );
 }
 
 #[tokio::test]
@@ -1878,14 +2275,26 @@ async fn attached_agent_cannot_use_human_message_source_methods() {
     let (stop, stopping) = tokio::sync::oneshot::channel();
     let server = fixture.spawn_owned_socket(stopping).await;
     let mut agent = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
-    local(&mut agent, "agent.attach", json!({
-        "sessionId":fixture.worker,"token":fixture.token(&fixture.worker)
-    })).await;
+    local(
+        &mut agent,
+        "agent.attach",
+        json!({
+            "sessionId":fixture.worker,"token":fixture.token(&fixture.worker)
+        }),
+    )
+    .await;
     let before = durable_state(&fixture).await;
     for method in [RECORD, GET, MESSAGE_OBJECTS, REQUEST_GET] {
-        let refusal = tokio::time::timeout(LIMIT, agent.call(method,
-            json!({"deliberatelyInvalid":"no Human source parsing or read oracle"})))
-            .await.unwrap().unwrap_err();
+        let refusal = tokio::time::timeout(
+            LIMIT,
+            agent.call(
+                method,
+                json!({"deliberatelyInvalid":"no Human source parsing or read oracle"}),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
         assert_eq!(refusal.0, crewd_proto::RpcError::FORBIDDEN, "{method}");
     }
     assert_eq!(durable_state(&fixture).await, before);
@@ -2031,7 +2440,9 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
     let mut updates = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     updates.call("system.hello", json!({})).await;
     assert_eq!(
-        updates.call("events.subscribe", json!({"topics":["onto"]})).await,
+        updates
+            .call("events.subscribe", json!({"topics":["onto"]}))
+            .await,
         json!({"topics":["onto"]})
     );
     let linked = remote
@@ -2045,7 +2456,9 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
         json!({"event":"onto.changed","data":{"crewId":owner,"objectIds":[risk["id"],lesson["id"]]}})
     );
     assert_eq!(
-        updates.call("managedObject.get", json!({"id":lesson["id"]})).await,
+        updates
+            .call("managedObject.get", json!({"id":lesson["id"]}))
+            .await,
         linked["object"]
     );
     assert_eq!(
@@ -2073,7 +2486,10 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
         .await,
         json!({"status":"notFound"})
     );
-    assert_eq!(remote.call("managedObject.submit", occurrence).await, linked);
+    assert_eq!(
+        remote.call("managedObject.submit", occurrence).await,
+        linked
+    );
     let confirmation = json!({
         "scope":scope,"crewId":owner,"requestId":uuid::Uuid::new_v4().to_string(),
         "change":{"kind":"confirmLesson","lessonId":lesson["id"],"expectedRevision":lesson["revision"]}
@@ -2091,10 +2507,13 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
             "lesson":"Recheck authority before notifying","learnedFrom":[],"evidence":[],"appliesTo":[]}}
     })).await;
     let mut after_revoke = String::new();
-    assert!(matches!(
-        tokio::time::timeout(LIMIT, updates.io.read_line(&mut after_revoke)).await,
-        Ok(Ok(0) | Err(_))
-    ), "revoked subscriber received {after_revoke}");
+    assert!(
+        matches!(
+            tokio::time::timeout(LIMIT, updates.io.read_line(&mut after_revoke)).await,
+            Ok(Ok(0) | Err(_))
+        ),
+        "revoked subscriber received {after_revoke}"
+    );
     for (method, params) in [
         ("managedObject.get", json!({"id":table})),
         ("managedObject.request.get", lookup),
@@ -4075,12 +4494,17 @@ async fn paired_human_reads_exact_channel_responsibility_and_revocation_denies()
             "message.post",
             json!({"channelId":topic,"text":format!("synthetic observation {index}")}),
         );
-        assert_eq!(remote.call("command.submit", post).await["phase"], "committed");
+        assert_eq!(
+            remote.call("command.submit", post).await["phase"],
+            "committed"
+        );
     }
     let query = json!({"crewId":crew,"channelId":topic});
     let result = tokio::time::timeout(Duration::from_secs(25), async {
         loop {
-            let result = remote.call("work.channelResponsibility", query.clone()).await;
+            let result = remote
+                .call("work.channelResponsibility", query.clone())
+                .await;
             if result["items"][0]["phase"] == "open" {
                 break result;
             }
@@ -4096,11 +4520,19 @@ async fn paired_human_reads_exact_channel_responsibility_and_revocation_denies()
     assert_eq!(row["noticePhase"], "not_queued");
     assert_eq!(
         remote
-            .call("work.channelResponsibility", json!({"crewId":other_crew,"channelId":topic}))
+            .call(
+                "work.channelResponsibility",
+                json!({"crewId":other_crew,"channelId":topic})
+            )
             .await,
         json!({"crewId":other_crew,"items":[]})
     );
-    assert_eq!(remote.call("work.channelResponsibility", query.clone()).await, result);
+    assert_eq!(
+        remote
+            .call("work.channelResponsibility", query.clone())
+            .await,
+        result
+    );
 
     local(&mut running.owner, "remote.revoke", json!({
         "grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"responsibility fixture complete"
@@ -4152,7 +4584,9 @@ async fn paired_human_reads_message_correction_history_until_grant_is_revoked() 
     let cleared = local(&mut running.owner, "message.attribution.set", clear).await;
     let query = json!({"crewId":crew,"channelId":channel,"messageId":message});
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
-    let history = remote.call("message.attribution.history", query.clone()).await;
+    let history = remote
+        .call("message.attribution.history", query.clone())
+        .await;
     assert_eq!(history["crewId"], crew);
     assert_eq!(history["channelId"], channel);
     assert_eq!(&history["messageId"], message);
@@ -4163,9 +4597,17 @@ async fn paired_human_reads_message_correction_history_until_grant_is_revoked() 
         json!({"action":"clear","targetUnavailable":false})
     );
     let reset = json!({"crewId":crew,"messageId":message,"expectedRevision":cleared["revision"],"action":"reset"});
-    let denied = remote.frame("message.attribution.set", reset).await.unwrap();
+    let denied = remote
+        .frame("message.attribution.set", reset)
+        .await
+        .unwrap();
     assert!(denied["error"].is_object());
-    assert_eq!(remote.call("message.attribution.history", query.clone()).await, history);
+    assert_eq!(
+        remote
+            .call("message.attribution.history", query.clone())
+            .await,
+        history
+    );
 
     local(&mut running.owner, "remote.revoke", json!({
         "grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"correction history fixture complete"
@@ -4467,8 +4909,20 @@ async fn paired_artifact_history_keeps_original_receipts_across_restart_and_rech
     let (cert, _, grant) = approved(&mut running.owner, &identity).await;
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let hello = remote.call("system.hello", json!({})).await;
-    assert!(hello["capabilities"].as_array().unwrap().iter().any(|c| c == CAPABILITY));
-    let crew = remote.call("crew.create", json!({"title":"Historical index", "workingDirectory":dir.path()})).await["id"].clone();
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c == CAPABILITY)
+    );
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({"title":"Historical index", "workingDirectory":dir.path()}),
+        )
+        .await["id"]
+        .clone();
     let requirement = remote.call("todo.create", json!({"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"text":"Retain the original evidence"})).await;
     for n in 0..3 {
         let work = remote.call("work.create", json!({"crewId":crew,"title":format!("Actual completed source {n}"),"goal":"Keep factual evidence","acceptance":"Original evidence remains exact","sources":[requirement["requirementId"]]})).await;
@@ -4476,118 +4930,616 @@ async fn paired_artifact_history_keeps_original_receipts_across_restart_and_rech
         assert_eq!(done["status"], "done");
     }
     let scope = remote.call("managedObject.scope", json!({})).await;
-    assert_eq!(remote.call(STATUS,json!({"crewId":crew})).await["job"], Value::Null);
+    assert_eq!(
+        remote.call(STATUS, json!({"crewId":crew})).await["job"],
+        Value::Null
+    );
     let begin = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string()});
     // Submit once and deliberately never read this response. The independent status read proves commit.
     let mut unread = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     unread.call("system.hello", json!({})).await;
-    unread.io.get_mut().write_all(format!("{}\n",json!({"id":unread.next,"method":BEGIN,"params":begin})).as_bytes()).await.unwrap();
+    unread
+        .io
+        .get_mut()
+        .write_all(
+            format!(
+                "{}\n",
+                json!({"id":unread.next,"method":BEGIN,"params":begin})
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
     let first = tokio::time::timeout(LIMIT, async {
         loop {
-            let status=remote.call(STATUS,json!({"crewId":crew})).await;
-            if status["job"].is_object() { break status; }
+            let status = remote.call(STATUS, json!({"crewId":crew})).await;
+            if status["job"].is_object() {
+                break status;
+            }
             tokio::task::yield_now().await;
         }
-    }).await.unwrap();
-    assert_eq!(first["job"]["lastRequestId"],begin["requestId"]);
-    assert_eq!(first["canContinue"],true);
+    })
+    .await
+    .unwrap();
+    assert_eq!(first["job"]["lastRequestId"], begin["requestId"]);
+    assert_eq!(first["canContinue"], true);
     let step = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":first["job"]["id"],"expectedRevision":first["job"]["revision"],"expectedCursor":first["job"]["cursor"],"limit":1});
-    let advanced=remote.call(STEP,step.clone()).await;
-    assert_eq!(advanced["effect"]["delta"]["scanned"],"1");
-    assert_eq!(remote.call(STEP,step.clone()).await,advanced,"exact original replay precedes old CAS");
-    let lookup=json!({"scope":scope,"crewId":crew,"requestId":step["requestId"]});
-    assert_eq!(local(&mut running.owner,REQUEST_GET,lookup.clone()).await,json!({"status":"notFound"}),"owner cannot borrow paired principal's request ledger");
-    let begin_lookup=json!({"scope":scope,"crewId":crew,"requestId":begin["requestId"]});
+    let advanced = remote.call(STEP, step.clone()).await;
+    assert_eq!(advanced["effect"]["delta"]["scanned"], "1");
+    assert_eq!(
+        remote.call(STEP, step.clone()).await,
+        advanced,
+        "exact original replay precedes old CAS"
+    );
+    let lookup = json!({"scope":scope,"crewId":crew,"requestId":step["requestId"]});
+    assert_eq!(
+        local(&mut running.owner, REQUEST_GET, lookup.clone()).await,
+        json!({"status":"notFound"}),
+        "owner cannot borrow paired principal's request ledger"
+    );
+    let begin_lookup = json!({"scope":scope,"crewId":crew,"requestId":begin["requestId"]});
     drop(unread);
     drop(remote);
     stopped(running).await;
 
-    let mut running=service(dir.path()).await;
-    let mut remote=RemoteRpc::connect(port,&cert,&identity.spki_sha256).await;
-    let reopened=remote.call("system.hello",json!({})).await;
-    assert_ne!(reopened["runtimeIdentity"]["runtimeBindingId"],hello["runtimeIdentity"]["runtimeBindingId"]);
-    assert_eq!(remote.call(REQUEST_GET,lookup.clone()).await,json!({"status":"known","receipt":advanced}));
-    let begun=remote.call(REQUEST_GET,begin_lookup).await;
-    assert_eq!(begun["status"],"known");
-    assert_eq!(begun["receipt"]["job"],first["job"],"unread original begin cannot be replaced by the later job");
-    let before=remote.call(STATUS,json!({"crewId":crew})).await["job"].clone();
-    let race=json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":before["id"],"expectedRevision":before["revision"],"expectedCursor":before["cursor"],"limit":1});
-    let mut competing=race.clone(); competing["requestId"]=json!(uuid::Uuid::new_v4().to_string());
-    let mut second=RemoteRpc::connect(port,&cert,&identity.spki_sha256).await;
-    second.call("system.hello",json!({})).await;
-    let (one,two)=tokio::join!(remote.frame(STEP,race.clone()),second.frame(STEP,competing.clone()));
-    let frames=[one.unwrap(),two.unwrap()];
-    assert_eq!(frames.iter().filter(|f|f.get("result").is_some()).count(),1);
-    let refused=frames.iter().find(|f|f.get("error").is_some()).unwrap();
-    assert_eq!(refused["error"]["code"],crewd_proto::RpcError::CONFLICT);
-    assert_eq!(refused["error"]["data"]["refusal"],"artifact.history_changed");
-    let mut current=remote.call(STATUS,json!({"crewId":crew})).await["job"].clone();
-    assert_eq!(current["revision"].as_str().unwrap().parse::<u64>().unwrap(),before["revision"].as_str().unwrap().parse::<u64>().unwrap()+1);
-    let mut invalid_scope=race.clone(); invalid_scope["scope"]["restoreEpoch"]=json!(uuid::Uuid::new_v4().to_string()); invalid_scope["requestId"]=json!(uuid::Uuid::new_v4().to_string());
-    assert!(remote.frame(STEP,invalid_scope.clone()).await.unwrap()["error"].is_object());
-    assert_eq!(remote.call(REQUEST_GET,json!({"scope":invalid_scope["scope"],"crewId":crew,"requestId":step["requestId"]})).await,json!({"status":"historical","receipt":null}));
-    assert_eq!(remote.call(REQUEST_GET,lookup.clone()).await,json!({"status":"known","receipt":advanced}));
-    let mut updates=RemoteRpc::connect(port,&cert,&identity.spki_sha256).await;
-    updates.call("system.hello",json!({})).await;
-    assert_eq!(updates.call("events.subscribe",json!({"topics":["artifact"]})).await,json!({"topics":["artifact"]}));
-    let local_step=json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1});
-    current=local(&mut running.owner,STEP,local_step).await["job"].clone();
-    assert_eq!(updates.event().await,json!({"event":CHANGED,"data":{"crewId":crew,"jobId":current["id"]}}));
-    let mut peers=Vec::new();
-    for (method,params) in [
-        (STATUS,json!({"crewId":crew})),
-        (BEGIN,json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string()})),
-        (STEP,json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1})),
-        (REQUEST_GET,lookup),
+    let mut running = service(dir.path()).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let reopened = remote.call("system.hello", json!({})).await;
+    assert_ne!(
+        reopened["runtimeIdentity"]["runtimeBindingId"],
+        hello["runtimeIdentity"]["runtimeBindingId"]
+    );
+    assert_eq!(
+        remote.call(REQUEST_GET, lookup.clone()).await,
+        json!({"status":"known","receipt":advanced})
+    );
+    let begun = remote.call(REQUEST_GET, begin_lookup).await;
+    assert_eq!(begun["status"], "known");
+    assert_eq!(
+        begun["receipt"]["job"], first["job"],
+        "unread original begin cannot be replaced by the later job"
+    );
+    let before = remote.call(STATUS, json!({"crewId":crew})).await["job"].clone();
+    let race = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":before["id"],"expectedRevision":before["revision"],"expectedCursor":before["cursor"],"limit":1});
+    let mut competing = race.clone();
+    competing["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    let mut second = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    second.call("system.hello", json!({})).await;
+    let (one, two) = tokio::join!(
+        remote.frame(STEP, race.clone()),
+        second.frame(STEP, competing.clone())
+    );
+    let frames = [one.unwrap(), two.unwrap()];
+    assert_eq!(
+        frames.iter().filter(|f| f.get("result").is_some()).count(),
+        1
+    );
+    let refused = frames.iter().find(|f| f.get("error").is_some()).unwrap();
+    assert_eq!(refused["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    assert_eq!(
+        refused["error"]["data"]["refusal"],
+        "artifact.history_changed"
+    );
+    let mut current = remote.call(STATUS, json!({"crewId":crew})).await["job"].clone();
+    assert_eq!(
+        current["revision"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap(),
+        before["revision"].as_str().unwrap().parse::<u64>().unwrap() + 1
+    );
+    let mut invalid_scope = race.clone();
+    invalid_scope["scope"]["restoreEpoch"] = json!(uuid::Uuid::new_v4().to_string());
+    invalid_scope["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    assert!(remote.frame(STEP, invalid_scope.clone()).await.unwrap()["error"].is_object());
+    assert_eq!(
+        remote
+            .call(
+                REQUEST_GET,
+                json!({"scope":invalid_scope["scope"],"crewId":crew,"requestId":step["requestId"]})
+            )
+            .await,
+        json!({"status":"historical","receipt":null})
+    );
+    assert_eq!(
+        remote.call(REQUEST_GET, lookup.clone()).await,
+        json!({"status":"known","receipt":advanced})
+    );
+    let mut updates = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    updates.call("system.hello", json!({})).await;
+    assert_eq!(
+        updates
+            .call("events.subscribe", json!({"topics":["artifact"]}))
+            .await,
+        json!({"topics":["artifact"]})
+    );
+    let local_step = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1});
+    current = local(&mut running.owner, STEP, local_step).await["job"].clone();
+    assert_eq!(
+        updates.event().await,
+        json!({"event":CHANGED,"data":{"crewId":crew,"jobId":current["id"]}})
+    );
+    let mut peers = Vec::new();
+    for (method, params) in [
+        (STATUS, json!({"crewId":crew})),
+        (
+            BEGIN,
+            json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string()}),
+        ),
+        (
+            STEP,
+            json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1}),
+        ),
+        (REQUEST_GET, lookup),
     ] {
-        let mut peer=RemoteRpc::connect(port,&cert,&identity.spki_sha256).await;
-        peer.call("system.hello",json!({})).await;
-        peers.push((method,params,peer));
+        let mut peer = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+        peer.call("system.hello", json!({})).await;
+        peers.push((method, params, peer));
     }
     local(&mut running.owner,"remote.revoke",json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"End historical index fixture"})).await;
     // A real post-revocation commit must not leak an already-subscribed invalidation.
-    let post_revoke=json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1});
-    local(&mut running.owner,STEP,post_revoke).await;
-    let mut after_revoke=String::new();
-    assert!(matches!(tokio::time::timeout(LIMIT,updates.io.read_line(&mut after_revoke)).await,Ok(Ok(0)|Err(_))),"revoked subscriber received {after_revoke}");
-    for (method,params,mut peer) in peers {
-        if let Ok(reply)=tokio::time::timeout(LIMIT,peer.frame(method,params)).await.unwrap() {
-            assert_eq!(reply["error"]["code"],crewd_proto::RpcError::FORBIDDEN,"{method}: {reply}");
+    let post_revoke = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1});
+    local(&mut running.owner, STEP, post_revoke).await;
+    let mut after_revoke = String::new();
+    assert!(
+        matches!(
+            tokio::time::timeout(LIMIT, updates.io.read_line(&mut after_revoke)).await,
+            Ok(Ok(0) | Err(_))
+        ),
+        "revoked subscriber received {after_revoke}"
+    );
+    for (method, params, mut peer) in peers {
+        if let Ok(reply) = tokio::time::timeout(LIMIT, peer.frame(method, params))
+            .await
+            .unwrap()
+        {
+            assert_eq!(
+                reply["error"]["code"],
+                crewd_proto::RpcError::FORBIDDEN,
+                "{method}: {reply}"
+            );
             assert!(reply.get("result").is_none());
         }
     }
-    drop(remote); drop(second);
+    drop(remote);
+    drop(second);
     stopped(running).await;
 }
 
 #[tokio::test]
 async fn attached_agent_cannot_use_human_artifact_history_methods() {
     use crewd_proto::artifact_history::METHODS;
-    let fixture=crewd_server::agent::testkit::Fixture::new().await;
-    let (stop,stopping)=tokio::sync::oneshot::channel();
-    let server=fixture.spawn_owned_socket(stopping).await;
-    let mut agent=RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
-    local(&mut agent,"agent.attach",json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)})).await;
-    let before=durable_state(&fixture).await;
+    let fixture = crewd_server::agent::testkit::Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let server = fixture.spawn_owned_socket(stopping).await;
+    let mut agent = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    local(
+        &mut agent,
+        "agent.attach",
+        json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)}),
+    )
+    .await;
+    let before = durable_state(&fixture).await;
     for method in METHODS {
-        let refusal=tokio::time::timeout(LIMIT,agent.call(method,json!({"deliberatelyInvalid":"no Human history oracle"}))).await.unwrap().unwrap_err();
-        assert_eq!(refusal.0,crewd_proto::RpcError::FORBIDDEN,"{method}");
+        let refusal = tokio::time::timeout(
+            LIMIT,
+            agent.call(
+                method,
+                json!({"deliberatelyInvalid":"no Human history oracle"}),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(refusal.0, crewd_proto::RpcError::FORBIDDEN, "{method}");
     }
-    assert_eq!(durable_state(&fixture).await,before);
+    assert_eq!(durable_state(&fixture).await, before);
     // Subscribe through the actual attached connection, then observe a Human-only hint
     // on an independent Human subscriber to prove the event was really published.
-    local(&mut agent,"events.subscribe",json!({"topics":["artifact"]})).await;
-    let mut human=RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
-    local(&mut human,"events.subscribe",json!({"topics":["artifact"]})).await;
-    let scope=local(&mut human,"managedObject.scope",json!({})).await;
-    let receipt=local(&mut human,"artifact.history.begin",json!({"scope":scope,"crewId":fixture.crew,"requestId":uuid::Uuid::new_v4().to_string()})).await;
-    let published=human.next_event(LIMIT).await.unwrap();
-    assert_eq!(published.event,crewd_proto::artifact_history::CHANGED);
-    assert_eq!(published.data,json!({"crewId":fixture.crew,"jobId":receipt["job"]["id"]}));
-    local(&mut agent,crewd_proto::agent::methods::TOOLS,json!({})).await;
-    assert!(agent.next_event(Duration::from_millis(200)).await.is_none(),"Human history invalidation leaked to attached Agent");
+    local(
+        &mut agent,
+        "events.subscribe",
+        json!({"topics":["artifact"]}),
+    )
+    .await;
+    let mut human = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    local(
+        &mut human,
+        "events.subscribe",
+        json!({"topics":["artifact"]}),
+    )
+    .await;
+    let scope = local(&mut human, "managedObject.scope", json!({})).await;
+    let receipt = local(
+        &mut human,
+        "artifact.history.begin",
+        json!({"scope":scope,"crewId":fixture.crew,"requestId":uuid::Uuid::new_v4().to_string()}),
+    )
+    .await;
+    let published = human.next_event(LIMIT).await.unwrap();
+    assert_eq!(published.event, crewd_proto::artifact_history::CHANGED);
+    assert_eq!(
+        published.data,
+        json!({"crewId":fixture.crew,"jobId":receipt["job"]["id"]})
+    );
+    local(&mut agent, crewd_proto::agent::methods::TOOLS, json!({})).await;
+    assert!(
+        agent.next_event(Duration::from_millis(200)).await.is_none(),
+        "Human history invalidation leaked to attached Agent"
+    );
     drop(human);
 
-    drop(agent); stop.send(()).unwrap();
-    tokio::time::timeout(LIMIT,server).await.unwrap().unwrap();
+    drop(agent);
+    stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT, server).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn paired_v2_link_columns_keep_original_receipts_across_evolution_and_restart() {
+    use crewd_proto::managed_tables_v2::*;
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    for cap in [TABLES_CAPABILITY, LINKS_CAPABILITY] {
+        assert!(
+            hello["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == cap)
+        );
+    }
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({"title":"Typed column owner","workingDirectory":dir.path()}),
+        )
+        .await["id"]
+        .clone();
+    let scope = remote.call("managedObject.scope", json!({})).await;
+    let malformed = remote
+        .frame(
+            MANAGED_LINK_RESOLVE_TARGET,
+            json!({"target":{"kind":"human","id":"must-not-be-ignored"}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        malformed["error"]["code"],
+        crewd_proto::RpcError::INVALID_PARAMS,
+        "tagged unit target input must stay closed"
+    );
+    let req=remote.call("todo.create",json!({"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"text":"One factual work target"})).await;
+    let work = remote
+        .call(
+            "work.create",
+            json!({"crewId":crew,"title":"Immutable linked work","sources":[req["requirementId"]]}),
+        )
+        .await;
+    let work_before = remote.call("work.get", json!({"id":work["id"]})).await;
+    let create = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+    "kind":"createTable","title":"Typed links","purpose":"Original receipt and stable field proof","titleFieldIndex":0,
+    "rowWritePolicy":"authorCaptainHuman","fields":[
+        {"name":"Name","kind":{"kind":"text"},"nullable":false},
+        {"name":"Task","kind":{"kind":"link","target":{"kind":"work"},"many":false},"nullable":true}
+    ]}});
+    let created = remote.call(TABLE_SUBMIT, create.clone()).await;
+    assert_eq!(created["operationKind"], "createTable");
+    assert_eq!(created["effect"]["kind"], "tableCreated");
+    let table_id = created["effect"]["tableId"].clone();
+    let table = remote.call(TABLE_GET, json!({"id":table_id})).await;
+    assert_eq!(table["author"], json!({"kind":"human"}));
+    assert_eq!(table["schemaRevision"], "1");
+    assert_eq!(table["titleFieldId"], "p1");
+    assert_eq!(table["fields"][1]["id"], "p2");
+    let add = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+    "kind":"addRow","tableId":table_id,"expectedSchemaRevision":"1","patches":[
+        {"fieldId":"p1","change":{"kind":"setScalar","value":{"type":"text","value":"Original row"}}},
+        {"fieldId":"p2","change":{"kind":"replaceLinks","values":[{"kind":"reference","target":{"kind":"work","id":work["id"]}}],"keepHiddenSetToken":null}}
+    ]}});
+    let added = remote.call(TABLE_SUBMIT, add.clone()).await;
+    let row_id = added["effect"]["rowId"].clone();
+    let row = remote.call(ROW_GET, json!({"id":row_id})).await;
+    assert_eq!(row["revision"], "1");
+    assert_eq!(
+        row["scalarCells"],
+        json!([{"fieldId":"p1","value":{"type":"text","value":"Original row"}}])
+    );
+    let cell = row["linkCells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["fieldId"] == "p2")
+        .unwrap();
+    assert_eq!(cell["visible"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        cell["visible"][0]["target"],
+        json!({"kind":"work","id":work["id"]})
+    );
+    assert!(cell["hiddenSet"].is_null());
+    let column_edge = cell["visible"][0]["edgeId"].clone();
+    let outgoing = json!({"query":{"direction":"outgoing","source":{"kind":"row","id":row_id},"includeAdapters":false},"after":null,"limit":16});
+    let incoming = json!({"query":{"direction":"incoming","target":{"kind":"work","id":work["id"]},"includeAdapters":false},"after":null,"limit":16});
+    assert_eq!(
+        remote.call(LINK_LIST, outgoing.clone()).await["items"][0]["id"],
+        column_edge
+    );
+    assert_eq!(
+        remote.call(LINK_LIST, incoming.clone()).await["items"][0]["id"],
+        column_edge
+    );
+    assert_eq!(
+        remote
+            .call(ROW_LIST, json!({"tableId":table_id,"after":null}))
+            .await["items"],
+        json!([row])
+    );
+    assert_eq!(
+        remote.call("work.get", json!({"id":work["id"]})).await,
+        work_before,
+        "generic columns cannot mutate WorkBook"
+    );
+    let patch = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+        "kind":"patchRow","rowId":row_id,"expectedSchemaRevision":"1","expectedRowRevision":"1",
+        "patches":[{"fieldId":"p1","change":{"kind":"setScalar","value":{"type":"text","value":"Patched once"}}}]}});
+    let mut unread = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    unread.call("system.hello", json!({})).await;
+    unread
+        .io
+        .get_mut()
+        .write_all(
+            format!(
+                "{}\n",
+                json!({"id":unread.next,"method":TABLE_SUBMIT,"params":patch})
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let updated = tokio::time::timeout(LIMIT, async {
+        loop {
+            let r = remote.call(ROW_GET, json!({"id":row_id})).await;
+            if r["revision"] == "2" {
+                break r;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        updated["linkCells"], row["linkCells"],
+        "omitted link column is not cleared by a scalar patch"
+    );
+    drop(unread);
+    let alter = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+        "kind":"alterTable","tableId":table_id,"expectedSchemaRevision":"1","change":{"kind":"renameField","fieldId":"p2","name":"Evidence work"}}});
+    let altered = remote.call(TABLE_SUBMIT, alter).await;
+    assert_eq!(altered["effect"]["resultSchemaRevision"], "2");
+    let evolved = remote.call(TABLE_GET, json!({"id":table_id})).await;
+    assert_eq!(evolved["fields"][1]["id"], "p2");
+    let row_after_schema = remote.call(ROW_GET, json!({"id":row_id})).await;
+    assert_eq!(row_after_schema["schemaRevision"], "2");
+    assert_eq!(row_after_schema["revision"], "2");
+    assert_eq!(row_after_schema["linkCells"], updated["linkCells"]);
+    let old_read = remote
+        .frame("managedObject.get", json!({"id":table_id}))
+        .await
+        .unwrap();
+    assert_eq!(old_read["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    assert!(old_read["error"]["data"]["refusal"].is_string());
+    let mut stale = patch.clone();
+    stale["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    let refusal = remote.frame(TABLE_SUBMIT, stale.clone()).await.unwrap();
+    assert_eq!(refusal["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    assert_eq!(
+        remote
+            .call(
+                TABLE_REQUEST_GET,
+                json!({"scope":scope,"crewId":crew,"requestId":stale["requestId"]})
+            )
+            .await,
+        json!({"status":"notFound"})
+    );
+    let lookup = json!({"scope":scope,"crewId":crew,"requestId":patch["requestId"]});
+    assert_eq!(
+        local(&mut running.owner, TABLE_REQUEST_GET, lookup.clone()).await,
+        json!({"status":"notFound"})
+    );
+    drop(remote);
+    stopped(running).await;
+
+    let mut running = service(dir.path()).await;
+    // A bound Unix socket can precede persisted TLS setup. This actual RPC is
+    // processed after startup, so distinguish real bind failure from fixture readiness.
+    let rebound = local(&mut running.owner, "remote.status", json!({})).await;
+    eprintln!(
+        "V2 restart remote configuration={} listening={} endpoint={} failure={}",
+        rebound["configuration"], rebound["listening"], rebound["endpoint"], rebound["failure"]
+    );
+    assert_eq!(rebound["configuration"]["enabled"], true);
+    assert_eq!(rebound["configuration"]["port"], port);
+    assert_eq!(
+        rebound["listening"], true,
+        "persisted remote listener did not recover: {rebound}"
+    );
+    assert_eq!(rebound["endpoint"]["port"], port);
+    assert!(
+        rebound["failure"].is_null(),
+        "persisted listener failed: {rebound}"
+    );
+    assert_eq!(
+        rebound["identity"],
+        serde_json::to_value(&identity).unwrap()
+    );
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let current_hello = remote.call("system.hello", json!({})).await;
+    assert_ne!(
+        hello["runtimeIdentity"]["runtimeBindingId"],
+        current_hello["runtimeIdentity"]["runtimeBindingId"]
+    );
+    let original = remote.call(TABLE_REQUEST_GET, lookup.clone()).await;
+    assert_eq!(original["status"], "known");
+    assert_eq!(original["receipt"]["requestId"], patch["requestId"]);
+    assert_eq!(original["receipt"]["effect"]["originalRowRevision"], "1");
+    assert_eq!(original["receipt"]["effect"]["resultRowRevision"], "2");
+    assert_eq!(
+        original["receipt"]["effect"]["schemaRevision"], "1",
+        "original receipt is not rewritten to later schema 2"
+    );
+    assert_eq!(
+        remote.call(ROW_GET, json!({"id":row_id})).await,
+        row_after_schema
+    );
+    let channel = crewd_store::channels::human_id(crew.as_str().unwrap());
+    let msg = remote
+        .call(
+            "message.post",
+            json!({"channelId":channel,"text":"Precise temporary message target"}),
+        )
+        .await;
+    let message_target = json!({"kind":"message","id":msg["id"]});
+    let resolved = remote
+        .call(
+            MANAGED_LINK_RESOLVE_TARGET,
+            json!({"target":message_target}),
+        )
+        .await;
+    assert_eq!(resolved["target"], message_target);
+    assert_eq!(resolved["messageChannelId"], channel);
+    assert!(resolved["summary"].as_str().unwrap().chars().count() <= 280);
+    let table_source = json!({"kind":"table","id":table_id});
+    let table_links = json!({"query":{"direction":"outgoing","source":table_source,"includeAdapters":false},"after":null,"limit":16});
+    let manual_before = remote.call(LINK_LIST, table_links.clone()).await;
+    let link = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+        "kind":"link","source":table_source,"target":{"kind":"reference","target":message_target},"expectedManualLinkRevision":manual_before["manualLinkRevision"]}});
+    let mut updates = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    updates.call("system.hello", json!({})).await;
+    assert_eq!(
+        updates
+            .call("events.subscribe", json!({"topics":[TOPIC]}))
+            .await,
+        json!({"topics":[TOPIC]})
+    );
+    let linked = remote.call(LINK_SUBMIT, link.clone()).await;
+    assert_eq!(linked["effect"]["added"], true);
+    assert_eq!(
+        updates.event().await,
+        json!({"event":CHANGED,"data":{"crewId":crew}})
+    );
+    assert_eq!(remote.call(LINK_SUBMIT, link.clone()).await, linked);
+    let link_lookup = json!({"scope":scope,"crewId":crew,"requestId":link["requestId"]});
+    assert_eq!(
+        remote.call(LINK_REQUEST_GET, link_lookup.clone()).await,
+        json!({"status":"known","receipt":linked})
+    );
+    let mut noop = link.clone();
+    noop["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    noop["operation"]["expectedManualLinkRevision"] = linked["resultManualLinkRevision"].clone();
+    let no_effect = remote.call(LINK_SUBMIT, noop).await;
+    assert_eq!(no_effect["effect"]["added"], false);
+    assert_eq!(no_effect["eventId"], Value::Null);
+    let mut peers = Vec::new();
+    let fresh_patch = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+        "kind":"patchRow","rowId":row_id,"expectedSchemaRevision":"2","expectedRowRevision":"2",
+        "patches":[{"fieldId":"p1","change":{"kind":"setScalar","value":{"type":"text","value":"Post-revocation local change"}}}]}});
+    for (method, params) in [
+        (TABLE_GET, json!({"id":table_id})),
+        (TABLE_LIST, json!({"after":null})),
+        (ROW_GET, json!({"id":row_id})),
+        (ROW_LIST, json!({"tableId":table_id,"after":null})),
+        (TABLE_SUBMIT, fresh_patch.clone()),
+        (TABLE_REQUEST_GET, lookup),
+        (LINK_LIST, table_links),
+        (LINK_SUBMIT, link.clone()),
+        (LINK_REQUEST_GET, link_lookup),
+        (
+            MANAGED_LINK_RESOLVE_TARGET,
+            json!({"target":message_target}),
+        ),
+    ] {
+        let mut peer = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+        peer.call("system.hello", json!({})).await;
+        peers.push((method, params, peer));
+    }
+    local(&mut running.owner,"remote.revoke",json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"End typed column fixture"})).await;
+    local(&mut running.owner, TABLE_SUBMIT, fresh_patch).await;
+    let mut line = String::new();
+    assert!(
+        matches!(
+            tokio::time::timeout(LIMIT, updates.io.read_line(&mut line)).await,
+            Ok(Ok(0) | Err(_))
+        ),
+        "revoked subscriber received {line}; replay/noop must not enqueue links.changed"
+    );
+    for (method, params, mut peer) in peers {
+        if let Ok(frame) = tokio::time::timeout(LIMIT, peer.frame(method, params))
+            .await
+            .unwrap()
+        {
+            assert_eq!(
+                frame["error"]["code"],
+                crewd_proto::RpcError::FORBIDDEN,
+                "{method}: {frame}"
+            );
+            assert!(frame.get("result").is_none());
+        }
+    }
+    drop(remote);
+    stopped(running).await;
+}
+
+#[tokio::test]
+async fn attached_agent_cannot_use_human_v2_table_and_link_methods_or_human_link_events() {
+    use crewd_proto::managed_tables_v2::*;
+    let f = crewd_server::agent::testkit::Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let server = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut agent = RpcClient::connect(&socket).await;
+    local(
+        &mut agent,
+        "agent.attach",
+        json!({"sessionId":f.worker,"token":f.token(&f.worker)}),
+    )
+    .await;
+    let before = durable_state(&f).await;
+    for method in METHODS {
+        let refused = tokio::time::timeout(
+            LIMIT,
+            agent.call(method, json!({"deliberatelyInvalid":"no Human V2 oracle"})),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(refused.0, crewd_proto::RpcError::FORBIDDEN, "{method}");
+    }
+    assert_eq!(durable_state(&f).await, before);
+    // Human-only links topic is either refused at subscribe or filtered at send.
+    let subscribed = agent
+        .call("events.subscribe", json!({"topics":[TOPIC]}))
+        .await;
+    let mut human = RpcClient::connect(&socket).await;
+    local(&mut human, "events.subscribe", json!({"topics":[TOPIC]})).await;
+    let scope = local(&mut human, "managedObject.scope", json!({})).await;
+    local(&mut human,TABLE_SUBMIT,json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+        "kind":"createTable","title":"Human hint source","purpose":"No Agent event","titleFieldIndex":0,"rowWritePolicy":"ownerCrewWriters",
+        "fields":[{"name":"Name","kind":{"kind":"text"},"nullable":false}]}})).await;
+    let event = human.next_event(LIMIT).await.unwrap();
+    assert_eq!(event.event, CHANGED);
+    assert_eq!(event.data, json!({"crewId":f.crew}));
+    if subscribed.is_ok() {
+        local(&mut agent, crewd_proto::agent::methods::TOOLS, json!({})).await;
+        assert!(
+            agent.next_event(Duration::from_millis(200)).await.is_none(),
+            "Human-only link hint leaked to attached Agent"
+        );
+    }
+    drop((agent, human));
+    stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT, server).await.unwrap().unwrap();
 }

@@ -223,7 +223,7 @@ fn answer_default_or_restore_wins_after_due_selection() {
         answer(tx, "crew-a", &public, "explicit answer")
     });
     ok_at(&mut s, at, |tx| escalate_wait(tx, due.remove(0)));
-    ok_at(&mut s, at, |tx| apply_all_due_defaults(tx));
+    ok_at(&mut s, at, apply_all_due_defaults);
     ok_at(&mut s, at, |tx| {
         Ok(crewd_store::judgment_state::restored(tx.conn())?)
     });

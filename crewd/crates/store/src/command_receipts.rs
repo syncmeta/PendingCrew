@@ -172,7 +172,9 @@ pub fn reserve(
 /// channel is being purged. Keep only their request identity to fence replay.
 pub fn retire_purged_decision_asks(c: &Connection, crew: &str) -> Result<()> {
     if c.is_autocommit() {
-        return Err(invalid("public command retirement requires a purge transaction"));
+        return Err(invalid(
+            "public command retirement requires a purge transaction",
+        ));
     }
     let retired = c.execute(
         "INSERT INTO public_command_purge_tombstones(principal,request_id,db_id)

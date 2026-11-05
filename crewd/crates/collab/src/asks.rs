@@ -231,7 +231,10 @@ fn resolve_ask(conn: &Connection, crew: &str, ask: &str) -> Result<AskId> {
     .and_then(|id| id.parse().ok())
     .ok_or_else(|| unknown_id(crew, ask))
 }
-pub(crate) fn public_ask(conn: &Connection, h: AskId) -> Result<crewd_store::object_refs::ObjectReference> {
+pub(crate) fn public_ask(
+    conn: &Connection,
+    h: AskId,
+) -> Result<crewd_store::object_refs::ObjectReference> {
     crewd_store::work_organization::reference_for_core(
         conn,
         crewd_store::object_refs::ObjectKind::HumanTask,
@@ -425,7 +428,10 @@ pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
 }
 
 pub(crate) fn open_with_message(
-    tx: &mut Tx<'_>, asker: &str, o: OpenAsk, announcement: Option<String>,
+    tx: &mut Tx<'_>,
+    asker: &str,
+    o: OpenAsk,
+    announcement: Option<String>,
 ) -> Result<Ask> {
     let s = sessions::get(tx.conn(), asker)?;
     let crew = crews::get(tx.conn(), &s.crew_id)?;
@@ -450,10 +456,13 @@ pub(crate) fn open_with_message(
     })?;
     let reference = public_ask(tx.conn(), h)?;
     let home = crews::home_of(tx.conn(), &crew.id)?;
-    let posted =
-        messages::announce_to_human(
-            tx, &home, Sender::Session(asker.into()), announcement.unwrap_or(question), "ask",
-        )?;
+    let posted = messages::announce_to_human(
+        tx,
+        &home,
+        Sender::Session(asker.into()),
+        announcement.unwrap_or(question),
+        "ask",
+    )?;
     tx.conn().execute(
         "INSERT INTO ask_meta(crew_id,ask,resume_note,message_id) VALUES(?1,?2,?3,?4)",
         params![
@@ -895,7 +904,9 @@ fn list_waits(
 ) -> Result<Vec<HumanWait>> {
     let book = load_org(conn)?;
     let mut out = Vec::new();
-    let epoch = include_inbox.then(|| crate::ask_inbox::epoch(conn)).transpose()?;
+    let epoch = include_inbox
+        .then(|| crate::ask_inbox::epoch(conn))
+        .transpose()?;
     for w in book.human_waits(Ts(now_ms)) {
         let crew = book
             .state()

@@ -182,7 +182,7 @@ mod tests {
             } else {
                 assert_eq!(
                     ok_at(&mut s, at, |tx| asks::apply_due_defaults(tx, "crew-a")).0,
-                    [original.ask.clone()]
+                    std::slice::from_ref(&original.ask)
                 );
             }
             let result = check(s.conn(), "crew-a", &original.ask, NOW).unwrap();

@@ -291,6 +291,9 @@ async fn patrol_socket_has_bounded_cursor_and_work_readback() {
         },
     )
     .unwrap();
-    assert_eq!(serde_json::to_value(responsibility_reopened).unwrap(), responsibility);
+    assert_eq!(
+        serde_json::to_value(responsibility_reopened).unwrap(),
+        responsibility
+    );
     assert_eq!(reopened.conn().total_changes(), changes);
 }

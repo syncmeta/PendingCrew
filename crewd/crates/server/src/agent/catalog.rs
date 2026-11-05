@@ -31,8 +31,16 @@ pub enum Ty {
     DocumentEdits,
     WorkContinuation,
     CoordinationChildren,
-    ArtifactInput, ArtifactReference, ArtifactSubject, ArtifactChange, ArtifactHistoryCursor,
+    ArtifactInput,
+    ArtifactReference,
+    ArtifactSubject,
+    ArtifactChange,
+    ArtifactHistoryCursor,
     ManagedObjectScope,
+    ManagedTableV2Operation,
+    ManagedLinkV2Operation,
+    ManagedLinkQuery,
+    ManagedLinkTarget,
     ManagedObjectChange,
     ManagedMessageChange,
     DecisionAskDraft,
@@ -368,17 +376,23 @@ pub const CATALOG: &[ToolSpec] = &[
         &[p("id", Str, true), p("expected_revision", Str, true)],
     )),
     ro(all("todo_get", &[p("id", Str, true)])),
-    ro(cap(crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL, &[
-        p("id", Str, true),
-        p("after", Str, false),
-        p("expected_revision", Str, false),
-    ])),
-    idempotent(cap(crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL, &[
-        p("id", Str, true),
-        p("expected_revision", Str, true),
-        p("request_id", Str, true),
-        p("note", Str, true),
-    ])),
+    ro(cap(
+        crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL,
+        &[
+            p("id", Str, true),
+            p("after", Str, false),
+            p("expected_revision", Str, false),
+        ],
+    )),
+    idempotent(cap(
+        crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL,
+        &[
+            p("id", Str, true),
+            p("expected_revision", Str, true),
+            p("request_id", Str, true),
+            p("note", Str, true),
+        ],
+    )),
     ro(all(
         "work_closure_history",
         &[
@@ -425,16 +439,19 @@ pub const CATALOG: &[ToolSpec] = &[
     )),
     idempotent(ToolSpec {
         scope: Scope::CaseAdmin,
-        ..all(crewd_collab::admin_case_link::UNLINK_TOOL, &[
-            p("request_id", Str, true),
-            p("id", Str, true),
-            p("expected_revision", Str, true),
-            p("related_id", Str, true),
-            p("expected_related_revision", Str, true),
-            c("edge", true, &["parent", "dependency"]),
-            p("evidence", Evidence, true),
-            p("note", Str, true),
-        ])
+        ..all(
+            crewd_collab::admin_case_link::UNLINK_TOOL,
+            &[
+                p("request_id", Str, true),
+                p("id", Str, true),
+                p("expected_revision", Str, true),
+                p("related_id", Str, true),
+                p("expected_related_revision", Str, true),
+                c("edge", true, &["parent", "dependency"]),
+                p("evidence", Evidence, true),
+                p("note", Str, true),
+            ],
+        )
     }),
     idempotent(all(
         "work_item_update",
@@ -588,7 +605,10 @@ pub const CATALOG: &[ToolSpec] = &[
     )),
     ro(crew_member(
         "ask_decision_request_get",
-        &[p("scope", ManagedObjectScope, true), p("requestId", Str, true)],
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("requestId", Str, true),
+        ],
     )),
     all(
         "withdraw_ask",
@@ -682,22 +702,157 @@ pub const CATALOG: &[ToolSpec] = &[
             c("runner", false, RUNNERS),
         ],
     )),
-    ro(crew_member("artifact_history_status",&[p("crewId",Str,true),p("jobId",Str,false)])),
-    idempotent(crew_member("artifact_history_begin",&[p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true)])),
-    idempotent(crew_member("artifact_history_step",&[
-        p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true),p("jobId",Str,true),
-        p("expectedRevision",Str,true),p("expectedCursor",ArtifactHistoryCursor,true),Param {required:true,..int("limit",1,64)},
-    ])),
-    ro(crew_member("artifact_history_request_get",&[p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true)])),
-    ro(crew_member("artifact_preview",&[p("crewId",Str,true),p("input",ArtifactInput,true)])),
-    ro(crew_member("artifacts_list",&[p("after",ArtifactReference,false)])),
-    ro(crew_member("artifact_get",&[p("reference",ArtifactReference,true)])),
-    ro(crew_member("artifact_backlinks",&[p("reference",ArtifactReference,true),p("after",Str,false),p("includeLegacySources",Bool,false)])),
-    ro(crew_member("artifact_subject",&[p("subject",ArtifactSubject,true),p("after",Str,false),p("includeLegacySources",Bool,false)])),
-    ToolSpec { destructive:true,idempotent:true,..crew_member("artifact_submit",&[
-        p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true),p("change",ArtifactChange,true),
-    ]) },
-    ro(crew_member("artifact_request_get",&[p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true)])),
+    ro(crew_member("managed_table_v2_get", &[p("id", Str, true)])),
+    ro(crew_member(
+        "managed_tables_v2_list",
+        &[p("after", Str, false)],
+    )),
+    ro(crew_member("managed_row_v2_get", &[p("id", Str, true)])),
+    ro(crew_member(
+        "managed_rows_v2_list",
+        &[p("tableId", Str, true), p("after", Str, false)],
+    )),
+    ToolSpec {
+        destructive: true,
+        idempotent: true,
+        ..crew_member(
+            "managed_table_v2_submit",
+            &[
+                p("scope", ManagedObjectScope, true),
+                p("crewId", Str, true),
+                p("requestId", Str, true),
+                p("operation", ManagedTableV2Operation, true),
+            ],
+        )
+    },
+    ro(crew_member(
+        "managed_table_v2_request_get",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("crewId", Str, true),
+            p("requestId", Str, true),
+        ],
+    )),
+    ro(crew_member(
+        "managed_link_resolve_target",
+        &[p("target", ManagedLinkTarget, true)],
+    )),
+    ro(crew_member(
+        "managed_links_list",
+        &[
+            p("query", ManagedLinkQuery, true),
+            p("after", Str, false),
+            Param {
+                required: true,
+                ..int("limit", 1, 64)
+            },
+        ],
+    )),
+    ToolSpec {
+        destructive: true,
+        idempotent: true,
+        ..crew_member(
+            "managed_link_submit",
+            &[
+                p("scope", ManagedObjectScope, true),
+                p("crewId", Str, true),
+                p("requestId", Str, true),
+                p("operation", ManagedLinkV2Operation, true),
+            ],
+        )
+    },
+    ro(crew_member(
+        "managed_link_request_get",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("crewId", Str, true),
+            p("requestId", Str, true),
+        ],
+    )),
+    ro(crew_member(
+        "artifact_history_status",
+        &[p("crewId", Str, true), p("jobId", Str, false)],
+    )),
+    idempotent(crew_member(
+        "artifact_history_begin",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("crewId", Str, true),
+            p("requestId", Str, true),
+        ],
+    )),
+    idempotent(crew_member(
+        "artifact_history_step",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("crewId", Str, true),
+            p("requestId", Str, true),
+            p("jobId", Str, true),
+            p("expectedRevision", Str, true),
+            p("expectedCursor", ArtifactHistoryCursor, true),
+            Param {
+                required: true,
+                ..int("limit", 1, 64)
+            },
+        ],
+    )),
+    ro(crew_member(
+        "artifact_history_request_get",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("crewId", Str, true),
+            p("requestId", Str, true),
+        ],
+    )),
+    ro(crew_member(
+        "artifact_preview",
+        &[p("crewId", Str, true), p("input", ArtifactInput, true)],
+    )),
+    ro(crew_member(
+        "artifacts_list",
+        &[p("after", ArtifactReference, false)],
+    )),
+    ro(crew_member(
+        "artifact_get",
+        &[p("reference", ArtifactReference, true)],
+    )),
+    ro(crew_member(
+        "artifact_backlinks",
+        &[
+            p("reference", ArtifactReference, true),
+            p("after", Str, false),
+            p("includeLegacySources", Bool, false),
+        ],
+    )),
+    ro(crew_member(
+        "artifact_subject",
+        &[
+            p("subject", ArtifactSubject, true),
+            p("after", Str, false),
+            p("includeLegacySources", Bool, false),
+        ],
+    )),
+    ToolSpec {
+        destructive: true,
+        idempotent: true,
+        ..crew_member(
+            "artifact_submit",
+            &[
+                p("scope", ManagedObjectScope, true),
+                p("crewId", Str, true),
+                p("requestId", Str, true),
+                p("change", ArtifactChange, true),
+            ],
+        )
+    },
+    ro(crew_member(
+        "artifact_request_get",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("crewId", Str, true),
+            p("requestId", Str, true),
+        ],
+    )),
     ro(crew_member("managed_object_scope_get", &[])),
     ro(crew_member(
         "managed_object_get",
@@ -713,7 +868,10 @@ pub const CATALOG: &[ToolSpec] = &[
     )),
     ro(crew_member(
         "managed_decisions_list",
-        &[p("after", Str, false), p("includeSystemDefaults", Bool, false)],
+        &[
+            p("after", Str, false),
+            p("includeSystemDefaults", Bool, false),
+        ],
     )),
     ro(crew_member("managed_risks_list", &[p("after", Str, false)])),
     ro(crew_member(
@@ -723,16 +881,33 @@ pub const CATALOG: &[ToolSpec] = &[
     ToolSpec {
         destructive: true,
         idempotent: true,
-        ..crew_member("managed_object_from_message", &[
-            p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true),
-            p("sourceMessageId",Str,true),p("change",ManagedMessageChange,true),
-        ])
+        ..crew_member(
+            "managed_object_from_message",
+            &[
+                p("scope", ManagedObjectScope, true),
+                p("crewId", Str, true),
+                p("requestId", Str, true),
+                p("sourceMessageId", Str, true),
+                p("change", ManagedMessageChange, true),
+            ],
+        )
     },
-    ro(crew_member("managed_message_request_get", &[
-        p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true),
-    ])),
-    ro(crew_member("managed_object_source_get", &[p("id",Str,true)])),
-    ro(crew_member("managed_objects_from_message", &[p("messageId",Str,true),p("after",Str,false)])),
+    ro(crew_member(
+        "managed_message_request_get",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("crewId", Str, true),
+            p("requestId", Str, true),
+        ],
+    )),
+    ro(crew_member(
+        "managed_object_source_get",
+        &[p("id", Str, true)],
+    )),
+    ro(crew_member(
+        "managed_objects_from_message",
+        &[p("messageId", Str, true), p("after", Str, false)],
+    )),
     ToolSpec {
         destructive: true,
         idempotent: true,
@@ -847,8 +1022,12 @@ fn definition(t: &ToolSpec, loc: Locale) -> ToolDef {
 }
 
 pub(crate) fn case_tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
-    CATALOG.iter()
-        .filter(|t| (visible(t, me) || visible_in_case(t, me)) && super::admin_case_scope::allowed_tool(t.name))
+    CATALOG
+        .iter()
+        .filter(|t| {
+            (visible(t, me) || visible_in_case(t, me))
+                && super::admin_case_scope::allowed_tool(t.name)
+        })
         .map(|t| definition(t, loc))
         .collect()
 }
@@ -884,15 +1063,14 @@ fn work_continuation_schema(loc: Locale) -> Value {
     ]})
 }
 
-
-fn artifact_input_schema()->Value {
+fn artifact_input_schema() -> Value {
     json!({"type":"object","properties":{
         "kind":{"type":"string","enum":["commit","pullRequest","file","test","link"]},
         "value":{"type":"string","minLength":1,"maxLength":4096},
         "repository":{"type":["string","null"],"minLength":1,"maxLength":512}
     },"required":["kind","value"],"additionalProperties":false})
 }
-fn artifact_reference_schema()->Value {
+fn artifact_reference_schema() -> Value {
     json!({"type":"object","properties":{
         "namespace":{"oneOf":[
             {"type":"object","properties":{"kind":{"const":"global"}},"required":["kind"],"additionalProperties":false},
@@ -901,11 +1079,11 @@ fn artifact_reference_schema()->Value {
         ]},"key":{"type":"string","minLength":1,"maxLength":4096}
     },"required":["namespace","key"],"additionalProperties":false})
 }
-fn artifact_subject_schema()->Value {
+fn artifact_subject_schema() -> Value {
     json!({"type":"object","properties":{"kind":{"type":"string","enum":["work","requirement","decision","lesson","risk","row","table"]},"id":{"type":"string"}},"required":["kind","id"],"additionalProperties":false})
 }
-fn artifact_change_schema()->Value {
-    let relation=json!({"type":"string","enum":["evidence","appliesTo","relates"]});
+fn artifact_change_schema() -> Value {
+    let relation = json!({"type":"string","enum":["evidence","appliesTo","relates"]});
     json!({"oneOf":[
         {"type":"object","properties":{"kind":{"const":"register"},"input":artifact_input_schema()},"required":["kind","input"],"additionalProperties":false},
         {"type":"object","properties":{"kind":{"const":"link"},"input":artifact_input_schema(),"subject":artifact_subject_schema(),"relation":relation},"required":["kind","input","subject","relation"],"additionalProperties":false},
@@ -1052,6 +1230,52 @@ fn decision_ask_draft_schema() -> Value {
     )
 }
 
+/// V2 closed unions are authored once in proto. Inline its exact schema for MCP tools.
+fn managed_v2_parameter(method: &str, parameter: &str) -> Value {
+    static API: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let api = API.get_or_init(crewd_proto::api_schema);
+    fn inline(value: &Value, api: &Value, depth: u16) -> Value {
+        assert!(depth < 128, "unexpected recursive V2 parameter schema");
+        match value {
+            Value::Object(object) => {
+                if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+                    let path = reference
+                        .strip_prefix('#')
+                        .expect("local proto schema reference");
+                    let target = api.pointer(path).expect("resolved proto schema reference");
+                    let mut expanded = inline(target, api, depth + 1);
+                    for (key, value) in object {
+                        if key != "$ref" {
+                            expanded[key] = inline(value, api, depth + 1)
+                        }
+                    }
+                    return expanded;
+                }
+                Value::Object(
+                    object
+                        .iter()
+                        .map(|(key, value)| (key.clone(), inline(value, api, depth + 1)))
+                        .collect(),
+                )
+            }
+            Value::Array(values) => Value::Array(
+                values
+                    .iter()
+                    .map(|value| inline(value, api, depth + 1))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+    let params = inline(&api["methods"][method]["params"], api, 0);
+    let result = params["properties"][parameter].clone();
+    assert!(
+        result.is_object(),
+        "V2 tool parameter must exist in actual proto"
+    );
+    result
+}
+
 pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
@@ -1080,23 +1304,38 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
             ManagedObjectScope => json!({"type":"object","properties":{
                 "dbId":{"type":"string"},"restoreEpoch":{"type":"string"}
             },"required":["dbId","restoreEpoch"],"additionalProperties":false}),
-            ArtifactHistoryCursor=>json!({"type":"object","properties":{
+            ArtifactHistoryCursor => json!({"type":"object","properties":{
                 "phase":{"type":"string","enum":["legacyEvents","legacySnapshots","events","lessons","complete"]},
                 "after":{"type":"string"}
             },"required":["phase","after"],"additionalProperties":false}),
-            ArtifactInput=>artifact_input_schema(),
-            ArtifactReference=>artifact_reference_schema(),
-            ArtifactSubject=>artifact_subject_schema(),
-            ArtifactChange=>artifact_change_schema(),
+            ArtifactInput => artifact_input_schema(),
+            ArtifactReference => artifact_reference_schema(),
+            ArtifactSubject => artifact_subject_schema(),
+            ArtifactChange => artifact_change_schema(),
+            ManagedTableV2Operation => {
+                managed_v2_parameter(crewd_proto::managed_tables_v2::TABLE_SUBMIT, "operation")
+            }
+            ManagedLinkV2Operation => {
+                managed_v2_parameter(crewd_proto::managed_tables_v2::LINK_SUBMIT, "operation")
+            }
+            ManagedLinkQuery => {
+                managed_v2_parameter(crewd_proto::managed_tables_v2::LINK_LIST, "query")
+            }
+            ManagedLinkTarget => managed_v2_parameter(
+                crewd_proto::managed_tables_v2::MANAGED_LINK_RESOLVE_TARGET,
+                "target",
+            ),
             ManagedObjectChange => managed_change_schema(),
             ManagedMessageChange => {
-                let mut schema=managed_change_schema();
+                let mut schema = managed_change_schema();
                 schema["oneOf"].as_array_mut().unwrap().retain(|change| {
-                    matches!(change["properties"]["kind"]["const"].as_str(),
-                        Some("recordDecision"|"recordRisk"|"recordLesson"|"addRow"))
+                    matches!(
+                        change["properties"]["kind"]["const"].as_str(),
+                        Some("recordDecision" | "recordRisk" | "recordLesson" | "addRow")
+                    )
                 });
                 schema
-            },
+            }
             DecisionAskDraft => decision_ask_draft_schema(),
             CoordinationChildren => json!({"type":"array","minItems":2,"maxItems":8,"items":{
                 "type":"object",
@@ -1245,8 +1484,16 @@ mod tests {
         }
         assert!(!worker.contains(&"admin_case_custody_accept".to_string()));
         assert!(captain.contains(&"admin_case_custody_accept".to_string()));
-        assert!(!worker.iter().any(|name| name == crewd_collab::work_coordination::SPLIT_TOOL));
-        assert!(captain.iter().any(|name| name == crewd_collab::work_coordination::SPLIT_TOOL));
+        assert!(
+            !worker
+                .iter()
+                .any(|name| name == crewd_collab::work_coordination::SPLIT_TOOL)
+        );
+        assert!(
+            captain
+                .iter()
+                .any(|name| name == crewd_collab::work_coordination::SPLIT_TOOL)
+        );
     }
 
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
@@ -1254,8 +1501,11 @@ mod tests {
     #[test]
     fn annotations_are_on_every_tool_and_passive_is_derived() {
         let mut defs = tools_for(&who(Role::Captain), Locale::Zh);
-        defs.extend(case_tools_for(&who(Role::Admin), Locale::Zh).into_iter()
-            .filter(|tool| find(&tool.name).is_some_and(|spec| spec.scope == Scope::CaseAdmin)));
+        defs.extend(
+            case_tools_for(&who(Role::Admin), Locale::Zh)
+                .into_iter()
+                .filter(|tool| find(&tool.name).is_some_and(|spec| spec.scope == Scope::CaseAdmin)),
+        );
         assert_eq!(defs.len(), CATALOG.len());
         for d in &defs {
             let h = d
@@ -1301,8 +1551,22 @@ mod tests {
                 "get_quota",
                 "inspect_session",
                 "list_sessions",
-                "artifact_history_status", "artifact_history_request_get",
-                "artifact_preview", "artifacts_list", "artifact_get", "artifact_backlinks", "artifact_subject", "artifact_request_get",
+                "managed_table_v2_get",
+                "managed_tables_v2_list",
+                "managed_row_v2_get",
+                "managed_rows_v2_list",
+                "managed_table_v2_request_get",
+                "managed_link_resolve_target",
+                "managed_links_list",
+                "managed_link_request_get",
+                "artifact_history_status",
+                "artifact_history_request_get",
+                "artifact_preview",
+                "artifacts_list",
+                "artifact_get",
+                "artifact_backlinks",
+                "artifact_subject",
+                "artifact_request_get",
                 "managed_object_scope_get",
                 "managed_object_get",
                 "managed_tables_list",
@@ -1328,6 +1592,8 @@ mod tests {
                 "stop_session",
                 "handoff_captain",
                 "crew_structure",
+                "managed_table_v2_submit",
+                "managed_link_submit",
                 "artifact_submit",
                 "managed_object_from_message",
                 "managed_object_submit",
@@ -1367,7 +1633,10 @@ mod tests {
                 "change_workdir",
                 "set_crew_status",
                 "delegation_policy",
-                "artifact_history_begin", "artifact_history_step",
+                "managed_table_v2_submit",
+                "managed_link_submit",
+                "artifact_history_begin",
+                "artifact_history_step",
                 "artifact_submit",
                 "managed_object_from_message",
                 "managed_object_submit",
@@ -1401,8 +1670,22 @@ mod tests {
                 "get_quota",
                 "inspect_session",
                 "list_sessions",
-                "artifact_history_status", "artifact_history_request_get",
-                "artifact_preview", "artifacts_list", "artifact_get", "artifact_backlinks", "artifact_subject", "artifact_request_get",
+                "managed_table_v2_get",
+                "managed_tables_v2_list",
+                "managed_row_v2_get",
+                "managed_rows_v2_list",
+                "managed_table_v2_request_get",
+                "managed_link_resolve_target",
+                "managed_links_list",
+                "managed_link_request_get",
+                "artifact_history_status",
+                "artifact_history_request_get",
+                "artifact_preview",
+                "artifacts_list",
+                "artifact_get",
+                "artifact_backlinks",
+                "artifact_subject",
+                "artifact_request_get",
                 "managed_object_scope_get",
                 "managed_object_get",
                 "managed_tables_list",

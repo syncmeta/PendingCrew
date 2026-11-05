@@ -493,6 +493,18 @@ expectedStatus 必须是原始需求状态。
 
 这行数据已变化。请先读取当前内容和版本，再确认修改。
 
+## managedTable.schema_changed
+
+表格的列已变化。请先读取当前表格和列版本，再确认修改；保留尚未提交的内容。
+
+## managedLink.changed
+
+关联已变化。请先读取当前关联和版本，再确认修改。
+
+## managedTable.v1_unsupported
+
+这张表已使用新列结构。请使用支持当前表格版本的客户端查看或编辑。
+
 ## managed_object.decision_changed
 
 原决策的状态或版本已变化。请重新读取它与当前替代决策。

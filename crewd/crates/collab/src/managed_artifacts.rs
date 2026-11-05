@@ -62,7 +62,7 @@ fn readable(c: &Connection, actor: Actor<'_>, target: &Subject) -> Result<i64> {
         | Subject::Lesson { id }
         | Subject::Row { id }
         | Subject::Table { id } => {
-            objects::get_with_defaults(c, actor, id, true)?;
+            objects::read_authority(c, actor, id)?;
         }
     }
     Ok(db::subject_number(c, target)?)
@@ -142,7 +142,7 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         Some(db::Saved::Active {
             digest: saved,
             receipt,
-        }) if saved == digest && receipt.scope == request.scope => return Ok(receipt),
+        }) if saved == digest && receipt.scope == request.scope => return Ok(*receipt),
         Some(_) => return Err(conflict(&request.request_id)),
         None => {}
     }
@@ -193,7 +193,7 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
                 Effect::Linked {
                     created,
                     added,
-                    edge,
+                    edge: Box::new(edge),
                 },
                 Some(target),
                 created || added,
@@ -228,7 +228,7 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
                 Effect::Linked {
                     created: false,
                     added,
-                    edge,
+                    edge: Box::new(edge),
                 },
                 Some(target),
                 added,
@@ -306,7 +306,7 @@ pub fn lookup(
         return Err(forbidden());
     }
     let saved = match db::receipt(c, crew, &principal, request)? {
-        Some(db::Saved::Active { receipt, .. }) => Some(receipt),
+        Some(db::Saved::Active { receipt, .. }) => Some(*receipt),
         Some(db::Saved::Retired) | None => None,
     };
     if current.restore_epoch != origin.restore_epoch {

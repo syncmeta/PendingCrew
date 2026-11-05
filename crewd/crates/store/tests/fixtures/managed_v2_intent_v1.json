@@ -1,0 +1,1640 @@
+[
+  {
+    "name": "create-unicode-nfc",
+    "normalized": {
+      "method": "managedTable.v2.submit",
+      "scope": {
+        "dbId": "synthetic-db",
+        "restoreEpoch": "11111111-1111-4111-8111-111111111111"
+      },
+      "crewId": "crew-A",
+      "requestId": "22222222-2222-4222-8222-222222222222",
+      "operation": {
+        "kind": "createTable",
+        "title": "表格 é",
+        "purpose": "跟踪",
+        "fields": [
+          {
+            "name": "id",
+            "kind": {
+              "kind": "text"
+            },
+            "nullable": false
+          }
+        ],
+        "titleFieldIndex": 0,
+        "rowWritePolicy": "authorCaptainHuman"
+      }
+    },
+    "node": {
+      "type": "object",
+      "entries": [
+        {
+          "key": "method",
+          "value": {
+            "type": "string",
+            "text": "managedTable.v2.submit"
+          }
+        },
+        {
+          "key": "scope",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "dbId",
+                "value": {
+                  "type": "string",
+                  "text": "synthetic-db"
+                }
+              },
+              {
+                "key": "restoreEpoch",
+                "value": {
+                  "type": "string",
+                  "text": "11111111-1111-4111-8111-111111111111"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "key": "crewId",
+          "value": {
+            "type": "string",
+            "text": "crew-A"
+          }
+        },
+        {
+          "key": "requestId",
+          "value": {
+            "type": "string",
+            "text": "22222222-2222-4222-8222-222222222222"
+          }
+        },
+        {
+          "key": "operation",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "kind",
+                "value": {
+                  "type": "string",
+                  "text": "createTable"
+                }
+              },
+              {
+                "key": "title",
+                "value": {
+                  "type": "string",
+                  "text": "表格 é"
+                }
+              },
+              {
+                "key": "purpose",
+                "value": {
+                  "type": "string",
+                  "text": "跟踪"
+                }
+              },
+              {
+                "key": "fields",
+                "value": {
+                  "type": "array",
+                  "values": [
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "name",
+                          "value": {
+                            "type": "string",
+                            "text": "id"
+                          }
+                        },
+                        {
+                          "key": "kind",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "text"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "key": "nullable",
+                          "value": {
+                            "type": "bool",
+                            "bool": false
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "key": "titleFieldIndex",
+                "value": {
+                  "type": "unsigned",
+                  "value": "0"
+                }
+              },
+              {
+                "key": "rowWritePolicy",
+                "value": {
+                  "type": "string",
+                  "text": "authorCaptainHuman"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "canonicalHex": "6d616e616765642d76322d696e74656e742e763100210000000000000005100000000000000006637265774964100000000000000006637265772d411000000000000000066d6574686f641000000000000000166d616e616765645461626c652e76322e7375626d69741000000000000000096f7065726174696f6e2100000000000000061000000000000000066669656c64732000000000000000012100000000000000031000000000000000046b696e642100000000000000011000000000000000046b696e64100000000000000004746578741000000000000000046e616d6510000000000000000269641000000000000000086e756c6c61626c65011000000000000000046b696e6410000000000000000b6372656174655461626c65100000000000000007707572706f7365100000000000000006e8b79fe8b8aa10000000000000000e726f775772697465506f6c696379100000000000000012617574686f724361707461696e48756d616e1000000000000000057469746c65100000000000000009e8a1a8e6a0bc20c3a910000000000000000f7469746c654669656c64496e64657811000000000000000010000000000000000972657175657374496410000000000000002432323232323232322d323232322d343232322d383232322d32323232323232323232323210000000000000000573636f70652100000000000000021000000000000000046462496410000000000000000c73796e7468657469632d646210000000000000000c726573746f726545706f636810000000000000002431313131313131312d313131312d343131312d383131312d313131313131313131313131",
+    "sha256": "4a27d15b266b191fff05a219a462e5023146b54c1be428adb048a74ff7fdb084"
+  },
+  {
+    "name": "create-unicode-nfd",
+    "normalized": {
+      "method": "managedTable.v2.submit",
+      "scope": {
+        "dbId": "synthetic-db",
+        "restoreEpoch": "11111111-1111-4111-8111-111111111111"
+      },
+      "crewId": "crew-A",
+      "requestId": "22222222-2222-4222-8222-222222222222",
+      "operation": {
+        "kind": "createTable",
+        "title": "表格 é",
+        "purpose": "跟踪",
+        "fields": [
+          {
+            "name": "id",
+            "kind": {
+              "kind": "text"
+            },
+            "nullable": false
+          }
+        ],
+        "titleFieldIndex": 0,
+        "rowWritePolicy": "authorCaptainHuman"
+      }
+    },
+    "node": {
+      "type": "object",
+      "entries": [
+        {
+          "key": "method",
+          "value": {
+            "type": "string",
+            "text": "managedTable.v2.submit"
+          }
+        },
+        {
+          "key": "scope",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "dbId",
+                "value": {
+                  "type": "string",
+                  "text": "synthetic-db"
+                }
+              },
+              {
+                "key": "restoreEpoch",
+                "value": {
+                  "type": "string",
+                  "text": "11111111-1111-4111-8111-111111111111"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "key": "crewId",
+          "value": {
+            "type": "string",
+            "text": "crew-A"
+          }
+        },
+        {
+          "key": "requestId",
+          "value": {
+            "type": "string",
+            "text": "22222222-2222-4222-8222-222222222222"
+          }
+        },
+        {
+          "key": "operation",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "kind",
+                "value": {
+                  "type": "string",
+                  "text": "createTable"
+                }
+              },
+              {
+                "key": "title",
+                "value": {
+                  "type": "string",
+                  "text": "表格 é"
+                }
+              },
+              {
+                "key": "purpose",
+                "value": {
+                  "type": "string",
+                  "text": "跟踪"
+                }
+              },
+              {
+                "key": "fields",
+                "value": {
+                  "type": "array",
+                  "values": [
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "name",
+                          "value": {
+                            "type": "string",
+                            "text": "id"
+                          }
+                        },
+                        {
+                          "key": "kind",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "text"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "key": "nullable",
+                          "value": {
+                            "type": "bool",
+                            "bool": false
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "key": "titleFieldIndex",
+                "value": {
+                  "type": "unsigned",
+                  "value": "0"
+                }
+              },
+              {
+                "key": "rowWritePolicy",
+                "value": {
+                  "type": "string",
+                  "text": "authorCaptainHuman"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "canonicalHex": "6d616e616765642d76322d696e74656e742e763100210000000000000005100000000000000006637265774964100000000000000006637265772d411000000000000000066d6574686f641000000000000000166d616e616765645461626c652e76322e7375626d69741000000000000000096f7065726174696f6e2100000000000000061000000000000000066669656c64732000000000000000012100000000000000031000000000000000046b696e642100000000000000011000000000000000046b696e64100000000000000004746578741000000000000000046e616d6510000000000000000269641000000000000000086e756c6c61626c65011000000000000000046b696e6410000000000000000b6372656174655461626c65100000000000000007707572706f7365100000000000000006e8b79fe8b8aa10000000000000000e726f775772697465506f6c696379100000000000000012617574686f724361707461696e48756d616e1000000000000000057469746c6510000000000000000ae8a1a8e6a0bc2065cc8110000000000000000f7469746c654669656c64496e64657811000000000000000010000000000000000972657175657374496410000000000000002432323232323232322d323232322d343232322d383232322d32323232323232323232323210000000000000000573636f70652100000000000000021000000000000000046462496410000000000000000c73796e7468657469632d646210000000000000000c726573746f726545706f636810000000000000002431313131313131312d313131312d343131312d383131312d313131313131313131313131",
+    "sha256": "30c094eda8d064cfeddd6311c2b639ae061b2463e0db034ad605654d88a33672"
+  },
+  {
+    "name": "typed-boundaries-and-signed-zero",
+    "normalized": {
+      "method": "managedTable.v2.submit",
+      "scope": {
+        "dbId": "synthetic-db",
+        "restoreEpoch": "11111111-1111-4111-8111-111111111111"
+      },
+      "crewId": "crew-A",
+      "requestId": "22222222-2222-4222-8222-222222222222",
+      "operation": {
+        "kind": "addRow",
+        "tableId": "T12",
+        "expectedSchemaRevision": "1",
+        "patches": [
+          {
+            "fieldId": "p1",
+            "change": {
+              "kind": "setScalar",
+              "value": {
+                "type": "integer",
+                "value": "-9223372036854775808"
+              }
+            }
+          },
+          {
+            "fieldId": "p2",
+            "change": {
+              "kind": "setScalar",
+              "value": {
+                "type": "integer",
+                "value": "9223372036854775807"
+              }
+            }
+          },
+          {
+            "fieldId": "p3",
+            "change": {
+              "kind": "setScalar",
+              "value": {
+                "type": "real",
+                "value": 0.0
+              }
+            }
+          },
+          {
+            "fieldId": "p4",
+            "change": {
+              "kind": "setScalar",
+              "value": {
+                "type": "real",
+                "value": -0.0
+              }
+            }
+          },
+          {
+            "fieldId": "p5",
+            "change": {
+              "kind": "setScalar",
+              "value": {
+                "type": "real",
+                "value": 1.0
+              }
+            }
+          },
+          {
+            "fieldId": "p6",
+            "change": {
+              "kind": "setScalar",
+              "value": {
+                "type": "text",
+                "value": ""
+              }
+            }
+          },
+          {
+            "fieldId": "p7",
+            "change": {
+              "kind": "setScalar",
+              "value": {
+                "type": "null"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "node": {
+      "type": "object",
+      "entries": [
+        {
+          "key": "method",
+          "value": {
+            "type": "string",
+            "text": "managedTable.v2.submit"
+          }
+        },
+        {
+          "key": "scope",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "dbId",
+                "value": {
+                  "type": "string",
+                  "text": "synthetic-db"
+                }
+              },
+              {
+                "key": "restoreEpoch",
+                "value": {
+                  "type": "string",
+                  "text": "11111111-1111-4111-8111-111111111111"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "key": "crewId",
+          "value": {
+            "type": "string",
+            "text": "crew-A"
+          }
+        },
+        {
+          "key": "requestId",
+          "value": {
+            "type": "string",
+            "text": "22222222-2222-4222-8222-222222222222"
+          }
+        },
+        {
+          "key": "operation",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "kind",
+                "value": {
+                  "type": "string",
+                  "text": "addRow"
+                }
+              },
+              {
+                "key": "tableId",
+                "value": {
+                  "type": "string",
+                  "text": "T12"
+                }
+              },
+              {
+                "key": "expectedSchemaRevision",
+                "value": {
+                  "type": "string",
+                  "text": "1"
+                }
+              },
+              {
+                "key": "patches",
+                "value": {
+                  "type": "array",
+                  "values": [
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p1"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "setScalar"
+                                }
+                              },
+                              {
+                                "key": "value",
+                                "value": {
+                                  "type": "object",
+                                  "entries": [
+                                    {
+                                      "key": "type",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "integer"
+                                      }
+                                    },
+                                    {
+                                      "key": "value",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "-9223372036854775808"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p2"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "setScalar"
+                                }
+                              },
+                              {
+                                "key": "value",
+                                "value": {
+                                  "type": "object",
+                                  "entries": [
+                                    {
+                                      "key": "type",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "integer"
+                                      }
+                                    },
+                                    {
+                                      "key": "value",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "9223372036854775807"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p3"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "setScalar"
+                                }
+                              },
+                              {
+                                "key": "value",
+                                "value": {
+                                  "type": "object",
+                                  "entries": [
+                                    {
+                                      "key": "type",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "real"
+                                      }
+                                    },
+                                    {
+                                      "key": "value",
+                                      "value": {
+                                        "type": "realBits",
+                                        "value": "0000000000000000"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p4"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "setScalar"
+                                }
+                              },
+                              {
+                                "key": "value",
+                                "value": {
+                                  "type": "object",
+                                  "entries": [
+                                    {
+                                      "key": "type",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "real"
+                                      }
+                                    },
+                                    {
+                                      "key": "value",
+                                      "value": {
+                                        "type": "realBits",
+                                        "value": "8000000000000000"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p5"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "setScalar"
+                                }
+                              },
+                              {
+                                "key": "value",
+                                "value": {
+                                  "type": "object",
+                                  "entries": [
+                                    {
+                                      "key": "type",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "real"
+                                      }
+                                    },
+                                    {
+                                      "key": "value",
+                                      "value": {
+                                        "type": "realBits",
+                                        "value": "3ff0000000000000"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p6"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "setScalar"
+                                }
+                              },
+                              {
+                                "key": "value",
+                                "value": {
+                                  "type": "object",
+                                  "entries": [
+                                    {
+                                      "key": "type",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "text"
+                                      }
+                                    },
+                                    {
+                                      "key": "value",
+                                      "value": {
+                                        "type": "string",
+                                        "text": ""
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p7"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "setScalar"
+                                }
+                              },
+                              {
+                                "key": "value",
+                                "value": {
+                                  "type": "object",
+                                  "entries": [
+                                    {
+                                      "key": "type",
+                                      "value": {
+                                        "type": "string",
+                                        "text": "null"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "canonicalHex": "6d616e616765642d76322d696e74656e742e763100210000000000000005100000000000000006637265774964100000000000000006637265772d411000000000000000066d6574686f641000000000000000166d616e616765645461626c652e76322e7375626d69741000000000000000096f7065726174696f6e2100000000000000041000000000000000166578706563746564536368656d615265766973696f6e100000000000000001311000000000000000046b696e64100000000000000006616464526f77100000000000000007706174636865732000000000000000072100000000000000021000000000000000066368616e67652100000000000000021000000000000000046b696e641000000000000000097365745363616c617210000000000000000576616c756521000000000000000210000000000000000474797065100000000000000007696e746567657210000000000000000576616c75651000000000000000142d393232333337323033363835343737353830381000000000000000076669656c64496410000000000000000270312100000000000000021000000000000000066368616e67652100000000000000021000000000000000046b696e641000000000000000097365745363616c617210000000000000000576616c756521000000000000000210000000000000000474797065100000000000000007696e746567657210000000000000000576616c7565100000000000000013393232333337323033363835343737353830371000000000000000076669656c64496410000000000000000270322100000000000000021000000000000000066368616e67652100000000000000021000000000000000046b696e641000000000000000097365745363616c617210000000000000000576616c7565210000000000000002100000000000000004747970651000000000000000047265616c10000000000000000576616c75651200000000000000001000000000000000076669656c64496410000000000000000270332100000000000000021000000000000000066368616e67652100000000000000021000000000000000046b696e641000000000000000097365745363616c617210000000000000000576616c7565210000000000000002100000000000000004747970651000000000000000047265616c10000000000000000576616c75651280000000000000001000000000000000076669656c64496410000000000000000270342100000000000000021000000000000000066368616e67652100000000000000021000000000000000046b696e641000000000000000097365745363616c617210000000000000000576616c7565210000000000000002100000000000000004747970651000000000000000047265616c10000000000000000576616c7565123ff00000000000001000000000000000076669656c64496410000000000000000270352100000000000000021000000000000000066368616e67652100000000000000021000000000000000046b696e641000000000000000097365745363616c617210000000000000000576616c7565210000000000000002100000000000000004747970651000000000000000047465787410000000000000000576616c75651000000000000000001000000000000000076669656c64496410000000000000000270362100000000000000021000000000000000066368616e67652100000000000000021000000000000000046b696e641000000000000000097365745363616c617210000000000000000576616c7565210000000000000001100000000000000004747970651000000000000000046e756c6c1000000000000000076669656c64496410000000000000000270371000000000000000077461626c65496410000000000000000354313210000000000000000972657175657374496410000000000000002432323232323232322d323232322d343232322d383232322d32323232323232323232323210000000000000000573636f70652100000000000000021000000000000000046462496410000000000000000c73796e7468657469632d646210000000000000000c726573746f726545706f636810000000000000002431313131313131312d313131312d343131312d383131312d313131313131313131313131",
+    "sha256": "264b42c549de29c90b2ede80ac6fc1e747a3ce0a839cd5d97c13c2198b31da7e"
+  },
+  {
+    "name": "patch-keep-and-hidden-set",
+    "normalized": {
+      "method": "managedTable.v2.submit",
+      "scope": {
+        "dbId": "synthetic-db",
+        "restoreEpoch": "11111111-1111-4111-8111-111111111111"
+      },
+      "crewId": "crew-A",
+      "requestId": "22222222-2222-4222-8222-222222222222",
+      "operation": {
+        "kind": "patchRow",
+        "rowId": "O13",
+        "expectedSchemaRevision": "4",
+        "expectedRowRevision": "7",
+        "patches": [
+          {
+            "fieldId": "p1",
+            "change": {
+              "kind": "keep"
+            }
+          },
+          {
+            "fieldId": "p2",
+            "change": {
+              "kind": "replaceLinks",
+              "values": [
+                {
+                  "kind": "reference",
+                  "target": {
+                    "kind": "work",
+                    "id": "W3"
+                  }
+                }
+              ],
+              "keepHiddenSetToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      }
+    },
+    "node": {
+      "type": "object",
+      "entries": [
+        {
+          "key": "method",
+          "value": {
+            "type": "string",
+            "text": "managedTable.v2.submit"
+          }
+        },
+        {
+          "key": "scope",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "dbId",
+                "value": {
+                  "type": "string",
+                  "text": "synthetic-db"
+                }
+              },
+              {
+                "key": "restoreEpoch",
+                "value": {
+                  "type": "string",
+                  "text": "11111111-1111-4111-8111-111111111111"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "key": "crewId",
+          "value": {
+            "type": "string",
+            "text": "crew-A"
+          }
+        },
+        {
+          "key": "requestId",
+          "value": {
+            "type": "string",
+            "text": "22222222-2222-4222-8222-222222222222"
+          }
+        },
+        {
+          "key": "operation",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "kind",
+                "value": {
+                  "type": "string",
+                  "text": "patchRow"
+                }
+              },
+              {
+                "key": "rowId",
+                "value": {
+                  "type": "string",
+                  "text": "O13"
+                }
+              },
+              {
+                "key": "expectedSchemaRevision",
+                "value": {
+                  "type": "string",
+                  "text": "4"
+                }
+              },
+              {
+                "key": "expectedRowRevision",
+                "value": {
+                  "type": "string",
+                  "text": "7"
+                }
+              },
+              {
+                "key": "patches",
+                "value": {
+                  "type": "array",
+                  "values": [
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p1"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "keep"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p2"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "replaceLinks"
+                                }
+                              },
+                              {
+                                "key": "values",
+                                "value": {
+                                  "type": "array",
+                                  "values": [
+                                    {
+                                      "type": "object",
+                                      "entries": [
+                                        {
+                                          "key": "kind",
+                                          "value": {
+                                            "type": "string",
+                                            "text": "reference"
+                                          }
+                                        },
+                                        {
+                                          "key": "target",
+                                          "value": {
+                                            "type": "object",
+                                            "entries": [
+                                              {
+                                                "key": "kind",
+                                                "value": {
+                                                  "type": "string",
+                                                  "text": "work"
+                                                }
+                                              },
+                                              {
+                                                "key": "id",
+                                                "value": {
+                                                  "type": "string",
+                                                  "text": "W3"
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "key": "keepHiddenSetToken",
+                                "value": {
+                                  "type": "string",
+                                  "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "canonicalHex": "6d616e616765642d76322d696e74656e742e763100210000000000000005100000000000000006637265774964100000000000000006637265772d411000000000000000066d6574686f641000000000000000166d616e616765645461626c652e76322e7375626d69741000000000000000096f7065726174696f6e2100000000000000051000000000000000136578706563746564526f775265766973696f6e100000000000000001371000000000000000166578706563746564536368656d615265766973696f6e100000000000000001341000000000000000046b696e641000000000000000087061746368526f77100000000000000007706174636865732000000000000000022100000000000000021000000000000000066368616e67652100000000000000011000000000000000046b696e641000000000000000046b6565701000000000000000076669656c64496410000000000000000270312100000000000000021000000000000000066368616e67652100000000000000031000000000000000126b65657048696464656e536574546f6b656e100000000000000040616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161611000000000000000046b696e6410000000000000000c7265706c6163654c696e6b7310000000000000000676616c7565732000000000000000012100000000000000021000000000000000046b696e641000000000000000097265666572656e6365100000000000000006746172676574210000000000000002100000000000000002696410000000000000000257331000000000000000046b696e64100000000000000004776f726b1000000000000000076669656c6449641000000000000000027032100000000000000005726f7749641000000000000000034f313310000000000000000972657175657374496410000000000000002432323232323232322d323232322d343232322d383232322d32323232323232323232323210000000000000000573636f70652100000000000000021000000000000000046462496410000000000000000c73796e7468657469632d646210000000000000000c726573746f726545706f636810000000000000002431313131313131312d313131312d343131312d383131312d313131313131313131313131",
+    "sha256": "d108d2a423315435ecdf3cdc9b18880531b827d34ffe7dd23804e0697b16326c"
+  },
+  {
+    "name": "declare-artifact-null-repository",
+    "normalized": {
+      "method": "managedTable.v2.submit",
+      "scope": {
+        "dbId": "synthetic-db",
+        "restoreEpoch": "11111111-1111-4111-8111-111111111111"
+      },
+      "crewId": "crew-A",
+      "requestId": "22222222-2222-4222-8222-222222222222",
+      "operation": {
+        "kind": "addRow",
+        "tableId": "T12",
+        "expectedSchemaRevision": "1",
+        "patches": [
+          {
+            "fieldId": "p1",
+            "change": {
+              "kind": "replaceLinks",
+              "values": [
+                {
+                  "kind": "declareArtifact",
+                  "input": {
+                    "kind": "file",
+                    "value": "src/main.rs",
+                    "repository": null
+                  }
+                }
+              ],
+              "keepHiddenSetToken": null
+            }
+          }
+        ]
+      }
+    },
+    "node": {
+      "type": "object",
+      "entries": [
+        {
+          "key": "method",
+          "value": {
+            "type": "string",
+            "text": "managedTable.v2.submit"
+          }
+        },
+        {
+          "key": "scope",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "dbId",
+                "value": {
+                  "type": "string",
+                  "text": "synthetic-db"
+                }
+              },
+              {
+                "key": "restoreEpoch",
+                "value": {
+                  "type": "string",
+                  "text": "11111111-1111-4111-8111-111111111111"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "key": "crewId",
+          "value": {
+            "type": "string",
+            "text": "crew-A"
+          }
+        },
+        {
+          "key": "requestId",
+          "value": {
+            "type": "string",
+            "text": "22222222-2222-4222-8222-222222222222"
+          }
+        },
+        {
+          "key": "operation",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "kind",
+                "value": {
+                  "type": "string",
+                  "text": "addRow"
+                }
+              },
+              {
+                "key": "tableId",
+                "value": {
+                  "type": "string",
+                  "text": "T12"
+                }
+              },
+              {
+                "key": "expectedSchemaRevision",
+                "value": {
+                  "type": "string",
+                  "text": "1"
+                }
+              },
+              {
+                "key": "patches",
+                "value": {
+                  "type": "array",
+                  "values": [
+                    {
+                      "type": "object",
+                      "entries": [
+                        {
+                          "key": "fieldId",
+                          "value": {
+                            "type": "string",
+                            "text": "p1"
+                          }
+                        },
+                        {
+                          "key": "change",
+                          "value": {
+                            "type": "object",
+                            "entries": [
+                              {
+                                "key": "kind",
+                                "value": {
+                                  "type": "string",
+                                  "text": "replaceLinks"
+                                }
+                              },
+                              {
+                                "key": "values",
+                                "value": {
+                                  "type": "array",
+                                  "values": [
+                                    {
+                                      "type": "object",
+                                      "entries": [
+                                        {
+                                          "key": "kind",
+                                          "value": {
+                                            "type": "string",
+                                            "text": "declareArtifact"
+                                          }
+                                        },
+                                        {
+                                          "key": "input",
+                                          "value": {
+                                            "type": "object",
+                                            "entries": [
+                                              {
+                                                "key": "kind",
+                                                "value": {
+                                                  "type": "string",
+                                                  "text": "file"
+                                                }
+                                              },
+                                              {
+                                                "key": "value",
+                                                "value": {
+                                                  "type": "string",
+                                                  "text": "src/main.rs"
+                                                }
+                                              },
+                                              {
+                                                "key": "repository",
+                                                "value": {
+                                                  "type": "null"
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "key": "keepHiddenSetToken",
+                                "value": {
+                                  "type": "null"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "canonicalHex": "6d616e616765642d76322d696e74656e742e763100210000000000000005100000000000000006637265774964100000000000000006637265772d411000000000000000066d6574686f641000000000000000166d616e616765645461626c652e76322e7375626d69741000000000000000096f7065726174696f6e2100000000000000041000000000000000166578706563746564536368656d615265766973696f6e100000000000000001311000000000000000046b696e64100000000000000006616464526f77100000000000000007706174636865732000000000000000012100000000000000021000000000000000066368616e67652100000000000000031000000000000000126b65657048696464656e536574546f6b656e001000000000000000046b696e6410000000000000000c7265706c6163654c696e6b7310000000000000000676616c756573200000000000000001210000000000000002100000000000000005696e7075742100000000000000031000000000000000046b696e6410000000000000000466696c6510000000000000000a7265706f7369746f72790010000000000000000576616c756510000000000000000b7372632f6d61696e2e72731000000000000000046b696e6410000000000000000f6465636c61726541727469666163741000000000000000076669656c64496410000000000000000270311000000000000000077461626c65496410000000000000000354313210000000000000000972657175657374496410000000000000002432323232323232322d323232322d343232322d383232322d32323232323232323232323210000000000000000573636f70652100000000000000021000000000000000046462496410000000000000000c73796e7468657469632d646210000000000000000c726573746f726545706f636810000000000000002431313131313131312d313131312d343131312d383131312d313131313131313131313131",
+    "sha256": "79a1552233d9fb1586255123456fd0e9502e9c624e66223f3ce18dbb3844cdd4"
+  },
+  {
+    "name": "manual-artifact-source",
+    "normalized": {
+      "method": "managedLink.submit",
+      "scope": {
+        "dbId": "synthetic-db",
+        "restoreEpoch": "11111111-1111-4111-8111-111111111111"
+      },
+      "crewId": "crew-A",
+      "requestId": "22222222-2222-4222-8222-222222222222",
+      "operation": {
+        "kind": "link",
+        "source": {
+          "kind": "artifact",
+          "reference": {
+            "namespace": {
+              "kind": "unassigned",
+              "crewId": "crew-B"
+            },
+            "key": "file:src/main.rs"
+          },
+          "metadataCrewId": "crew-A"
+        },
+        "target": {
+          "kind": "reference",
+          "target": {
+            "kind": "message",
+            "id": "message-1"
+          }
+        },
+        "expectedManualLinkRevision": "0"
+      }
+    },
+    "node": {
+      "type": "object",
+      "entries": [
+        {
+          "key": "method",
+          "value": {
+            "type": "string",
+            "text": "managedLink.submit"
+          }
+        },
+        {
+          "key": "scope",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "dbId",
+                "value": {
+                  "type": "string",
+                  "text": "synthetic-db"
+                }
+              },
+              {
+                "key": "restoreEpoch",
+                "value": {
+                  "type": "string",
+                  "text": "11111111-1111-4111-8111-111111111111"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "key": "crewId",
+          "value": {
+            "type": "string",
+            "text": "crew-A"
+          }
+        },
+        {
+          "key": "requestId",
+          "value": {
+            "type": "string",
+            "text": "22222222-2222-4222-8222-222222222222"
+          }
+        },
+        {
+          "key": "operation",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "kind",
+                "value": {
+                  "type": "string",
+                  "text": "link"
+                }
+              },
+              {
+                "key": "source",
+                "value": {
+                  "type": "object",
+                  "entries": [
+                    {
+                      "key": "kind",
+                      "value": {
+                        "type": "string",
+                        "text": "artifact"
+                      }
+                    },
+                    {
+                      "key": "reference",
+                      "value": {
+                        "type": "object",
+                        "entries": [
+                          {
+                            "key": "namespace",
+                            "value": {
+                              "type": "object",
+                              "entries": [
+                                {
+                                  "key": "kind",
+                                  "value": {
+                                    "type": "string",
+                                    "text": "unassigned"
+                                  }
+                                },
+                                {
+                                  "key": "crewId",
+                                  "value": {
+                                    "type": "string",
+                                    "text": "crew-B"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "key": "key",
+                            "value": {
+                              "type": "string",
+                              "text": "file:src/main.rs"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": "metadataCrewId",
+                      "value": {
+                        "type": "string",
+                        "text": "crew-A"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "key": "target",
+                "value": {
+                  "type": "object",
+                  "entries": [
+                    {
+                      "key": "kind",
+                      "value": {
+                        "type": "string",
+                        "text": "reference"
+                      }
+                    },
+                    {
+                      "key": "target",
+                      "value": {
+                        "type": "object",
+                        "entries": [
+                          {
+                            "key": "kind",
+                            "value": {
+                              "type": "string",
+                              "text": "message"
+                            }
+                          },
+                          {
+                            "key": "id",
+                            "value": {
+                              "type": "string",
+                              "text": "message-1"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "key": "expectedManualLinkRevision",
+                "value": {
+                  "type": "string",
+                  "text": "0"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "canonicalHex": "6d616e616765642d76322d696e74656e742e763100210000000000000005100000000000000006637265774964100000000000000006637265772d411000000000000000066d6574686f641000000000000000126d616e616765644c696e6b2e7375626d69741000000000000000096f7065726174696f6e21000000000000000410000000000000001a65787065637465644d616e75616c4c696e6b5265766973696f6e100000000000000001301000000000000000046b696e641000000000000000046c696e6b100000000000000006736f757263652100000000000000031000000000000000046b696e64100000000000000008617274696661637410000000000000000e6d65746164617461437265774964100000000000000006637265772d411000000000000000097265666572656e63652100000000000000021000000000000000036b657910000000000000001066696c653a7372632f6d61696e2e72731000000000000000096e616d657370616365210000000000000002100000000000000006637265774964100000000000000006637265772d421000000000000000046b696e6410000000000000000a756e61737369676e65641000000000000000067461726765742100000000000000021000000000000000046b696e641000000000000000097265666572656e636510000000000000000674617267657421000000000000000210000000000000000269641000000000000000096d6573736167652d311000000000000000046b696e641000000000000000076d65737361676510000000000000000972657175657374496410000000000000002432323232323232322d323232322d343232322d383232322d32323232323232323232323210000000000000000573636f70652100000000000000021000000000000000046462496410000000000000000c73796e7468657469632d646210000000000000000c726573746f726545706f636810000000000000002431313131313131312d313131312d343131312d383131312d313131313131313131313131",
+    "sha256": "386478e2a3bbcd1f5ba8ca251006b8b0e8293db85d67020dbdb1404eca450d5f"
+  },
+  {
+    "name": "empty-patches",
+    "normalized": {
+      "method": "managedTable.v2.submit",
+      "scope": {
+        "dbId": "synthetic-db",
+        "restoreEpoch": "11111111-1111-4111-8111-111111111111"
+      },
+      "crewId": "crew-A",
+      "requestId": "22222222-2222-4222-8222-222222222222",
+      "operation": {
+        "kind": "patchRow",
+        "rowId": "O13",
+        "expectedSchemaRevision": "1",
+        "expectedRowRevision": "1",
+        "patches": []
+      }
+    },
+    "node": {
+      "type": "object",
+      "entries": [
+        {
+          "key": "method",
+          "value": {
+            "type": "string",
+            "text": "managedTable.v2.submit"
+          }
+        },
+        {
+          "key": "scope",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "dbId",
+                "value": {
+                  "type": "string",
+                  "text": "synthetic-db"
+                }
+              },
+              {
+                "key": "restoreEpoch",
+                "value": {
+                  "type": "string",
+                  "text": "11111111-1111-4111-8111-111111111111"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "key": "crewId",
+          "value": {
+            "type": "string",
+            "text": "crew-A"
+          }
+        },
+        {
+          "key": "requestId",
+          "value": {
+            "type": "string",
+            "text": "22222222-2222-4222-8222-222222222222"
+          }
+        },
+        {
+          "key": "operation",
+          "value": {
+            "type": "object",
+            "entries": [
+              {
+                "key": "kind",
+                "value": {
+                  "type": "string",
+                  "text": "patchRow"
+                }
+              },
+              {
+                "key": "rowId",
+                "value": {
+                  "type": "string",
+                  "text": "O13"
+                }
+              },
+              {
+                "key": "expectedSchemaRevision",
+                "value": {
+                  "type": "string",
+                  "text": "1"
+                }
+              },
+              {
+                "key": "expectedRowRevision",
+                "value": {
+                  "type": "string",
+                  "text": "1"
+                }
+              },
+              {
+                "key": "patches",
+                "value": {
+                  "type": "array",
+                  "values": []
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "canonicalHex": "6d616e616765642d76322d696e74656e742e763100210000000000000005100000000000000006637265774964100000000000000006637265772d411000000000000000066d6574686f641000000000000000166d616e616765645461626c652e76322e7375626d69741000000000000000096f7065726174696f6e2100000000000000051000000000000000136578706563746564526f775265766973696f6e100000000000000001311000000000000000166578706563746564536368656d615265766973696f6e100000000000000001311000000000000000046b696e641000000000000000087061746368526f7710000000000000000770617463686573200000000000000000100000000000000005726f7749641000000000000000034f313310000000000000000972657175657374496410000000000000002432323232323232322d323232322d343232322d383232322d32323232323232323232323210000000000000000573636f70652100000000000000021000000000000000046462496410000000000000000c73796e7468657469632d646210000000000000000c726573746f726545706f636810000000000000002431313131313131312d313131312d343131312d383131312d313131313131313131313131",
+    "sha256": "a604be66e3153188d208181bfccc2e7f6c2f5b40ad1f13c7030b99ab5492c4e7"
+  },
+  {
+    "name": "raw-key-order-and-canonical-distinction",
+    "normalized": {
+      "𐀀": "supplementary",
+      "": "bmp",
+      "é": "nfc",
+      "é": "nfd"
+    },
+    "node": {
+      "type": "object",
+      "entries": [
+        {
+          "key": "𐀀",
+          "value": {
+            "type": "string",
+            "text": "supplementary"
+          }
+        },
+        {
+          "key": "",
+          "value": {
+            "type": "string",
+            "text": "bmp"
+          }
+        },
+        {
+          "key": "é",
+          "value": {
+            "type": "string",
+            "text": "nfc"
+          }
+        },
+        {
+          "key": "é",
+          "value": {
+            "type": "string",
+            "text": "nfd"
+          }
+        }
+      ]
+    },
+    "canonicalHex": "6d616e616765642d76322d696e74656e742e76310021000000000000000410000000000000000365cc811000000000000000036e6664100000000000000002c3a91000000000000000036e6663100000000000000003ee8080100000000000000003626d70100000000000000004f090808010000000000000000d737570706c656d656e74617279",
+    "sha256": "bf0df3519402e236fde36a71479b6caf341dd8fdbad696d2c0c881e8e7c24d5a"
+  }
+]

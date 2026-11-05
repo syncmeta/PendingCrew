@@ -135,7 +135,7 @@ pub enum Effect {
     Advanced {
         before_revision: String,
         before_cursor: Cursor,
-        delta: Counts,
+        delta: Box<Counts>,
     },
 }
 

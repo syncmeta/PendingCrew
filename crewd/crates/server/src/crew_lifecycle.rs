@@ -120,14 +120,14 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
             {
                 owner.hub.emit(store.conn(), changes);
             }
-            if let Some(committed) = settlement? {
-                if committed != mutation.is_ok() {
-                    // An ambiguous SQLite return cannot justify a second purge.
-                    return Err(crewd_store::StoreError::Invalid(
-                        "original purge outcome requires reconciliation".into(),
-                    )
-                    .into());
-                }
+            if let Some(committed) = settlement?
+                && committed != mutation.is_ok()
+            {
+                // An ambiguous SQLite return cannot justify a second purge.
+                return Err(crewd_store::StoreError::Invalid(
+                    "original purge outcome requires reconciliation".into(),
+                )
+                .into());
             }
             mutation?;
             Ok::<_, collab::CollabError>(())

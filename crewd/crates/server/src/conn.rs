@@ -141,12 +141,35 @@ where
             }
             if let ServerFrame::Event(event) = &frame
                 && event.event == crewd_proto::managed_artifacts::CHANGED
-                && !crate::managed_artifacts::event_allowed(&writer_state,&writer_actor,&event.data).await {
+                && !crate::managed_artifacts::event_allowed(
+                    &writer_state,
+                    &writer_actor,
+                    &event.data,
+                )
+                .await
+            {
                 continue;
             }
             if let ServerFrame::Event(event) = &frame
                 && event.event == crewd_proto::artifact_history::CHANGED
-                && !crate::artifact_history::event_allowed(&writer_state,&writer_actor,&event.data).await {
+                && !crate::artifact_history::event_allowed(
+                    &writer_state,
+                    &writer_actor,
+                    &event.data,
+                )
+                .await
+            {
+                continue;
+            }
+            if let ServerFrame::Event(event) = &frame
+                && event.event == crewd_proto::managed_tables_v2::CHANGED
+                && !crate::managed_tables_v2::event_allowed(
+                    &writer_state,
+                    &writer_actor,
+                    &event.data,
+                )
+                .await
+            {
                 continue;
             }
             let mut line = match serde_json::to_vec(&frame) {
@@ -313,6 +336,30 @@ async fn read_loop<R: AsyncRead + Unpin>(
         }
         let parsed = serde_json::from_str::<Request>(&line);
         let id = parsed.as_ref().map_or(0, |req| req.id);
+        if parsed
+            .as_ref()
+            .is_ok_and(|request| crate::managed_v2_input::enforced(request, agent.is_attached()))
+            && crate::managed_v2_input::unique_fields(&line).is_err()
+        {
+            let invalid = RpcError::new(
+                RpcError::INVALID_PARAMS,
+                "Duplicate object fields are not valid V2 input",
+            );
+            let error = if agent.is_attached() {
+                invalid
+            } else {
+                // Retain Human authentication-before-params even for raw errors.
+                match peer.command_actor().principal(state).await {
+                    Ok(_) => invalid,
+                    Err(error) => error,
+                }
+            };
+            let response = Response::err(id, error);
+            if tx.send(ServerFrame::Response(response)).await.is_err() {
+                return Ok(());
+            }
+            continue;
+        }
         let step = match catch_request(request_step(
             state,
             parsed,
@@ -804,22 +851,53 @@ async fn request_step(
         }
         Ok(req) if crewd_proto::managed_artifacts::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
-                ServerFrame::Response(Response::err(req.id,crate::dispatch::refused(
-                    RpcError::FORBIDDEN,
-                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
-                )))
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
+                    ),
+                ))
             } else {
-                ServerFrame::Response(crate::managed_artifacts::handle(state,&peer.command_actor(),req).await)
+                ServerFrame::Response(
+                    crate::managed_artifacts::handle(state, &peer.command_actor(), req).await,
+                )
             }
         }
         Ok(req) if crewd_proto::artifact_history::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
-                ServerFrame::Response(Response::err(req.id,crate::dispatch::refused(
-                    RpcError::FORBIDDEN,
-                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
-                )))
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
+                    ),
+                ))
             } else {
-                ServerFrame::Response(crate::artifact_history::handle(state,&peer.command_actor(),req).await)
+                ServerFrame::Response(
+                    crate::artifact_history::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
+        Ok(req) if crewd_proto::managed_tables_v2::METHODS.contains(&req.method.as_str()) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::managed_tables_v2::handle(state, &peer.command_actor(), req).await,
+                )
             }
         }
         Ok(req) if crewd_proto::managed_objects_api::METHODS.contains(&req.method.as_str()) => {
@@ -828,7 +906,9 @@ async fn request_step(
                     req.id,
                     crate::dispatch::refused(
                         RpcError::FORBIDDEN,
-                        crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
                     ),
                 ))
             } else {
@@ -843,7 +923,9 @@ async fn request_step(
                     req.id,
                     crate::dispatch::refused(
                         RpcError::FORBIDDEN,
-                        crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
                     ),
                 ))
             } else {
@@ -946,22 +1028,36 @@ async fn request_step(
         }
         Ok(req) if req.method == methods::WORK_CHANNEL_RESPONSIBILITY => {
             if agent.is_attached() {
-                ServerFrame::Response(Response::err(req.id, crate::dispatch::refused(
-                    RpcError::FORBIDDEN,
-                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
-                )))
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
+                    ),
+                ))
             } else {
-                ServerFrame::Response(crate::channel_responsibility::handle(state, &peer.command_actor(), req).await)
+                ServerFrame::Response(
+                    crate::channel_responsibility::handle(state, &peer.command_actor(), req).await,
+                )
             }
         }
         Ok(req) if crate::requirement_ruling::handles(&req.method) => {
             if agent.is_attached() {
-                ServerFrame::Response(Response::err(req.id, crate::dispatch::refused(
-                    RpcError::FORBIDDEN,
-                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::TodoHumanOnly),
-                )))
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::TodoHumanOnly,
+                        ),
+                    ),
+                ))
             } else {
-                ServerFrame::Response(crate::requirement_ruling::handle(state, &peer.command_actor(), req).await)
+                ServerFrame::Response(
+                    crate::requirement_ruling::handle(state, &peer.command_actor(), req).await,
+                )
             }
         }
         Ok(req) if req.method == methods::ASK_LIST && !agent.is_attached() => {
@@ -1042,10 +1138,7 @@ async fn request_step(
                 crate::dispatch::refused(
                     RpcError::FORBIDDEN,
                     crewd_collab::refusal::Refusal::new(
-                        if matches!(
-                            req.method.as_str(),
-                            methods::TODO_CREATE
-                        ) {
+                        if matches!(req.method.as_str(), methods::TODO_CREATE) {
                             crewd_collab::refusal::Code::TodoHumanOnly
                         } else if req.method.starts_with("work.") {
                             crewd_collab::refusal::Code::WorkActorForbidden
@@ -1182,18 +1275,28 @@ async fn ask_inbox_event_allowed(
     actor: &crate::public_commands::Actor,
     data: &serde_json::Value,
 ) -> bool {
-    let Some(crew) = data.as_object().filter(|object| object.len() == 1)
-        .and_then(|object| object.get("crewId")).and_then(serde_json::Value::as_str) else {
+    let Some(crew) = data
+        .as_object()
+        .filter(|object| object.len() == 1)
+        .and_then(|object| object.get("crewId"))
+        .and_then(serde_json::Value::as_str)
+    else {
         return false;
     };
     let crew = crew.to_owned();
     let actor = actor.clone();
     let owned_state = state.clone();
-    state.db.call(move |store| {
-        actor.authorize_tx(&owned_state, store.conn(), methods::ASK_LIST).is_ok()
-            && crewd_collab::crews::get(store.conn(), &crew)
-                .is_ok_and(|crew| crew.removed_at.is_none())
-    }).await.unwrap_or(false)
+    state
+        .db
+        .call(move |store| {
+            actor
+                .authorize_tx(&owned_state, store.conn(), methods::ASK_LIST)
+                .is_ok()
+                && crewd_collab::crews::get(store.conn(), &crew)
+                    .is_ok_and(|crew| crew.removed_at.is_none())
+        })
+        .await
+        .unwrap_or(false)
 }
 
 fn spawn_forwarder(
@@ -1236,6 +1339,7 @@ fn spawn_forwarder(
                                 | events::ONTO_CHANGED
                                 | crewd_proto::managed_artifacts::CHANGED
                                 | crewd_proto::artifact_history::CHANGED
+                                | crewd_proto::managed_tables_v2::CHANGED
                                 | events::TODO_ATTRIBUTES_CHANGED
                                 | events::DATA_CHANGED
                                 | events::DOCUMENT_CHANGED

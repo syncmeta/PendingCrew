@@ -493,6 +493,18 @@ Request {request} already has a different original payload.
 
 This row has changed. Read its current values and version before editing again.
 
+## managedTable.schema_changed
+
+The table columns changed. Read the current schema and version before confirming edits. Keep your unsent draft.
+
+## managedLink.changed
+
+The links changed. Read the current links and version before confirming edits.
+
+## managedTable.v1_unsupported
+
+This table uses an evolved schema. Use a client that supports its current table version to read or edit it.
+
 ## managed_object.decision_changed
 
 The original decision has changed. Read it and its current successor before submitting again.

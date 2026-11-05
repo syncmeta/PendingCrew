@@ -89,6 +89,9 @@ pub(crate) fn source(kind: ObjectKind, id: &str) -> bool {
     .is_some_and(crewd_proto::valid_remote_uuid)
 }
 pub fn table(c: &Connection, number: i64) -> Result<Option<Table>> {
+    if crate::managed_tables_v2::enabled(c)? {
+        return crate::managed_tables_v2::v1_table(c, number);
+    }
     let record = c
         .query_row(
             "SELECT r.crew_id,r.source_id,t.title,t.fields_json,c.archived_at IS NOT NULL
@@ -126,6 +129,9 @@ pub fn table(c: &Connection, number: i64) -> Result<Option<Table>> {
         .transpose()
 }
 pub fn row(c: &Connection, number: i64) -> Result<Option<Row>> {
+    if crate::managed_tables_v2::enabled(c)? {
+        return crate::managed_tables_v2::v1_row(c, number);
+    }
     let record = c.query_row(
         "SELECT r.crew_id,r.source_id,v.table_number,t.source_id,v.revision,v.values_json,c.archived_at IS NOT NULL,m.fields_json
          FROM managed_rows v JOIN object_refs r ON v.number=r.number AND r.kind='custom_row'
@@ -162,6 +168,9 @@ pub fn row(c: &Connection, number: i64) -> Result<Option<Row>> {
 }
 
 pub fn table_numbers(c: &Connection, after: i64, limit: u16) -> Result<Vec<i64>> {
+    if crate::managed_tables_v2::enabled(c)? {
+        return crate::managed_tables_v2::numbers(c, None, after, limit, true);
+    }
     let mut q =
         c.prepare("SELECT number FROM managed_tables WHERE number>?1 ORDER BY number LIMIT ?2")?;
     Ok(q.query_map(params![after, limit], |r| r.get(0))?
@@ -204,6 +213,9 @@ pub fn create_table(
     at: &str,
 ) -> Result<Table> {
     transaction(c)?;
+    if crate::managed_tables_v2::enabled(c)? {
+        return Err(invalid("V2 table requires actual creator"));
+    }
     let r = allocate(c, ObjectKind::Table, crew, at)?;
     c.execute(
         "INSERT INTO managed_tables(number,title,fields_json) VALUES(?1,?2,?3)",
@@ -219,6 +231,9 @@ pub fn add_row(
     at: &str,
 ) -> Result<Row> {
     transaction(c)?;
+    if crate::managed_tables_v2::enabled(c)? {
+        return Err(invalid("V2 row requires actual creator"));
+    }
     let r = allocate(c, ObjectKind::CustomRow, crew, at)?;
     c.execute(
         "INSERT INTO managed_rows(number,table_number,revision,values_json) VALUES(?1,?2,1,?3)",
@@ -228,6 +243,24 @@ pub fn add_row(
 }
 pub fn edit_row(c: &Connection, number: i64, expected: i64, values: &[Cell]) -> Result<Row> {
     transaction(c)?;
+    if crate::managed_tables_v2::enabled(c)? {
+        let (t, _, _, _) =
+            crate::managed_tables_v2::row_base(c, number)?.ok_or_else(|| invalid("row missing"))?;
+        if !t.v1_writable || t.fields.len() != values.len() {
+            return Err(invalid("V1 positional schema changed"));
+        }
+        let values = t
+            .fields
+            .iter()
+            .zip(values)
+            .map(|(f, v)| crewd_proto::managed_tables_v2::ScalarValue {
+                field_id: f.id.clone(),
+                value: crate::managed_tables_v2::from_v1(v),
+            })
+            .collect::<Vec<_>>();
+        crate::managed_tables_v2::save_row(c, number, expected, &values)?;
+        return crate::managed_tables_v2::v1_row(c, number)?.ok_or_else(|| invalid("row missing"));
+    }
     let revision = expected
         .checked_add(1)
         .ok_or_else(|| invalid("managed row revision exhausted"))?;
@@ -269,12 +302,18 @@ pub fn receipt(
                 return Err(invalid("managed object receipt scope mismatch"));
             }
             match (&receipt.object, &receipt.occurrence) {
-                (Object::Lesson { lesson }, Some(effect)) if !member_confirmation
-                    && lesson.id == effect.lesson_id
-                    && lesson.revision == effect.lesson_revision
-                    && lesson.risk_id.as_ref() == Some(&effect.risk_id)
-                    && next_revision(&effect.original_risk_revision, &effect.result_risk_revision) => {}
-                (_, None) if !member_confirmation || matches!(&receipt.object, Object::Lesson { .. }) => {}
+                (Object::Lesson { lesson }, Some(effect))
+                    if !member_confirmation
+                        && lesson.id == effect.lesson_id
+                        && lesson.revision == effect.lesson_revision
+                        && lesson.risk_id.as_ref() == Some(&effect.risk_id)
+                        && next_revision(
+                            &effect.original_risk_revision,
+                            &effect.result_risk_revision,
+                        ) => {}
+                (_, None)
+                    if !member_confirmation || matches!(&receipt.object, Object::Lesson { .. }) => {
+                }
                 _ => return Err(invalid("managed object receipt effect mismatch")),
             }
             Ok((digest, receipt, member_confirmation))
@@ -282,7 +321,9 @@ pub fn receipt(
         .transpose()
 }
 fn next_revision(original: &str, result: &str) -> bool {
-    original.parse::<i64>().ok()
+    original
+        .parse::<i64>()
+        .ok()
         .filter(|n| *n > 0 && n.to_string() == original)
         .and_then(|n| n.checked_add(1))
         .is_some_and(|n| n.to_string() == result)
@@ -302,4 +343,75 @@ pub fn record(
         params![receipt.crew_id,principal,receipt.request_id,digest.as_slice(),result,member_confirmation],
     )?;
     Ok(())
+}
+
+/// Fresh compatibility creation retains the actual caller, never migration unknown.
+pub fn create_table_by(
+    c: &Connection,
+    crew: &str,
+    title: &str,
+    fields: &[Field],
+    author: &crewd_proto::managed_tables_v2::Author,
+    at: &str,
+) -> Result<Table> {
+    if !crate::managed_tables_v2::enabled(c)? {
+        return create_table(c, crew, title, fields, at);
+    }
+    let fs = fields
+        .iter()
+        .enumerate()
+        .map(|(i, f)| crewd_proto::managed_tables_v2::Field {
+            id: format!("p{}", i + 1),
+            name: f.name.clone(),
+            kind: match f.field_type {
+                FieldType::Text => crewd_proto::managed_tables_v2::FieldKind::Text {},
+                FieldType::Integer => crewd_proto::managed_tables_v2::FieldKind::Integer {},
+                FieldType::Real => crewd_proto::managed_tables_v2::FieldKind::Real {},
+            },
+            nullable: f.nullable,
+            hidden: false,
+        })
+        .collect::<Vec<_>>();
+    let t = crate::managed_tables_v2::create(
+        c,
+        crate::managed_tables_v2::NewTable {
+            crew,
+            title,
+            purpose: None,
+            fields: &fs,
+            title_field: "p1",
+            policy: crewd_proto::managed_tables_v2::RowWritePolicy::OwnerCrewWriters,
+            author,
+            now: at,
+        },
+    )?;
+    crate::managed_tables_v2::v1_table(c, crate::managed_tables_v2::number(&t.id, 'T')?)?
+        .ok_or_else(|| invalid("table missing"))
+}
+pub fn add_row_by(
+    c: &Connection,
+    crew: &str,
+    table: i64,
+    values: &[Cell],
+    author: &crewd_proto::managed_tables_v2::Author,
+    at: &str,
+) -> Result<Row> {
+    if !crate::managed_tables_v2::enabled(c)? {
+        return add_row(c, crew, table, values, at);
+    }
+    let t = crate::managed_tables_v2::table(c, table)?.ok_or_else(|| invalid("table missing"))?;
+    if !t.v1_writable || t.crew_id != crew || t.fields.len() != values.len() {
+        return Err(invalid("V1 positional schema changed"));
+    }
+    let vs = t
+        .fields
+        .iter()
+        .zip(values)
+        .map(|(f, v)| crewd_proto::managed_tables_v2::ScalarValue {
+            field_id: f.id.clone(),
+            value: crate::managed_tables_v2::from_v1(v),
+        })
+        .collect::<Vec<_>>();
+    let n = crate::managed_tables_v2::add(c, &t, author, &vs, at)?;
+    crate::managed_tables_v2::v1_row(c, n)?.ok_or_else(|| invalid("row missing"))
 }

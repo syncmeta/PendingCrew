@@ -453,7 +453,7 @@ fn handled_from_event(
                 && last.by == event.by
                 && last.note == *note
         })
-        || !crewd_store::sessions::get(c, to.as_str())?.is_some_and(|s| s.crew_id == e.crew)
+        || crewd_store::sessions::get(c, to.as_str())?.is_none_or(|s| s.crew_id != e.crew)
     {
         return Ok(None);
     }
@@ -853,10 +853,9 @@ fn view(c: &Connection, e: Episode, book: &WorkBook, epoch: &str) -> Result<View
         verify_handled(c, &e, proof)?;
     }
     let mut phase = e.phase;
-    if e.epoch != epoch {
-        phase = Phase::Stale;
-    } else if phase == Phase::Open
-        && facts(c, book, &e.crew, &e.channel)?.is_none_or(|f| !current(&e, &f, epoch))
+    if e.epoch != epoch
+        || (phase == Phase::Open
+            && facts(c, book, &e.crew, &e.channel)?.is_none_or(|f| !current(&e, &f, epoch)))
     {
         phase = Phase::Stale;
     }

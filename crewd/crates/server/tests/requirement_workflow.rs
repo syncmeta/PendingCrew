@@ -359,7 +359,9 @@ async fn all_dropped_requirement_ruling_uses_exact_evidence_and_recovers_origina
     for invalid in [&first["closeRevision"], &current["revision"]] {
         let packet = packet(invalid);
         let lookup = json!({"requestId":packet["requestId"],"dbId":packet["dbId"]});
-        let denied = call(&mut human, "command.submit", packet).await.unwrap_err();
+        let denied = call(&mut human, "command.submit", packet)
+            .await
+            .unwrap_err();
         assert_eq!(denied.0, -32009);
         assert!(rpc(&mut human, "command.lookup", lookup).await.is_null());
     }

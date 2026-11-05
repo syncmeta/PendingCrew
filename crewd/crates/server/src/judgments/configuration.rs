@@ -344,7 +344,8 @@ async fn route(state: &Arc<AppState>, actor: &Actor, req: Request) -> Result<Val
                 return Err(crewd_collab::CollabError::Conflict(
                     crewd_collab::refusal::Refusal::new(
                         crewd_collab::refusal::Code::ResourceRequestConflict,
-                    ).arg("request", &id),
+                    )
+                    .arg("request", &id),
                 ));
             }
             let old = binding(tx.conn())?;

@@ -238,8 +238,14 @@ async fn native_high_and_low_decisions_are_persisted_without_admin_or_delivery_e
         assert_eq!(v["decisionRecord"]["adopted"], p >= 0.5);
         assert_eq!(v["execution"], "not_started");
         assert_eq!(v["retirement"], "not_started");
-        let public = f.rpc("adminCase.get", json!({"crewId":f.crew,"id":source.id})).await.unwrap();
-        assert_eq!(public, v, "authenticated public read must expose the actual decision receipt");
+        let public = f
+            .rpc("adminCase.get", json!({"crewId":f.crew,"id":source.id}))
+            .await
+            .unwrap();
+        assert_eq!(
+            public, v,
+            "authenticated public read must expose the actual decision receipt"
+        );
         assert_eq!(counts(&f).await, before);
         let wid = source.work.clone();
         let plan = f

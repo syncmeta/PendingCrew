@@ -292,6 +292,8 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 capabilities.push(crewd_proto::managed_message_sources::CAPABILITY.into());
                 capabilities.push(crewd_proto::managed_artifacts::CAPABILITY.into());
                 capabilities.push(crewd_proto::artifact_history::CAPABILITY.into());
+                capabilities.push(crewd_proto::managed_tables_v2::TABLES_CAPABILITY.into());
+                capabilities.push(crewd_proto::managed_tables_v2::LINKS_CAPABILITY.into());
                 capabilities.push("session.claude.recovery".into());
                 capabilities.push("crew.defaultWorkingDirectory".into());
                 if state.orchestra.get().is_some() {
@@ -804,7 +806,12 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         methods::WORK_COORDINATION_STATUS => {
             let p: CoordinationStatusParams = parse_params(p)?;
             read(state, move |c| {
-                crewd_collab::work_coordination::status(c, &p.crew_id, &p.id, p.decision_id.as_deref())
+                crewd_collab::work_coordination::status(
+                    c,
+                    &p.crew_id,
+                    &p.id,
+                    p.decision_id.as_deref(),
+                )
             })
             .await
         }
@@ -884,13 +891,15 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
         #[cfg(test)]
         methods::TODO_CLOSE => {
             let p: TodoCloseParams = parse_params(p)?;
-            write(state, move |tx| crewd_collab::requirement_ruling::close_legacy(tx, p)).await
+            write(state, move |tx| {
+                crewd_collab::requirement_ruling::close_legacy(tx, p)
+            })
+            .await
         }
-        method if crate::requirement_ruling::handles(method) => {
-            Err(refused(RpcError::FORBIDDEN, crewd_collab::refusal::Refusal::new(
-                crewd_collab::refusal::Code::TodoHumanOnly,
-            )))
-        }
+        method if crate::requirement_ruling::handles(method) => Err(refused(
+            RpcError::FORBIDDEN,
+            crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::TodoHumanOnly),
+        )),
         methods::TODO_LIST => {
             let p: TodoListParams = parse_params(p)?;
             read(state, move |c| {

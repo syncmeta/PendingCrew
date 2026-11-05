@@ -277,7 +277,9 @@ pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun, periodic: bo
             Err(error) => Err(error),
         };
         checkpoint = Some(i.id.clone());
-        if periodic { observed_channels.push(i.id.clone()); }
+        if periodic {
+            observed_channels.push(i.id.clone());
+        }
         *r.scanned_counts.entry("channels".into()).or_default() += 1;
         if i.blocked_by
             .contains(&crewd_proto::WorkPatrolChannelBlocker::LinksTruncated)
@@ -415,7 +417,7 @@ mod tests {
         assert_eq!(first.findings["idle_archive_candidates"], old[1..2]);
         assert_eq!(
             first.findings["archive_review_incomplete"],
-            [broken.clone()]
+            std::slice::from_ref(broken)
         );
         let second = advance(&mut s);
         assert!(second.after.is_some());
@@ -502,7 +504,7 @@ mod tests {
         let mut s = store();
         meta_set(s.conn(), "patrol.error.v1:crew-a", "invalid").unwrap();
         for _ in 0..30 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
         }
         assert_eq!(
             meta_get(s.conn(), "patrol.error.v1:crew-a")
@@ -529,7 +531,7 @@ mod tests {
             s.conn().execute("INSERT INTO channel_work_links(channel_id,object_kind,object_id,source_crew_id) VALUES('patrol-incomplete','requirement',?1,'crew-b')",[format!("#{n}")]).unwrap();
         }
         for _ in 0..30 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
         }
         let run = status(s.conn(), "crew-b").unwrap().run.unwrap();
         assert!(run.completed_at_ms.is_some());
@@ -541,7 +543,7 @@ mod tests {
     fn ten_messages_trigger_and_inflight_messages_are_not_consumed() {
         let mut s = store();
         for _ in 0..30 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
         }
         let initial = status(s.conn(), "crew-b").unwrap().run.unwrap().run_id;
         let channel: String = s
@@ -559,7 +561,7 @@ mod tests {
         };
         add(&s, 9);
         for _ in 0..10 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
         }
         assert_eq!(
             status(s.conn(), "crew-b").unwrap().run.unwrap().run_id,
@@ -567,7 +569,7 @@ mod tests {
         );
         add(&s, 1);
         for _ in 0..10 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
             if status(s.conn(), "crew-b").unwrap().run.unwrap().run_id != initial {
                 break;
             }
@@ -576,7 +578,7 @@ mod tests {
         assert!(active.completed_at_ms.is_none());
         add(&s, 10);
         for _ in 0..50 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
         }
         assert_ne!(
             status(s.conn(), "crew-b").unwrap().run.unwrap().run_id,
@@ -587,12 +589,12 @@ mod tests {
     fn completed_observation_waits_for_interval_and_restore_invalidates_it() {
         let mut s = store();
         for _ in 0..30 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
         }
         let before = status(s.conn(), "crew-b").unwrap().run.unwrap();
         assert!(before.completed_at_ms.is_some());
         for _ in 0..30 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
         }
         assert_eq!(
             status(s.conn(), "crew-b").unwrap().run.unwrap().run_id,
@@ -602,7 +604,7 @@ mod tests {
             crate::testkit::ok_at(
                 &mut s,
                 before.completed_at_ms.unwrap() + 30 * 60 * 1000,
-                |tx| tick(tx),
+                tick,
             );
         }
         assert_ne!(
@@ -617,7 +619,7 @@ mod tests {
         let mut s = store();
         meta_set(s.conn(), &key("crew-a"), "invalid").unwrap();
         for _ in 0..30 {
-            ok(&mut s, |tx| tick(tx));
+            ok(&mut s, tick);
         }
         assert_eq!(
             meta_get(s.conn(), &key("crew-a")).unwrap().as_deref(),

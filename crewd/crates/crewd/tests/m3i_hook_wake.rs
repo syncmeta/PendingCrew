@@ -115,7 +115,11 @@ impl Rig {
             codex_options: None,
 
             crew_id: f.crew.clone(),
-            role: if captain { crewd_proto::Role::Captain } else { crewd_proto::Role::Worker },
+            role: if captain {
+                crewd_proto::Role::Captain
+            } else {
+                crewd_proto::Role::Worker
+            },
             executor: "claude".into(),
             brief: "合成初始任务".into(),
             title: Some(title.into()),

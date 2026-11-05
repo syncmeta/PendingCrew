@@ -91,27 +91,55 @@ pub fn get(c: &Connection, actor: Actor<'_>, id: &str) -> Result<Object> {
     get_with_defaults(c, actor, id, false)
 }
 
-pub fn get_with_defaults(c: &Connection, actor: Actor<'_>, id: &str, include_system_defaults: bool) -> Result<Object> {
+pub fn get_with_defaults(
+    c: &Connection,
+    actor: Actor<'_>,
+    id: &str,
+    include_system_defaults: bool,
+) -> Result<Object> {
     actor.principal(c)?;
     if id.starts_with('T') {
         let number = object_number(id, 'T', "id")?;
+        v1_read_guard(c, number, false)?;
         Ok(Object::Table {
             table: db::table(c, number)?.ok_or_else(|| missing(id))?,
         })
     } else if id.starts_with('D') {
         Ok(Object::Decision {
             decision: decisions_db::get(c, object_number(id, 'D', "id")?)?
-                .filter(|decision| include_system_defaults || decision.author.kind != "systemDefault")
+                .filter(|decision| {
+                    include_system_defaults || decision.author.kind != "systemDefault"
+                })
                 .ok_or_else(|| missing(id))?,
         })
     } else if id.starts_with('R') || id.starts_with('L') {
         risks_lessons::get(c, id)
     } else {
         let number = object_number(id, 'O', "id")?;
+        v1_read_guard(c, number, true)?;
         Ok(Object::Row {
             row: db::row(c, number)?.ok_or_else(|| missing(id))?,
         })
     }
+}
+
+/// Current object existence/read permission without forcing a V2 object into
+/// the closed legacy Object codec. T/O remain organization-readable.
+pub(crate) fn read_authority(c: &Connection, actor: Actor<'_>, id: &str) -> Result<String> {
+    actor.principal(c)?;
+    if crewd_store::managed_tables_v2::enabled(c)? {
+        if id.starts_with('T') {
+            return crewd_store::managed_tables_v2::table(c, object_number(id, 'T', "id")?)?
+                .map(|t| t.crew_id)
+                .ok_or_else(|| missing(id));
+        }
+        if id.starts_with('O') {
+            return crewd_store::managed_tables_v2::row_base(c, object_number(id, 'O', "id")?)?
+                .map(|(t, _, _, _)| t.crew_id)
+                .ok_or_else(|| missing(id));
+        }
+    }
+    Ok(get_with_defaults(c, actor, id, true)?.crew_id().into())
 }
 
 pub fn tables(c: &Connection, actor: Actor<'_>, after: Option<&str>) -> Result<TablePage> {
@@ -134,6 +162,7 @@ pub fn tables(c: &Connection, actor: Actor<'_>, after: Option<&str>) -> Result<T
 pub fn rows(c: &Connection, actor: Actor<'_>, table: &str, after: Option<&str>) -> Result<RowPage> {
     actor.principal(c)?;
     let table_number = object_number(table, 'T', "tableId")?;
+    v1_read_guard(c, table_number, false)?;
     let table = db::table(c, table_number)?.ok_or_else(|| missing(table))?;
     let after = after
         .map(|id| object_number(id, 'O', "after"))
@@ -159,7 +188,10 @@ pub fn decisions(c: &Connection, actor: Actor<'_>, after: Option<&str>) -> Resul
 }
 
 pub fn decisions_with_defaults(
-    c: &Connection, actor: Actor<'_>, after: Option<&str>, include_system_defaults: bool,
+    c: &Connection,
+    actor: Actor<'_>,
+    after: Option<&str>,
+    include_system_defaults: bool,
 ) -> Result<DecisionPage> {
     actor.principal(c)?;
     let after = after
@@ -243,9 +275,31 @@ pub(crate) fn artifact_link_authority(
             crate::requirements::get(c, id)?;
             return Ok(());
         }
-        Subject::Decision { id } | Subject::Lesson { id } | Subject::Risk { id }
-        | Subject::Row { id } | Subject::Table { id } => id,
+        Subject::Decision { id }
+        | Subject::Lesson { id }
+        | Subject::Risk { id }
+        | Subject::Row { id }
+        | Subject::Table { id } => id,
     };
+    if crewd_store::managed_tables_v2::enabled(c)? {
+        match subject {
+            Subject::Row { id } => {
+                let (t, _, author, _) = crewd_store::managed_tables_v2::row_base(
+                    c,
+                    object_number(id, 'O', "subject")?,
+                )?
+                .ok_or_else(|| missing(id))?;
+                return crate::managed_tables_v2::row_authority(c, actor, &t, &author);
+            }
+            Subject::Table { id } => {
+                let t =
+                    crewd_store::managed_tables_v2::table(c, object_number(id, 'T', "subject")?)?
+                        .ok_or_else(|| missing(id))?;
+                return crate::managed_tables_v2::schema_authority(c, actor, &t);
+            }
+            _ => (),
+        }
+    }
     let object = get_with_defaults(c, actor, id, true)?;
     match &object {
         Object::Decision { decision } => {
@@ -295,7 +349,12 @@ pub(crate) fn check_decision_draft(c: &Connection, draft: &DecisionDraft) -> Res
                 crate::requirements::get(c, id).map_err(|error| about_refusal(error, id))?;
             }
             DecisionAbout::Row { id } => {
-                db::row(c, object_number(id, 'O', "about")?)?.ok_or_else(|| missing(id))?;
+                if crewd_store::managed_tables_v2::enabled(c)? {
+                    crewd_store::managed_tables_v2::row_base(c, object_number(id, 'O', "about")?)?
+                        .ok_or_else(|| missing(id))?;
+                } else {
+                    db::row(c, object_number(id, 'O', "about")?)?.ok_or_else(|| missing(id))?;
+                }
             }
             DecisionAbout::Risk { id } => {
                 risks_lessons::risk(c, id, "about")?;
@@ -345,9 +404,13 @@ pub fn lookup(
     }
     let recorded = db::receipt(c, crew, &principal, request)?
         .filter(|(_, receipt, confirmation)| {
-            !foreign || *confirmation || (captain && matches!(
-                &receipt.object, Object::Decision { .. } | Object::Risk { .. } | Object::Lesson { .. }
-            ))
+            !foreign
+                || *confirmation
+                || (captain
+                    && matches!(
+                        &receipt.object,
+                        Object::Decision { .. } | Object::Risk { .. } | Object::Lesson { .. }
+                    ))
         })
         .map(|(_, receipt, _)| receipt);
     if foreign && !captain && recorded.is_none() {
@@ -413,11 +476,21 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
                 return Err(invalid("fields"));
             }
             Object::Table {
-                table: db::create_table(c, &request.crew_id, &title, &fields, &now)?,
+                table: db::create_table_by(
+                    c,
+                    &request.crew_id,
+                    &title,
+                    &fields,
+                    &crate::managed_links::author(actor),
+                    &now,
+                )?,
             }
         }
         Change::AddRow { table_id, values } => {
             let table_number = object_number(&table_id, 'T', "tableId")?;
+            if crewd_store::managed_tables_v2::enabled(c)? {
+                crate::managed_tables_v2::v1_write(c, actor, table_number, None)?;
+            }
             let table = db::table(c, table_number)?.ok_or_else(|| missing(&table_id))?;
             if table.crew_id != request.crew_id {
                 return Err(forbidden());
@@ -426,7 +499,14 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
                 return Err(invalid("values"));
             }
             Object::Row {
-                row: db::add_row(c, &request.crew_id, table_number, &values, &now)?,
+                row: db::add_row_by(
+                    c,
+                    &request.crew_id,
+                    table_number,
+                    &values,
+                    &crate::managed_links::author(actor),
+                    &now,
+                )?,
             }
         }
         Change::EditRow {
@@ -435,6 +515,16 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
             values,
         } => {
             let row_number = object_number(&row_id, 'O', "rowId")?;
+            if crewd_store::managed_tables_v2::enabled(c)? {
+                let (t, _, _, _) = crewd_store::managed_tables_v2::row_base(c, row_number)?
+                    .ok_or_else(|| missing(&row_id))?;
+                crate::managed_tables_v2::v1_write(
+                    c,
+                    actor,
+                    crewd_store::managed_tables_v2::number(&t.id, 'T')?,
+                    Some(row_number),
+                )?;
+            }
             let expected = number(&expected_revision, "expectedRevision")?;
             let row = db::row(c, row_number)?.ok_or_else(|| missing(&row_id))?;
             if row.crew_id != request.crew_id {
@@ -444,6 +534,9 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
                 return Err(CollabError::Conflict(Refusal::new(Code::ManagedRowChanged)));
             }
             let table_number = object_number(&row.table_id, 'T', "tableId")?;
+            if crewd_store::managed_tables_v2::enabled(c)? {
+                crate::managed_tables_v2::v1_write(c, actor, table_number, Some(row_number))?;
+            }
             let table = db::table(c, table_number)?.ok_or_else(|| missing(&row.table_id))?;
             if !db::values_valid(&table.fields, &values)? {
                 return Err(invalid("values"));
@@ -507,7 +600,15 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         }
         change => {
             let (_, target) = risk_or_lesson.ok_or_else(|| invalid("change"))?;
-            let (object, effect) = risks_lessons::apply(c, actor, &request.crew_id, target, change, tx.now_ms(), &now)?;
+            let (object, effect) = risks_lessons::apply(
+                c,
+                actor,
+                &request.crew_id,
+                target,
+                change,
+                tx.now_ms(),
+                &now,
+            )?;
             occurrence = effect;
             object
         }
@@ -767,7 +868,10 @@ mod tests {
         let made = ok(&mut s, |tx| submit(tx, AUTHOR, create.clone()));
         let t = table(&made);
         assert_eq!(get(s.conn(), OTHER, &t.id).unwrap(), made.object);
-        assert_eq!(tables(s.conn(), OTHER, None).unwrap().items, [t.clone()]);
+        assert_eq!(
+            tables(s.conn(), OTHER, None).unwrap().items,
+            std::slice::from_ref(t)
+        );
         assert!(get(s.conn(), Actor::Session("untrusted-id"), &t.id).is_err());
         assert!(
             lookup(s.conn(), HUMAN, "crew-a", &create.request_id)
@@ -793,7 +897,7 @@ mod tests {
         assert_eq!(get(s.conn(), OTHER, &first.id).unwrap(), original.object);
         assert_eq!(
             rows(s.conn(), OTHER, &t.id, None).unwrap().items,
-            [first.clone()]
+            std::slice::from_ref(first)
         );
         let mut wrong = added.clone();
         wrong.change = Change::AddRow {
@@ -938,7 +1042,11 @@ mod tests {
         use crewd_store::object_refs::{self, ObjectKind};
         let dir = tempfile::tempdir().unwrap();
         let s = crewd_store::testing::open_legacy_store(22).unwrap();
-        s.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew-a','A','t','t');").unwrap();
+        s.conn()
+            .execute_batch(
+                "INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew-a','A','t','t');",
+            )
+            .unwrap();
         let prior = object_refs::bind(
             s.conn(),
             ObjectKind::Plan,
@@ -947,7 +1055,12 @@ mod tests {
             "original",
         )
         .unwrap();
-        s.conn().execute("VACUUM INTO ?1", [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()]).unwrap();
+        s.conn()
+            .execute(
+                "VACUUM INTO ?1",
+                [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()],
+            )
+            .unwrap();
         drop(s);
         let mut s = Store::open_data_dir(dir.path()).unwrap();
         let version: i64 = s
@@ -1574,4 +1687,20 @@ mod decision_tests {
         assert_eq!(count(&s, "SELECT count(*) FROM managed_decisions"), 0);
         assert_eq!(count(&s, "SELECT count(*) FROM managed_object_receipts"), 0);
     }
+}
+
+fn v1_read_guard(c: &Connection, number: i64, is_row: bool) -> Result<()> {
+    if crewd_store::managed_tables_v2::enabled(c)? {
+        let table = if is_row {
+            crewd_store::managed_tables_v2::row_base(c, number)?.map(|v| v.0)
+        } else {
+            crewd_store::managed_tables_v2::table(c, number)?
+        };
+        if table.is_some_and(|t| !t.v1_readable) {
+            return Err(CollabError::Conflict(Refusal::new(
+                Code::ManagedV1Unsupported,
+            )));
+        }
+    }
+    Ok(())
 }

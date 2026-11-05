@@ -190,17 +190,33 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
         )?],
         Change::AskInboxChanged { crew_id } => vec![ev(
             events::ASK_INBOX_CHANGED,
-            &CrewRef { crew_id: crew_id.clone() },
+            &CrewRef {
+                crew_id: crew_id.clone(),
+            },
         )?],
         Change::ArtifactChanged { crew_id } => vec![ev(
             crewd_proto::managed_artifacts::CHANGED,
-            &crewd_proto::managed_artifacts::Changed { crew_id:crew_id.clone() },
+            &crewd_proto::managed_artifacts::Changed {
+                crew_id: crew_id.clone(),
+            },
         )?],
         Change::ArtifactHistoryChanged { crew_id, job_id } => vec![ev(
             crewd_proto::artifact_history::CHANGED,
-            &crewd_proto::artifact_history::Changed { crew_id:crew_id.clone(), job_id:job_id.clone() },
+            &crewd_proto::artifact_history::Changed {
+                crew_id: crew_id.clone(),
+                job_id: job_id.clone(),
+            },
         )?],
-        Change::OntologyChanged { crew_id, object_ids } => vec![ev(
+        Change::ManagedLinksChanged { crew_id } => vec![ev(
+            crewd_proto::managed_tables_v2::CHANGED,
+            &crewd_proto::managed_tables_v2::Changed {
+                crew_id: crew_id.clone(),
+            },
+        )?],
+        Change::OntologyChanged {
+            crew_id,
+            object_ids,
+        } => vec![ev(
             events::ONTO_CHANGED,
             &crewd_proto::managed_objects_api::OntologyChanged {
                 crew_id: crew_id.clone(),

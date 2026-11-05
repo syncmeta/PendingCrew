@@ -6,6 +6,7 @@ pub mod captain;
 pub mod channels;
 pub mod crews;
 mod managed_objects;
+mod managed_tables_v2;
 pub mod messaging;
 mod resources;
 pub mod work;
@@ -171,17 +172,35 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
     };
     // One gate (`catalog::visible`, the same rule the tool list uses): the role, re-read on
     // every call. The management crew has no special case (S68).
-    if !catalog::visible(spec, me)
-        && !(catalog::visible_in_case(spec, me) && super::admin_case_scope::capture().is_some())
+    if !(catalog::visible(spec, me)
+        || (catalog::visible_in_case(spec, me) && super::admin_case_scope::capture().is_some()))
     {
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
+        "managed_table_v2_get"
+        | "managed_tables_v2_list"
+        | "managed_row_v2_get"
+        | "managed_rows_v2_list"
+        | "managed_table_v2_submit"
+        | "managed_table_v2_request_get"
+        | "managed_link_resolve_target"
+        | "managed_links_list"
+        | "managed_link_submit"
+        | "managed_link_request_get" => managed_tables_v2::call(&cx, tool, args).await,
         "ask_decision"
         | "ask_decision_request_get"
-        | "artifact_history_status" | "artifact_history_begin" | "artifact_history_step" | "artifact_history_request_get"
-        | "artifact_preview" | "artifacts_list" | "artifact_get" | "artifact_backlinks"
-        | "artifact_subject" | "artifact_submit" | "artifact_request_get"
+        | "artifact_history_status"
+        | "artifact_history_begin"
+        | "artifact_history_step"
+        | "artifact_history_request_get"
+        | "artifact_preview"
+        | "artifacts_list"
+        | "artifact_get"
+        | "artifact_backlinks"
+        | "artifact_subject"
+        | "artifact_submit"
+        | "artifact_request_get"
         | "managed_object_scope_get"
         | "managed_object_get"
         | "managed_tables_list"
@@ -204,8 +223,12 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         "admin_case_handoff_accept" => admin_cases::accept(&cx, args).await,
         "my_work_items" => work::mine(&cx, args).await,
         "todo_get" => work::todo_get(&cx, args).await,
-        crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL => work::todo_ruling_check(&cx, args).await,
-        crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL => work::todo_ruling_close(&cx, args).await,
+        crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL => {
+            work::todo_ruling_check(&cx, args).await
+        }
+        crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL => {
+            work::todo_ruling_close(&cx, args).await
+        }
         "work_item_get" => work::get(&cx, args).await,
         "work_item_history" => work::history(&cx, args).await,
         "work_item_create" => work::create(&cx, args).await,

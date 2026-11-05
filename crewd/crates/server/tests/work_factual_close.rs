@@ -724,7 +724,8 @@ async fn original_factual_close_rolls_back_work_and_release_if_receipt_cannot_co
     assert_eq!(
         call(&mut human, "command.submit", request.clone())
             .await
-            .unwrap_err().0,
+            .unwrap_err()
+            .0,
         crewd_proto::RpcError::INTERNAL
     );
     assert_eq!(snapshot(&f).await, before);

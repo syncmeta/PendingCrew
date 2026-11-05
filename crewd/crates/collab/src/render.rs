@@ -630,8 +630,10 @@ pub fn build_batch_after(
                 let mut answer = a.answer.clone().unwrap_or_default();
                 if let Some(decision) = crate::decision_asks::get(conn, &a.crew_id, &a.ask)?
                     && let Some(capture) = decision.capture
-                    && let Some(index) =
-                        crewd_store::decision_asks::option_index(&decision.draft, &capture.option_id)
+                    && let Some(index) = crewd_store::decision_asks::option_index(
+                        &decision.draft,
+                        &capture.option_id,
+                    )
                 {
                     answer = format!(
                         "{} {} ({})",

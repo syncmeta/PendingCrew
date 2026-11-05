@@ -292,6 +292,7 @@ private struct CrewdTypedHumanActions: View {
                 symbol:"person.crop.circle.badge.questionmark")
             Text(key.ask + " · " + (target.crewTitle ?? key.crew)).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             if let review, current {
+                CrewdManagedLinksEntry(workspace:workspace,source:.init(kind:"ask",id:key.ask),current:{current})
                 if let decisionReview { structuredSummary(decisionReview,open:review.revision != nil) }
                 else { Text(verbatim:review.ask["question"].string ?? "").textSelection(.enabled) }
                 if let item = review.ask["item"].string { Text("关联计划 " + item).font(.caption).textSelection(.enabled) }

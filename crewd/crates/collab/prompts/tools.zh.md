@@ -1807,3 +1807,103 @@ register显式登记；link原子懒建并关联；unlink只移除精确expected
 
 ## artifact_subject.includeLegacySources
 为true时包含旧版真实Done和冻结快照的诚实来源；快照不得当作原事件。省略为false，兼容旧Origin集合。
+
+
+## managed_table_v2_get
+读取组织表的真实V2定义、稳定字段号、当前schemaRevision及写策略。旧位置式表格接口不能表达V2时不得自行忽略关联列或改为SQL。
+
+## managed_table_v2_get.id
+实际组织表T编号。
+
+## managed_tables_v2_list
+按有界页读取当前可读组织表（包括已归档只读表），不推断未读后续页。
+
+## managed_tables_v2_list.after
+上一页nextAfter，首读省略；只原样回传，不猜顺序。
+
+## managed_row_v2_get
+读取真实O记录及当前字段号映射和有权读取的关联。hiddenSet只表示部分关系当前不可见，不代表隐藏数量或可复制目标。
+
+## managed_row_v2_get.id
+实际O编号。
+
+## managed_rows_v2_list
+读取指定T的有界V2记录页，表定义与schemaRevision一起返回。
+
+## managed_rows_v2_list.tableId
+实际T编号。
+
+## managed_rows_v2_list.after
+上一页nextAfter，首读省略。
+
+## managed_table_v2_submit
+显式创建组织表、单次安全列演进、新增记录或按稳定字段号局部修改。先读真实schemaRevision/rowRevision；未提及字段原样保留。隐藏关联只能原单元整组Keep，不计数、不复制、不自动清除；有hiddenSet时可见关联不能净增。更名/隐藏/恢复/单变多不改业务对象状态；标题必须active scalar，先改标题列再隐藏。新UUID不可冒充旧结果；失败或回包不明只查原requestId，不自动重发。
+
+## managed_table_v2_submit.scope
+managed_object_scope_get返回的当前Core原样scope；恢复旧epoch仅查历史结果。
+
+## managed_table_v2_submit.crewId
+请求对应的实际机组，不从路径、目标归属或标题猜测。
+
+## managed_table_v2_submit.requestId
+本次原始UUID，调用前保存；结果不明只用managed_table_v2_request_get查询。
+
+## managed_table_v2_submit.operation
+闭合typed操作。patches只含实际要改的fieldId，原schema/row版本必须匹配；关联目标用resolve_target读当前授权摘要；不支持降窄、单元跨列Keep或改Work/D/R/L/H状态。
+
+## managed_table_v2_request_get
+只读查询这一个原始V2请求。known为原不可变效果，historical仅历史，notFound不能推出未提交，不用当前行状态代替回执。
+
+## managed_table_v2_request_get.scope
+原请求原样scope，不替换restoreEpoch。
+
+## managed_table_v2_request_get.crewId
+原请求机组。
+
+## managed_table_v2_request_get.requestId
+原始UUID。
+
+## managed_link_resolve_target
+按真实ID和当前权限核对目标及Core实际摘要。消息按B15逐次核验；不扫描消息列表猜旧消息是否存在，不创建产物、资料库或目标。可读不代表可写。
+
+## managed_link_resolve_target.target
+完整typed目标。仅在明确提供managedLinks.knowledgeTargets.v1能力时使用资料/文档目标及其真实SQLite限定source；未提供时不可用，不用旧Core镜像或表名替代。未支持Folder不使用。
+
+## managed_links_list
+读取有界手工/关联列关系，可显式包含只读业务适配关系。outgoing隐藏整组只返回单marker、不提供隐藏数量；incoming不可读source不返回。适配关系的副作用须使用原业务工具。
+
+## managed_links_list.query
+outgoing精确source或incoming精确target；includeAdapters显式选择。artifact source须指定metadataCrewId，不挪动全局指针或他组关联。
+
+## managed_links_list.after
+上一页nextAfter，首读省略。
+
+## managed_links_list.limit
+单页上限1–64，后续页显式读取。
+
+## managed_link_submit
+显式增删通用手工relates，必须当前source权限、target读权及manualLinkRevision相符。不会修改Work/Ask/D/R/L状态；column/adapter关系不能在此改删。artifact source用本机组metadata域，不改变他组边或全局产物所有权。不明结果只查原UUID，不自动再提交。
+
+## managed_link_submit.scope
+当前Core精确scope；lookup使用原scope。
+
+## managed_link_submit.crewId
+实际请求机组；artifact metadataCrewId必须与此一致。
+
+## managed_link_submit.requestId
+提交前保存的原始UUID，不能新建UUID重试未知操作。
+
+## managed_link_submit.operation
+link或unlink及精确source/manualLinkRevision；删除须expectedEdgeId，只能手工relates，不能复用隐藏marker当目标。
+
+## managed_link_request_get
+只读核对原始manual relates请求及不可变效果。目标失权后不回显目标原文，不从当前边存在与否推断自身成功。
+
+## managed_link_request_get.scope
+原请求精确scope。
+
+## managed_link_request_get.crewId
+原请求机组。
+
+## managed_link_request_get.requestId
+原请求UUID。

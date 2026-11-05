@@ -2,28 +2,31 @@
 //! 同步、不碰 tokio、不读时钟：每个写操作是 `fn(&mut Tx, ..) -> Result<T>`，时间是 `Tx` 里调用方给的
 //! `now_ms`；操作把「改了什么」记成 `Change`，`run` 提交成功才交回（服务层据此发事件）。
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
-pub mod admin_cases;
+pub mod admin_case_custody;
 pub mod admin_case_effect_report;
-pub mod admin_human_brief;
 pub mod admin_case_execution;
+pub mod admin_case_handoff;
 pub mod admin_case_launch;
 pub mod admin_case_legacy;
 pub mod admin_case_link;
-pub mod admin_case_handoff;
-pub mod admin_case_custody;
 pub mod admin_case_outcome;
-pub mod asks;
+pub mod admin_cases;
+pub mod admin_human_brief;
+pub mod artifact_history;
 pub mod ask_inbox;
 pub mod ask_resolution;
+pub mod asks;
 pub mod causal;
 pub mod channel_archive;
 mod channel_archive_discovery;
+pub mod channel_responsibility;
 pub mod channel_work;
 pub mod channels;
 pub mod checkpoints;
 pub mod crews;
 pub mod cursor_reservations;
 pub mod cursors;
+pub mod decision_asks;
 pub mod directory;
 pub mod documents;
 #[cfg(test)]
@@ -31,27 +34,25 @@ mod global_workflow_core;
 pub mod hibernate;
 pub mod judgments;
 pub mod listens;
+pub mod managed_artifacts;
+pub mod managed_links;
+pub mod managed_message_sources;
+pub mod managed_objects;
+pub mod managed_tables_v2;
 pub mod message_attribution;
 pub mod message_delivery;
 pub mod message_provenance;
 pub mod messages;
-pub mod decision_asks;
-pub mod managed_objects;
-pub mod managed_artifacts;
-pub mod artifact_history;
-pub mod managed_message_sources;
 pub mod patrol_brief;
-pub mod channel_responsibility;
 pub mod patrol_manual;
 pub mod patrol_runtime;
 pub mod prompts;
 pub mod refusal;
 pub mod render;
-pub mod requirements;
-pub mod requirement_similarity;
 pub mod requirement_review;
 pub mod requirement_ruling;
-pub mod work_duplicate_review;
+pub mod requirement_similarity;
+pub mod requirements;
 pub(crate) mod resource_acl;
 pub mod restart;
 pub mod session_retirement;
@@ -69,6 +70,7 @@ pub mod work;
 pub mod work_block;
 pub mod work_close;
 pub mod work_coordination;
+pub mod work_duplicate_review;
 pub mod work_followups;
 pub mod work_lost;
 pub mod work_patrol;
@@ -141,6 +143,10 @@ pub enum Change {
     ArtifactHistoryChanged {
         crew_id: String,
         job_id: String,
+    },
+    /// A committed graph/schema invalidation; no business state or receipt.
+    ManagedLinksChanged {
+        crew_id: String,
     },
     DocumentChanged {
         crew_id: String,
@@ -361,6 +367,10 @@ pub fn run_with_context<T>(
     f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
 ) -> Result<(T, Vec<Change>)> {
     let t = store.conn().unchecked_transaction()?;
+    let graph_enabled = crewd_store::managed_tables_v2::enabled(&t)?;
+    if graph_enabled {
+        managed_links::check_target_deletions(&t)?;
+    }
     let (v, changes) = {
         let mut tx = Tx {
             conn: &t,
@@ -369,6 +379,9 @@ pub fn run_with_context<T>(
             context,
         };
         let v = f(&mut tx)?;
+        if graph_enabled {
+            managed_links::settle_target_deletions(&mut tx)?;
+        }
         (v, tx.changes)
     };
     t.commit()?;

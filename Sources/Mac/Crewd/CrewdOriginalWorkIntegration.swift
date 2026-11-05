@@ -82,6 +82,12 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             CrewdOriginalMessages(workspace:workspace,header:nil,openSession:openSession){sectionContent}
             #endif
         }
+        .task(id:workspace.currentManagedBusinessNavigation?.id) {
+            guard let navigation=workspace.currentManagedBusinessNavigation else {return}
+            if navigation.target.kind == .work {workScopes["progress"]="crew"}
+            if navigation.target.kind == .requirement {workScopes["ai"]="crew"}
+            if [.ask,.human].contains(navigation.target.kind) {workScopes["human"]="crew"}
+        }
         #if os(macOS)
         .toolbar { workspaceToolbar }
         .modifier(CrewdWorkspaceToolbarTitle())

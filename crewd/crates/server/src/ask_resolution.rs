@@ -62,9 +62,17 @@ async fn route(state: &Arc<AppState>, actor: &Actor, req: Request) -> Result<Val
                 .collab(move |tx| {
                     actor.authorize_tx(&owner, tx.conn(), methods::ASK_ANSWER)?;
                     if matches!(&actor, Actor::Remote(_))
-                        && crewd_collab::decision_asks::answer_is_structured(tx.conn(), &p.crew_id, &p.ask)?
+                        && crewd_collab::decision_asks::answer_is_structured(
+                            tx.conn(),
+                            &p.crew_id,
+                            &p.ask,
+                        )?
                     {
-                        actor.authorize_tx(&owner, tx.conn(), crewd_proto::commands::ASK_RESOLVE)?;
+                        actor.authorize_tx(
+                            &owner,
+                            tx.conn(),
+                            crewd_proto::commands::ASK_RESOLVE,
+                        )?;
                     }
                     asks::answer(tx, &p.crew_id, &p.ask, &p.text)
                 })

@@ -165,6 +165,24 @@ fn snapshot_steps(
     restore_floor: Option<i64>,
     qualify_empty_knowledge: bool,
 ) -> Result<()> {
+    snapshot_steps_with_floors(
+        conn,
+        dest,
+        reserve,
+        restore_floor,
+        None,
+        qualify_empty_knowledge,
+    )
+}
+
+fn snapshot_steps_with_floors(
+    conn: &Connection,
+    dest: &Path,
+    reserve: u64,
+    restore_floor: Option<i64>,
+    field_floor: Option<i64>,
+    qualify_empty_knowledge: bool,
+) -> Result<()> {
     let dir = dest
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
@@ -203,7 +221,7 @@ fn snapshot_steps(
                 .open(&tmp)?;
         }
         conn.execute("VACUUM INTO ?1", [tmp_str])?;
-        if restore_floor.is_some() || qualify_empty_knowledge {
+        if restore_floor.is_some() || field_floor.is_some() || qualify_empty_knowledge {
             // Never install an old active grant even if the process crashes just
             // after rename. Transform only this private staging copy, not the backup.
             let mut copy =
@@ -241,6 +259,9 @@ fn snapshot_steps(
                 }
             } else {
                 record_empty_knowledge_cut(&tx)?;
+            }
+            if let Some(floor) = field_floor {
+                crate::managed_field_allocator::preserve_restore_floor(&tx, floor)?;
             }
             tx.commit()?;
         }
@@ -1102,18 +1123,21 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     let floor_witness = data_dir.join(RESTORE_ALLOCATOR_WITNESS);
     let recorded = restore_allocator_floor(data_dir)?;
     let source_floor = crate::object_refs::allocator_floor(&src)?;
-    let (live_id, live_floor) = if db.try_exists()? {
+    let recorded_field_floor = crate::managed_field_allocator::witness_floor(data_dir)?;
+    let source_field_floor = crate::managed_field_allocator::allocator_floor(&src)?;
+    let (live_id, live_floor, live_field_floor) = if db.try_exists()? {
         crate::version_guard::with_quiescent_copy(&db, |current| {
             Ok((
                 crate::meta_get(current, "dbId")?,
                 crate::object_refs::allocator_floor(current)?,
+                crate::managed_field_allocator::allocator_floor(current)?,
             ))
         })?
     } else {
         // A failed cut may already have moved the predecessor. Its identity
         // record remains until a replacement has been durably published.
         let recorded = crate::read_id_file(&data_dir.join(crate::ID_FILE))?.map(|id| id.id);
-        (recorded, 0)
+        (recorded, 0, 0)
     };
     if target_has_root && (src_id.is_none() || live_id != src_id) {
         return Err(StoreError::Invalid(
@@ -1121,6 +1145,9 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
         ));
     }
     let floor = recorded.max(source_floor).max(live_floor);
+    let field_floor = recorded_field_floor
+        .max(source_field_floor)
+        .max(live_field_floor);
 
     let aside = data_dir.join(format!(
         "{}.replaced-{}",
@@ -1134,13 +1161,15 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     let cut = (|| -> Result<Option<PathBuf>> {
         // Finish and verify the entire replacement before changing any active
         // path. Its allocator floor and restore stamp share one SQLite commit.
-        snapshot_steps(&src, &stage, 0, Some(floor), false).map_err(|e| StoreError::Snapshot {
-            dest: db.clone(),
-            source: Box::new(e),
-        })?;
+        snapshot_steps_with_floors(&src, &stage, 0, Some(floor), Some(field_floor), false)
+            .map_err(|e| StoreError::Snapshot {
+                dest: db.clone(),
+                source: Box::new(e),
+            })?;
         if floor > recorded {
             fsutil::atomic_write(&floor_witness, format!("{floor}\n").as_bytes(), 0o600)?;
         }
+        crate::managed_field_allocator::persist_witness(data_dir, field_floor)?;
         let db_present = db.exists();
         if db_present {
             // Preserve the previous physical authority and any committed WAL.
@@ -1654,5 +1683,225 @@ mod sqlite_knowledge_restore_guard_tests {
                 .unwrap(),
             crate::schema::SCHEMA_VERSION
         );
+    }
+}
+
+#[cfg(test)]
+mod managed_field_restore_tests {
+    use super::*;
+    use crewd_proto::{managed_objects as v1, managed_tables_v2 as v2};
+    fn create(c: &Connection) -> i64 {
+        c.execute("INSERT OR IGNORE INTO crews(id,title,created_at,updated_at) VALUES('field-floor-crew','A','t','t')",[]).unwrap();
+        let tx = c.unchecked_transaction().unwrap();
+        let t = crate::managed_objects::create_table_by(
+            &tx,
+            "field-floor-crew",
+            "T",
+            &[v1::Field {
+                name: "title".into(),
+                field_type: v1::FieldType::Text,
+                nullable: false,
+            }],
+            &v2::Author::Human {},
+            "t",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        crate::managed_tables_v2::number(&t.id, 'T').unwrap()
+    }
+    fn issue(c: &Connection, n: i64) -> String {
+        let mut t = crate::managed_tables_v2::table(c, n).unwrap().unwrap();
+        let expected = t.schema_revision.parse::<i64>().unwrap();
+        let next = t.next_field_number.parse::<i64>().unwrap();
+        let id = format!("p{next}");
+        t.fields.push(v2::Field {
+            id: id.clone(),
+            name: format!("field{next}"),
+            kind: v2::FieldKind::Text {},
+            nullable: true,
+            hidden: false,
+        });
+        t.schema_revision = (expected + 1).to_string();
+        t.next_field_number = next.checked_add(1).unwrap().to_string();
+        let tx = c.unchecked_transaction().unwrap();
+        crate::managed_tables_v2::save_table(&tx, &t, expected).unwrap();
+        tx.commit().unwrap();
+        id
+    }
+    #[test]
+    fn restore_keeps_issued_fields_after_table_cascade_but_new_table_starts_at_p1() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("old.db");
+        let s = crate::Store::open_data_dir(d.path()).unwrap();
+        let n = create(s.conn());
+        vacuum_into(s.conn(), &source).unwrap();
+        let bytes = std::fs::read(&source).unwrap();
+        assert_eq!(issue(s.conn(), n), "p2");
+        // Exercise the real storage cascade: allocator metadata must outlive it.
+        s.conn()
+            .execute("DELETE FROM object_refs WHERE number=?1", [n])
+            .unwrap();
+        assert!(
+            crate::managed_tables_v2::table(s.conn(), n)
+                .unwrap()
+                .is_none()
+        );
+        drop(s);
+        restore(d.path(), &source).unwrap();
+        let s = crate::Store::open_data_dir(d.path()).unwrap();
+        assert_eq!(issue(s.conn(), n), "p3");
+        let fresh = create(s.conn());
+        assert_eq!(
+            crate::managed_tables_v2::table(s.conn(), fresh)
+                .unwrap()
+                .unwrap()
+                .next_field_number,
+            "2"
+        );
+        assert_eq!(std::fs::read(source).unwrap(), bytes);
+    }
+    #[test]
+    fn staged_and_missing_active_publish_retry_preserve_field_floor() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("old.db");
+        let s = crate::Store::open_data_dir(d.path()).unwrap();
+        let n = create(s.conn());
+        vacuum_into(s.conn(), &source).unwrap();
+        assert_eq!(issue(s.conn(), n), "p2");
+        drop(s);
+        let src = open_read_only(&source).unwrap();
+        let stage = d.path().join("interrupted-stage.db");
+        snapshot_steps_with_floors(&src, &stage, 0, Some(0), Some(41), false).unwrap();
+        let staged = open_read_only(&stage).unwrap();
+        assert_eq!(
+            crate::managed_field_allocator::allocator_floor(&staged).unwrap(),
+            41
+        );
+        drop(staged);
+        // Exact cut after durable witness / before publish, with old active moved.
+        crate::managed_field_allocator::persist_witness(d.path(), 41).unwrap();
+        let held = d.path().join("held-active.db");
+        std::fs::rename(d.path().join(crate::DB_FILE), &held).unwrap();
+        restore(d.path(), &source).unwrap();
+        let s = crate::Store::open_data_dir(d.path()).unwrap();
+        assert_eq!(issue(s.conn(), n), "p41");
+        assert!(held.is_file());
+        assert!(stage.is_file());
+    }
+    #[test]
+    fn bad_field_witness_refuses_before_moving_live_or_source() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("old.db");
+        let s = crate::Store::open_data_dir(d.path()).unwrap();
+        create(s.conn());
+        vacuum_into(s.conn(), &source).unwrap();
+        drop(s);
+        let active = d.path().join(crate::DB_FILE);
+        let before = std::fs::read(&active).unwrap();
+        let backup = std::fs::read(&source).unwrap();
+        fsutil::atomic_write(
+            &d.path().join(".managed-fields-restore-floor.v1"),
+            b"invalid\n",
+            0o600,
+        )
+        .unwrap();
+        assert!(restore(d.path(), &source).is_err());
+        assert_eq!(std::fs::read(active).unwrap(), before);
+        assert_eq!(std::fs::read(source).unwrap(), backup);
+        assert!(!std::fs::read_dir(d.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".replaced-")
+        }));
+    }
+    #[test]
+    fn real_v29_restore_keeps_positional_fields_then_carries_only_next_number() {
+        let d = tempfile::tempdir().unwrap();
+        let source = d.path().join("v29.db");
+        let old = Connection::open(&source).unwrap();
+        crate::testing::historical_fixture(&old, 29).unwrap();
+        old.execute(
+            "INSERT INTO crews(id,title,created_at,updated_at) VALUES('old','Old','t','t')",
+            [],
+        )
+        .unwrap();
+        let tx = old.unchecked_transaction().unwrap();
+        let t = crate::managed_objects::create_table(
+            &tx,
+            "old",
+            "Original",
+            &[
+                v1::Field {
+                    name: "name".into(),
+                    field_type: v1::FieldType::Text,
+                    nullable: false,
+                },
+                v1::Field {
+                    name: "count".into(),
+                    field_type: v1::FieldType::Integer,
+                    nullable: true,
+                },
+            ],
+            "t",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        drop(old);
+        let bytes = std::fs::read(&source).unwrap();
+        crate::managed_field_allocator::persist_witness(d.path(), 73).unwrap();
+        restore(d.path(), &source).unwrap();
+        let s = crate::Store::open_data_dir(d.path()).unwrap();
+        let n = crate::managed_tables_v2::number(&t.id, 'T').unwrap();
+        let t = crate::managed_tables_v2::table(s.conn(), n)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            t.fields.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(),
+            vec!["p1", "p2"]
+        );
+        assert_eq!(t.next_field_number, "73");
+        assert_eq!(t.schema_revision, "1");
+        assert_eq!(issue(s.conn(), n), "p73");
+        assert_eq!(std::fs::read(source).unwrap(), bytes);
+    }
+    #[test]
+    fn normal_v29_migration_keeps_each_tables_original_local_next() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join(crate::DB_FILE);
+        let c = Connection::open(&db).unwrap();
+        crate::testing::historical_fixture(&c, 29).unwrap();
+        c.execute(
+            "INSERT INTO crews(id,title,created_at,updated_at) VALUES('old','Old','t','t')",
+            [],
+        )
+        .unwrap();
+        let tx = c.unchecked_transaction().unwrap();
+        let mut ids = Vec::new();
+        for count in [3, 1] {
+            let fields = (0..count)
+                .map(|i| v1::Field {
+                    name: format!("field{i}"),
+                    field_type: v1::FieldType::Text,
+                    nullable: false,
+                })
+                .collect::<Vec<_>>();
+            let t =
+                crate::managed_objects::create_table(&tx, "old", "Original", &fields, "t").unwrap();
+            ids.push((crate::managed_tables_v2::number(&t.id, 'T').unwrap(), count));
+        }
+        tx.commit().unwrap();
+        drop(c);
+        let s = crate::Store::open_data_dir(d.path()).unwrap();
+        for (id, count) in ids {
+            let t = crate::managed_tables_v2::table(s.conn(), id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                t.fields.iter().map(|f| f.id.clone()).collect::<Vec<_>>(),
+                (1..=count).map(|i| format!("p{i}")).collect::<Vec<_>>()
+            );
+            assert_eq!(t.next_field_number, (count + 1).to_string());
+        }
     }
 }

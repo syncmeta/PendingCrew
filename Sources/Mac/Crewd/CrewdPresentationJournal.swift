@@ -74,6 +74,19 @@ final class CrewdPresentationJournal {
         }
     }
 
+    func prepareManagedV2(_ params:CrewdValue,crew:String,manual:Bool)throws->Prepared {
+        let method=manual ? "managedLink.observation":"managedTable.v2.observation"
+        guard params["crewId"].string?.utf8.elementsEqual(crew.utf8)==true,
+              let target=params["target"].string,!target.isEmpty else {throw CrewdPublicWire.invalid()}
+        return try withPrivateLock("managed-v2.lock",message:"此对象的原关联或表格请求正在核对。") {
+            guard try !unknownRecords().contains(where:{$0.method==method && $0.scope==scope &&
+                $0.params["target"].string?.utf8.elementsEqual(target.utf8)==true}) else {
+                throw CrewdClientError(message:"此对象在同一恢复范围内有原请求待核对，未重复提交。",kind:.notSubmitted)
+            }
+            return try prepare(method:method,params:params,crew:crew)
+        }
+    }
+
     func prepareManagedDirectory(_ params: CrewdValue, crew: String) throws -> Prepared {
         let method = "managedObject.submit.observation"
         guard params["crewId"].string?.utf8.elementsEqual(crew.utf8) == true,

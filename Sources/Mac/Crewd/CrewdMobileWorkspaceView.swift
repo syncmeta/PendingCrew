@@ -105,6 +105,15 @@ private struct CrewdMobileCrewPane: View {
             }
         }.navigationTitle(title)
         .onChange(of:workspace.knowledgeNavigation) { _,_ in tab = .messages }
+        .task(id:workspace.currentManagedBusinessNavigation?.id) {
+            guard let navigation=workspace.currentManagedBusinessNavigation else {return}
+            switch navigation.target.kind {
+            case .work:tab = .progress
+            case .requirement,.ask,.human:tab = .todo
+            case .table,.row,.decision,.risk,.lesson,.artifact,.document,.knowledge:tab = .documents
+            default:tab = .messages
+            }
+        }
         .toolbar { Button("刷新", systemImage: "arrow.clockwise") { workspace.scheduleSync(recoverHistory: true) }.disabled(!workspace.client.connected) }
     }
 }

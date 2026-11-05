@@ -169,12 +169,13 @@ pub(crate) fn report_receipt(
     // Pre-index receipts can be recovered only when the whole case-specific
     // range fits the bounded read and provides a unique event match.
     let prefix = key(witness, "");
-    let mut stmt = c.prepare(
-        "SELECT key,value FROM meta WHERE key>=?1 AND key<?2 ORDER BY key LIMIT 51",
-    )?;
-    let rows = stmt.query_map(params![prefix, format!("{prefix}\u{10ffff}")], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-    })?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut stmt =
+        c.prepare("SELECT key,value FROM meta WHERE key>=?1 AND key<?2 ORDER BY key LIMIT 51")?;
+    let rows = stmt
+        .query_map(params![prefix, format!("{prefix}\u{10ffff}")], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     if rows.len() > 50 {
         return Ok(None);
     }

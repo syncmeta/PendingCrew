@@ -193,7 +193,10 @@ async fn route(
             }
             let mut list = catalog::tools_for(&me, loc);
             if !scope.is_live()
-                || !conn.data_token.as_ref().is_some_and(|token| state.tokens.verify(&session, token))
+                || !conn
+                    .data_token
+                    .as_ref()
+                    .is_some_and(|token| state.tokens.verify(&session, token))
                 || (state.management.get().is_some() && !state.admission.contains(&session))
             {
                 list.retain(|tool| !catalog::requires_managed_scope(&tool.name));
@@ -272,13 +275,19 @@ async fn route(
                     "Agent execution requires current-run Human admission",
                 ));
             }
-            if catalog::requires_managed_scope(&p.tool) || matches!(
-                p.tool.as_str(),
-                "channel_archive_check" | "channel_archive_verified" | "channel_restore_verified"
-                    | crewd_collab::work_coordination::SPLIT_TOOL
-                    | crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL
-                    | crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL
-            ) || (p.tool == "work_item_assign" && p.args.get("coordination_decision_id").is_some()) {
+            if catalog::requires_managed_scope(&p.tool)
+                || matches!(
+                    p.tool.as_str(),
+                    "channel_archive_check"
+                        | "channel_archive_verified"
+                        | "channel_restore_verified"
+                        | crewd_collab::work_coordination::SPLIT_TOOL
+                        | crewd_collab::requirement_ruling::CAPTAIN_CHECK_TOOL
+                        | crewd_collab::requirement_ruling::CAPTAIN_CLOSE_TOOL
+                )
+                || (p.tool == "work_item_assign"
+                    && p.args.get("coordination_decision_id").is_some())
+            {
                 let token = conn.data_token.clone().ok_or_else(invalid)?;
                 return to_value(
                     tools::call_scoped(state, &me, &p.tool, p.args, scope.clone(), token).await,
@@ -438,7 +447,7 @@ async fn legacy_risk_context(
     .filter(|_| review())
     {
         let line = crewd_proto::agent::managed_risk_line(risk);
-        if existing.encode_utf16().count() + line.len() + 1 <= state.agent.config.inject_cap_chars {
+        if existing.encode_utf16().count() + line.len() < state.agent.config.inject_cap_chars {
             content["hookSpecificOutput"]["additionalContext"] =
                 Value::String(format!("{existing}\n{line}"));
             output.stdout = Some(content.to_string());
@@ -644,78 +653,776 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v2_raw_socket_duplicates_refuse_before_effect_and_preserve_original_uuid() {
+        use crewd_proto::managed_tables_v2::*;
+        use serde_json::Value;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        async fn frame(
+            rd: &mut tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+            wr: &mut tokio::net::unix::OwnedWriteHalf,
+            id: u64,
+            line: &str,
+        ) -> Value {
+            wr.write_all(format!("{line}\n").as_bytes()).await.unwrap();
+            loop {
+                let mut body = String::new();
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(10), rd.read_line(&mut body))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        > 0
+                );
+                let result: Value = serde_json::from_str(&body).unwrap();
+                if result["id"] == id {
+                    return result;
+                }
+            }
+        }
+        async fn snapshot(f: &Fixture) -> Value {
+            f.state
+                .db
+                .call(|s| -> crewd_store::Result<Value> {
+                    let mut out = serde_json::Map::new();
+                    for t in [
+                        "managed_tables",
+                        "managed_rows",
+                        "managed_links",
+                        "managed_v2_receipts",
+                        "managed_link_events",
+                        "object_refs",
+                    ] {
+                        let n: i64 =
+                            s.conn()
+                                .query_row(&format!("SELECT count(*) FROM {t}"), [], |r| {
+                                    r.get(0)
+                                })?;
+                        out.insert(t.into(), json!(n));
+                    }
+                    let clock: i64 = s.conn().query_row(
+                        "SELECT value FROM managed_link_clock WHERE id=1",
+                        [],
+                        |r| r.get(0),
+                    )?;
+                    out.insert("clock".into(), json!(clock));
+                    Ok(Value::Object(out))
+                })
+                .await
+                .unwrap()
+                .unwrap()
+        }
+        fn duplicate(line: &str, alias: bool) -> String {
+            let marker = "\"title\":\"Raw original\"";
+            assert_eq!(line.matches(marker).count(), 1);
+            line.replacen(
+                marker,
+                if alias {
+                    r#""title":"not the accepted intent","t\u0069tle":"Raw original""#
+                } else {
+                    r#""title":"not the accepted intent","title":"Raw original""#
+                },
+                1,
+            )
+        }
+        let f = Fixture::new().await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let server = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut observer = RpcClient::connect(&socket).await;
+        let scope = observer
+            .call("managedObject.scope", json!({}))
+            .await
+            .unwrap();
+        let packet = |uuid: String| {
+            json!({"scope":scope,"crewId":f.crew,"requestId":uuid,"operation":{
+            "kind":"createTable","title":"Raw original","purpose":"A scalar may contain {\"x\":1,\"x\":2} without parsing it as JSON", "titleFieldIndex":0,"rowWritePolicy":"ownerCrewWriters",
+            "fields":[{"name":"Name","kind":{"kind":"text"},"nullable":false}]}})
+        };
+        let human_uuid = uuid::Uuid::new_v4().to_string();
+        let human = packet(human_uuid.clone());
+        let stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
+        let (rd, mut wr) = stream.into_split();
+        let mut rd = tokio::io::BufReader::new(rd);
+        let valid =
+            serde_json::to_string(&json!({"id":1,"method":TABLE_SUBMIT,"params":human})).unwrap();
+        let before = snapshot(&f).await;
+        for alias in [false, true] {
+            let bad = frame(&mut rd, &mut wr, 1, &duplicate(&valid, alias)).await;
+            assert_eq!(bad["error"]["code"], crewd_proto::RpcError::INVALID_PARAMS);
+            assert_eq!(
+                snapshot(&f).await,
+                before,
+                "rejected raw duplicate cannot allocate rows/receipts/events/IDs"
+            );
+        }
+        assert_eq!(
+            observer
+                .call(
+                    TABLE_REQUEST_GET,
+                    json!({"scope":scope,"crewId":f.crew,"requestId":human_uuid})
+                )
+                .await
+                .unwrap(),
+            json!({"status":"notFound"})
+        );
+        let accepted = frame(&mut rd, &mut wr, 1, &valid).await;
+        assert!(accepted.get("error").is_none());
+        assert_eq!(accepted["result"]["requestId"], human_uuid);
+        assert_eq!(
+            observer
+                .call(
+                    TABLE_REQUEST_GET,
+                    json!({"scope":scope,"crewId":f.crew,"requestId":human_uuid})
+                )
+                .await
+                .unwrap(),
+            json!({"status":"known","receipt":accepted["result"]})
+        );
+        let agent_uuid = uuid::Uuid::new_v4().to_string();
+        let agent = packet(agent_uuid.clone());
+        let stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
+        let (agent_rd, mut agent_wr) = stream.into_split();
+        let mut agent_rd = tokio::io::BufReader::new(agent_rd);
+        let agent_line=serde_json::to_string(&json!({"id":3,"method":methods::CALL,"params":{"tool":"managed_table_v2_submit","args":agent}})).unwrap();
+        let unauth = frame(
+            &mut agent_rd,
+            &mut agent_wr,
+            3,
+            &duplicate(&agent_line, true),
+        )
+        .await;
+        assert_eq!(
+            unauth["error"]["code"],
+            crewd_proto::RpcError::FORBIDDEN,
+            "attachment must win before new raw input validation"
+        );
+        let attach=serde_json::to_string(&json!({"id":2,"method":methods::ATTACH,"params":{"sessionId":f.worker,"token":f.token(&f.worker)}})).unwrap();
+        assert!(
+            frame(&mut agent_rd, &mut agent_wr, 2, &attach)
+                .await
+                .get("error")
+                .is_none()
+        );
+        let after_human = snapshot(&f).await;
+        let bad = frame(
+            &mut agent_rd,
+            &mut agent_wr,
+            3,
+            &duplicate(&agent_line, true),
+        )
+        .await;
+        assert_eq!(bad["error"]["code"], crewd_proto::RpcError::INVALID_PARAMS);
+        assert_eq!(snapshot(&f).await, after_human);
+        let human_on_agent =
+            serde_json::to_string(&json!({"id":4,"method":TABLE_SUBMIT,"params":agent})).unwrap();
+        let refused = frame(
+            &mut agent_rd,
+            &mut agent_wr,
+            4,
+            &duplicate(&human_on_agent, false),
+        )
+        .await;
+        assert_eq!(
+            refused["error"]["code"],
+            crewd_proto::RpcError::FORBIDDEN,
+            "Human-only route must win before duplicate oracle"
+        );
+        assert_eq!(snapshot(&f).await, after_human);
+        let accepted = frame(&mut agent_rd, &mut agent_wr, 3, &agent_line).await;
+        assert!(accepted.get("error").is_none());
+        assert_eq!(accepted["result"]["isError"], false);
+        let receipt: Value =
+            serde_json::from_str(accepted["result"]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(receipt["requestId"], agent_uuid);
+        let lookup=serde_json::to_string(&json!({"id":5,"method":methods::CALL,"params":{"tool":"managed_table_v2_request_get","args":{"scope":scope,"crewId":f.crew,"requestId":agent_uuid}}})).unwrap();
+        let known = frame(&mut agent_rd, &mut agent_wr, 5, &lookup).await;
+        assert_eq!(known["result"]["isError"], false);
+        assert_eq!(
+            serde_json::from_str::<Value>(known["result"]["text"].as_str().unwrap()).unwrap(),
+            json!({"status":"known","receipt":receipt})
+        );
+        drop((rd, wr, agent_rd, agent_wr, observer));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn v2_tools_keep_real_message_scope_hidden_sets_and_current_row_authority() {
+        use crewd_proto::managed_tables_v2::*;
+        use serde_json::Value;
+        async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
+            peer.call(methods::CALL, json!({"tool":name,"args":args}))
+                .await
+                .unwrap()
+        }
+        fn decoded(r: Value) -> Value {
+            assert_eq!(r["isError"], false, "{r}");
+            serde_json::from_str(r["text"].as_str().unwrap()).unwrap()
+        }
+        fn packet(scope: &Value, crew: &str, operation: Value) -> Value {
+            json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"operation":operation})
+        }
+        let f = Fixture::new().await;
+        f.enable_knowledge();
+        let foreign = f.add_crew("Independent row owner", None).await;
+        let message_crew = f
+            .add_crew("Independent private message authority", None)
+            .await;
+        let other = "v2-independent-worker";
+        let colleague = "v2-same-crew-worker";
+        f.add_session(&foreign, other, Role::Worker, "Independent author")
+            .await;
+        f.add_session(&f.crew, colleague, Role::Worker, "Same crew reader")
+            .await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let server = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut writer = RpcClient::connect(&socket).await;
+        let mut reader = RpcClient::connect(&socket).await;
+        let mut same_crew = RpcClient::connect(&socket).await;
+        let mut human = RpcClient::connect(&socket).await;
+        for (peer, id) in [
+            (&mut writer, f.worker.as_str()),
+            (&mut reader, other),
+            (&mut same_crew, colleague),
+        ] {
+            peer.call(methods::ATTACH, json!({"sessionId":id,"token":f.token(id)}))
+                .await
+                .unwrap();
+        }
+        let scope =
+            decoded(tool(&mut writer, "managed_object_scope_get", json!({})).await)["scope"]
+                .clone();
+        let topic=human.call("channel.create",json!({"crewId":message_crew,"kind":"topic","name":"Private V2 target","members":[{"kind":"session","id":f.worker}]})).await.unwrap();
+        let message = human
+            .call(
+                "message.post",
+                json!({"channelId":topic["id"],"text":"Synthetic private target e\u{301}"}),
+            )
+            .await
+            .unwrap();
+        let private_target = json!({"kind":"message","id":message["id"]});
+        let resolved = decoded(
+            tool(
+                &mut writer,
+                "managed_link_resolve_target",
+                json!({"target":private_target}),
+            )
+            .await,
+        );
+        assert_eq!(resolved["target"], private_target);
+        assert_eq!(resolved["messageChannelId"], topic["id"]);
+        assert!(resolved["summary"].as_str().unwrap().chars().count() <= 280);
+        assert_eq!(
+            tool(
+                &mut reader,
+                "managed_link_resolve_target",
+                json!({"target":private_target})
+            )
+            .await["isError"],
+            true
+        );
+        let create = packet(
+            &scope,
+            &f.crew,
+            json!({"kind":"createTable","title":"Author protected scalar table","purpose":"No V1 ACL bypass","titleFieldIndex":0,"rowWritePolicy":"authorCaptainHuman",
+            "fields":[{"name":"Name","kind":{"kind":"text"},"nullable":false}]}),
+        );
+        let mut changes = f.state.hub.subscribe_collab();
+        let created = decoded(tool(&mut writer, "managed_table_v2_submit", create.clone()).await);
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_table_v2_submit", create.clone()).await),
+            created
+        );
+        let original = json!({"scope":scope,"crewId":f.crew,"requestId":create["requestId"]});
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "managed_table_v2_request_get",
+                    original.clone()
+                )
+                .await
+            ),
+            json!({"status":"known","receipt":created})
+        );
+        assert_eq!(
+            std::iter::from_fn(|| changes.try_recv().ok())
+                .filter(|v| matches!(v,Change::Progress{session_id,..} if session_id==&f.worker))
+                .count(),
+            1,
+            "fresh create counts once; replay/lookup count zero"
+        );
+        let table_id = created["effect"]["tableId"].clone();
+        let table =
+            decoded(tool(&mut writer, "managed_table_v2_get", json!({"id":table_id})).await);
+        assert_eq!(
+            table["author"],
+            json!({"kind":"session","sessionId":f.worker})
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut same_crew,
+                    "managed_table_v2_get",
+                    json!({"id":table_id})
+                )
+                .await
+            ),
+            table
+        );
+        assert!(decoded(tool(&mut reader,"managed_tables_v2_list",json!({"after":null})).await)["items"].as_array().unwrap().iter().any(|t|t["id"]==table_id));
+        let row_add = packet(
+            &scope,
+            &f.crew,
+            json!({"kind":"addRow","tableId":table_id,"expectedSchemaRevision":"1","patches":[{"fieldId":"p1","change":{"kind":"setScalar","value":{"type":"text","value":"Author's original"}}}]}),
+        );
+        let added = decoded(tool(&mut writer, "managed_table_v2_submit", row_add).await);
+        let row_id = added["effect"]["rowId"].clone();
+        let row = decoded(tool(&mut writer, "managed_row_v2_get", json!({"id":row_id})).await);
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "managed_rows_v2_list",
+                    json!({"tableId":table_id,"after":null})
+                )
+                .await
+            )["items"],
+            json!([row])
+        );
+        let other_patch = packet(
+            &scope,
+            &f.crew,
+            json!({"kind":"patchRow","rowId":row_id,"expectedSchemaRevision":"1","expectedRowRevision":row["revision"],"patches":[{"fieldId":"p1","change":{"kind":"setScalar","value":{"type":"text","value":"Not the original row author"}}}]}),
+        );
+        assert_eq!(
+            tool(&mut same_crew, "managed_table_v2_submit", other_patch).await["isError"],
+            true
+        );
+        let legacy_edit = json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"change":{"kind":"editRow","rowId":row_id,"expectedRevision":row["revision"],"values":[{"type":"text","value":"Must not bypass author policy"}]}});
+        assert_eq!(
+            tool(&mut same_crew, "managed_object_submit", legacy_edit).await["isError"],
+            true,
+            "V1 positional route must not bypass V2 existing-row author policy"
+        );
+        let legacy_create = json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"change":{"kind":"createTable","title":"Fresh V1 collaboration","fields":[{"name":"Name","fieldType":"text","nullable":false}]}});
+        let legacy = decoded(tool(&mut writer, "managed_object_submit", legacy_create).await);
+        let legacy_id = legacy["object"]["table"]["id"].clone();
+        let captured =
+            decoded(tool(&mut writer, "managed_table_v2_get", json!({"id":legacy_id})).await);
+        assert_eq!(
+            captured["author"],
+            json!({"kind":"session","sessionId":f.worker})
+        );
+        assert_eq!(captured["rowWritePolicy"], "ownerCrewWriters");
+        let colleague_add = json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"change":{"kind":"addRow","tableId":legacy_id,"values":[{"type":"text","value":"Preserved V1 crew-writer authority"}]}});
+        assert_eq!(
+            decoded(tool(&mut same_crew, "managed_object_submit", colleague_add).await)["object"]["row"]
+                ["crewId"],
+            f.crew
+        );
+        let req=human.call("todo.create",json!({"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"text":"A public Core target"})).await.unwrap();
+        let work=human.call("work.create",json!({"crewId":f.crew,"title":"Shared Core target","sources":[req["requirementId"]]})).await.unwrap();
+        let work_target = json!({"kind":"work","id":work["id"]});
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut reader,
+                    "managed_link_resolve_target",
+                    json!({"target":work_target})
+                )
+                .await
+            )["target"],
+            work_target,
+            "organization Core reads remain available across crews"
+        );
+        let source = json!({"kind":"table","id":table_id});
+        let outgoing = json!({"query":{"direction":"outgoing","source":source,"includeAdapters":false},"after":null,"limit":16});
+        let empty = decoded(tool(&mut writer, "managed_links_list", outgoing.clone()).await);
+        let link = packet(
+            &scope,
+            &f.crew,
+            json!({"kind":"link","source":source,"target":{"kind":"reference","target":work_target},"expectedManualLinkRevision":empty["manualLinkRevision"]}),
+        );
+        let mut manual_changes = f.state.hub.subscribe_collab();
+        let linked = decoded(tool(&mut writer, "managed_link_submit", link.clone()).await);
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_link_submit", link.clone()).await),
+            linked
+        );
+        let link_lookup = json!({"scope":scope,"crewId":f.crew,"requestId":link["requestId"]});
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_link_request_get", link_lookup.clone()).await),
+            json!({"status":"known","receipt":linked})
+        );
+        let mut duplicate = link.clone();
+        duplicate["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        duplicate["operation"]["expectedManualLinkRevision"] =
+            linked["resultManualLinkRevision"].clone();
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_link_submit", duplicate).await)["effect"]["added"],
+            false
+        );
+        assert_eq!(
+            std::iter::from_fn(|| manual_changes.try_recv().ok())
+                .filter(|v| matches!(v,Change::Progress{session_id,..} if session_id==&f.worker))
+                .count(),
+            1
+        );
+        assert_eq!(
+            human
+                .call("work.get", json!({"id":work["id"]}))
+                .await
+                .unwrap(),
+            work,
+            "manual relates never changes WorkBook"
+        );
+        let b_create = packet(
+            &scope,
+            &foreign,
+            json!({"kind":"createTable","title":"Source-bound hidden collection","purpose":"Foreign private targets stay hidden","titleFieldIndex":0,"rowWritePolicy":"authorCaptainHuman","fields":[
+            {"name":"Name","kind":{"kind":"text"},"nullable":false},
+            {"name":"Private targets","kind":{"kind":"link","target":{"kind":"message"},"many":true},"nullable":true},
+            {"name":"Other targets","kind":{"kind":"link","target":{"kind":"message"},"many":true},"nullable":true}]}),
+        );
+        let b_table=decoded(tool(&mut reader,"managed_table_v2_submit",b_create).await)["effect"]["tableId"].clone();
+        let b_add = packet(
+            &scope,
+            &foreign,
+            json!({"kind":"addRow","tableId":b_table,"expectedSchemaRevision":"1","patches":[{"fieldId":"p1","change":{"kind":"setScalar","value":{"type":"text","value":"B's editable row"}}}]}),
+        );
+        let b_row_id = decoded(tool(&mut reader, "managed_table_v2_submit", b_add).await)["effect"]
+            ["rowId"]
+            .clone();
+        let human_link = packet(
+            &scope,
+            &foreign,
+            json!({"kind":"patchRow","rowId":b_row_id,"expectedSchemaRevision":"1","expectedRowRevision":"1","patches":[{"fieldId":"p2","change":{"kind":"replaceLinks","values":[{"kind":"reference","target":private_target}],"keepHiddenSetToken":null}}]}),
+        );
+        human.call(TABLE_SUBMIT, human_link).await.unwrap();
+        let hidden = decoded(tool(&mut reader, "managed_row_v2_get", json!({"id":b_row_id})).await);
+        let hidden_cell = hidden["linkCells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["fieldId"] == "p2")
+            .unwrap();
+        assert!(hidden_cell["visible"].as_array().unwrap().is_empty());
+        assert_eq!(hidden_cell["hiddenSet"].as_object().unwrap().len(), 1);
+        assert!(hidden_cell["hiddenSet"]["keepToken"].is_string());
+        assert!(
+            !hidden.to_string().contains(message["id"].as_str().unwrap())
+                && !hidden.to_string().contains("Synthetic private target")
+        );
+        let b_outgoing = json!({"query":{"direction":"outgoing","source":{"kind":"row","id":b_row_id},"includeAdapters":false},"after":null,"limit":16});
+        let hidden_page =
+            decoded(tool(&mut reader, "managed_links_list", b_outgoing.clone()).await);
+        assert!(
+            hidden_page["items"].as_array().unwrap().is_empty()
+                && hidden_page["outgoingHiddenSet"].is_object()
+        );
+        assert!(
+            !hidden_page
+                .to_string()
+                .contains(message["id"].as_str().unwrap())
+        );
+        let scalar = packet(
+            &scope,
+            &foreign,
+            json!({"kind":"patchRow","rowId":b_row_id,"expectedSchemaRevision":"1","expectedRowRevision":hidden["revision"],"patches":[{"fieldId":"p1","change":{"kind":"setScalar","value":{"type":"text","value":"Scalar edit preserves hidden field"}}}]}),
+        );
+        decoded(tool(&mut reader, "managed_table_v2_submit", scalar).await);
+        let current =
+            decoded(tool(&mut reader, "managed_row_v2_get", json!({"id":b_row_id})).await);
+        let keep = current["linkCells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["fieldId"] == "p2")
+            .unwrap()["hiddenSet"]["keepToken"]
+            .clone();
+        let noop = packet(
+            &scope,
+            &foreign,
+            json!({"kind":"patchRow","rowId":b_row_id,"expectedSchemaRevision":"1","expectedRowRevision":current["revision"],"patches":[{"fieldId":"p2","change":{"kind":"replaceLinks","values":[],"keepHiddenSetToken":keep}}]}),
+        );
+        let mut hidden_changes = f.state.hub.subscribe_collab();
+        let no_effect = decoded(tool(&mut reader, "managed_table_v2_submit", noop.clone()).await);
+        assert_eq!(no_effect["effect"]["changed"], false);
+        assert!(no_effect["eventId"].is_null());
+        let b_message=human.call("message.post",json!({"channelId":crewd_store::channels::lobby_id(&foreign),"text":"Visible B target"})).await.unwrap();
+        let mut increase = noop.clone();
+        increase["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        increase["operation"]["patches"][0]["change"]["values"] =
+            json!([{"kind":"reference","target":{"kind":"message","id":b_message["id"]}}]);
+        assert_eq!(
+            tool(&mut reader, "managed_table_v2_submit", increase).await["isError"],
+            true,
+            "hidden-set capacity must not become a cardinality oracle"
+        );
+        let mut launder = noop.clone();
+        launder["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        launder["operation"]["patches"][0]["fieldId"] = json!("p3");
+        assert_eq!(
+            tool(&mut reader, "managed_table_v2_submit", launder).await["isError"],
+            true,
+            "hidden-set Keep cannot be copied to another field"
+        );
+        assert_eq!(
+            decoded(tool(&mut reader, "managed_row_v2_get", json!({"id":b_row_id})).await),
+            current
+        );
+        assert!(
+            !std::iter::from_fn(|| hidden_changes.try_recv().ok())
+                .any(|v| matches!(v, Change::Progress { .. })),
+            "no-op, hidden increase and token laundering have no progress"
+        );
+        human
+            .call(
+                "channel.removeMember",
+                json!({"channelId":topic["id"],"member":{"kind":"session","id":f.worker}}),
+            )
+            .await
+            .unwrap();
+        let revoked_message = tool(
+            &mut writer,
+            "managed_link_resolve_target",
+            json!({"target":private_target}),
+        )
+        .await;
+        assert_eq!(
+            revoked_message["isError"], true,
+            "live message membership is checked again"
+        );
+        for private in [
+            message["id"].as_str().unwrap(),
+            topic["id"].as_str().unwrap(),
+            "Synthetic private target",
+        ] {
+            assert!(
+                !revoked_message.to_string().contains(private),
+                "revoked resolve leaked private message metadata: {revoked_message}"
+            );
+        }
+        f.add_session(
+            &foreign,
+            &f.worker,
+            Role::Worker,
+            "Changed current identity",
+        )
+        .await;
+        assert_eq!(
+            tool(&mut writer, "managed_table_v2_submit", create.clone()).await["isError"],
+            true
+        );
+        assert_eq!(
+            tool(
+                &mut writer,
+                "managed_table_v2_request_get",
+                original.clone()
+            )
+            .await["isError"],
+            true
+        );
+        f.state.tokens.revoke(&f.worker);
+        for (name, args) in [
+            ("managed_table_v2_get", json!({"id":table_id})),
+            ("managed_tables_v2_list", json!({"after":null})),
+            ("managed_row_v2_get", json!({"id":row_id})),
+            (
+                "managed_rows_v2_list",
+                json!({"tableId":table_id,"after":null}),
+            ),
+            ("managed_table_v2_submit", create),
+            ("managed_table_v2_request_get", original),
+            ("managed_link_resolve_target", json!({"target":work_target})),
+            ("managed_links_list", outgoing),
+            ("managed_link_submit", link),
+            ("managed_link_request_get", link_lookup),
+        ] {
+            assert_eq!(
+                tool(&mut writer, name, args).await["isError"],
+                true,
+                "invalidated attachment used {name}"
+            );
+        }
+        drop((writer, reader, same_crew, human));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn artifact_history_tools_recheck_current_identity_without_model_progress() {
         use serde_json::Value;
         async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
-            peer.call(methods::CALL,json!({"tool":name,"args":args})).await.unwrap()
+            peer.call(methods::CALL, json!({"tool":name,"args":args}))
+                .await
+                .unwrap()
         }
-        fn decoded(result:Value)->Value {
-            assert_eq!(result["isError"],false,"{result}");
+        fn decoded(result: Value) -> Value {
+            assert_eq!(result["isError"], false, "{result}");
             serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
         }
-        let f=Fixture::new().await;
-        let foreign=f.add_crew("Other history owner",None).await;
-        let other="history-foreign-worker";
-        f.add_session(&foreign,other,Role::Worker,"Other historical worker").await;
-        let (stop,stopping)=tokio::sync::oneshot::channel();
-        let server=f.spawn_owned_socket(stopping).await;
-        let socket=f.data_dir().join("crewd.sock");
-        let mut writer=RpcClient::connect(&socket).await;
-        let mut reader=RpcClient::connect(&socket).await;
-        for (peer,session) in [(&mut writer,f.worker.as_str()),(&mut reader,other)] {
-            peer.call(methods::ATTACH,json!({"sessionId":session,"token":f.token(session)})).await.unwrap();
+        let f = Fixture::new().await;
+        let foreign = f.add_crew("Other history owner", None).await;
+        let other = "history-foreign-worker";
+        f.add_session(&foreign, other, Role::Worker, "Other historical worker")
+            .await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let server = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut writer = RpcClient::connect(&socket).await;
+        let mut reader = RpcClient::connect(&socket).await;
+        for (peer, session) in [(&mut writer, f.worker.as_str()), (&mut reader, other)] {
+            peer.call(
+                methods::ATTACH,
+                json!({"sessionId":session,"token":f.token(session)}),
+            )
+            .await
+            .unwrap();
         }
-        let captured=decoded(tool(&mut writer,"managed_object_scope_get",json!({})).await);
-        let scope=captured["scope"].clone();
-        let mut changes=f.state.hub.subscribe_collab();
-        let begin=json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string()});
-        let begun=decoded(tool(&mut writer,"artifact_history_begin",begin.clone()).await);
-        assert_eq!(begun["effect"],json!({"kind":"begun","created":true}));
-        assert_eq!(decoded(tool(&mut writer,"artifact_history_begin",begin.clone()).await),begun);
-        let status=decoded(tool(&mut writer,"artifact_history_status",json!({"crewId":f.crew})).await);
-        assert_eq!(status["job"],begun["job"]);
-        assert_eq!(status["canContinue"],true);
-        let mut reuse=begin.clone(); reuse["requestId"]=json!(uuid::Uuid::new_v4().to_string());
-        let reused=decoded(tool(&mut writer,"artifact_history_begin",reuse.clone()).await);
-        assert_eq!(reused["effect"],json!({"kind":"begun","created":false}));
-        assert_eq!(reused["job"],begun["job"]);
-        assert_eq!(reused["job"]["lastRequestId"],begin["requestId"],"reuse is not an invented new advancement");
-        let original=json!({"scope":scope,"crewId":f.crew,"requestId":begin["requestId"]});
-        assert_eq!(decoded(tool(&mut writer,"artifact_history_request_get",original.clone()).await),json!({"status":"known","receipt":begun}));
-        let step=json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":begun["job"]["id"],"expectedRevision":begun["job"]["revision"],"expectedCursor":begun["job"]["cursor"],"limit":64});
-        let advanced=decoded(tool(&mut writer,"artifact_history_step",step.clone()).await);
-        assert_eq!(advanced["job"]["cursor"],json!({"phase":"complete","after":"0"}));
-        assert_eq!(advanced["effect"]["delta"]["scanned"],"0","empty phases consume no invented rows");
-        assert_eq!(decoded(tool(&mut writer,"artifact_history_step",step.clone()).await),advanced,"original UUID replays before the now-complete CAS");
-        assert_eq!(decoded(tool(&mut writer,"artifact_history_request_get",original.clone()).await),json!({"status":"known","receipt":begun}),"current complete cursor never substitutes for original Begin receipt");
-        let calls=[
-            ("artifact_history_status",json!({"crewId":f.crew,"jobId":begun["job"]["id"]})),
-            ("artifact_history_begin",begin.clone()),
-            ("artifact_history_step",step.clone()),
-            ("artifact_history_request_get",original.clone()),
+        let captured = decoded(tool(&mut writer, "managed_object_scope_get", json!({})).await);
+        let scope = captured["scope"].clone();
+        let mut changes = f.state.hub.subscribe_collab();
+        let begin =
+            json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string()});
+        let begun = decoded(tool(&mut writer, "artifact_history_begin", begin.clone()).await);
+        assert_eq!(begun["effect"], json!({"kind":"begun","created":true}));
+        assert_eq!(
+            decoded(tool(&mut writer, "artifact_history_begin", begin.clone()).await),
+            begun
+        );
+        let status = decoded(
+            tool(
+                &mut writer,
+                "artifact_history_status",
+                json!({"crewId":f.crew}),
+            )
+            .await,
+        );
+        assert_eq!(status["job"], begun["job"]);
+        assert_eq!(status["canContinue"], true);
+        let mut reuse = begin.clone();
+        reuse["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        let reused = decoded(tool(&mut writer, "artifact_history_begin", reuse.clone()).await);
+        assert_eq!(reused["effect"], json!({"kind":"begun","created":false}));
+        assert_eq!(reused["job"], begun["job"]);
+        assert_eq!(
+            reused["job"]["lastRequestId"], begin["requestId"],
+            "reuse is not an invented new advancement"
+        );
+        let original = json!({"scope":scope,"crewId":f.crew,"requestId":begin["requestId"]});
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "artifact_history_request_get",
+                    original.clone()
+                )
+                .await
+            ),
+            json!({"status":"known","receipt":begun})
+        );
+        let step = json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":begun["job"]["id"],"expectedRevision":begun["job"]["revision"],"expectedCursor":begun["job"]["cursor"],"limit":64});
+        let advanced = decoded(tool(&mut writer, "artifact_history_step", step.clone()).await);
+        assert_eq!(
+            advanced["job"]["cursor"],
+            json!({"phase":"complete","after":"0"})
+        );
+        assert_eq!(
+            advanced["effect"]["delta"]["scanned"], "0",
+            "empty phases consume no invented rows"
+        );
+        assert_eq!(
+            decoded(tool(&mut writer, "artifact_history_step", step.clone()).await),
+            advanced,
+            "original UUID replays before the now-complete CAS"
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "artifact_history_request_get",
+                    original.clone()
+                )
+                .await
+            ),
+            json!({"status":"known","receipt":begun}),
+            "current complete cursor never substitutes for original Begin receipt"
+        );
+        let calls = [
+            (
+                "artifact_history_status",
+                json!({"crewId":f.crew,"jobId":begun["job"]["id"]}),
+            ),
+            ("artifact_history_begin", begin.clone()),
+            ("artifact_history_step", step.clone()),
+            ("artifact_history_request_get", original.clone()),
         ];
-        for (name,args) in calls.clone() {
-            assert_eq!(tool(&mut reader,name,args).await["isError"],true,"foreign worker used {name}");
+        for (name, args) in calls.clone() {
+            assert_eq!(
+                tool(&mut reader, name, args).await["isError"],
+                true,
+                "foreign worker used {name}"
+            );
         }
-        let archived=f.crew.clone();
-        f.state.collab(move|tx|crewd_collab::crews::archive(tx,&archived)).await.unwrap();
-        for (name,args) in calls.clone() {
-            assert_eq!(tool(&mut writer,name,args).await["isError"],true,"archived Agent used {name}, even for original replay");
+        let archived = f.crew.clone();
+        f.state
+            .collab(move |tx| crewd_collab::crews::archive(tx, &archived))
+            .await
+            .unwrap();
+        for (name, args) in calls.clone() {
+            assert_eq!(
+                tool(&mut writer, name, args).await["isError"],
+                true,
+                "archived Agent used {name}, even for original replay"
+            );
         }
-        let mut human=RpcClient::connect(&socket).await;
-        assert_eq!(human.call("artifact.history.status",json!({"crewId":f.crew})).await.unwrap()["job"],advanced["job"],"Human may inspect archived retained facts");
+        let mut human = RpcClient::connect(&socket).await;
+        assert_eq!(
+            human
+                .call("artifact.history.status", json!({"crewId":f.crew}))
+                .await
+                .unwrap()["job"],
+            advanced["job"],
+            "Human may inspect archived retained facts"
+        );
         drop(human);
-        f.add_session(&foreign,&f.worker,Role::Worker,"Changed current crew").await;
-        for (name,args) in calls.clone() {
-            assert_eq!(tool(&mut writer,name,args).await["isError"],true,"changed current crew borrowed old {name}");
+        f.add_session(&foreign, &f.worker, Role::Worker, "Changed current crew")
+            .await;
+        for (name, args) in calls.clone() {
+            assert_eq!(
+                tool(&mut writer, name, args).await["isError"],
+                true,
+                "changed current crew borrowed old {name}"
+            );
         }
         f.state.tokens.revoke(&f.worker);
-        for (name,args) in calls {
-            assert_eq!(tool(&mut writer,name,args).await["isError"],true,"invalid attachment used {name}");
+        for (name, args) in calls {
+            assert_eq!(
+                tool(&mut writer, name, args).await["isError"],
+                true,
+                "invalid attachment used {name}"
+            );
         }
-        assert!(!std::iter::from_fn(||changes.try_recv().ok()).any(|change|matches!(change,Change::Progress{..})),"historical maintenance, replay, reuse and empty steps never manufacture model progress");
-        drop((writer,reader)); stop.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(10),server).await.unwrap().unwrap();
+        assert!(
+            !std::iter::from_fn(|| changes.try_recv().ok())
+                .any(|change| matches!(change, Change::Progress { .. })),
+            "historical maintenance, replay, reuse and empty steps never manufacture model progress"
+        );
+        drop((writer, reader));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
@@ -723,7 +1430,9 @@ mod tests {
         use serde_json::Value;
 
         async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
-            peer.call(methods::CALL, json!({"tool":name,"args":args})).await.unwrap()
+            peer.call(methods::CALL, json!({"tool":name,"args":args}))
+                .await
+                .unwrap()
         }
         fn decoded(result: Value) -> Value {
             assert_eq!(result["isError"], false, "{result}");
@@ -733,25 +1442,58 @@ mod tests {
         let f = Fixture::new().await;
         let foreign = f.add_crew("Other artifact owner", None).await;
         let other = "artifact-foreign-worker";
-        f.add_session(&foreign, other, Role::Worker, "Artifact reader").await;
+        f.add_session(&foreign, other, Role::Worker, "Artifact reader")
+            .await;
         let (stop, stopping) = tokio::sync::oneshot::channel();
         let server = f.spawn_owned_socket(stopping).await;
         let socket = f.data_dir().join("crewd.sock");
         let mut writer = RpcClient::connect(&socket).await;
         let mut reader = RpcClient::connect(&socket).await;
         for (peer, session) in [(&mut writer, f.worker.as_str()), (&mut reader, other)] {
-            peer.call(methods::ATTACH, json!({"sessionId":session,"token":f.token(session)})).await.unwrap();
+            peer.call(
+                methods::ATTACH,
+                json!({"sessionId":session,"token":f.token(session)}),
+            )
+            .await
+            .unwrap();
         }
         let captured = decoded(tool(&mut writer, "managed_object_scope_get", json!({})).await);
         let scope = captured["scope"].clone();
         let input = json!({"kind":"commit","value":"b".repeat(40),"repository":null});
-        let reference = decoded(tool(&mut writer, "artifact_preview", json!({"crewId":f.crew,"input":input})).await);
-        assert_eq!(reference, json!({"namespace":{"kind":"global"},"key":format!("commit:{}", "b".repeat(40))}));
+        let reference = decoded(
+            tool(
+                &mut writer,
+                "artifact_preview",
+                json!({"crewId":f.crew,"input":input}),
+            )
+            .await,
+        );
+        assert_eq!(
+            reference,
+            json!({"namespace":{"kind":"global"},"key":format!("commit:{}", "b".repeat(40))})
+        );
         let file = json!({"kind":"file","value":"Sources/Fixture.swift","repository":null});
-        assert_eq!(decoded(tool(&mut writer, "artifact_preview", json!({"crewId":f.crew,"input":file})).await),
-                   json!({"namespace":{"kind":"unassigned","crewId":f.crew},"key":"file:Sources/Fixture.swift"}));
-        assert_eq!(tool(&mut reader, "artifact_preview", json!({"crewId":f.crew,"input":file})).await["isError"], true,
-                   "preview cannot create another crew's unassigned identity");
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "artifact_preview",
+                    json!({"crewId":f.crew,"input":file})
+                )
+                .await
+            ),
+            json!({"namespace":{"kind":"unassigned","crewId":f.crew},"key":"file:Sources/Fixture.swift"})
+        );
+        assert_eq!(
+            tool(
+                &mut reader,
+                "artifact_preview",
+                json!({"crewId":f.crew,"input":file})
+            )
+            .await["isError"],
+            true,
+            "preview cannot create another crew's unassigned identity"
+        );
         let mut repository_refs = Vec::new();
         for repository in ["repo-a", "repo-b"] {
             repository_refs.push(decoded(tool(&mut writer, "artifact_preview", json!({
@@ -763,19 +1505,37 @@ mod tests {
                               "change":{"kind":"register","input":input}});
         let mut changes = f.state.hub.subscribe_collab();
         let receipt = decoded(tool(&mut writer, "artifact_submit", register.clone()).await);
-        assert_eq!(receipt["effect"], json!({"kind":"registered","created":true,"claimAdded":true}));
-        assert_eq!(decoded(tool(&mut writer, "artifact_submit", register.clone()).await), receipt);
+        assert_eq!(
+            receipt["effect"],
+            json!({"kind":"registered","created":true,"claimAdded":true})
+        );
+        assert_eq!(
+            decoded(tool(&mut writer, "artifact_submit", register.clone()).await),
+            receipt
+        );
         let lookup = json!({"scope":scope,"crewId":f.crew,"requestId":register["requestId"]});
-        assert_eq!(decoded(tool(&mut writer, "artifact_request_get", lookup.clone()).await), json!({"status":"known","receipt":receipt}));
-        assert_eq!(decoded(tool(&mut reader, "artifact_get", json!({"reference":reference})).await), receipt["artifact"]);
+        assert_eq!(
+            decoded(tool(&mut writer, "artifact_request_get", lookup.clone()).await),
+            json!({"status":"known","receipt":receipt})
+        );
+        assert_eq!(
+            decoded(tool(&mut reader, "artifact_get", json!({"reference":reference})).await),
+            receipt["artifact"]
+        );
         let mut no_op = register.clone();
         no_op["requestId"] = json!(uuid::Uuid::new_v4().to_string());
         let unchanged = decoded(tool(&mut writer, "artifact_submit", no_op).await);
-        assert_eq!(unchanged["effect"], json!({"kind":"registered","created":false,"claimAdded":false}));
+        assert_eq!(
+            unchanged["effect"],
+            json!({"kind":"registered","created":false,"claimAdded":false})
+        );
         let progress = std::iter::from_fn(|| changes.try_recv().ok())
             .filter(|change| matches!(change, Change::Progress { session_id, .. } if session_id == &f.worker))
             .count();
-        assert_eq!(progress, 1, "lookup, exact replay, and no-op claim must not count as fresh progress");
+        assert_eq!(
+            progress, 1,
+            "lookup, exact replay, and no-op claim must not count as fresh progress"
+        );
         let decision = decoded(tool(&mut writer, "managed_object_submit", json!({
             "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
             "change":{"kind":"recordDecision","draft":{"question":"Which artifact to retain?",
@@ -787,40 +1547,110 @@ mod tests {
         let linked = decoded(tool(&mut writer, "artifact_submit", link.clone()).await);
         let edge = linked["effect"]["edge"].clone();
         assert_eq!(linked["change"], link["change"]);
-        assert_eq!(edge["origin"], json!({"kind":"manual","actor":{"kind":"session","sessionId":f.worker}}));
-        assert_eq!(decoded(tool(&mut reader, "artifact_backlinks", json!({"reference":reference})).await),
-                   json!({"items":[edge],"nextAfter":null}));
-        assert_eq!(decoded(tool(&mut reader, "artifact_subject", json!({"subject":subject})).await),
-                   json!({"items":[edge],"nextAfter":null}));
-        assert_eq!(decoded(tool(&mut reader, "artifacts_list", json!({})).await)["items"], json!([receipt["artifact"]]));
+        assert_eq!(
+            edge["origin"],
+            json!({"kind":"manual","actor":{"kind":"session","sessionId":f.worker}})
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut reader,
+                    "artifact_backlinks",
+                    json!({"reference":reference})
+                )
+                .await
+            ),
+            json!({"items":[edge],"nextAfter":null})
+        );
+        assert_eq!(
+            decoded(tool(&mut reader, "artifact_subject", json!({"subject":subject})).await),
+            json!({"items":[edge],"nextAfter":null})
+        );
+        assert_eq!(
+            decoded(tool(&mut reader, "artifacts_list", json!({})).await)["items"],
+            json!([receipt["artifact"]])
+        );
         let mut stolen = link.clone();
         stolen["crewId"] = json!(foreign);
         stolen["requestId"] = json!(uuid::Uuid::new_v4().to_string());
-        assert_eq!(tool(&mut reader, "artifact_submit", stolen.clone()).await["isError"], true,
-                   "global reads must not confer edit authority on another crew's Decision");
-        assert_eq!(tool(&mut reader, "artifact_request_get", lookup.clone()).await["isError"], true);
+        assert_eq!(
+            tool(&mut reader, "artifact_submit", stolen.clone()).await["isError"],
+            true,
+            "global reads must not confer edit authority on another crew's Decision"
+        );
+        assert_eq!(
+            tool(&mut reader, "artifact_request_get", lookup.clone()).await["isError"],
+            true
+        );
         let mut stale = register.clone();
         stale["scope"]["restoreEpoch"] = json!(uuid::Uuid::new_v4().to_string());
         stale["requestId"] = json!(uuid::Uuid::new_v4().to_string());
-        assert_eq!(tool(&mut writer, "artifact_submit", stale.clone()).await["isError"], true);
-        assert_eq!(decoded(tool(&mut writer, "artifact_request_get", json!({
-            "scope":stale["scope"],"crewId":f.crew,"requestId":register["requestId"]}
-        )).await), json!({"status":"historical","receipt":null}),
-                   "synthetic mismatched epoch checks parameter semantics only");
+        assert_eq!(
+            tool(&mut writer, "artifact_submit", stale.clone()).await["isError"],
+            true
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "artifact_request_get",
+                    json!({
+                        "scope":stale["scope"],"crewId":f.crew,"requestId":register["requestId"]}
+                    )
+                )
+                .await
+            ),
+            json!({"status":"historical","receipt":null}),
+            "synthetic mismatched epoch checks parameter semantics only"
+        );
         let unlink = json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
             "change":{"kind":"unlink","reference":reference,"subject":subject,"relation":"relates","expectedEdgeId":edge["id"]}});
         let unlinked = decoded(tool(&mut writer, "artifact_submit", unlink.clone()).await);
-        assert_eq!(unlinked["effect"], json!({"kind":"unlinked","edgeId":edge["id"]}));
-        assert_eq!(decoded(tool(&mut writer, "artifact_submit", unlink).await), unlinked);
-        assert_eq!(decoded(tool(&mut writer, "artifact_request_get", json!({
-            "scope":scope,"crewId":f.crew,"requestId":link["requestId"]}
-        )).await), json!({"status":"known","receipt":linked}));
-        assert_eq!(decoded(tool(&mut reader, "managed_object_get", json!({"id":decision["decision"]["id"]})).await), decision);
+        assert_eq!(
+            unlinked["effect"],
+            json!({"kind":"unlinked","edgeId":edge["id"]})
+        );
+        assert_eq!(
+            decoded(tool(&mut writer, "artifact_submit", unlink).await),
+            unlinked
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "artifact_request_get",
+                    json!({
+                        "scope":scope,"crewId":f.crew,"requestId":link["requestId"]}
+                    )
+                )
+                .await
+            ),
+            json!({"status":"known","receipt":linked})
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut reader,
+                    "managed_object_get",
+                    json!({"id":decision["decision"]["id"]})
+                )
+                .await
+            ),
+            decision
+        );
 
-        let unassigned = decoded(tool(&mut writer, "artifact_submit", json!({
-            "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
-            "change":{"kind":"register","input":file}
-        })).await)["artifact"].clone();
+        let unassigned = decoded(
+            tool(
+                &mut writer,
+                "artifact_submit",
+                json!({
+                    "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
+                    "change":{"kind":"register","input":file}
+                }),
+            )
+            .await,
+        )["artifact"]
+            .clone();
         let other_decision = decoded(tool(&mut reader, "managed_object_submit", json!({
             "scope":scope,"crewId":foreign,"requestId":uuid::Uuid::new_v4().to_string(),
             "change":{"kind":"recordDecision","draft":{"question":"Which shared pointer?",
@@ -836,26 +1666,64 @@ mod tests {
         assert_eq!(held["artifact"], unassigned);
         let held_edge = held["effect"]["edge"].clone();
         assert_eq!(held_edge["crewId"], foreign);
-        assert_eq!(held_edge["reference"]["namespace"], json!({"kind":"unassigned","crewId":f.crew}));
+        assert_eq!(
+            held_edge["reference"]["namespace"],
+            json!({"kind":"unassigned","crewId":f.crew})
+        );
         let mut missing_foreign = existing.clone();
         missing_foreign["requestId"] = json!(uuid::Uuid::new_v4().to_string());
         missing_foreign["change"]["reference"]["key"] = json!("file:NeverRegistered.swift");
-        assert_eq!(tool(&mut reader, "artifact_submit", missing_foreign).await["isError"], true,
-                   "linkExisting cannot implicitly create a foreign unassigned pointer");
-        f.add_session(&foreign, &f.worker, Role::Worker, "Moved artifact user").await;
-        assert_eq!(tool(&mut writer, "artifact_submit", register.clone()).await["isError"], true);
-        assert_eq!(tool(&mut writer, "artifact_preview", json!({"crewId":f.crew,"input":file})).await["isError"], true);
-        assert_eq!(decoded(tool(&mut writer, "artifact_get", json!({"reference":reference})).await), receipt["artifact"]);
+        assert_eq!(
+            tool(&mut reader, "artifact_submit", missing_foreign).await["isError"],
+            true,
+            "linkExisting cannot implicitly create a foreign unassigned pointer"
+        );
+        f.add_session(&foreign, &f.worker, Role::Worker, "Moved artifact user")
+            .await;
+        assert_eq!(
+            tool(&mut writer, "artifact_submit", register.clone()).await["isError"],
+            true
+        );
+        assert_eq!(
+            tool(
+                &mut writer,
+                "artifact_preview",
+                json!({"crewId":f.crew,"input":file})
+            )
+            .await["isError"],
+            true
+        );
+        assert_eq!(
+            decoded(tool(&mut writer, "artifact_get", json!({"reference":reference})).await),
+            receipt["artifact"]
+        );
         f.state.tokens.revoke(&f.worker);
         for (name, args) in [
-            ("artifact_preview", json!({"crewId":foreign,"input":file})), ("artifacts_list", json!({})),
-            ("artifact_get", json!({"reference":reference})), ("artifact_backlinks", json!({"reference":reference})),
-            ("artifact_subject", json!({"subject":subject})), ("artifact_submit", stolen), ("artifact_request_get", lookup),
+            ("artifact_preview", json!({"crewId":foreign,"input":file})),
+            ("artifacts_list", json!({})),
+            ("artifact_get", json!({"reference":reference})),
+            ("artifact_backlinks", json!({"reference":reference})),
+            ("artifact_subject", json!({"subject":subject})),
+            ("artifact_submit", stolen),
+            ("artifact_request_get", lookup),
         ] {
-            assert_eq!(tool(&mut writer, name, args).await["isError"], true, "invalidated attachment used {name}");
+            assert_eq!(
+                tool(&mut writer, name, args).await["isError"],
+                true,
+                "invalidated attachment used {name}"
+            );
         }
-        assert_eq!(decoded(tool(&mut reader, "artifact_backlinks", json!({"reference":reference})).await),
-                   json!({"items":[],"nextAfter":null}));
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut reader,
+                    "artifact_backlinks",
+                    json!({"reference":reference})
+                )
+                .await
+            ),
+            json!({"items":[],"nextAfter":null})
+        );
         let requirement = f.rpc("todo.create", json!({
             "crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"text":"Preserve frozen ledger"
         })).await;
@@ -864,35 +1732,81 @@ mod tests {
             "acceptance":"External edges never change the ledger","sources":[requirement["requirementId"]]
         })).await;
         let purged = f.crew.clone();
-        f.state.collab(move |tx| crewd_collab::crews::archive(tx, &purged)).await.unwrap();
+        f.state
+            .collab(move |tx| crewd_collab::crews::archive(tx, &purged))
+            .await
+            .unwrap();
         let frozen = f.rpc("work.get", json!({"id":work["id"]})).await;
         assert_eq!(frozen["frozen"], true);
         let frozen_subject = json!({"kind":"work","id":work["id"]});
         let frozen_link = json!({"scope":scope,"crewId":foreign,"requestId":uuid::Uuid::new_v4().to_string(),
             "change":{"kind":"linkExisting","reference":unassigned["reference"],
                       "subject":frozen_subject,"relation":"evidence"}});
-        let retained_edge = decoded(tool(&mut reader, "artifact_submit", frozen_link).await)["effect"]["edge"].clone();
+        let retained_edge =
+            decoded(tool(&mut reader, "artifact_submit", frozen_link).await)["effect"]["edge"]
+                .clone();
         assert_eq!(retained_edge["crewId"], foreign);
         assert_eq!(f.rpc("work.get", json!({"id":work["id"]})).await, frozen);
         let clear_frozen = json!({"scope":scope,"crewId":foreign,"requestId":uuid::Uuid::new_v4().to_string(),
             "change":{"kind":"unlink","reference":unassigned["reference"],"subject":frozen_subject,
                       "relation":"evidence","expectedEdgeId":retained_edge["id"]}});
         let cleared = decoded(tool(&mut reader, "artifact_submit", clear_frozen).await);
-        assert_eq!(cleared["effect"], json!({"kind":"unlinked","edgeId":retained_edge["id"]}));
-        assert_eq!(f.rpc("work.get", json!({"id":work["id"]})).await, frozen,
-                   "B may maintain its own edges without editing A's frozen ledger");
+        assert_eq!(
+            cleared["effect"],
+            json!({"kind":"unlinked","edgeId":retained_edge["id"]})
+        );
+        assert_eq!(
+            f.rpc("work.get", json!({"id":work["id"]})).await,
+            frozen,
+            "B may maintain its own edges without editing A's frozen ledger"
+        );
         let purged = f.crew.clone();
-        f.state.collab(move |tx| crewd_collab::crews::purge(tx, &purged)).await.unwrap();
-        assert_eq!(decoded(tool(&mut reader, "artifact_get", json!({"reference":unassigned["reference"]})).await), unassigned,
-                   "the original namespace crew's purge cannot remove another crew's retained edge");
-        assert_eq!(decoded(tool(&mut reader, "artifact_backlinks", json!({"reference":unassigned["reference"]})).await),
-                   json!({"items":[held_edge],"nextAfter":null}));
-        assert_eq!(decoded(tool(&mut reader, "artifact_request_get", json!({
-            "scope":scope,"crewId":foreign,"requestId":existing["requestId"]}
-        )).await), json!({"status":"known","receipt":held}));
+        f.state
+            .collab(move |tx| crewd_collab::crews::purge(tx, &purged))
+            .await
+            .unwrap();
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut reader,
+                    "artifact_get",
+                    json!({"reference":unassigned["reference"]})
+                )
+                .await
+            ),
+            unassigned,
+            "the original namespace crew's purge cannot remove another crew's retained edge"
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut reader,
+                    "artifact_backlinks",
+                    json!({"reference":unassigned["reference"]})
+                )
+                .await
+            ),
+            json!({"items":[held_edge],"nextAfter":null})
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut reader,
+                    "artifact_request_get",
+                    json!({
+                        "scope":scope,"crewId":foreign,"requestId":existing["requestId"]}
+                    )
+                )
+                .await
+            ),
+            json!({"status":"known","receipt":held})
+        );
         drop((writer, reader));
         stop.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), server).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
@@ -901,7 +1815,8 @@ mod tests {
 
         async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
             peer.call(methods::CALL, json!({"tool":name,"args":args}))
-                .await.unwrap()
+                .await
+                .unwrap()
         }
         fn decoded(result: Value) -> Value {
             assert_eq!(result["isError"], false, "{result}");
@@ -911,17 +1826,24 @@ mod tests {
         let f = Fixture::new().await;
         let foreign = f.add_crew("Foreign source reader", None).await;
         let other = "foreign-source-worker";
-        f.add_session(&foreign, other, Role::Worker, "Foreign reader").await;
+        f.add_session(&foreign, other, Role::Worker, "Foreign reader")
+            .await;
         let channel = crewd_store::channels::lobby_id(&f.crew);
-        let message = f.human_post(&channel, "Synthetic source e\u{301} kept private", vec![]).await;
+        let message = f
+            .human_post(&channel, "Synthetic source e\u{301} kept private", vec![])
+            .await;
         let (stop, stopping) = tokio::sync::oneshot::channel();
         let server = f.spawn_owned_socket(stopping).await;
         let socket = f.data_dir().join("crewd.sock");
         let mut writer = RpcClient::connect(&socket).await;
         let mut reader = RpcClient::connect(&socket).await;
         for (peer, session) in [(&mut writer, f.worker.as_str()), (&mut reader, other)] {
-            peer.call(methods::ATTACH, json!({"sessionId":session,"token":f.token(session)}))
-                .await.unwrap();
+            peer.call(
+                methods::ATTACH,
+                json!({"sessionId":session,"token":f.token(session)}),
+            )
+            .await
+            .unwrap();
         }
         let captured = decoded(tool(&mut writer, "managed_object_scope_get", json!({})).await);
         let scope = captured["scope"].clone();
@@ -933,71 +1855,142 @@ mod tests {
             }}
         });
         let mut changes = f.state.hub.subscribe_collab();
-        let receipt = decoded(tool(&mut writer, "managed_object_from_message", packet.clone()).await);
+        let receipt =
+            decoded(tool(&mut writer, "managed_object_from_message", packet.clone()).await);
         assert_eq!(receipt["created"], true);
         assert_eq!(receipt["sourceMessageId"], message.id);
         assert_eq!(receipt["requestId"], packet["requestId"]);
-        assert_eq!(receipt["object"]["decision"]["author"],
-                   json!({"kind":"session","sessionId":f.worker}));
+        assert_eq!(
+            receipt["object"]["decision"]["author"],
+            json!({"kind":"session","sessionId":f.worker})
+        );
         let id = receipt["object"]["decision"]["id"].clone();
-        assert_eq!(decoded(tool(&mut writer, "managed_object_from_message", packet.clone()).await), receipt);
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_object_from_message", packet.clone()).await),
+            receipt
+        );
         let lookup = json!({"scope":scope,"crewId":f.crew,"requestId":packet["requestId"]});
-        assert_eq!(decoded(tool(&mut writer, "managed_message_request_get", lookup.clone()).await),
-                   json!({"status":"known","receipt":receipt}));
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_message_request_get", lookup.clone()).await),
+            json!({"status":"known","receipt":receipt})
+        );
         let mut duplicate = packet.clone();
         duplicate["requestId"] = json!(uuid::Uuid::new_v4().to_string());
-        let second = decoded(tool(&mut writer, "managed_object_from_message", duplicate.clone()).await);
+        let second = decoded(
+            tool(
+                &mut writer,
+                "managed_object_from_message",
+                duplicate.clone(),
+            )
+            .await,
+        );
         assert_eq!(second["created"], false);
         assert_eq!(second["object"], receipt["object"]);
-        assert_eq!(decoded(tool(&mut writer, "managed_object_from_message", duplicate.clone()).await), second);
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "managed_object_from_message",
+                    duplicate.clone()
+                )
+                .await
+            ),
+            second
+        );
         let progress: Vec<_> = std::iter::from_fn(|| changes.try_recv().ok())
             .filter(|change| matches!(change, Change::Progress { session_id, .. } if session_id == &f.worker))
             .collect();
-        assert_eq!(progress.len(), 1, "only the new object may count as actual progress");
-        assert_eq!(decoded(tool(&mut writer, "managed_object_source_get", json!({"id":id})).await),
-                   json!({"status":"available","crewId":f.crew,"messageId":message.id,
-                          "channelId":channel,"excerpt":message.text}));
-        assert_eq!(decoded(tool(&mut writer, "managed_objects_from_message", json!({"messageId":message.id})).await),
-                   json!({"items":[receipt["object"]],"nextAfter":null}));
+        assert_eq!(
+            progress.len(),
+            1,
+            "only the new object may count as actual progress"
+        );
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_object_source_get", json!({"id":id})).await),
+            json!({"status":"available","crewId":f.crew,"messageId":message.id,
+                          "channelId":channel,"excerpt":message.text})
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "managed_objects_from_message",
+                    json!({"messageId":message.id})
+                )
+                .await
+            ),
+            json!({"items":[receipt["object"]],"nextAfter":null})
+        );
 
-        assert_eq!(decoded(tool(&mut reader, "managed_object_get", json!({"id":id})).await), receipt["object"]);
-        assert_eq!(decoded(tool(&mut reader, "managed_object_source_get", json!({"id":id})).await),
-                   json!({"status":"restricted"}), "object visibility must not expose source IDs or excerpt");
+        assert_eq!(
+            decoded(tool(&mut reader, "managed_object_get", json!({"id":id})).await),
+            receipt["object"]
+        );
+        assert_eq!(
+            decoded(tool(&mut reader, "managed_object_source_get", json!({"id":id})).await),
+            json!({"status":"restricted"}),
+            "object visibility must not expose source IDs or excerpt"
+        );
         let mut foreign_record = packet.clone();
         foreign_record["crewId"] = json!(foreign);
         foreign_record["requestId"] = json!(uuid::Uuid::new_v4().to_string());
         foreign_record["change"]["draft"]["about"] = json!([{"kind":"crew","id":foreign}]);
         for (name, args) in [
             ("managed_object_from_message", foreign_record.clone()),
-            ("managed_objects_from_message", json!({"messageId":message.id})),
+            (
+                "managed_objects_from_message",
+                json!({"messageId":message.id}),
+            ),
             ("managed_message_request_get", lookup.clone()),
         ] {
-            assert_eq!(tool(&mut reader, name, args).await["isError"], true, "{name}");
+            assert_eq!(
+                tool(&mut reader, name, args).await["isError"],
+                true,
+                "{name}"
+            );
         }
 
         // Keep this exact attachment and token, but change its authoritative crew row.
-        f.add_session(&foreign, &f.worker, Role::Worker, "Moved worker").await;
-        assert_eq!(decoded(tool(&mut writer, "managed_object_get", json!({"id":id})).await), receipt["object"]);
-        assert_eq!(decoded(tool(&mut writer, "managed_object_source_get", json!({"id":id})).await),
-                   json!({"status":"restricted"}));
+        f.add_session(&foreign, &f.worker, Role::Worker, "Moved worker")
+            .await;
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_object_get", json!({"id":id})).await),
+            receipt["object"]
+        );
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_object_source_get", json!({"id":id})).await),
+            json!({"status":"restricted"})
+        );
         for (name, args) in [
             ("managed_object_from_message", packet.clone()),
             ("managed_object_from_message", foreign_record.clone()),
-            ("managed_objects_from_message", json!({"messageId":message.id})),
+            (
+                "managed_objects_from_message",
+                json!({"messageId":message.id}),
+            ),
             ("managed_message_request_get", lookup.clone()),
         ] {
-            assert_eq!(tool(&mut writer, name, args).await["isError"], true,
-                       "current crew must be read again for {name}");
+            assert_eq!(
+                tool(&mut writer, name, args).await["isError"],
+                true,
+                "current crew must be read again for {name}"
+            );
         }
         f.state.tokens.revoke(&f.worker);
         for (name, args) in [
             ("managed_object_from_message", foreign_record),
             ("managed_object_source_get", json!({"id":id})),
-            ("managed_objects_from_message", json!({"messageId":message.id})),
+            (
+                "managed_objects_from_message",
+                json!({"messageId":message.id}),
+            ),
             ("managed_message_request_get", lookup),
         ] {
-            assert_eq!(tool(&mut writer, name, args).await["isError"], true,
-                       "invalidated attachment must not use {name}");
+            assert_eq!(
+                tool(&mut writer, name, args).await["isError"],
+                true,
+                "invalidated attachment must not use {name}"
+            );
         }
         let objects = decoded(tool(&mut reader, "managed_decisions_list", json!({})).await);
         assert_eq!(objects["items"], json!([receipt["object"]["decision"]]));
@@ -1006,7 +1999,10 @@ mod tests {
             "refused or read-only calls cannot extend progress");
         drop((writer, reader));
         stop.send(()).unwrap();
-        tokio::time::timeout(Duration::from_secs(10), server).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1131,8 +2127,14 @@ mod tests {
         assert_eq!(previous["decision"]["status"], "superseded");
         let page = decoded(tool(&mut reader, "managed_decisions_list", json!({})).await);
         assert_eq!(page["items"], json!([second, previous["decision"]]));
-        let next_page =
-            decoded(tool(&mut reader, "managed_decisions_list", json!({"after":next_id})).await);
+        let next_page = decoded(
+            tool(
+                &mut reader,
+                "managed_decisions_list",
+                json!({"after":next_id}),
+            )
+            .await,
+        );
         assert_eq!(next_page["items"], json!([previous["decision"]]));
         let end = decoded(tool(&mut reader, "managed_decisions_list", json!({"after":id})).await);
         assert_eq!(end["items"], json!([]));

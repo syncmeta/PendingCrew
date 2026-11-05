@@ -844,7 +844,11 @@ pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     let cascaded = crate::channels::release_sessions_of_doomed_crew(tx, id)?;
     crate::message_delivery::purge_source_crew(tx, id)?;
     for ask in before.state().asks.keys().copied() {
-        if before.state().ask_crew(ask).is_some_and(|crew| crew.as_str() == id) {
+        if before
+            .state()
+            .ask_crew(ask)
+            .is_some_and(|crew| crew.as_str() == id)
+        {
             crate::ask_inbox::purge(tx, ask)?;
         }
     }

@@ -956,7 +956,7 @@ mod tests {
         let prepared = ok(&mut s, |tx| prepare(tx, &id)).unwrap();
         let result = ok(&mut s, |tx| recover_page(tx, None));
         assert_eq!(result.0, 0);
-        assert_eq!(result.1, [id.clone()]);
+        assert_eq!(result.1, std::slice::from_ref(&id));
         assert_eq!(
             ok(&mut s, |tx| prepare(tx, &id)).unwrap().fingerprint,
             prepared.fingerprint

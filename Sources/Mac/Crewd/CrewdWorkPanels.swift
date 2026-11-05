@@ -174,7 +174,11 @@ struct CrewdWorkPanels: View {
     var visiblePlanIDs: Set<String>? = nil
     var patrolWorkspace: CrewdWorkspace? = nil
     private var visibleProgress: [CrewdPlan] {
-        guard let visiblePlanIDs else { return store.progress }
+        guard let visiblePlanIDs else {
+            var plans=store.progress
+            if let managedSelection,let id=CrewdWorkID(managedSelection,kind:.plan),let plan=store.plans[id],!plans.contains(where:{$0.id==id}) {plans.append(plan)}
+            return plans
+        }
         return visiblePlanIDs.sorted().compactMap { raw in
             guard let id = CrewdWorkID(raw, kind: .plan) else { return nil }
             return store.plans[id]
@@ -184,6 +188,7 @@ struct CrewdWorkPanels: View {
     @State private var humanBriefPresented = false
     @State private var collapsed:Set<String>=[]
     @State private var selected:String?
+    @State private var managedSelection:String?
     @State private var failure:String?
     @State private var actionTarget: CrewdPlanTarget?
     @State private var humanTarget:CrewdHumanTarget?
@@ -198,7 +203,32 @@ struct CrewdWorkPanels: View {
     @State private var closeNotes:[CrewdWorkID:String]=[:]
     private var folderView:CrewdResourceView{progressOnly ? .progress:.todo}
     private var folderSelection:Binding<String>{Binding(get:{resourceDrafts.selection(resources.crew,folderView,channel:resources.channel)},set:{resourceDrafts.select(resources.crew,folderView,$0,channel:resources.channel)})}
-    private func includes(_ kind:String,_ id:String)->Bool {compact || CrewdFolderFilter.includes(CrewdFolderFilter.object(kind,id),selection:folderSelection.wrappedValue,snapshot:resources.folders[folderView])}
+    private var visibleRequirementIDs:[CrewdWorkID] {
+        var ids=store.requirementIDs
+        if let managedSelection,let id=CrewdWorkID(managedSelection,kind:.requirement),store.requirements[id] != nil,!ids.contains(id) {ids.append(id)}
+        return ids
+    }
+    @MainActor private func openManagedNavigation() async {
+        guard let workspace=patrolWorkspace,let nav=workspace.currentManagedBusinessNavigation,nav.crew==store.selectedCrew else {return}
+        let read=store.readScope
+        do {
+            await store.ensureLoaded()
+            guard store.readScope==read,workspace.currentManagedBusinessNavigation?.id==nav.id else {return}
+            if nav.target.kind == .work,let raw=nav.target.idValue,let id=CrewdWorkID(raw,kind:.plan) {
+                let plan=try await store.detail(id)
+                guard plan.crew==nav.crew,store.readScope==read,workspace.currentManagedBusinessNavigation?.id==nav.id else {return}
+                managedSelection=raw;selected=raw;collapsed.remove(raw)
+            } else if nav.target.kind == .requirement,let raw=nav.target.idValue,let id=CrewdWorkID(raw,kind:.requirement) {
+                _=try await store.requirementDetail(id,expectedCrew:nav.crew)
+                guard store.readScope==read,workspace.currentManagedBusinessNavigation?.id==nav.id else {return}
+                managedSelection=raw;selectedRequirement=id
+            } else if nav.target.kind == .ask,let raw=nav.target.idValue {
+                humanPresentationScope=UUID();humanTarget = .init(key:.init(scope:store.selectedCrew,crew:nav.crew,ask:raw))
+            } else {return}
+            workspace.consumeManagedBusinessNavigation(nav.id)
+        }catch{if workspace.currentManagedBusinessNavigation?.id==nav.id {failure=error.localizedDescription}}
+    }
+    private func includes(_ kind:String,_ id:String)->Bool {managedSelection==id || compact || CrewdFolderFilter.includes(CrewdFolderFilter.object(kind,id),selection:folderSelection.wrappedValue,snapshot:resources.folders[folderView])}
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
             if !compact {
@@ -238,10 +268,10 @@ struct CrewdWorkPanels: View {
                     }
                     if !progressOnly && !compact && domain != .human {
                         requirementComposer
-                        ForEach(store.requirementIDs.filter{includes("requirement",$0.raw)},id:\.self) { id in
+                        ForEach(visibleRequirementIDs.filter{includes("requirement",$0.raw)},id:\.self) { id in
                             requirementRow(id)
                         }
-                        if store.requirementIDs.filter({includes("requirement",$0.raw)}).isEmpty && !store.loading {
+                        if visibleRequirementIDs.filter({includes("requirement",$0.raw)}).isEmpty && !store.loading {
                             Text("暂无待办").font(CrewdType.label).foregroundStyle(.secondary).padding(.vertical,12)
                         }
                         if domain == .all{Text("计划").font(.headline)}
@@ -288,6 +318,8 @@ struct CrewdWorkPanels: View {
             humanTarget = nil
         }
         .task(id:store.readScope.uuidString+store.capabilities.sorted().joined(separator:",")) { await store.ensureLoaded() }
+        .task(id:patrolWorkspace?.currentManagedBusinessNavigation?.id){await openManagedNavigation()}
+        .onChange(of:store.selectedCrew){_,_ in managedSelection=nil}
         .sheet(isPresented: $patrolPresented) { CrewdPatrolView(store: store, workspace: patrolWorkspace) }
         .sheet(isPresented: $humanBriefPresented) {
             CrewdHumanBriefView(store: store, drafts: $humanDrafts,
@@ -591,8 +623,9 @@ struct CrewdWorkPanels: View {
         documentLinksButton(id, crew: raw["crewId"].string)
         if let workspace=patrolWorkspace,let crew=raw["crewId"].string {
             let sourceScope=store.readScope
+            CrewdManagedLinksEntry(workspace:workspace,source:.init(kind:"requirement",id:id.raw),current:{store.readScope==sourceScope && selectedRequirement==id})
             CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:.requirement,id:id.raw),crew:crew,
-                frozen:raw["frozen"] == .bool(true),current:{store.readScope==sourceScope && selected==id.raw})
+                frozen:raw["frozen"] == .bool(true),current:{store.readScope==sourceScope && selectedRequirement==id})
         }
         if raw["closure"] != .null {
             Text("关闭理由：" + (raw["closure"]["note"].string ?? "")).textSelection(.enabled)

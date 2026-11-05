@@ -135,7 +135,7 @@ pub(crate) fn enqueue(
         || completed > tx.now_ms()
         || uuid::Uuid::parse_str(&run.run_id).is_err()
         || !current_captain(c, crew, captain)?
-        || !crewd_store::sessions::get(c, captain)?.is_some_and(|s| s.desired == Desired::Running)
+        || crewd_store::sessions::get(c, captain)?.is_none_or(|s| s.desired != Desired::Running)
         || wakes::automatic_work_paused(c, captain)?
     {
         return Ok(());
@@ -283,8 +283,8 @@ pub(crate) fn render(c: &Connection, wake: &wakes::WakeRow) -> Result<FollowupNo
         || wake.attempts > 0
         || wakes::human_stop_floor(c, &wake.session)? >= wake.id
         || !current_captain(c, &target.crew, &target.captain)?
-        || !crewd_store::sessions::get(c, &target.captain)?
-            .is_some_and(|s| s.desired == Desired::Running)
+        || crewd_store::sessions::get(c, &target.captain)?
+            .is_none_or(|s| s.desired != Desired::Running)
     {
         return Ok(FollowupNote::Stale);
     }

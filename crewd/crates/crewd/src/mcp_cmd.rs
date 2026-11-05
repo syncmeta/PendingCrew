@@ -14,6 +14,8 @@ use rmcp::{RoleServer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 
 use crate::agent_client::{AgentClient, CallError};
+#[path = "mcp_v2_transport.rs"]
+mod v2_transport;
 
 #[derive(clap::Args, Clone)]
 pub struct McpArgs {
@@ -143,7 +145,10 @@ pub async fn run(data_dir: &Path, args: McpArgs) -> anyhow::Result<()> {
         instructions,
         version: format!("{}+{}", env!("CARGO_PKG_VERSION"), who.surface_hash),
     }
-    .serve(rmcp::transport::stdio())
+    .serve(v2_transport::V2Transport::new(
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+    ))
     .await?;
     let peer = service.peer().clone();
     tokio::spawn(async move {

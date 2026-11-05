@@ -237,47 +237,82 @@ async fn similar_requirements_tick_exposes_only_current_scoped_human_review() {
     let f = Fixture::new().await;
     let crew = f.crew.clone();
     let secret = concat!("sk-p", "roj-0123456789abcdefghijABCDEFGHIJ");
-    let pair = f.state.collab(move |tx| {
-        ["Refresh the report with monthly data", "Refresh the report with monthly data using OPENAI_API_KEY="]
+    let pair = f
+        .state
+        .collab(move |tx| {
+            [
+                "Refresh the report with monthly data",
+                "Refresh the report with monthly data using OPENAI_API_KEY=",
+            ]
             .into_iter()
             .enumerate()
             .map(|(index, text)| {
-                let text = if index == 1 { format!("{text}{secret}") } else { text.into() };
-                requirements::create(tx, &Sender::Human, crewd_proto::TodoCreateParams {
-                    crew_id: crew.clone(),
-                    request_id: uuid::Uuid::new_v4().to_string(),
-                    channel_id: Some(format!("{crew}/lobby")),
-                    text,
-                }).map(|result| result.todo.requirement_id.unwrap())
+                let text = if index == 1 {
+                    format!("{text}{secret}")
+                } else {
+                    text.into()
+                };
+                requirements::create(
+                    tx,
+                    &Sender::Human,
+                    crewd_proto::TodoCreateParams {
+                        crew_id: crew.clone(),
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        channel_id: Some(format!("{crew}/lobby")),
+                        text,
+                    },
+                )
+                .map(|result| result.todo.requirement_id.unwrap())
             })
             .collect::<crewd_collab::Result<Vec<_>>>()
-    }).await.unwrap();
+        })
+        .await
+        .unwrap();
     let scope = json!({"crewId": f.crew});
     let initial = f.rpc(SIMILAR_REQUIREMENTS, scope.clone()).await.unwrap();
     assert_eq!(initial["enabled"], false);
     assert_eq!(initial["items"], json!([]));
     assert!(fake.requests().is_empty());
     let prior = f.configure(&fake.base_url).await;
-    let before = f.state.db.call(|store| {
-        store.conn().query_row("SELECT count(*) FROM wakes", [], |row| row.get::<_, i64>(0)).unwrap()
-    }).await.unwrap();
+    let before = f
+        .state
+        .db
+        .call(|store| {
+            store
+                .conn()
+                .query_row("SELECT count(*) FROM wakes", [], |row| row.get::<_, i64>(0))
+                .unwrap()
+        })
+        .await
+        .unwrap();
     let mut config = Fixture::config(&fake.base_url);
     config.similar_requirements = Some(true);
-    f.rpc(SETTINGS_SET, serde_json::to_value(JudgmentSettingsSet {
-        request_id: uuid::Uuid::new_v4().to_string(),
-        expected_revision: prior.view.settings.revision,
-        config: Some(config),
-        credential_update: CredentialUpdate::Keep,
-    }).unwrap()).await.unwrap();
+    f.rpc(
+        SETTINGS_SET,
+        serde_json::to_value(JudgmentSettingsSet {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            expected_revision: prior.view.settings.revision,
+            config: Some(config),
+            credential_update: CredentialUpdate::Keep,
+        })
+        .unwrap(),
+    )
+    .await
+    .unwrap();
     let review = tokio::time::timeout(std::time::Duration::from_secs(16), async {
         loop {
             let value = f.rpc(SIMILAR_REQUIREMENTS, scope.clone()).await.unwrap();
-            if value["items"].as_array().is_some_and(|rows| !rows.is_empty()) {
+            if value["items"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())
+            {
                 break value;
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-    }).await.expect("the real periodic runtime should produce a scoped suggestion");
+    })
+    .await
+    .expect("the real periodic runtime should produce a scoped suggestion");
     let row = &review["items"][0];
     assert_eq!(review["crewId"], f.crew);
     assert_eq!(review["items"].as_array().unwrap().len(), 1);
@@ -291,15 +326,33 @@ async fn similar_requirements_tick_exposes_only_current_scoped_human_review() {
     assert!(body.contains("[REDACTED]") && !body.contains(secret));
     assert!(!body.contains(&f.crew));
     for id in &pair {
-        assert_eq!(f.rpc("todo.get", json!({"id": id})).await.unwrap()["status"], "unclaimed");
+        assert_eq!(
+            f.rpc("todo.get", json!({"id": id})).await.unwrap()["status"],
+            "unclaimed"
+        );
     }
-    let after = f.state.db.call(|store| {
-        store.conn().query_row("SELECT count(*) FROM wakes", [], |row| row.get::<_, i64>(0)).unwrap()
-    }).await.unwrap();
+    let after = f
+        .state
+        .db
+        .call(|store| {
+            store
+                .conn()
+                .query_row("SELECT count(*) FROM wakes", [], |row| row.get::<_, i64>(0))
+                .unwrap()
+        })
+        .await
+        .unwrap();
     assert_eq!(before, after);
-    f.rpc("todo.close", json!({"id": pair[0], "expectedStatus":"unclaimed", "note":"already addressed"}))
-        .await.unwrap();
-    assert_eq!(f.rpc(SIMILAR_REQUIREMENTS, scope).await.unwrap()["items"], json!([]));
+    f.rpc(
+        "todo.close",
+        json!({"id": pair[0], "expectedStatus":"unclaimed", "note":"already addressed"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f.rpc(SIMILAR_REQUIREMENTS, scope).await.unwrap()["items"],
+        json!([])
+    );
     f.close().await;
 }
 

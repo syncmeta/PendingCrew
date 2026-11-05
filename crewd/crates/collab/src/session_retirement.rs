@@ -458,6 +458,49 @@ pub fn recover_page(
     }
     Ok((count, Vec::new(), next))
 }
+
+pub fn status(
+    c: &Connection,
+    crew: &str,
+    id: &str,
+) -> Result<crewd_proto::SessionRetirementStatus> {
+    status_at(c, crew, id, crewd_store::now_ms())
+}
+
+/// A case may display only the retirement receipt for its exact bound physical generation.
+pub(crate) fn case_record(
+    c: &Connection,
+    crew: &str,
+    id: &str,
+    now: i64,
+) -> Result<Option<RetirementView>> {
+    let Some(binding) = crate::admin_case_execution::binding(c, crew, id)? else {
+        return Ok(None);
+    };
+    let Some(generation) = crate::admin_case_execution::generation(c, &binding)? else {
+        return Ok(None);
+    };
+    let Some(raw) = record(c, binding.session_id())? else {
+        return Ok(None);
+    };
+    if raw.snapshot.actor.generation != generation || raw.view.generation != generation.to_string()
+    {
+        return Ok(None);
+    }
+    let mut status = status_at(c, crew, binding.session_id(), now)?.record;
+    let resolved = crate::admin_case_outcome::status_at(c, crew, id, now)?
+        .is_some_and(|o| o.phase == crewd_proto::AdminCaseOutcomePhase::Resolved);
+    let handed_over = crate::admin_case_handoff::current_accepted(c, crew, id, now)?.is_some();
+    if !resolved
+        && !handed_over
+        && let Some(r) = &mut status
+    {
+        r.phase = Phase::Stale;
+        r.reason = Reason::StateChanged;
+        r.adopted = false;
+    }
+    Ok(status)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,47 +896,4 @@ mod tests {
                 .contains("other crew private evidence")
         );
     }
-}
-
-pub fn status(
-    c: &Connection,
-    crew: &str,
-    id: &str,
-) -> Result<crewd_proto::SessionRetirementStatus> {
-    status_at(c, crew, id, crewd_store::now_ms())
-}
-
-/// A case may display only the retirement receipt for its exact bound physical generation.
-pub(crate) fn case_record(
-    c: &Connection,
-    crew: &str,
-    id: &str,
-    now: i64,
-) -> Result<Option<RetirementView>> {
-    let Some(binding) = crate::admin_case_execution::binding(c, crew, id)? else {
-        return Ok(None);
-    };
-    let Some(generation) = crate::admin_case_execution::generation(c, &binding)? else {
-        return Ok(None);
-    };
-    let Some(raw) = record(c, binding.session_id())? else {
-        return Ok(None);
-    };
-    if raw.snapshot.actor.generation != generation || raw.view.generation != generation.to_string()
-    {
-        return Ok(None);
-    }
-    let mut status = status_at(c, crew, binding.session_id(), now)?.record;
-    let resolved = crate::admin_case_outcome::status_at(c, crew, id, now)?
-        .is_some_and(|o| o.phase == crewd_proto::AdminCaseOutcomePhase::Resolved);
-    let handed_over = crate::admin_case_handoff::current_accepted(c, crew, id, now)?.is_some();
-    if !resolved
-        && !handed_over
-        && let Some(r) = &mut status
-    {
-        r.phase = Phase::Stale;
-        r.reason = Reason::StateChanged;
-        r.adopted = false;
-    }
-    Ok(status)
 }

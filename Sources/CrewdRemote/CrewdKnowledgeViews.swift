@@ -12,6 +12,9 @@ struct CrewdKnowledgeDocumentsEntry: View {
     @ObservedObject var workspace:CrewdWorkspace
     @State private var library=false
     @State private var collection=CrewdKnowledgeCollection.documents
+    @State private var managedTarget:String?
+    @State private var artifactTarget:CrewdArtifactWire.Reference?
+    @State private var knowledgeTarget:CrewdManagedTableV2Wire.Target?
     var body:some View {
         VStack(spacing:0){
             ViewThatFits(in:.horizontal){
@@ -23,7 +26,7 @@ struct CrewdKnowledgeDocumentsEntry: View {
             .padding(.horizontal,16).padding(.vertical,10)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
             if collection == .managedDirectory {
-                CrewdManagedDirectoryView(workspace:workspace,store:workspace.managedDirectory)
+                CrewdManagedDirectoryView(workspace:workspace,store:workspace.managedDirectory,initialObjectID:managedTarget).id(managedTarget ?? "catalog")
             } else if collection == .tables {
                 if workspace.client.capabilities.contains("data.table.keyset.v1") {
                     CrewdNativeTablesView(workspace:workspace,store:workspace.knowledge)
@@ -37,6 +40,18 @@ struct CrewdKnowledgeDocumentsEntry: View {
             }else{CrewdGroupKnowledgeView(workspace:workspace,collection:collection)}
         }
         .tint(.gray)
+        .task(id:workspace.currentManagedBusinessNavigation?.id) {
+            guard let navigation=workspace.currentManagedBusinessNavigation else {return}
+            switch navigation.target.kind {
+            case .table,.row,.decision,.risk,.lesson:managedTarget=navigation.target.idValue;collection = .managedDirectory
+            case .artifact:artifactTarget=navigation.target.reference
+            case .document,.knowledge:knowledgeTarget=navigation.target
+            default:return
+            }
+            workspace.consumeManagedBusinessNavigation(navigation.id)
+        }
+        .sheet(item:$artifactTarget) {reference in CrewdArtifactPanel(workspace:workspace,initialReference:reference,current:{artifactTarget==reference})}
+        .sheet(isPresented:Binding(get:{knowledgeTarget != nil},set:{if !$0{knowledgeTarget=nil}})) {if let knowledgeTarget,let source=knowledgeTarget.source {CrewdManagedKnowledgeTargetView(workspace:workspace,source:source,documentOnly:knowledgeTarget.kind == .document,current:{self.knowledgeTarget?.id==knowledgeTarget.id})}}
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
         .enableInjection()
         #endif
@@ -2341,14 +2356,17 @@ struct CrewdManagedDirectoryView: View {
     @ObservedObject private var client: CrewdClient
     @ObservedObject var store: Store
     private let linkedAsk: CrewdStructuredAskWire.Review?
+    private let initialObjectID:String?
 
-    init(workspace:CrewdWorkspace,store:Store,fromAsk:CrewdStructuredAskWire.Review? = nil) {
+    init(workspace:CrewdWorkspace,store:Store,fromAsk:CrewdStructuredAskWire.Review? = nil,initialObjectID:String?=nil) {
         self.workspace=workspace
         self.client=workspace.client
         self.store=store
-        self.linkedAsk=fromAsk
-        self._section=State(initialValue:fromAsk == nil ? .tables:.decisions)
-        self._initialDecision=State(initialValue:fromAsk?.capture?.decisionId)
+        self.linkedAsk=fromAsk;self.initialObjectID=initialObjectID
+        let section:SectionMode
+        switch initialObjectID?.first {case "D":section = .decisions;case "R":section = .risks;case "L":section = .lessons;default:section=fromAsk == nil ? .tables:.decisions}
+        self._section=State(initialValue:section)
+        self._initialDecision=State(initialValue:initialObjectID ?? fromAsk?.capture?.decisionId)
     }
     enum SectionMode: Hashable {
         case tables, decisions, risks, lessons
@@ -2490,6 +2508,8 @@ struct CrewdManagedDirectoryView: View {
         Group {
             if client.readyForWork && !client.capabilities.contains(Wire.capability) {
                 CrewdEmptySurface(title:"组织目录暂不可用",detail:"当前连接尚未提供组织目录。",symbol:"list.bullet.rectangle")
+            } else if route.section == .tables && client.capabilities.contains(CrewdManagedTableV2Wire.capability) {
+                VStack(alignment:.leading,spacing:12) {header.padding(.horizontal,16);CrewdManagedTableV2View(workspace:workspace,store:workspace.managedTablesV2,initialID:initialObjectID)}
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
@@ -2515,7 +2535,13 @@ struct CrewdManagedDirectoryView: View {
             }
         }
         .task(id:route) {
-            let captured = route, link = linkedRiskLesson
+            let captured = route
+            if captured.section == .tables && client.capabilities.contains(CrewdManagedTableV2Wire.capability) {
+                presentationRoute=captured.presentation;shownSection=captured.section;busy=false
+                do {let active=try await store.scope(stillCurrent:{route==captured});if route==captured {scope=active}}catch{if route==captured{scope=nil;problem=error.localizedDescription}}
+                return
+            }
+            let link = linkedRiskLesson
             linkedRiskLesson = nil
             let preserve = presentationRoute == captured.presentation
             presentationRoute = captured.presentation
@@ -2529,7 +2555,7 @@ struct CrewdManagedDirectoryView: View {
                 busy = false
                 return
             }
-            let entry = captured.journalReady && captured.section == .decisions ? initialDecision:nil
+            let entry = captured.journalReady ? initialDecision:nil
             await reload(captured,target:entry ?? (matches ? link?.id : (preserve ? selectedID:nil)),
                          reset:!preserve,kind:preserve ? .reconnect:.ordinary)
         }
@@ -2748,7 +2774,18 @@ struct CrewdManagedDirectoryView: View {
         }
     }
     @ViewBuilder private func artifactSubject(_ kind:CrewdArtifactWire.SubjectKind,_ id:String,_ crew:String,_ frozen:Bool)->some View {
-        CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:kind,id:id),crew:crew,frozen:frozen,current:{presentsCurrentScope})
+        CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:kind,id:id),crew:crew,frozen:frozen,current:{objectCurrent(kind,id)})
+        CrewdManagedLinksEntry(workspace:workspace,source:.init(kind:kind.rawValue,id:id),current:{objectCurrent(kind,id)})
+    }
+    private func objectCurrent(_ kind:CrewdArtifactWire.SubjectKind,_ id:String)->Bool {
+        guard presentsCurrentScope else{return false}
+        switch kind {
+        case .table:return table?.id==id
+        case .row:return rows.contains{$0.id==id}
+        case .decision:return decision?.id==id
+        case .risk,.lesson:return riskLessonDetail?.id==id
+        default:return false
+        }
     }
     @ViewBuilder private func messageSource(_ id: String) -> some View {
         if let scope, store.supportsMessageSources {
@@ -3002,6 +3039,7 @@ struct CrewdManagedDirectoryView: View {
                     let item = try await store.riskLesson(active,id:target,stillCurrent:current)
                     guard current() else { return }
                     riskLessonDetail = item
+                    if target == initialDecision {initialDecision=nil}
                 } else {
                     let page = try await store.riskLessons(active,lessons:captured.section == .lessons,after:nil,stillCurrent:current)
                     guard current() else { return }
@@ -3871,9 +3909,9 @@ private struct CrewdArtifactPanel:View {
     @State private var inspected:Wire.Edge?
     private struct FormTarget:Identifiable {let id=UUID();var reference:Wire.Reference?=nil}
     private struct Route:Hashable {let connection:UUID;let observation:UUID;let crew:String;let authority:UUID;let supported:Bool;let ready:Bool}
-    init(workspace:CrewdWorkspace,subject:Wire.Subject?=nil,subjectCrew:String?=nil,frozen:Bool=false,current:@escaping @MainActor ()->Bool) {
+    init(workspace:CrewdWorkspace,subject:Wire.Subject?=nil,subjectCrew:String?=nil,frozen:Bool=false,initialReference:Wire.Reference?=nil,current:@escaping @MainActor ()->Bool) {
         self.workspace=workspace;self.client=workspace.client;self.store=workspace.artifacts
-        self.subject=subject;self.subjectCrew=subjectCrew;self.frozen=frozen;self.current=current
+        self.subject=subject;self.subjectCrew=subjectCrew;self.frozen=frozen;self.current=current;self._selected=State(initialValue:initialReference)
     }
     private var route:Route {.init(connection:client.connectionEpoch,observation:workspace.observationGeneration,crew:workspace.crewID,authority:workspace.authorityRecordID,supported:store.supported,ready:client.readyForWork && workspace.originalJournalReady)}
     private var allowed:Bool {visible && current() && client.readyForWork && store.supported}
@@ -3903,6 +3941,7 @@ private struct CrewdArtifactPanel:View {
         .onChange(of:busy) {_,_ in refreshIfReady()}
         .onChange(of:form?.id) {_,_ in refreshIfReady()}
         .onDisappear {visible=false;ticket=UUID();artifacts=[];edges=[];detail=nil}
+        .onChange(of:workspace.managedBusinessNavigation?.id){_,id in if id != nil {visible=false;dismiss()}}
         .sheet(isPresented:$showHistory) {
             CrewdArtifactHistorySheet(workspace:workspace,store:store,current:{showHistory && allowed})
         }
@@ -3936,6 +3975,7 @@ private struct CrewdArtifactPanel:View {
                     if let selected {
                         Button(subject==nil ? "将此产物关联到对象":"关联到当前对象",systemImage:"link.badge.plus") {form = .init(reference:selected)}
                             .disabled(!writable || busy)
+                        CrewdManagedLinksEntry(workspace:workspace,source:.init(kind:"artifact",reference:selected,metadataCrewId:workspace.crewID),current:{allowed && self.selected==selected})
                     }
                     Text("反向关联").font(.headline)
                     edgeRows(scope,backlinks:true)
@@ -3969,7 +4009,11 @@ private struct CrewdArtifactPanel:View {
         VStack(alignment:.leading,spacing:10) {
             ForEach(edges) {edge in
                 VStack(alignment:.leading,spacing:6) {
-                    if backlinks {Button(edge.subject.kind.title+" "+edge.subject.id) {inspected=edge}.disabled(busy)}
+                    if backlinks {
+                        if workspace.client.capabilities.contains(CrewdManagedTableV2Wire.linksCapability),let kind=CrewdManagedTableV2Wire.TargetKind(rawValue:edge.subject.kind.rawValue) {
+                            CrewdManagedTargetButton(workspace:workspace,target:.init(kind:kind,idValue:edge.subject.id),summary:edge.subject.kind.title+" "+edge.subject.id,current:{allowed && store.owns(scope)})
+                        }else{Button(edge.subject.kind.title+" "+edge.subject.id) {inspected=edge}.disabled(busy)}
+                    }
                     else {Button {selected=edge.reference;Task {await load(reset:true)}} label:{pointer(edge.reference)}.buttonStyle(.plain)}
                     Text(edge.relation.title+" · "+edge.origin.title+" · 归属机组 "+edge.crewId).font(.caption).foregroundStyle(.secondary)
                     if !backlinks && edge.origin.manual && writable && edge.crewId.utf8.elementsEqual(scope.origin.crew.utf8) {

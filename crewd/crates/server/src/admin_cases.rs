@@ -23,26 +23,41 @@ async fn route(
     match req.method.as_str() {
         WORK_DUPLICATE_HISTORY => {
             let p: crewd_proto::WorkDuplicateHistoryParams = crewd_proto::parse_params(req.params)?;
-            let page = state.db.call_result(move |store| {
-                by.authorize_tx(&owner, store.conn(), WORK_DUPLICATE_HISTORY)?;
-                crewd_collab::work_duplicate_review::reviewed_history(store.conn(), p)
-            }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)?;
+            let page = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), WORK_DUPLICATE_HISTORY)?;
+                    crewd_collab::work_duplicate_review::reviewed_history(store.conn(), p)
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
             serde_json::to_value(page).map_err(dispatch::internal)
         }
         WORK_DUPLICATES => {
             let p: crewd_proto::WorkDuplicatesParams = crewd_proto::parse_params(req.params)?;
-            let page = state.db.call_result(move |store| {
-                by.authorize_tx(&owner, store.conn(), WORK_DUPLICATES)?;
-                crewd_collab::work_duplicate_review::list(store.conn(), &p)
-            }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)?;
+            let page = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), WORK_DUPLICATES)?;
+                    crewd_collab::work_duplicate_review::list(store.conn(), &p)
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
             serde_json::to_value(page).map_err(dispatch::internal)
         }
         REQUIREMENT_REVIEWS => {
             let p: RequirementReviewsParams = crewd_proto::parse_params(req.params)?;
-            let page = state.db.call_result(move |store| {
-                by.authorize_tx(&owner, store.conn(), REQUIREMENT_REVIEWS)?;
-                crewd_collab::requirement_review::list(store.conn(), &p)
-            }).await.map_err(dispatch::internal)?.map_err(dispatch::collab_err)?;
+            let page = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(&owner, store.conn(), REQUIREMENT_REVIEWS)?;
+                    crewd_collab::requirement_review::list(store.conn(), &p)
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
             serde_json::to_value(page).map_err(dispatch::internal)
         }
         SIMILAR_REQUIREMENTS => {
@@ -234,7 +249,11 @@ async fn route(
                 .db
                 .call_result(move |store| {
                     by.authorize_tx(&owner, store.conn(), HUMAN_BRIEF)?;
-                    crewd_collab::admin_human_brief::get(store.conn(), &p.crew_id, crewd_store::now_ms())
+                    crewd_collab::admin_human_brief::get(
+                        store.conn(),
+                        &p.crew_id,
+                        crewd_store::now_ms(),
+                    )
                 })
                 .await
                 .map_err(dispatch::internal)?

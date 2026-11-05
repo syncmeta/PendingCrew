@@ -321,15 +321,27 @@ fn sql_effect(
             )?;
             Ok(serde_json::json!({"crew":crew,"message":message.message}))
         }
-        PublicCommand::MessagePost(p) => {
-            serde_json::to_value(crate::ask_resolution::post_authorized_human(tx, p, state, actor)?)
+        PublicCommand::MessagePost(p) => serde_json::to_value(
+            crate::ask_resolution::post_authorized_human(tx, p, state, actor)?,
+        ),
+        PublicCommand::PatrolStart(p) => {
+            serde_json::to_value(collab::patrol_manual::start(tx, &p.crew_id)?)
         }
-        PublicCommand::PatrolStart(p) => serde_json::to_value(collab::patrol_manual::start(tx, &p.crew_id)?),
-        PublicCommand::RequirementReview(p) => serde_json::to_value(collab::requirement_review::apply(tx, p)?),
-        PublicCommand::WorkDuplicateClose(p) => serde_json::to_value(collab::work_duplicate_review::close(tx, p)?),
-        PublicCommand::WorkCloseWithReceipt(p) => serde_json::to_value(collab::work_close::close_with_receipt(tx, p)?),
-        PublicCommand::AskResolve(p) => serde_json::to_value(collab::ask_resolution::resolve(tx, p)?),
-        PublicCommand::AskInboxSchedule(p) => serde_json::to_value(collab::ask_inbox::schedule(tx, p)?),
+        PublicCommand::RequirementReview(p) => {
+            serde_json::to_value(collab::requirement_review::apply(tx, p)?)
+        }
+        PublicCommand::WorkDuplicateClose(p) => {
+            serde_json::to_value(collab::work_duplicate_review::close(tx, p)?)
+        }
+        PublicCommand::WorkCloseWithReceipt(p) => {
+            serde_json::to_value(collab::work_close::close_with_receipt(tx, p)?)
+        }
+        PublicCommand::AskResolve(p) => {
+            serde_json::to_value(collab::ask_resolution::resolve(tx, p)?)
+        }
+        PublicCommand::AskInboxSchedule(p) => {
+            serde_json::to_value(collab::ask_inbox::schedule(tx, p)?)
+        }
         PublicCommand::RequirementRuleClose(p) => serde_json::to_value(
             collab::requirement_ruling::close(tx, &Sender::Human, request_id, p)?,
         ),
@@ -426,8 +438,10 @@ async fn submit_sql_with_home(
         actor.authorize(state, method).await?;
     }
     if matches!(&p.command, PublicCommand::PatrolStart(_)) && state.orchestra.get().is_none() {
-        return Err(RpcError::new(RpcError::CONFLICT, "orchestra is not running")
-            .with_refusal("orchestra.not_running"));
+        return Err(
+            RpcError::new(RpcError::CONFLICT, "orchestra is not running")
+                .with_refusal("orchestra.not_running"),
+        );
     }
     if !crewd_proto::valid_remote_uuid(&p.request_id)
         || !crewd_proto::valid_remote_uuid(&p.runtime_binding_id)

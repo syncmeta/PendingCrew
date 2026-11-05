@@ -94,8 +94,12 @@ pub enum Relation {
     deny_unknown_fields
 )]
 pub enum Origin {
-    Manual { actor: ResourceActor },
-    WorkDone { event_seq: String },
+    Manual {
+        actor: ResourceActor,
+    },
+    WorkDone {
+        event_seq: String,
+    },
     LegacyWorkDone {
         crew_id: String,
         local_seq: String,
@@ -165,7 +169,7 @@ pub enum Effect {
     Linked {
         created: bool,
         added: bool,
-        edge: Edge,
+        edge: Box<Edge>,
     },
     Unlinked {
         edge_id: String,

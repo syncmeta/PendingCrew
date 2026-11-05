@@ -105,7 +105,11 @@ fn work_context(c: &Connection, crew: &str, channel: Option<&str>) -> Result<Val
         serde_json::json!({"scope":if channel.is_some(){"source_channel"}else{"source_crew"},"sample":items,"truncated":truncated,"revision":revision}),
     )
 }
-pub(crate) fn recipients(c: &Connection, crew: &str, channel: Option<&str>) -> Result<Vec<Recipient>> {
+pub(crate) fn recipients(
+    c: &Connection,
+    crew: &str,
+    channel: Option<&str>,
+) -> Result<Vec<Recipient>> {
     let captain = crews::captain_of(c, crew)?;
     let mut all = sessions::list(c, Some(crew))?;
     all.sort_by(|a, b| {

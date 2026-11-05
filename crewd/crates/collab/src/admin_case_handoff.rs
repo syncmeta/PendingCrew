@@ -955,7 +955,11 @@ pub(crate) fn render(
         .join(", ");
     Ok(crate::work::FollowupNote::Current(crate::prompts::fill(
         crate::prompts::render_file(crate::Locale::Zh).get("notice.admin.handoff"),
-        &[("request", id), ("targets", &targets), ("reason", &r.view.request_reason)],
+        &[
+            ("request", id),
+            ("targets", &targets),
+            ("reason", &r.view.request_reason),
+        ],
     )))
 }
 

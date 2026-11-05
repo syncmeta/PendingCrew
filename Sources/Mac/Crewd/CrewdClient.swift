@@ -28,7 +28,12 @@ indirect enum CrewdValue: Codable, Equatable, Sendable {
         else if let v = try? c.decode(String.self) { self = .string(v) }
         else if let v = try? c.decode([String: CrewdValue].self) { self = .object(v) }
         else if let v = try? c.decode([CrewdValue].self) { self = .array(v) }
-        else if let v = try? c.decode(Int64.self) { self = .integer(v) }
+        else if let v = try? c.decode(Int64.self) {
+            // Preserve typed Real -0 through generic transport and durable journals.
+            // All other integral values retain their exact integer representation.
+            if v==0,let real=try? c.decode(Double.self),real==0,real.sign == .minus {self = .number(real)}
+            else {self = .integer(v)}
+        }
         else if let v = try? c.decode(UInt64.self) { self = .unsigned(v) }
         else { self = .number(try c.decode(Double.self)) }
     }
@@ -368,6 +373,7 @@ final class CrewdClient: ObservableObject {
         topics += ["documents","viewFolders","data"].filter { capabilities.contains($0) }
         if capabilities.contains("managedObjects.events.v1") { topics.append("onto") }
         if capabilities.contains("managedArtifacts.v1") { topics.append("artifact") }
+        if capabilities.contains("managedLinks.v1") { topics.append("links") }
         return topics
     }
 

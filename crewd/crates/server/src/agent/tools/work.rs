@@ -37,9 +37,20 @@ pub async fn todo_ruling_check(cx: &Ctx<'_>, v: Value) -> CallResult {
         Ok(a) => a,
         Err(e) => return e,
     };
-    receipt(cx, port::todo_ruling_check(cx.st, cx.me, crewd_proto::RequirementRulingCheckParams {
-        crew_id: cx.me.crew_id.clone(), id: a.id, after: a.after, expected_revision: a.expected_revision,
-    }).await)
+    receipt(
+        cx,
+        port::todo_ruling_check(
+            cx.st,
+            cx.me,
+            crewd_proto::RequirementRulingCheckParams {
+                crew_id: cx.me.crew_id.clone(),
+                id: a.id,
+                after: a.after,
+                expected_revision: a.expected_revision,
+            },
+        )
+        .await,
+    )
 }
 
 #[derive(Deserialize)]
@@ -56,9 +67,21 @@ pub async fn todo_ruling_close(cx: &Ctx<'_>, v: Value) -> CallResult {
         Ok(a) => a,
         Err(e) => return e,
     };
-    receipt(cx, port::todo_ruling_close(cx.st, cx.me, a.request_id, crewd_proto::RequirementRuleCloseParams {
-        crew_id: cx.me.crew_id.clone(), id: a.id, expected_revision: a.expected_revision, note: a.note,
-    }).await)
+    receipt(
+        cx,
+        port::todo_ruling_close(
+            cx.st,
+            cx.me,
+            a.request_id,
+            crewd_proto::RequirementRuleCloseParams {
+                crew_id: cx.me.crew_id.clone(),
+                id: a.id,
+                expected_revision: a.expected_revision,
+                note: a.note,
+            },
+        )
+        .await,
+    )
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -2517,6 +2517,53 @@
       ],
       "type": "object"
     },
+    "Author": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "session",
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "sessionId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "legacyUnknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "BacklinksParams": {
       "additionalProperties": false,
       "properties": {
@@ -2970,6 +3017,136 @@
           "required": [
             "type",
             "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Cell2": {
+      "description": "Distinct from V1: preserve IEEE signed zero and never normalize real bits.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "real",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CellPatch": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "keep",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "setScalar",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Cell2"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "keepHiddenSetToken": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "replaceLinks",
+              "type": "string"
+            },
+            "values": {
+              "items": {
+                "$ref": "#/$defs/LinkWrite"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "values"
           ],
           "type": "object"
         }
@@ -3462,6 +3639,18 @@
       "required": [
         "crewId",
         "jobId"
+      ],
+      "type": "object"
+    },
+    "Changed3": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
       ],
       "type": "object"
     },
@@ -10447,6 +10636,61 @@
       ],
       "type": "object"
     },
+    "EdgeOrigin": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "origin": {
+              "const": "manualRelates",
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "column",
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "adapter": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "adapter",
+              "type": "string"
+            },
+            "readonlyEdgeId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin",
+            "adapter",
+            "readonlyEdgeId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "EdgePage": {
       "additionalProperties": false,
       "properties": {
@@ -10465,6 +10709,89 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    },
+    "EdgePage2": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/EdgeView"
+          },
+          "type": "array"
+        },
+        "manualLinkRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outgoingHiddenSet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutgoingHiddenSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "EdgeView": {
+      "additionalProperties": false,
+      "properties": {
+        "editable": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/EdgeOrigin"
+        },
+        "ownerCrewId": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRef"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetRef"
+        }
+      },
+      "required": [
+        "id",
+        "ownerCrewId",
+        "source",
+        "target",
+        "summary",
+        "origin",
+        "editable"
       ],
       "type": "object"
     },
@@ -10576,6 +10903,173 @@
             "beforeRevision",
             "beforeCursor",
             "delta"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Effect3": {
+      "description": "Immutable mutation result. No target payload is echoed here after ACL changes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "tableCreated",
+              "type": "string"
+            },
+            "schemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            },
+            "titleFieldId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "schemaRevision",
+            "fieldIds",
+            "titleFieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "changed": {
+              "type": "boolean"
+            },
+            "changedFieldIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "schemaChanged",
+              "type": "string"
+            },
+            "originalSchemaRevision": {
+              "type": "string"
+            },
+            "resultSchemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "originalSchemaRevision",
+            "resultSchemaRevision",
+            "changedFieldIds",
+            "changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edgeIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "rowAdded",
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            },
+            "rowRevision": {
+              "type": "string"
+            },
+            "schemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "rowId",
+            "schemaRevision",
+            "rowRevision",
+            "edgeIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "addedEdgeIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "changedFieldIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "rowPatched",
+              "type": "string"
+            },
+            "originalRowRevision": {
+              "type": "string"
+            },
+            "removedEdgeIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resultRowRevision": {
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            },
+            "schemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "rowId",
+            "schemaRevision",
+            "originalRowRevision",
+            "resultRowRevision",
+            "changedFieldIds",
+            "addedEdgeIds",
+            "removedEdgeIds",
+            "changed"
           ],
           "type": "object"
         }
@@ -10820,6 +11314,22 @@
             },
             "event": {
               "const": "artifact.historyChanged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Changed3"
+            },
+            "event": {
+              "const": "links.changed",
               "type": "string"
             }
           },
@@ -11142,6 +11652,118 @@
         "nullable"
       ],
       "type": "object"
+    },
+    "Field2": {
+      "additionalProperties": false,
+      "properties": {
+        "hidden": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FieldKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nullable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "nullable",
+        "hidden"
+      ],
+      "type": "object"
+    },
+    "FieldDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/FieldKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nullable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "nullable"
+      ],
+      "type": "object"
+    },
+    "FieldKind": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "integer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "real",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "link",
+              "type": "string"
+            },
+            "many": {
+              "type": "boolean"
+            },
+            "target": {
+              "$ref": "#/$defs/TargetConstraint"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "many"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "FieldType": {
       "enum": [
@@ -11775,6 +12397,18 @@
         "interrupted",
         "failed",
         "completed"
+      ],
+      "type": "object"
+    },
+    "HiddenSet": {
+      "additionalProperties": false,
+      "properties": {
+        "keepToken": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "keepToken"
       ],
       "type": "object"
     },
@@ -12963,6 +13597,148 @@
       ],
       "type": "object"
     },
+    "LinkCell": {
+      "additionalProperties": false,
+      "properties": {
+        "fieldId": {
+          "type": "string"
+        },
+        "hiddenSet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HiddenSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "incompleteRequiredLink": {
+          "type": "boolean"
+        },
+        "visible": {
+          "items": {
+            "$ref": "#/$defs/VisibleLink"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "fieldId",
+        "visible",
+        "incompleteRequiredLink"
+      ],
+      "type": "object"
+    },
+    "LinkQuery": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "const": "outgoing",
+              "type": "string"
+            },
+            "includeAdapters": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/$defs/SourceRef"
+            }
+          },
+          "required": [
+            "direction",
+            "source",
+            "includeAdapters"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "direction": {
+              "const": "incoming",
+              "type": "string"
+            },
+            "includeAdapters": {
+              "type": "boolean"
+            },
+            "target": {
+              "$ref": "#/$defs/TargetRef"
+            }
+          },
+          "required": [
+            "direction",
+            "target",
+            "includeAdapters"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LinkWrite": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "reference",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/TargetRef"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/Input"
+            },
+            "kind": {
+              "const": "declareArtifact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "input"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ListLinks": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "$ref": "#/$defs/LinkQuery"
+        }
+      },
+      "required": [
+        "query",
+        "limit"
+      ],
+      "type": "object"
+    },
     "ListParams": {
       "additionalProperties": false,
       "properties": {
@@ -13335,6 +14111,271 @@
         "recovered"
       ],
       "type": "object"
+    },
+    "ManualEffect": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "added": {
+              "type": "boolean"
+            },
+            "edgeId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "linked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "edgeId",
+            "added"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edgeId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unlinked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "edgeId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ManualLookup": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/ManualReceipt"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ManualReceipt"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ManualOperation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedManualLinkRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "link",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/SourceRef"
+            },
+            "target": {
+              "$ref": "#/$defs/ManualTargetWrite"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "target",
+            "expectedManualLinkRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedEdgeId": {
+              "type": "string"
+            },
+            "expectedManualLinkRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unlink",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/SourceRef"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "expectedManualLinkRevision",
+            "expectedEdgeId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ManualReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/ManualEffect"
+        },
+        "eventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intentDigest": {
+          "type": "string"
+        },
+        "originalManualLinkRevision": {
+          "type": "string"
+        },
+        "recordedAt": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "resultManualLinkRevision": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRef"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "recordedAt",
+        "intentDigest",
+        "source",
+        "originalManualLinkRevision",
+        "resultManualLinkRevision",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "ManualSubmit": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/ManualOperation"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "operation"
+      ],
+      "type": "object"
+    },
+    "ManualTargetWrite": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "reference",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/TargetRef"
+            }
+          },
+          "required": [
+            "kind",
+            "target"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/Input"
+            },
+            "kind": {
+              "const": "declareArtifact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "input"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "ManualTodoState": {
       "enum": [
@@ -14185,6 +15226,13 @@
           "type": "object"
         }
       ]
+    },
+    "NewRowWritePolicy": {
+      "enum": [
+        "authorCaptainHuman",
+        "ownerCrewWriters"
+      ],
+      "type": "string"
     },
     "NoParams": {
       "additionalProperties": false,
@@ -15040,6 +16088,143 @@
         }
       ]
     },
+    "Operation2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/FieldDraft"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "createTable",
+              "type": "string"
+            },
+            "purpose": {
+              "type": "string"
+            },
+            "rowWritePolicy": {
+              "$ref": "#/$defs/NewRowWritePolicy"
+            },
+            "title": {
+              "type": "string"
+            },
+            "titleFieldIndex": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "title",
+            "purpose",
+            "fields",
+            "titleFieldIndex",
+            "rowWritePolicy"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "change": {
+              "$ref": "#/$defs/SchemaChange"
+            },
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "alterTable",
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "expectedSchemaRevision",
+            "change"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "addRow",
+              "type": "string"
+            },
+            "patches": {
+              "items": {
+                "$ref": "#/$defs/Patch"
+              },
+              "type": "array"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "expectedSchemaRevision",
+            "patches"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRowRevision": {
+              "type": "string"
+            },
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "patchRow",
+              "type": "string"
+            },
+            "patches": {
+              "items": {
+                "$ref": "#/$defs/Patch"
+              },
+              "type": "array"
+            },
+            "rowId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "rowId",
+            "expectedSchemaRevision",
+            "expectedRowRevision",
+            "patches"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OperationKind": {
+      "enum": [
+        "createTable",
+        "alterTable",
+        "addRow",
+        "patchRow"
+      ],
+      "type": "string"
+    },
     "OptionDraft": {
       "additionalProperties": false,
       "properties": {
@@ -15165,6 +16350,18 @@
       ],
       "type": "object"
     },
+    "OutgoingHiddenSet": {
+      "additionalProperties": false,
+      "properties": {
+        "marker": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marker"
+      ],
+      "type": "object"
+    },
     "Page": {
       "additionalProperties": false,
       "properties": {
@@ -15187,6 +16384,22 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    },
+    "Patch": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/CellPatch"
+        },
+        "fieldId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fieldId",
+        "change"
       ],
       "type": "object"
     },
@@ -17254,6 +18467,48 @@
       "type": "object"
     },
     "Receipt4": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect3"
+        },
+        "eventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intentDigest": {
+          "type": "string"
+        },
+        "operationKind": {
+          "$ref": "#/$defs/OperationKind"
+        },
+        "recordedAt": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "recordedAt",
+        "operationKind",
+        "intentDigest",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "Receipt5": {
       "description": "`message.receipts` 的一行：一条消息叫醒的一个 session（S54；N2 再加「开始了 / 回复了」）。",
       "properties": {
         "attempts": {
@@ -17739,6 +18994,83 @@
         "method"
       ],
       "type": "object"
+    },
+    "RequestGet": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "RequestLookup": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/Receipt4"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Receipt4"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "RequestParams": {
       "additionalProperties": false,
@@ -18284,6 +19616,46 @@
         "dropKind",
         "dropNote",
         "dropNoteTruncated"
+      ],
+      "type": "object"
+    },
+    "ResolveTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/TargetRef"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "ResolvedTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "messageChannelId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ownerCrewId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetRef"
+        }
+      },
+      "required": [
+        "target",
+        "summary"
       ],
       "type": "object"
     },
@@ -18865,6 +20237,74 @@
       ],
       "type": "object"
     },
+    "Row2": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/Author"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "linkCells": {
+          "items": {
+            "$ref": "#/$defs/LinkCell"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "scalarCells": {
+          "items": {
+            "$ref": "#/$defs/ScalarValue"
+          },
+          "type": "array"
+        },
+        "schemaRevision": {
+          "type": "string"
+        },
+        "tableId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "tableId",
+        "schemaRevision",
+        "revision",
+        "author",
+        "scalarCells",
+        "linkCells",
+        "frozen"
+      ],
+      "type": "object"
+    },
+    "RowList": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tableId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tableId"
+      ],
+      "type": "object"
+    },
     "RowPage": {
       "additionalProperties": false,
       "properties": {
@@ -18889,6 +20329,39 @@
         "items"
       ],
       "type": "object"
+    },
+    "RowPage2": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Row2"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/Table2"
+        }
+      },
+      "required": [
+        "table",
+        "items"
+      ],
+      "type": "object"
+    },
+    "RowWritePolicy": {
+      "enum": [
+        "authorCaptainHuman",
+        "ownerCrewWriters",
+        "legacyCrewWriters"
+      ],
+      "type": "string"
     },
     "RowsParams": {
       "additionalProperties": false,
@@ -19219,6 +20692,166 @@
         "reason"
       ],
       "type": "object"
+    },
+    "ScalarValue": {
+      "additionalProperties": false,
+      "properties": {
+        "fieldId": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Cell2"
+        }
+      },
+      "required": [
+        "fieldId",
+        "value"
+      ],
+      "type": "object"
+    },
+    "SchemaChange": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/FieldDraft"
+            },
+            "kind": {
+              "const": "addField",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "renameField",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "renameTable",
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "title"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "setPurpose",
+              "type": "string"
+            },
+            "purpose": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "purpose"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "hideField",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "restoreField",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "setTitleField",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "widenSingleLink",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Scope": {
       "additionalProperties": false,
@@ -19962,6 +21595,167 @@
         }
       ]
     },
+    "SourceRef": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "requirement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "ask",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "row",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "risk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "lesson",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "artifact",
+              "type": "string"
+            },
+            "metadataCrewId": {
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            }
+          },
+          "required": [
+            "kind",
+            "reference",
+            "metadataCrewId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Status": {
       "additionalProperties": false,
       "properties": {
@@ -20242,6 +22036,30 @@
       ],
       "type": "object"
     },
+    "Submit3": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation2"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "operation"
+      ],
+      "type": "object"
+    },
     "SubscribeParams": {
       "additionalProperties": false,
       "properties": {
@@ -20265,7 +22083,8 @@
               "personalDraft",
               "data",
               "onto",
-              "artifact"
+              "artifact",
+              "links"
             ],
             "type": "string"
           },
@@ -20335,12 +22154,122 @@
       ],
       "type": "object"
     },
+    "Table2": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/Author"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/Field2"
+          },
+          "type": "array"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "nextFieldNumber": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rowWritePolicy": {
+          "$ref": "#/$defs/RowWritePolicy"
+        },
+        "schemaRevision": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "titleFieldId": {
+          "type": "string"
+        },
+        "v1Readable": {
+          "type": "boolean"
+        },
+        "v1Writable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "schemaRevision",
+        "title",
+        "titleFieldId",
+        "rowWritePolicy",
+        "author",
+        "fields",
+        "nextFieldNumber",
+        "frozen",
+        "v1Readable",
+        "v1Writable"
+      ],
+      "type": "object"
+    },
+    "TableGet": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "TableList": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "TablePage": {
       "additionalProperties": false,
       "properties": {
         "items": {
           "items": {
             "$ref": "#/$defs/Table"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "TablePage2": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Table2"
           },
           "type": "array"
         },
@@ -20384,6 +22313,509 @@
         "count"
       ],
       "type": "object"
+    },
+    "TargetConstraint": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "requirement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "ask",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "row",
+              "type": "string"
+            },
+            "tableId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "risk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "lesson",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "artifact",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "crew",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "channel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "document",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "knowledgeView",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "anyReadable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TargetRef": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "requirement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "ask",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "row",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "risk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "lesson",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "artifact",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            }
+          },
+          "required": [
+            "kind",
+            "reference"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "crew",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "channel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "document",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/ChannelKnowledgeReference"
+            }
+          },
+          "required": [
+            "kind",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "knowledge",
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/ChannelKnowledgeReference"
+            }
+          },
+          "required": [
+            "kind",
+            "source"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "TargetView": {
       "description": "`wake.list` 里一个目标的近况（R9）。",
@@ -21274,6 +23706,26 @@
         "id",
         "name",
         "position"
+      ],
+      "type": "object"
+    },
+    "VisibleLink": {
+      "additionalProperties": false,
+      "properties": {
+        "edgeId": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/TargetRef"
+        }
+      },
+      "required": [
+        "edgeId",
+        "target",
+        "summary"
       ],
       "type": "object"
     },
@@ -23289,6 +25741,9 @@
     "events.lagged": {
       "$ref": "#/$defs/Lagged"
     },
+    "links.changed": {
+      "$ref": "#/$defs/Changed3"
+    },
     "message.appended": {
       "$ref": "#/$defs/Message"
     },
@@ -24195,6 +26650,38 @@
         "$ref": "#/$defs/LoopRecovered"
       }
     },
+    "managedLink.list": {
+      "params": {
+        "$ref": "#/$defs/ListLinks"
+      },
+      "result": {
+        "$ref": "#/$defs/EdgePage2"
+      }
+    },
+    "managedLink.request.get": {
+      "params": {
+        "$ref": "#/$defs/RequestGet"
+      },
+      "result": {
+        "$ref": "#/$defs/ManualLookup"
+      }
+    },
+    "managedLink.resolveTarget": {
+      "params": {
+        "$ref": "#/$defs/ResolveTarget"
+      },
+      "result": {
+        "$ref": "#/$defs/ResolvedTarget"
+      }
+    },
+    "managedLink.submit": {
+      "params": {
+        "$ref": "#/$defs/ManualSubmit"
+      },
+      "result": {
+        "$ref": "#/$defs/ManualReceipt"
+      }
+    },
     "managedObject.decisionOrigin": {
       "params": {
         "$ref": "#/$defs/OriginParams"
@@ -24349,6 +26836,54 @@
         "$ref": "#/$defs/TablePage"
       }
     },
+    "managedTable.v2.get": {
+      "params": {
+        "$ref": "#/$defs/TableGet"
+      },
+      "result": {
+        "$ref": "#/$defs/Table2"
+      }
+    },
+    "managedTable.v2.list": {
+      "params": {
+        "$ref": "#/$defs/TableList"
+      },
+      "result": {
+        "$ref": "#/$defs/TablePage2"
+      }
+    },
+    "managedTable.v2.request.get": {
+      "params": {
+        "$ref": "#/$defs/RequestGet"
+      },
+      "result": {
+        "$ref": "#/$defs/RequestLookup"
+      }
+    },
+    "managedTable.v2.row.get": {
+      "params": {
+        "$ref": "#/$defs/TableGet"
+      },
+      "result": {
+        "$ref": "#/$defs/Row2"
+      }
+    },
+    "managedTable.v2.rows": {
+      "params": {
+        "$ref": "#/$defs/RowList"
+      },
+      "result": {
+        "$ref": "#/$defs/RowPage2"
+      }
+    },
+    "managedTable.v2.submit": {
+      "params": {
+        "$ref": "#/$defs/Submit3"
+      },
+      "result": {
+        "$ref": "#/$defs/Receipt4"
+      }
+    },
     "message.attribution.get": {
       "params": {
         "$ref": "#/$defs/MessageAttributionGet"
@@ -24406,7 +26941,7 @@
       },
       "result": {
         "items": {
-          "$ref": "#/$defs/Receipt4"
+          "$ref": "#/$defs/Receipt5"
         },
         "type": "array"
       }
@@ -25182,7 +27717,8 @@
     "personalDraft",
     "data",
     "onto",
-    "artifact"
+    "artifact",
+    "links"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

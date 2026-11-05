@@ -46,7 +46,7 @@ pub fn get(c: &Connection, number: i64) -> Result<Option<Snapshot>> {
 }
 
 pub fn existing(c: &Connection, source_type: &str, message: &str) -> Result<Option<String>> {
-    Ok(c.query_row(
+    c.query_row(
         "SELECT r.kind,r.number FROM managed_message_sources s JOIN object_refs r ON r.number=s.number
          WHERE s.source_type=?1 AND s.original_message_id=?2",
         params![source_type,message],
@@ -57,7 +57,7 @@ pub fn existing(c: &Connection, source_type: &str, message: &str) -> Result<Opti
             _ => return Err(crate::StoreError::Invalid("invalid source object kind".into())),
         };
         Ok(format!("{prefix}{number}"))
-    }).transpose()?)
+    }).transpose()
 }
 
 pub fn record(

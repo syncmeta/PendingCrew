@@ -1066,7 +1066,13 @@ pub(crate) fn render(
         .join(", ");
     Ok(crate::work::FollowupNote::Current(crate::prompts::fill(
         crate::prompts::render_file(crate::Locale::Zh).get("notice.admin.custody"),
-        &[("case", &t.view.case_id), ("crew", &t.view.crew_id), ("request", id), ("targets", &targets), ("reason", &t.view.request_reason)],
+        &[
+            ("case", &t.view.case_id),
+            ("crew", &t.view.crew_id),
+            ("request", id),
+            ("targets", &targets),
+            ("reason", &t.view.request_reason),
+        ],
     )))
 }
 pub fn propose(

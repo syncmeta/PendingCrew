@@ -606,10 +606,7 @@ fn quarantine(tx: &mut Tx<'_>, id: &str, witness: &str) -> Result<()> {
         return Err(invalid());
     }
     tx.conn()
-        .execute(
-            "DELETE FROM meta WHERE key=?1",
-            [format!("{PENDING}{id}")],
-        )?;
+        .execute("DELETE FROM meta WHERE key=?1", [format!("{PENDING}{id}")])?;
     Ok(())
 }
 

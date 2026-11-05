@@ -97,10 +97,10 @@ async fn record(r: &Rig, sid: &str) -> Option<RetirementView> {
 async fn phase(r: &Rig, sid: &str, want: RetirementPhase) -> RetirementView {
     tokio::time::timeout(Duration::from_secs(4), async {
         loop {
-            if let Some(v) = record(r, sid).await {
-                if v.phase == want {
-                    break v;
-                }
+            if let Some(v) = record(r, sid).await
+                && v.phase == want
+            {
+                break v;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }

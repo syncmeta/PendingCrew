@@ -427,7 +427,7 @@ mod tests {
         let stale_clear = request(&s, &a, due - 1, None);
         assert_eq!(
             ok_at(&mut s, due, |tx| asks::apply_due_defaults(tx, &a.crew_id)).0,
-            [a.ask.clone()]
+            std::slice::from_ref(&a.ask)
         );
         let resolved = asks::get(s.conn(), &a.crew_id, &a.ask).unwrap();
         assert_eq!(resolved.state, AskStateView::Defaulted);

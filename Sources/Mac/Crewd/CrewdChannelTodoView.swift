@@ -361,6 +361,7 @@ struct CrewdChannelTodoView:View {
             if id.kind == .requirement {
                 if let workspace,let sourceCrew=row["crewId"].string {
                     let sourceScope=group.readScope,sourceDetail=detailToken
+                    CrewdManagedLinksEntry(workspace:workspace,source:.init(kind:"requirement",id:id.raw),current:{group.readScope==sourceScope && detailToken==sourceDetail && selected?["object"]==row["object"]})
                     CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:.requirement,id:id.raw),crew:sourceCrew,
                         frozen:detail["frozen"] == .bool(true),current:{group.readScope==sourceScope && detailToken==sourceDetail && selected?["object"]==row["object"]})
                 }

@@ -981,7 +981,8 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO crews(id,title,created_at,updated_at)VALUES('crew','Original19 business row','t','t');",
         ).unwrap();
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
         drop(conn);
         let s = crate::Store::open_data_dir(&data).unwrap();
         assert_eq!(
@@ -1019,7 +1020,11 @@ mod tests {
             19
         );
         assert!(!exists(&old).unwrap());
-        assert!(crate::meta_get(&old, "personalDraft.restoreStamp.v1").unwrap().is_none());
+        assert!(
+            crate::meta_get(&old, "personalDraft.restoreStamp.v1")
+                .unwrap()
+                .is_none()
+        );
         assert!(!old.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='messages_stop_escalations_seq')",
             [], |r| r.get::<_, bool>(0),

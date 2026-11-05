@@ -488,14 +488,23 @@ impl<P: Port> Core<P> {
                 use crewd_collab::{channel_responsibility as responsibility, patrol_brief};
                 let brief = patrol_brief::is_brief(&wake.source);
                 let notice = responsibility::is_notice(&wake.source);
-                let obsolete = (brief || notice) && (wake.attempts > 0
-                    || !generation.as_deref().is_some_and(|generation| {
-                        if brief {
-                            patrol_brief::matches_generation(&wake.source, wake.note.as_deref(), generation)
-                        } else {
-                            responsibility::matches_generation(&wake.source, wake.note.as_deref(), generation)
-                        }
-                    }));
+                let obsolete = (brief || notice)
+                    && (wake.attempts > 0
+                        || !generation.as_deref().is_some_and(|generation| {
+                            if brief {
+                                patrol_brief::matches_generation(
+                                    &wake.source,
+                                    wake.note.as_deref(),
+                                    generation,
+                                )
+                            } else {
+                                responsibility::matches_generation(
+                                    &wake.source,
+                                    wake.note.as_deref(),
+                                    generation,
+                                )
+                            }
+                        }));
                 if obsolete {
                     obsolete_briefs.push(wake.clone());
                 }

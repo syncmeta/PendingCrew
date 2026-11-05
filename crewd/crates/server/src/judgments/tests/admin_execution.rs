@@ -35,7 +35,12 @@ async fn sources(f: &Fixture, n: usize) -> Vec<Source> {
 async fn source_fixture(f: &Fixture, n: usize, include_foreign: bool) -> Vec<Source> {
     source_fixture_with_link(f, n, include_foreign, false).await
 }
-async fn source_fixture_with_link(f: &Fixture, n: usize, include_foreign: bool, link: bool) -> Vec<Source> {
+async fn source_fixture_with_link(
+    f: &Fixture,
+    n: usize,
+    include_foreign: bool,
+    link: bool,
+) -> Vec<Source> {
     let crew = f.crew.clone();
     let worker = f.worker.clone();
     let (made, _changes) = f
@@ -88,10 +93,17 @@ async fn source_fixture_with_link(f: &Fixture, n: usize, include_foreign: bool, 
                         },
                     )?;
                     if link {
-                        work::create(tx, &Sender::Human, WorkCreateParams {
-                            crew_id: crew.clone(), owner: Some(owner.clone()), title: "linked administrative source".into(),
-                            parent: Some(work.id.clone()), ..Default::default()
-                        })?;
+                        work::create(
+                            tx,
+                            &Sender::Human,
+                            WorkCreateParams {
+                                crew_id: crew.clone(),
+                                owner: Some(owner.clone()),
+                                title: "linked administrative source".into(),
+                                parent: Some(work.id.clone()),
+                                ..Default::default()
+                            },
+                        )?;
                     }
                     if include_foreign {
                         let foreign = crews::create(
@@ -453,10 +465,10 @@ impl Socket {
                     .unwrap()
                     > 0
             );
-            if let crewd_proto::ServerFrame::Response(r) = serde_json::from_str(&line).unwrap() {
-                if r.id == self.id {
-                    return r.into_result();
-                }
+            if let crewd_proto::ServerFrame::Response(r) = serde_json::from_str(&line).unwrap()
+                && r.id == self.id
+            {
+                return r.into_result();
             }
         }
     }
@@ -549,32 +561,65 @@ async fn bound_native_catalog_unlink_has_exact_receipt_and_does_not_resolve_case
     let f = Fixture::new().await;
     f.configure(&fake.base_url).await;
     let source = source_fixture_with_link(&f, 1, false, true).await.remove(0);
-    f.runtime.run_admin_case(f.crew.clone(), source.id.clone(), true).await.unwrap();
+    f.runtime
+        .run_admin_case(f.crew.clone(), source.id.clone(), true)
+        .await
+        .unwrap();
     let original = view(&f, &source.id).await;
-    let child = original["targets"].as_array().unwrap().iter().filter_map(|t| t["id"].as_str())
-        .find(|id| *id != source.work).unwrap();
+    let child = original["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["id"].as_str())
+        .find(|id| *id != source.work)
+        .unwrap();
     let child = current_work(&f, child).await;
     assert_eq!(child.parent.as_deref(), Some(source.work.as_str()));
     let parent = current_work(&f, &source.work).await;
     let crew = f.crew.clone();
     let id = source.id.clone();
-    let (permit, outside) = f.state.collab(move |tx| {
-        let outside = work::create(tx, &Sender::Human, WorkCreateParams {
-            crew_id: crew.clone(), title: "same crew outside the case".into(), ..Default::default()
-        })?;
-        Ok((execution::launch_permit(tx, &crew, &id)?.unwrap(), outside))
-    }).await.unwrap();
+    let (permit, outside) = f
+        .state
+        .collab(move |tx| {
+            let outside = work::create(
+                tx,
+                &Sender::Human,
+                WorkCreateParams {
+                    crew_id: crew.clone(),
+                    title: "same crew outside the case".into(),
+                    ..Default::default()
+                },
+            )?;
+            Ok((execution::launch_permit(tx, &crew, &id)?.unwrap(), outside))
+        })
+        .await
+        .unwrap();
     let r = Rig::new(f).await;
     let sid = r.handle.start_admin_case(permit).await.unwrap().id;
     wait_started(&r, &source.id, &sid).await;
-    assert_eq!(r.exec.launches(&sid)[0].native_policy, orchestra::exec::NativeExecutionPolicy::AdminCaseRestricted);
+    assert_eq!(
+        r.exec.launches(&sid)[0].native_policy,
+        orchestra::exec::NativeExecutionPolicy::AdminCaseRestricted
+    );
     let mut admin = Socket::attach(r.f.state.clone(), &sid).await;
     let mut worker = Socket::attach(r.f.state.clone(), &r.f.worker).await;
     let tool = crewd_collab::admin_case_link::UNLINK_TOOL;
     let bound_tools = admin.call("agent.tools", json!({})).await.unwrap();
-    assert!(bound_tools.as_array().unwrap().iter().any(|t| t["name"] == tool));
+    assert!(
+        bound_tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == tool)
+    );
     let ordinary = worker.call("agent.tools", json!({})).await.unwrap();
-    assert!(!ordinary.as_array().unwrap().iter().any(|t| t["name"] == tool));
+    assert!(
+        !ordinary
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["name"] == tool)
+    );
     let params = json!({"tool":tool,"args":{"request_id":uuid::Uuid::new_v4().to_string(),"id":child.id,
         "expected_revision":child.revision,"related_id":parent.id,"expected_related_revision":parent.revision,
         "edge":"parent","evidence":{"kind":"text","value":"fixture evidence"},"note":"incorrect parent"}});
@@ -589,35 +634,71 @@ async fn bound_native_catalog_unlink_has_exact_receipt_and_does_not_resolve_case
 
     let removed = admin.call("agent.call", params.clone()).await.unwrap();
     assert_eq!(removed["isError"], false, "{removed}");
-    assert_eq!(admin.call("agent.call", params.clone()).await.unwrap(), removed);
+    assert_eq!(
+        admin.call("agent.call", params.clone()).await.unwrap(),
+        removed
+    );
     let after = current_work(&r.f, &child.id).await;
     assert!(after.parent.is_none());
     assert_eq!(after.status, child.status);
     assert_eq!(current_work(&r.f, &parent.id).await, parent);
-    assert_eq!(view(&r.f, &source.id).await["executionRecord"]["effectsCount"], 1);
+    assert_eq!(
+        view(&r.f, &source.id).await["executionRecord"]["effectsCount"],
+        1
+    );
     let mut human = Socket::owned(r.f.state.clone());
     let report_params = json!({"crewId":r.f.crew,"id":source.id,"limit":1});
-    let before = r.f.state.db.call(|s| s.conn().total_changes()).await.unwrap();
-    let report = human.call(crewd_proto::admin_cases::EFFECTS, report_params.clone()).await.unwrap();
+    let before =
+        r.f.state
+            .db
+            .call(|s| s.conn().total_changes())
+            .await
+            .unwrap();
+    let report = human
+        .call(crewd_proto::admin_cases::EFFECTS, report_params.clone())
+        .await
+        .unwrap();
     assert_eq!(report["items"].as_array().unwrap().len(), 1);
     assert_eq!(report["items"][0]["kind"], "unlinked");
     assert_eq!(report["items"][0]["workId"], child.id);
     assert_eq!(report["items"][0]["relatedWorkId"], parent.id);
-    assert_eq!(report["items"][0]["requestId"], params["args"]["request_id"]);
+    assert_eq!(
+        report["items"][0]["requestId"],
+        params["args"]["request_id"]
+    );
     assert_eq!(report["items"][0]["evidence"], params["args"]["evidence"]);
     assert_eq!(report["items"][0]["resultRevision"], after.revision);
     assert!(report["nextAfter"].is_null());
-    assert_eq!(r.f.state.db.call(|s| s.conn().total_changes()).await.unwrap(), before);
     assert_eq!(
-        admin.call(crewd_proto::admin_cases::EFFECTS, report_params).await.unwrap_err().code,
+        r.f.state
+            .db
+            .call(|s| s.conn().total_changes())
+            .await
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        admin
+            .call(crewd_proto::admin_cases::EFFECTS, report_params)
+            .await
+            .unwrap_err()
+            .code,
         crewd_proto::RpcError::FORBIDDEN
     );
     human.close().await;
     let crew = r.f.crew.clone();
     let case = source.id.clone();
-    let outcome = r.f.state.collab(move |tx| crewd_collab::admin_case_outcome::verify(tx, &crew, &case)).await.unwrap();
+    let outcome =
+        r.f.state
+            .collab(move |tx| crewd_collab::admin_case_outcome::verify(tx, &crew, &case))
+            .await
+            .unwrap();
     assert_ne!(outcome.phase, crewd_proto::AdminCaseOutcomePhase::Resolved);
-    assert_eq!(fake.requests().len(), 1, "correction must not dispatch a model");
+    assert_eq!(
+        fake.requests().len(),
+        1,
+        "correction must not dispatch a model"
+    );
     r.f.state.admission.revoke(&source.owner);
     let denied = admin.call("agent.call", params).await;
     assert!(denied.is_err() || denied.unwrap()["isError"] == true);

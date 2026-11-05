@@ -43,7 +43,10 @@ pub(crate) fn note_lifecycle(tx: &mut Tx<'_>, ch: &str) -> Result<()> {
 }
 
 pub(crate) fn generation(c: &Connection, ch: &str) -> Result<Option<String>> {
-    Ok(crewd_store::meta_get(c, &format!("channel.archive.generation.v1:{ch}"))?)
+    Ok(crewd_store::meta_get(
+        c,
+        &format!("channel.archive.generation.v1:{ch}"),
+    )?)
 }
 
 fn authorize_read(c: &Connection, by: &Sender, ch: &str) -> Result<()> {

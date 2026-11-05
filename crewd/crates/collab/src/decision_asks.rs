@@ -307,7 +307,7 @@ mod tests {
                 .iter()
                 .filter(
                     |f| matches!(f, Change::OntologyChanged { crew_id, object_ids }
-            if crew_id == "crew-a" && object_ids == &[captured.decision_id.clone()])
+            if crew_id == "crew-a" && object_ids == std::slice::from_ref(&captured.decision_id))
                 )
                 .count(),
             1
@@ -369,7 +369,7 @@ mod tests {
         let (_, early) = ok_at(&mut s, NOW + MIN - 1, asks::apply_all_due_defaults);
         assert!(early.is_empty());
         let (changed, facts) = ok_at(&mut s, NOW + MIN, asks::apply_all_due_defaults);
-        assert_eq!(changed, [h.clone()]);
+        assert_eq!(changed, std::slice::from_ref(h));
         let captured = get(s.conn(), "crew-a", h)
             .unwrap()
             .unwrap()
@@ -396,7 +396,7 @@ mod tests {
             facts
                 .iter()
                 .any(|f| matches!(f, Change::OntologyChanged { object_ids, .. }
-            if object_ids == &[captured.decision_id.clone()]))
+            if object_ids == std::slice::from_ref(&captured.decision_id)))
         );
         assert!(
             !facts
@@ -421,7 +421,7 @@ mod tests {
             managed_objects::decisions(s.conn(), who, None)
                 .unwrap()
                 .items,
-            [manual.clone()]
+            std::slice::from_ref(&manual)
         );
         assert_eq!(
             managed_objects::decisions_with_defaults(s.conn(), who, None, true)
@@ -595,7 +595,12 @@ mod tests {
                 &asks::public_ask(tx.conn(), core)?.id(),
             )
         });
-        s.conn().execute("VACUUM INTO ?1", [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()]).unwrap();
+        s.conn()
+            .execute(
+                "VACUUM INTO ?1",
+                [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()],
+            )
+            .unwrap();
         drop(s);
         let s = Store::open_data_dir(dir.path()).unwrap();
         assert_eq!(

@@ -1807,3 +1807,103 @@ Set true to include genuine legacy Done and frozen-snapshot provenance. Never tr
 
 ## artifact_subject.includeLegacySources
 Set true to include genuine legacy Done and frozen-snapshot provenance. Never treat snapshots as original events. Defaults to false for the legacy Origin set.
+
+
+## managed_table_v2_get
+Read a real V2 organization table, stable field IDs, current schemaRevision and write policy. Never omit link columns or substitute SQL when V1 cannot represent it.
+
+## managed_table_v2_get.id
+Actual T identity.
+
+## managed_tables_v2_list
+Read one bounded page of currently readable organization tables, including archived read-only tables; later pages remain unread.
+
+## managed_tables_v2_list.after
+Return the preceding nextAfter verbatim; omit for the first page.
+
+## managed_row_v2_get
+Read a real O row with current field IDs and authorized link projections. A hiddenSet never reveals hidden count or a transferable target.
+
+## managed_row_v2_get.id
+Actual O identity.
+
+## managed_rows_v2_list
+Read one bounded V2 row page together with the exact T definition and schemaRevision.
+
+## managed_rows_v2_list.tableId
+Actual T identity.
+
+## managed_rows_v2_list.after
+Previous nextAfter; omit on first read.
+
+## managed_table_v2_submit
+Explicitly create a table, perform one safe schema change, add a row, or patch stable field IDs. Read real schema/row revisions first; omitted fields remain unchanged. Hidden links can only be kept as the original whole cell set: never count, copy or clear them. With hiddenSet, visible links cannot increase. Rename/hide/restore/single-to-many never change business object state; title field must be active scalar and must be replaced before hiding it. Preserve the original UUID; after uncertainty only look it up, never resubmit automatically.
+
+## managed_table_v2_submit.scope
+Exact current Core scope from managed_object_scope_get; an old restore epoch is historical lookup only.
+
+## managed_table_v2_submit.crewId
+Actual request crew; do not infer from a path, target owner or label.
+
+## managed_table_v2_submit.requestId
+Original UUID persisted before submission; resolve uncertainty with managed_table_v2_request_get only.
+
+## managed_table_v2_submit.operation
+Closed typed operation. Patch only edited field IDs against exact schema/row revisions; resolve targets through the live read API. No narrowing, cross-cell hidden Keep, or Work/D/R/L/H state mutation.
+
+## managed_table_v2_request_get
+Read only this original V2 request. known is its immutable effect; historical is historical; notFound does not prove no submission. Current rows never substitute for a receipt.
+
+## managed_table_v2_request_get.scope
+Original exact scope; never replace restoreEpoch.
+
+## managed_table_v2_request_get.crewId
+Original request crew.
+
+## managed_table_v2_request_get.requestId
+Original UUID.
+
+## managed_link_resolve_target
+Resolve an exact target through current authority and actual Core summary. Message access is checked by B15 each time; never scan message pages to infer an old message. Does not create artifacts/namespaces/targets. Readability grants no write permission.
+
+## managed_link_resolve_target.target
+Complete typed target. Knowledge/document targets require the explicitly advertised managedLinks.knowledgeTargets.v1 capability and their real qualified SQLite source; they are unavailable without it. Never substitute an old Core mirror or SQL table name. Folder is unsupported.
+
+## managed_links_list
+Read a bounded page of manual/column edges, optionally real read-only business adapters. Outgoing hidden sets expose only one marker and no count; unreadable incoming sources are omitted. Use original business tools for adapter effects.
+
+## managed_links_list.query
+Exact outgoing source or incoming target with explicit includeAdapters. Artifact source includes metadataCrewId and never transfers the global pointer or another crew’s edges.
+
+## managed_links_list.after
+Previous nextAfter; omit for the first page.
+
+## managed_links_list.limit
+Explicit page bound 1–64; read subsequent pages explicitly.
+
+## managed_link_submit
+Explicitly add/remove manual relates with current source authority, target readability and manualLinkRevision CAS. Does not change Work/Ask/D/R/L state. Column/adapter edges cannot be edited here. Artifact source is per request crew metadata. Unknown results require original UUID lookup, never automatic resubmission.
+
+## managed_link_submit.scope
+Current exact Core scope; lookup uses the original scope.
+
+## managed_link_submit.crewId
+Actual request crew; artifact metadataCrewId must match.
+
+## managed_link_submit.requestId
+Original UUID saved before dispatch; never retry an unknown action with a new UUID.
+
+## managed_link_submit.operation
+link/unlink with exact source/manualLinkRevision; removal requires expectedEdgeId and manual relates. Hidden marker is never a target.
+
+## managed_link_request_get
+Read the original manual-relates request and immutable effect. Lost target authority never echoes old target content; current edge presence cannot prove this action succeeded.
+
+## managed_link_request_get.scope
+Original exact scope.
+
+## managed_link_request_get.crewId
+Original request crew.
+
+## managed_link_request_get.requestId
+Original UUID.

@@ -422,11 +422,23 @@ pub fn edges_with_legacy(
 }
 pub fn gc(c: &Connection) -> Result<()> {
     transaction(c)?;
-    c.execute("DELETE FROM managed_artifacts WHERE NOT EXISTS(SELECT 1 FROM managed_artifact_claims c WHERE c.reference=managed_artifacts.reference) AND NOT EXISTS(SELECT 1 FROM managed_artifact_edges e WHERE e.reference=managed_artifacts.reference)",[])?;
+    let v2: bool = c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_links')",
+        [],
+        |r| r.get(0),
+    )?;
+    if v2 {
+        c.execute("DELETE FROM managed_artifacts WHERE NOT EXISTS(SELECT 1 FROM managed_artifact_claims c WHERE c.reference=managed_artifacts.reference) AND NOT EXISTS(SELECT 1 FROM managed_artifact_edges e WHERE e.reference=managed_artifacts.reference) AND NOT EXISTS(SELECT 1 FROM managed_links l WHERE l.source_artifact=managed_artifacts.reference OR l.target_artifact=managed_artifacts.reference)",[])?;
+    } else {
+        c.execute("DELETE FROM managed_artifacts WHERE NOT EXISTS(SELECT 1 FROM managed_artifact_claims c WHERE c.reference=managed_artifacts.reference) AND NOT EXISTS(SELECT 1 FROM managed_artifact_edges e WHERE e.reference=managed_artifacts.reference)",[])?;
+    }
     Ok(())
 }
 pub enum Saved {
-    Active { digest: [u8; 32], receipt: Receipt },
+    Active {
+        digest: [u8; 32],
+        receipt: Box<Receipt>,
+    },
     Retired,
 }
 fn manual_actor_valid(origin: &Origin) -> bool {
@@ -583,7 +595,10 @@ pub fn receipt(
             return Err(bad());
         }
         receipt_valid(&receipt, target, &digest)?;
-        Ok(Saved::Active { digest, receipt })
+        Ok(Saved::Active {
+            digest,
+            receipt: Box::new(receipt),
+        })
     })
     .transpose()
 }
@@ -709,10 +724,10 @@ pub fn extract(crew: &str, evidence: &str) -> Vec<Reference> {
                 }
             }
             consumed = start + end;
-            if let Some(reference) = token_reference(crew, &tail[..end]) {
-                if seen.insert(reference.clone()) {
-                    result.push(reference);
-                }
+            if let Some(reference) = token_reference(crew, &tail[..end])
+                && seen.insert(reference.clone())
+            {
+                result.push(reference);
             }
         }
     }

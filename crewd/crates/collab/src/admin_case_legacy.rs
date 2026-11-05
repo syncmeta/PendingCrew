@@ -1119,7 +1119,10 @@ mod tests {
         let raw = meta_get(s.conn(), &key).unwrap().unwrap();
         meta_set(s.conn(), &key, "corrupt case").unwrap();
         ok(&mut s, tick);
-        assert_eq!(index(s.conn()).unwrap().unverified_sources, [v.id.clone()]);
+        assert_eq!(
+            index(s.conn()).unwrap().unverified_sources,
+            std::slice::from_ref(&v.id)
+        );
         let missing = "AC00000000000000000099".to_string();
         let mut i = index(s.conn()).unwrap();
         i.unverified_sources.insert(0, missing.clone());

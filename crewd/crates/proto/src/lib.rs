@@ -19,16 +19,17 @@ pub mod work_coordination;
 pub use work_coordination::*;
 pub mod patrol_runtime;
 pub use patrol_runtime::*;
+pub mod artifact_history;
 pub mod commands;
+pub mod decision_asks;
 pub mod host;
 pub mod judgments;
-pub mod managed_objects;
 pub mod managed_artifacts;
-pub mod artifact_history;
 pub mod managed_message_sources;
-pub mod decision_asks;
+pub mod managed_objects;
 pub mod managed_objects_api;
 mod managed_risks_lessons;
+pub mod managed_tables_v2;
 pub mod message_attribution;
 pub mod message_delivery;
 mod model;
@@ -366,6 +367,7 @@ pub mod methods {
             .chain(crate::team_data_api::METHODS.iter().copied())
             .chain(crate::managed_artifacts::METHODS.iter().copied())
             .chain(crate::artifact_history::METHODS.iter().copied())
+            .chain(crate::managed_tables_v2::METHODS.iter().copied())
             .chain(crate::lifecycle::METHODS.iter().copied())
             .chain(std::iter::once(crate::executors::EXECUTOR_LIST))
             .collect()
@@ -397,6 +399,7 @@ pub mod events {
         "data",
         ONTO_TOPIC,
         "artifact",
+        crate::managed_tables_v2::TOPIC,
     ];
     pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
     pub const MESSAGE_APPENDED: &str = "message.appended";
@@ -618,9 +621,22 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         ),
         (events::ASK_CHANGED, sub::<Ask>(g)),
         (events::ASK_INBOX_CHANGED, sub::<CrewRef>(g)),
-        (events::ONTO_CHANGED, sub::<managed_objects_api::OntologyChanged>(g)),
-        (managed_artifacts::CHANGED, sub::<managed_artifacts::Changed>(g)),
-        (artifact_history::CHANGED, sub::<artifact_history::Changed>(g)),
+        (
+            events::ONTO_CHANGED,
+            sub::<managed_objects_api::OntologyChanged>(g),
+        ),
+        (
+            managed_artifacts::CHANGED,
+            sub::<managed_artifacts::Changed>(g),
+        ),
+        (
+            artifact_history::CHANGED,
+            sub::<artifact_history::Changed>(g),
+        ),
+        (
+            managed_tables_v2::CHANGED,
+            sub::<managed_tables_v2::Changed>(g),
+        ),
         (events::WORK_CHANGED, sub::<WorkChanged>(g)),
         (events::CHANNEL_WORK_CHANGED, sub::<ChannelWorkChanged>(g)),
         (events::DATA_CHANGED, sub::<CrewRef>(g)),
@@ -752,15 +768,24 @@ pub fn api_schema() -> Value {
         ),
         (
             managed::GET,
-            m(sub::<managed::GetParams>(g), sub::<managed_objects::Object>(g)),
+            m(
+                sub::<managed::GetParams>(g),
+                sub::<managed_objects::Object>(g),
+            ),
         ),
         (
             managed::TABLES,
-            m(nullable(sub::<managed::TablesParams>(g)), sub::<managed_objects::TablePage>(g)),
+            m(
+                nullable(sub::<managed::TablesParams>(g)),
+                sub::<managed_objects::TablePage>(g),
+            ),
         ),
         (
             managed::ROWS,
-            m(sub::<managed::RowsParams>(g), sub::<managed_objects::RowPage>(g)),
+            m(
+                sub::<managed::RowsParams>(g),
+                sub::<managed_objects::RowPage>(g),
+            ),
         ),
         (
             managed::DECISIONS,
@@ -785,47 +810,207 @@ pub fn api_schema() -> Value {
         ),
         (
             managed::SUBMIT,
-            m(sub::<managed_objects::Submit>(g), sub::<managed_objects::Receipt>(g)),
+            m(
+                sub::<managed_objects::Submit>(g),
+                sub::<managed_objects::Receipt>(g),
+            ),
         ),
         (
             managed::REQUEST_GET,
-            m(sub::<managed::RequestParams>(g), sub::<managed_objects::Lookup>(g)),
+            m(
+                sub::<managed::RequestParams>(g),
+                sub::<managed_objects::Lookup>(g),
+            ),
         ),
         (
             decision_asks::GET,
-            m(sub::<decision_asks::GetParams>(g), nullable(sub::<decision_asks::View>(g))),
+            m(
+                sub::<decision_asks::GetParams>(g),
+                nullable(sub::<decision_asks::View>(g)),
+            ),
         ),
         (
             decision_asks::DECISION_ORIGIN,
-            m(sub::<decision_asks::OriginParams>(g), nullable(sub::<decision_asks::View>(g))),
+            m(
+                sub::<decision_asks::OriginParams>(g),
+                nullable(sub::<decision_asks::View>(g)),
+            ),
         ),
         (
             managed_message_sources::RECORD,
-            m(sub::<managed_message_sources::RecordParams>(g),sub::<managed_message_sources::RecordReceipt>(g)),
+            m(
+                sub::<managed_message_sources::RecordParams>(g),
+                sub::<managed_message_sources::RecordReceipt>(g),
+            ),
         ),
         (
             managed_message_sources::GET,
-            m(sub::<managed_message_sources::GetParams>(g),sub::<managed_message_sources::Source>(g)),
+            m(
+                sub::<managed_message_sources::GetParams>(g),
+                sub::<managed_message_sources::Source>(g),
+            ),
         ),
         (
             managed_message_sources::MESSAGE_OBJECTS,
-            m(sub::<managed_message_sources::MessageObjectsParams>(g),sub::<managed_message_sources::MessageObjectsPage>(g)),
+            m(
+                sub::<managed_message_sources::MessageObjectsParams>(g),
+                sub::<managed_message_sources::MessageObjectsPage>(g),
+            ),
         ),
         (
             managed_message_sources::REQUEST_GET,
-            m(sub::<managed::RequestParams>(g),sub::<managed_message_sources::Lookup>(g)),
+            m(
+                sub::<managed::RequestParams>(g),
+                sub::<managed_message_sources::Lookup>(g),
+            ),
         ),
-        (managed_artifacts::PREVIEW,m(sub::<managed_artifacts::PreviewParams>(g),sub::<managed_artifacts::Reference>(g))),
-        (managed_artifacts::LIST,m(nullable(sub::<managed_artifacts::ListParams>(g)),sub::<managed_artifacts::Page>(g))),
-        (managed_artifacts::GET,m(sub::<managed_artifacts::GetParams>(g),sub::<managed_artifacts::Artifact>(g))),
-        (managed_artifacts::BACKLINKS,m(sub::<managed_artifacts::BacklinksParams>(g),sub::<managed_artifacts::EdgePage>(g))),
-        (managed_artifacts::SUBJECT,m(sub::<managed_artifacts::SubjectParams>(g),sub::<managed_artifacts::EdgePage>(g))),
-        (managed_artifacts::SUBMIT,m(sub::<managed_artifacts::Submit>(g),sub::<managed_artifacts::Receipt>(g))),
-        (managed_artifacts::REQUEST_GET,m(sub::<managed_objects_api::RequestParams>(g),sub::<managed_artifacts::Lookup>(g))),
-        (artifact_history::STATUS,m(sub::<artifact_history::StatusParams>(g),sub::<artifact_history::Status>(g))),
-        (artifact_history::BEGIN,m(sub::<artifact_history::BeginParams>(g),sub::<artifact_history::Receipt>(g))),
-        (artifact_history::STEP,m(sub::<artifact_history::StepParams>(g),sub::<artifact_history::Receipt>(g))),
-        (artifact_history::REQUEST_GET,m(sub::<managed_objects_api::RequestParams>(g),sub::<artifact_history::Lookup>(g))),
+        (
+            managed_artifacts::PREVIEW,
+            m(
+                sub::<managed_artifacts::PreviewParams>(g),
+                sub::<managed_artifacts::Reference>(g),
+            ),
+        ),
+        (
+            managed_artifacts::LIST,
+            m(
+                nullable(sub::<managed_artifacts::ListParams>(g)),
+                sub::<managed_artifacts::Page>(g),
+            ),
+        ),
+        (
+            managed_artifacts::GET,
+            m(
+                sub::<managed_artifacts::GetParams>(g),
+                sub::<managed_artifacts::Artifact>(g),
+            ),
+        ),
+        (
+            managed_artifacts::BACKLINKS,
+            m(
+                sub::<managed_artifacts::BacklinksParams>(g),
+                sub::<managed_artifacts::EdgePage>(g),
+            ),
+        ),
+        (
+            managed_artifacts::SUBJECT,
+            m(
+                sub::<managed_artifacts::SubjectParams>(g),
+                sub::<managed_artifacts::EdgePage>(g),
+            ),
+        ),
+        (
+            managed_artifacts::SUBMIT,
+            m(
+                sub::<managed_artifacts::Submit>(g),
+                sub::<managed_artifacts::Receipt>(g),
+            ),
+        ),
+        (
+            managed_artifacts::REQUEST_GET,
+            m(
+                sub::<managed_objects_api::RequestParams>(g),
+                sub::<managed_artifacts::Lookup>(g),
+            ),
+        ),
+        (
+            artifact_history::STATUS,
+            m(
+                sub::<artifact_history::StatusParams>(g),
+                sub::<artifact_history::Status>(g),
+            ),
+        ),
+        (
+            artifact_history::BEGIN,
+            m(
+                sub::<artifact_history::BeginParams>(g),
+                sub::<artifact_history::Receipt>(g),
+            ),
+        ),
+        (
+            artifact_history::STEP,
+            m(
+                sub::<artifact_history::StepParams>(g),
+                sub::<artifact_history::Receipt>(g),
+            ),
+        ),
+        (
+            artifact_history::REQUEST_GET,
+            m(
+                sub::<managed_objects_api::RequestParams>(g),
+                sub::<artifact_history::Lookup>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::TABLE_GET,
+            m(
+                sub::<managed_tables_v2::TableGet>(g),
+                sub::<managed_tables_v2::Table>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::TABLE_LIST,
+            m(
+                sub::<managed_tables_v2::TableList>(g),
+                sub::<managed_tables_v2::TablePage>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::ROW_GET,
+            m(
+                sub::<managed_tables_v2::TableGet>(g),
+                sub::<managed_tables_v2::Row>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::ROW_LIST,
+            m(
+                sub::<managed_tables_v2::RowList>(g),
+                sub::<managed_tables_v2::RowPage>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::TABLE_SUBMIT,
+            m(
+                sub::<managed_tables_v2::Submit>(g),
+                sub::<managed_tables_v2::Receipt>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::TABLE_REQUEST_GET,
+            m(
+                sub::<managed_tables_v2::RequestGet>(g),
+                sub::<managed_tables_v2::RequestLookup>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::MANAGED_LINK_RESOLVE_TARGET,
+            m(
+                sub::<managed_tables_v2::ResolveTarget>(g),
+                sub::<managed_tables_v2::ResolvedTarget>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::LINK_LIST,
+            m(
+                sub::<managed_tables_v2::ListLinks>(g),
+                sub::<managed_tables_v2::EdgePage>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::LINK_SUBMIT,
+            m(
+                sub::<managed_tables_v2::ManualSubmit>(g),
+                sub::<managed_tables_v2::ManualReceipt>(g),
+            ),
+        ),
+        (
+            managed_tables_v2::LINK_REQUEST_GET,
+            m(
+                sub::<managed_tables_v2::RequestGet>(g),
+                sub::<managed_tables_v2::ManualLookup>(g),
+            ),
+        ),
         (
             "notification.status",
             m(sub::<Empty>(g), sub::<notifications::NotificationStatus>(g)),
@@ -952,7 +1137,10 @@ pub fn api_schema() -> Value {
         ),
         (
             admin_cases::EFFECTS,
-            m(sub::<AdminCaseEffectsParams>(g), sub::<AdminCaseEffectsPage>(g)),
+            m(
+                sub::<AdminCaseEffectsParams>(g),
+                sub::<AdminCaseEffectsPage>(g),
+            ),
         ),
         (
             admin_cases::HUMAN_BRIEF,
@@ -967,7 +1155,10 @@ pub fn api_schema() -> Value {
         ),
         (
             admin_cases::REQUIREMENT_REVIEWS,
-            m(sub::<RequirementReviewsParams>(g), sub::<RequirementReviewsPage>(g)),
+            m(
+                sub::<RequirementReviewsParams>(g),
+                sub::<RequirementReviewsPage>(g),
+            ),
         ),
         (
             admin_cases::WORK_DUPLICATES,
@@ -975,7 +1166,10 @@ pub fn api_schema() -> Value {
         ),
         (
             admin_cases::WORK_DUPLICATE_HISTORY,
-            m(sub::<WorkDuplicateHistoryParams>(g), sub::<WorkClosureHistoryPage>(g)),
+            m(
+                sub::<WorkDuplicateHistoryParams>(g),
+                sub::<WorkClosureHistoryPage>(g),
+            ),
         ),
         (
             admin_cases::LEGACY_LIST,
@@ -1550,7 +1744,10 @@ pub fn api_schema() -> Value {
         ),
         (
             methods::WORK_CHANNEL_RESPONSIBILITY,
-            m(sub::<ChannelResponsibilityParams>(g), sub::<ChannelResponsibilityPage>(g)),
+            m(
+                sub::<ChannelResponsibilityParams>(g),
+                sub::<ChannelResponsibilityPage>(g),
+            ),
         ),
         (
             methods::WORK_LIST,
@@ -1595,7 +1792,10 @@ pub fn api_schema() -> Value {
         ),
         (
             methods::TODO_CREATE_LOOKUP,
-            m(sub::<TodoCreateLookupParams>(g), sub::<TodoCreateLookupResult>(g)),
+            m(
+                sub::<TodoCreateLookupParams>(g),
+                sub::<TodoCreateLookupResult>(g),
+            ),
         ),
         (
             methods::TODO_GET,
@@ -1607,11 +1807,17 @@ pub fn api_schema() -> Value {
         ),
         (
             methods::TODO_RULING_CHECK,
-            m(sub::<RequirementRulingCheckParams>(g), sub::<RequirementRulingCheck>(g)),
+            m(
+                sub::<RequirementRulingCheckParams>(g),
+                sub::<RequirementRulingCheck>(g),
+            ),
         ),
         (
             methods::TODO_RULING_RESULT,
-            m(sub::<RequirementRulingParams>(g), sub::<RequirementRulingResult>(g)),
+            m(
+                sub::<RequirementRulingParams>(g),
+                sub::<RequirementRulingResult>(g),
+            ),
         ),
         (
             methods::TODO_LIST,

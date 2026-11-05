@@ -774,16 +774,31 @@ mod tests {
             meta_set(
                 s.conn(),
                 &key("crew-a", &v.id).unwrap(),
-                &serde_json::to_string(&Saved { version: 1, view: v }).unwrap(),
-            ).unwrap();
+                &serde_json::to_string(&Saved {
+                    version: 1,
+                    view: v,
+                })
+                .unwrap(),
+            )
+            .unwrap();
         }
         // The older, out-of-sample row cannot erase the complete recent rows.
         meta_set(s.conn(), &key("crew-a", &source.id).unwrap(), "damaged").unwrap();
         let report = crate::admin_human_brief::get(s.conn(), "crew-a", NOW).unwrap();
-        assert_eq!(report.case_coverage, AdminHumanBriefCaseCoverage::RecentSample);
         assert_eq!(
-            report.cases.iter().map(|row| row.case_id.clone()).collect::<Vec<_>>(),
-            (3..=14).rev().map(|n| format!("AC{n:020}")).collect::<Vec<_>>(),
+            report.case_coverage,
+            AdminHumanBriefCaseCoverage::RecentSample
+        );
+        assert_eq!(
+            report
+                .cases
+                .iter()
+                .map(|row| row.case_id.clone())
+                .collect::<Vec<_>>(),
+            (3..=14)
+                .rev()
+                .map(|n| format!("AC{n:020}"))
+                .collect::<Vec<_>>(),
         );
     }
     #[test]
@@ -1464,15 +1479,23 @@ pub(crate) fn recent_for_human_brief(
     let mut query = c.prepare(
         "SELECT key,value FROM meta WHERE key>=?1 AND key<?2 ORDER BY key DESC LIMIT ?3",
     )?;
-    let rows = query.query_map(
-        params![prefix, format!("{prefix}\u{10ffff}"), (limit + 1) as i64],
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-    )?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = query
+        .query_map(
+            params![prefix, format!("{prefix}\u{10ffff}"), (limit + 1) as i64],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let more = rows.len() > limit;
-    let views = rows.into_iter().take(limit).map(|(key, raw)| {
-        let id = key.strip_prefix(&prefix).ok_or_else(|| invalid("invalid case key"))?;
-        project_at(c, decode(&raw, crew, id)?, Some(now))
-    }).collect::<Result<_>>()?;
+    let views = rows
+        .into_iter()
+        .take(limit)
+        .map(|(key, raw)| {
+            let id = key
+                .strip_prefix(&prefix)
+                .ok_or_else(|| invalid("invalid case key"))?;
+            project_at(c, decode(&raw, crew, id)?, Some(now))
+        })
+        .collect::<Result<_>>()?;
     Ok((views, more))
 }
 

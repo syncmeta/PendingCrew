@@ -255,7 +255,7 @@ pub(super) async fn old_announcement(
                             kind: crewd_proto::MentionKind::Human,
                             target_id: None,
                         }],
-                        created_at: tx.now_ts().into(),
+                        created_at: tx.now_ts(),
                         ..Default::default()
                     },
                     None,
@@ -286,13 +286,12 @@ async fn preview(f: &Fixture, old: &Legacy) -> serde_json::Value {
 async fn scanned(f: &Fixture, old: &Legacy) -> serde_json::Value {
     tokio::time::timeout(Duration::from_secs(14), async {
         loop {
-            if let Ok(v) = f.rpc("adminCase.legacyList", json!({"limit":50})).await {
-                if let Some(found) = v["items"]
+            if let Ok(v) = f.rpc("adminCase.legacyList", json!({"limit":50})).await
+                && let Some(found) = v["items"]
                     .as_array()
                     .and_then(|items| items.iter().find(|item| item["messageId"] == old.message))
-                {
-                    return found.clone();
-                }
+            {
+                return found.clone();
             }
             tokio::time::sleep(Duration::from_millis(30)).await;
         }
@@ -765,7 +764,7 @@ async fn real_old_fifty_item_summary_requires_human_preview_of_all_fifty_five_cu
     // Direct scan is only this first backend regression; full-chain acceptance
     // below exercises the actual periodic scanner without invoking tick.
     f.state
-        .collab(|tx| crewd_collab::admin_case_legacy::tick(tx))
+        .collab(crewd_collab::admin_case_legacy::tick)
         .await
         .unwrap();
     let result = f

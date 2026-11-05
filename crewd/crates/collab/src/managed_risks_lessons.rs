@@ -17,7 +17,7 @@ use crewd_proto::{
     },
 };
 use crewd_store::{
-    StoreError, managed_decisions, managed_objects, managed_risks_lessons as db,
+    StoreError, managed_decisions, managed_risks_lessons as db,
     object_refs::{self, ObjectKind},
 };
 use rusqlite::Connection;
@@ -131,13 +131,19 @@ fn may_edit(
         Actor::Human(_) => Ok(true),
         Actor::Session(session) => {
             let owns = owner.is_some_and(|owner| is_owner(actor, owner));
-            Ok(((owns || is_author(actor, author)) && sessions::get(c, session)?.crew_id == crew)
-                || crews::acts_as_captain_of(c, session, crew)?)
+            Ok(
+                ((owns || is_author(actor, author)) && sessions::get(c, session)?.crew_id == crew)
+                    || crews::acts_as_captain_of(c, session, crew)?,
+            )
         }
     }
 }
 
-pub(super) fn artifact_link_authority(c: &Connection, actor: Actor<'_>, object: &Object) -> Result<()> {
+pub(super) fn artifact_link_authority(
+    c: &Connection,
+    actor: Actor<'_>,
+    object: &Object,
+) -> Result<()> {
     let (crew, author, owner) = match object {
         Object::Risk { risk } => (&risk.crew_id, &risk.author, Some(&risk.owner)),
         Object::Lesson { lesson } => (&lesson.crew_id, &lesson.author, None),
@@ -264,8 +270,8 @@ fn check_lesson_draft(
         LessonApplicability::Crew { id } => check_crew(c, id, "appliesTo"),
         LessonApplicability::Work { id } => check_work(c, id, "appliesTo"),
         LessonApplicability::Table { id } => {
-            managed_objects::table(c, object_number(id, 'T', "appliesTo")?)?
-                .ok_or_else(|| missing(id))?;
+            object_number(id, 'T', "appliesTo")?;
+            super::read_authority(c, actor, id)?;
             Ok(())
         }
     })
@@ -661,7 +667,7 @@ mod tests {
         );
         assert_eq!(
             db::due_owned_risks(s.conn(), "w-a1", NOW + REVIEW_MS).unwrap(),
-            [original.clone()]
+            std::slice::from_ref(&original)
         );
         assert!(
             db::due_owned_risks(s.conn(), "w-a2", NOW + REVIEW_MS)
@@ -1031,13 +1037,25 @@ mod tests {
         // Seed the actual v24 receipt columns. Newer writers require the v25
         // confirmation column and cannot manufacture a historical v24 write.
         let old = crate::testkit::ok(&mut s, |tx| {
-            let Change::CreateTable {title,fields} = &table.change else { unreachable!() };
+            let Change::CreateTable { title, fields } = &table.change else {
+                unreachable!()
+            };
             let object = Object::Table {
-                table: crewd_store::managed_objects::create_table(tx.conn(),"crew-a",title,fields,&tx.now_ts())?,
+                table: crewd_store::managed_objects::create_table(
+                    tx.conn(),
+                    "crew-a",
+                    title,
+                    fields,
+                    &tx.now_ts(),
+                )?,
             };
             let receipt = Receipt {
-                scope:table.scope.clone(),crew_id:table.crew_id.clone(),request_id:table.request_id.clone(),
-                recorded_at:tx.now_ts(),object,occurrence:None,
+                scope: table.scope.clone(),
+                crew_id: table.crew_id.clone(),
+                request_id: table.request_id.clone(),
+                recorded_at: tx.now_ts(),
+                object,
+                occurrence: None,
             };
             tx.conn().execute(
                 "INSERT INTO managed_object_receipts(crew_id,principal,request_id,digest,result_json) VALUES(?1,?2,?3,?4,?5)",
@@ -1046,7 +1064,12 @@ mod tests {
             Ok(receipt)
         });
         assert!(!serde_json::to_string(&old).unwrap().contains("occurrence"));
-        s.conn().execute("VACUUM INTO ?1", [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()]).unwrap();
+        s.conn()
+            .execute(
+                "VACUUM INTO ?1",
+                [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()],
+            )
+            .unwrap();
         drop(s);
         let mut s = Store::open_data_dir(dir.path()).unwrap();
         assert_eq!(

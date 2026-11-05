@@ -323,8 +323,15 @@ impl EffectPermit {
         let by = crate::Sender::Session(self.witness.session_id().into());
         let actor = crate::work::actor(tx.conn(), &by, self.witness.crew_id())?;
         crate::asks::with_book(tx, self.witness.crew_id(), |book, now| {
-            book.relink(&actor, now, self.core, link.after.parent, link.after.depends_on.clone())
-        }).map_err(crate::work::command_refusal)?;
+            book.relink(
+                &actor,
+                now,
+                self.core,
+                link.after.parent,
+                link.after.depends_on.clone(),
+            )
+        })
+        .map_err(crate::work::command_refusal)?;
         crate::work::changed(tx, &by, self.witness.crew_id(), self.action.id())?;
         self.before_seq.checked_add(1).ok_or_else(invalid)
     }
@@ -541,7 +548,11 @@ pub fn register_and_bind(tx: &mut Tx<'_>, permit: &AdminLaunchPermit) -> Result<
             model: source.model,
             effort: source.effort,
             working_directory: crew.working_directory,
-            title: Some(crate::prompts::render_file(crate::Locale::Zh).get("notice.admin.title").into()),
+            title: Some(
+                crate::prompts::render_file(crate::Locale::Zh)
+                    .get("notice.admin.title")
+                    .into(),
+            ),
             brief: Some(format!(
                 "Administrative case {}. Inspect only its original in-scope work. Use factual evidence for closure or verified lost-owner reassignment. A tool result is not case resolution.",
                 permit.case
@@ -775,7 +786,13 @@ pub fn validate_effect(
     let book = crate::asks::load_org(tx.conn())?;
     let link = if let ActionScope::WorkUnlink(p) = &scope {
         scope_work(tx.conn(), &r, &p.related_id)?;
-        Some(Box::new(crate::admin_case_link::expected(tx.conn(), &book, &r.crew, core, p)?))
+        Some(Box::new(crate::admin_case_link::expected(
+            tx.conn(),
+            &book,
+            &r.crew,
+            core,
+            p,
+        )?))
     } else {
         None
     };
@@ -867,10 +884,20 @@ pub fn finish_effect(tx: &mut Tx<'_>, permit: EffectPermit) -> Result<()> {
                     ..
                 },
             ) if *id == permit.core && to.as_str() == new_owner => primary.replace(seq).is_none(),
-            (ActionScope::WorkUnlink(_), E::Relinked { id, parent, depends_on })
-                if *id == permit.core && permit.link.as_ref().is_some_and(|link|
-                    *parent == link.after.parent && *depends_on == link.after.depends_on) =>
-                primary.replace(seq).is_none(),
+            (
+                ActionScope::WorkUnlink(_),
+                E::Relinked {
+                    id,
+                    parent,
+                    depends_on,
+                },
+            ) if *id == permit.core
+                && permit.link.as_ref().is_some_and(|link| {
+                    *parent == link.after.parent && *depends_on == link.after.depends_on
+                }) =>
+            {
+                primary.replace(seq).is_none()
+            }
             _ => false,
         };
         if !valid {
@@ -972,7 +999,10 @@ pub(crate) mod tests {
     pub(crate) fn adopted(s: &mut crewd_store::Store) -> AdminCaseView {
         adopted_with_edge(s, None)
     }
-    fn adopted_with_edge(s: &mut crewd_store::Store, edge: Option<crate::admin_case_link::Edge>) -> AdminCaseView {
+    fn adopted_with_edge(
+        s: &mut crewd_store::Store,
+        edge: Option<crate::admin_case_link::Edge>,
+    ) -> AdminCaseView {
         let settings = crewd_proto::judgments::JudgmentSettings {
             revision: Some("synthetic".into()),
             config: Some(crewd_proto::judgments::JudgmentConfig {
@@ -1002,7 +1032,9 @@ pub(crate) mod tests {
                 _ => None,
             };
             let depends_on: Vec<String> = match edge {
-                Some(crate::admin_case_link::Edge::Dependency) => previous.clone().into_iter().collect(),
+                Some(crate::admin_case_link::Edge::Dependency) => {
+                    previous.clone().into_iter().collect()
+                }
                 _ => Vec::new(),
             };
             let next_check_at = (!depends_on.is_empty()).then(|| crewd_store::ts_from_ms(NOW));
@@ -1066,7 +1098,10 @@ pub(crate) mod tests {
     pub(crate) fn running_case(s: &mut crewd_store::Store) -> (AdminCaseView, Registration) {
         running_case_with_edge(s, None)
     }
-    pub(crate) fn running_case_with_edge(s: &mut crewd_store::Store, edge: Option<crate::admin_case_link::Edge>) -> (AdminCaseView, Registration) {
+    pub(crate) fn running_case_with_edge(
+        s: &mut crewd_store::Store,
+        edge: Option<crate::admin_case_link::Edge>,
+    ) -> (AdminCaseView, Registration) {
         let case = adopted_with_edge(s, edge);
         let permit = ok(s, |tx| launch_permit(tx, "crew-a", &case.id)).unwrap();
         let registered = ok(s, |tx| register_and_bind(tx, &permit));
@@ -1880,7 +1915,6 @@ pub(crate) mod tests {
                         &[core],
                     )
                     .map(|_| ())
-                    .map_err(Into::into)
                 })
             });
         }
@@ -1951,14 +1985,30 @@ pub(crate) mod tests {
             work::get(s.conn(), &id).unwrap().owner.as_deref(),
             Some("w-a2")
         );
-        let page = crate::admin_case_effect_report::list(s.conn(), &AdminCaseEffectsParams {
-            crew_id: "crew-a".into(), id: case.id.clone(), after: None, limit: None,
-        }).unwrap();
-        let [effect] = page.items.as_slice() else { panic!("one reassignment effect") };
+        let page = crate::admin_case_effect_report::list(
+            s.conn(),
+            &AdminCaseEffectsParams {
+                crew_id: "crew-a".into(),
+                id: case.id.clone(),
+                after: None,
+                limit: None,
+            },
+        )
+        .unwrap();
+        let [effect] = page.items.as_slice() else {
+            panic!("one reassignment effect")
+        };
         assert_eq!(effect.work_id, id);
         assert_eq!(effect.occurred_at_ms, now);
-        let AdminCaseEffectAction::Reassigned { previous_owner, new_owner, note, wake_id } = &effect.action
-        else { panic!("genuine lost owner change") };
+        let AdminCaseEffectAction::Reassigned {
+            previous_owner,
+            new_owner,
+            note,
+            wake_id,
+        } = &effect.action
+        else {
+            panic!("genuine lost owner change")
+        };
         assert_eq!(previous_owner.as_deref(), Some("w-a1"));
         assert_eq!(new_owner, "w-a2");
         assert_eq!(note, "verified silent owner");
@@ -2013,7 +2063,11 @@ impl EffectHistory {
     }
 }
 
-pub(crate) fn effect_history(c: &Connection, crew: &str, id: &str) -> Result<Option<EffectHistory>> {
+pub(crate) fn effect_history(
+    c: &Connection,
+    crew: &str,
+    id: &str,
+) -> Result<Option<EffectHistory>> {
     let Some(r) = record(c, id)? else {
         return Ok(None);
     };
@@ -2021,13 +2075,15 @@ pub(crate) fn effect_history(c: &Connection, crew: &str, id: &str) -> Result<Opt
         return Err(invalid());
     }
     let prefix = effect_prefix(&r.view.attempt_id);
-    let last_key: Option<String> = c.query_row(
-        "SELECT key FROM meta WHERE key>=?1 AND key<?2 ORDER BY key DESC LIMIT 1",
-        params![prefix, format!("{prefix}\u{10ffff}")],
-        |row| row.get(0),
-    ).optional()?;
-    let expected = (r.view.effects_count > 0)
-        .then(|| effect_key(&r.view.attempt_id, r.view.effects_count));
+    let last_key: Option<String> = c
+        .query_row(
+            "SELECT key FROM meta WHERE key>=?1 AND key<?2 ORDER BY key DESC LIMIT 1",
+            params![prefix, format!("{prefix}\u{10ffff}")],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let expected =
+        (r.view.effects_count > 0).then(|| effect_key(&r.view.attempt_id, r.view.effects_count));
     if last_key != expected {
         return Err(invalid());
     }

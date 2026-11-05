@@ -758,10 +758,10 @@ async fn retirement_phase(
                     .await
                     .unwrap()
                     .unwrap();
-            if let Some(record) = status.record {
-                if record.phase == want {
-                    break record;
-                }
+            if let Some(record) = status.record
+                && record.phase == want
+            {
+                break record;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }

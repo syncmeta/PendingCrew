@@ -218,6 +218,14 @@ targets:
       - path: Sources/CrewdRemote/CrewdKnowledgeWire.swift
       - path: Sources/CrewdRemote/CrewdKnowledgeStore.swift
       - path: Sources/CrewdRemote/CrewdKnowledgeViewRuntime.swift
+      - path: Sources/CrewdRemote/CrewdManagedTableV2Wire.swift
+      - path: Sources/CrewdRemote/CrewdManagedTableV2Store.swift
+      # Shared table/link entries are used by the existing Work/H detail files.
+      # Their read-only document surface uses the same native renderer dependencies.
+      - path: Sources/CrewdRemote/CrewdManagedTableV2Views.swift
+      - path: Sources/CrewdRemote/CrewdManagedLinksViews.swift
+      - path: Sources/CrewdRemote/CrewdKnowledgeViews.swift
+      - path: Sources/CrewdRemote/CrewdKnowledgeCanvas.swift
       - path: Sources/Mac/Services/CrewLocalMentionWaker.swift
       - path: Sources/Mac/Services/ModelCatalogCenter.swift
       - path: Sources/Mac/Services/QuotaCenter.swift

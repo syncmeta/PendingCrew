@@ -54,7 +54,9 @@ fn work_link_revision_key(id: &str) -> String {
 pub(crate) fn work_link_revision(c: &Connection, id: &str) -> Result<Option<String>> {
     let value = crewd_store::meta_get(c, &work_link_revision_key(id))?;
     if value.as_ref().is_some_and(|raw| {
-        uuid::Uuid::parse_str(raw).ok().is_none_or(|id| id.to_string() != *raw)
+        uuid::Uuid::parse_str(raw)
+            .ok()
+            .is_none_or(|id| id.to_string() != *raw)
     }) {
         return Err(StoreError::Invalid("invalid Work link revision witness".into()).into());
     }

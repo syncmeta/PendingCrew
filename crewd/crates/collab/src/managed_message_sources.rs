@@ -33,10 +33,10 @@ fn conflict(request: &str) -> CollabError {
 fn message(c: &Connection, actor: Actor<'_>, id: &str) -> Result<Message> {
     actor.principal(c)?;
     let message = crewd_store::messages::get(c, id)?.ok_or_else(forbidden)?;
-    if let Actor::Session(session) = actor {
-        if !channels::readable_by(c, &message.channel_id, session)? {
-            return Err(forbidden());
-        }
+    if let Actor::Session(session) = actor
+        && !channels::readable_by(c, &message.channel_id, session)?
+    {
+        return Err(forbidden());
     }
     Ok(message)
 }
@@ -61,7 +61,7 @@ fn number(id: &str) -> Result<i64> {
 }
 
 pub fn source(c: &Connection, actor: Actor<'_>, id: &str) -> Result<Source> {
-    objects::get_with_defaults(c, actor, id, true)?;
+    objects::read_authority(c, actor, id)?;
     let Some(saved) = db::get(c, number(id)?)? else {
         return Ok(Source::None);
     };
@@ -132,8 +132,8 @@ pub fn record(tx: &mut Tx<'_>, actor: Actor<'_>, request: RecordParams) -> Resul
         Change::RecordRisk { .. } => "risk".into(),
         Change::RecordLesson { .. } => "lesson".into(),
         Change::AddRow { table_id, .. } => {
-            let target = objects::get_with_defaults(c, actor, table_id, true)?;
-            if target.crew_id() != request.crew_id {
+            let target_crew = objects::read_authority(c, actor, table_id)?;
+            if target_crew != request.crew_id {
                 return Err(forbidden());
             }
             format!("row:{table_id}")

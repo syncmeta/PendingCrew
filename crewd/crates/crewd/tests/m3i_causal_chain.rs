@@ -126,7 +126,11 @@ impl Rig {
                         codex_options: None,
 
                         crew_id: f.crew.clone(),
-                        role: if index == 0 { crewd_proto::Role::Captain } else { crewd_proto::Role::Worker },
+                        role: if index == 0 {
+                            crewd_proto::Role::Captain
+                        } else {
+                            crewd_proto::Role::Worker
+                        },
                         executor: "claude".into(),
                         brief: "S42 warmup initial brief".into(),
                         title: Some(format!("S42 participant {index}")),

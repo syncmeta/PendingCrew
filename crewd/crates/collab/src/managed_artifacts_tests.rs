@@ -323,7 +323,7 @@ fn manual_link_unlink_cas_and_original_receipt_do_not_delete_a_newer_edge() {
     assert!(facts.is_empty());
     assert_eq!(database_snapshot(&s), before);
     let page = subject(s.conn(), HUMAN, &target, None).unwrap();
-    assert_eq!(page.items, [new.clone()]);
+    assert_eq!(page.items, [new.as_ref().clone()]);
 }
 
 #[test]

@@ -77,7 +77,7 @@ fn replay(
         Some(db::Saved::Active {
             digest: saved,
             receipt,
-        }) if &saved == digest => Ok(Some(receipt)),
+        }) if &saved == digest => Ok(Some(*receipt)),
         Some(_) => Err(conflict(request)),
         None => Ok(None),
     }
@@ -159,7 +159,7 @@ pub fn step(tx: &mut Tx<'_>, actor: Actor<'_>, params: StepParams) -> Result<Rec
         effect: Effect::Advanced {
             before_revision: params.expected_revision,
             before_cursor: params.expected_cursor,
-            delta,
+            delta: Box::new(delta),
         },
     };
     db::record(tx.conn(), &principal, &digest, &receipt)?;
@@ -192,7 +192,7 @@ pub fn lookup(
         return Err(forbidden());
     }
     let receipt = match db::receipt(c, crew, &principal, request)? {
-        Some(db::Saved::Active { receipt, .. }) => Some(receipt),
+        Some(db::Saved::Active { receipt, .. }) => Some(*receipt),
         Some(db::Saved::Retired) | None => None,
     };
     if current.restore_epoch != origin.restore_epoch {

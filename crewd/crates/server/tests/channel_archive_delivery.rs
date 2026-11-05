@@ -134,10 +134,9 @@ async fn archive_waits_for_typed_delivery_ack_and_restoration_allows_only_new_me
                 if let Some(row) = rows
                     .into_iter()
                     .find(|w| w.source == source && w.state == WakeState::Inflight)
+                    && r.fake.sent(&owner).iter().any(|v| v.contains(&body))
                 {
-                    if r.fake.sent(&owner).iter().any(|v| v.contains(&body)) {
-                        break row;
-                    }
+                    break row;
                 }
                 tokio::task::yield_now().await;
             }

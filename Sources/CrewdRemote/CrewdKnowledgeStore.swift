@@ -272,6 +272,7 @@ enum CrewdKnowledgeTitleSearch {
     }
     private let origin: () -> Origin?
     private let nativeNavigation: (CrewdDataRef, CrewdDataContext) -> Bool
+    private let readOnlyPresentation:Bool
     private let rpc: RPC
     private let journal: () throws -> CrewdPresentationJournal
     private var active: Origin?
@@ -280,8 +281,8 @@ enum CrewdKnowledgeTitleSearch {
     private var rendererTerminal: [UUID: CrewdKnowledgeViewWriteObservation] = [:]
     private var rendererPrepared: [UUID: (Intent, CrewdPresentationJournal.Prepared, CrewdDataChange)] = [:]
     lazy var renderer = CrewdKnowledgeViewRuntime(authority: self)
-    init(origin: @escaping () -> Origin?, rpc: @escaping RPC, journal: @escaping () throws -> CrewdPresentationJournal, nativeNavigation: @escaping (CrewdDataRef, CrewdDataContext) -> Bool = { _,_ in false }) {
-        self.origin = origin; self.rpc = rpc; self.journal = journal; self.nativeNavigation = nativeNavigation
+    init(origin: @escaping () -> Origin?, rpc: @escaping RPC, journal: @escaping () throws -> CrewdPresentationJournal, nativeNavigation: @escaping (CrewdDataRef, CrewdDataContext) -> Bool = { _,_ in false },readOnlyPresentation:Bool=false) {
+        self.origin = origin; self.rpc = rpc; self.journal = journal; self.nativeNavigation = nativeNavigation;self.readOnlyPresentation=readOnlyPresentation
     }
     static func encode<T: Encodable>(_ value: T) throws -> CrewdValue { try JSONDecoder().decode(CrewdValue.self, from: JSONEncoder().encode(value)) }
     static func decode<T: Decodable>(_ value: CrewdValue, _ type: T.Type) throws -> T { try JSONDecoder().decode(type, from: JSONEncoder().encode(value)) }
@@ -1704,7 +1705,7 @@ enum CrewdKnowledgeTitleSearch {
         let definitionHash = SHA256.hash(data:bytes).map{String(format:"%02x",$0)}.joined()
         // A foreign read scope is not a standing write grant. Switch to its real
         // crew through the native workspace before granting writes there.
-        try? renderer.activate(.init(id:id,revision:revision,html:html,css:css,javascript:js,definitionDigest:definitionHash,assets:[:],declaresKnowledgeWrite:capabilities.contains("knowledge-write") && detailReference?.namespace == workspace?.context.namespace,readOnlySnapshot:snapshot),origin:origin,readContext:detail.resolvedContext,readGeneration:detail.generation)
+        try? renderer.activate(.init(id:id,revision:revision,html:html,css:css,javascript:js,definitionDigest:definitionHash,assets:[:],declaresKnowledgeWrite:!readOnlyPresentation && capabilities.contains("knowledge-write") && detailReference?.namespace == workspace?.context.namespace,readOnlySnapshot:snapshot),origin:origin,readContext:detail.resolvedContext,readGeneration:detail.generation)
     }
     private func renderContext(_ context: CrewdKnowledgeViewContext) throws -> CrewdDataContext {
         guard !busy, currentOrigin() == context.origin, renderer.context == context, let c = workspace?.context,

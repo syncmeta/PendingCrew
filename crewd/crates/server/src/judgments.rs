@@ -4,8 +4,8 @@ mod admin_cases;
 mod configuration;
 mod coordination;
 mod reassignment;
-mod retirement;
 mod requirement_similarity;
+mod retirement;
 pub(crate) use configuration::handle;
 use crewd_collab::judgments::InputSnapshot;
 use crewd_jev::provider::{

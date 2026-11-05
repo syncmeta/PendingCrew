@@ -141,7 +141,8 @@ pub fn create_lookup(
     };
     let raw_id = format!("requirement-request-{request_id}");
     // One indexed original source lookup; do not read mutable response/body projections.
-    let raw: Option<(String, String, Option<String>, i64, Option<String>)> = c
+    type OriginalRequirementRow = (String, String, Option<String>, i64, Option<String>);
+    let raw: Option<OriginalRequirementRow> = c
         .query_row(
             "SELECT t.text,t.created_at,t.extra,r.number,r.core_id
          FROM todos t

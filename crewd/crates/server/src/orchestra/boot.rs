@@ -57,7 +57,10 @@ impl<P: Port> Core<P> {
             match self.port.admin_case_bound(&row.id).await {
                 Ok(true) => continue,
                 Err(error) => {
-                    eprintln!("crewd: administrative binding unavailable for {}: {error}; withheld from ordinary recovery", row.id);
+                    eprintln!(
+                        "crewd: administrative binding unavailable for {}: {error}; withheld from ordinary recovery",
+                        row.id
+                    );
                     continue;
                 }
                 Ok(false) => {}

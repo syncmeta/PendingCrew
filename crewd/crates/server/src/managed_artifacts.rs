@@ -82,15 +82,27 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
                 BACKLINKS => {
                     let p: BacklinksParams = crewd_proto::parse_params(params)?;
                     value(
-                        domain::backlinks_with_legacy(c, by, &p.reference, p.after.as_deref(), p.include_legacy_sources)
-                            .map_err(dispatch::collab_err)?,
+                        domain::backlinks_with_legacy(
+                            c,
+                            by,
+                            &p.reference,
+                            p.after.as_deref(),
+                            p.include_legacy_sources,
+                        )
+                        .map_err(dispatch::collab_err)?,
                     )
                 }
                 SUBJECT => {
                     let p: SubjectParams = crewd_proto::parse_params(params)?;
                     value(
-                        domain::subject_with_legacy(c, by, &p.subject, p.after.as_deref(), p.include_legacy_sources)
-                            .map_err(dispatch::collab_err)?,
+                        domain::subject_with_legacy(
+                            c,
+                            by,
+                            &p.subject,
+                            p.after.as_deref(),
+                            p.include_legacy_sources,
+                        )
+                        .map_err(dispatch::collab_err)?,
                     )
                 }
                 REQUEST_GET => {

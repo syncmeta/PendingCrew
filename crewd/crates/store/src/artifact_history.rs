@@ -546,7 +546,10 @@ pub fn advance(
     Ok(delta)
 }
 pub enum Saved {
-    Active { digest: [u8; 32], receipt: Receipt },
+    Active {
+        digest: [u8; 32],
+        receipt: Box<Receipt>,
+    },
     Retired,
 }
 pub fn request_digest(
@@ -556,10 +559,10 @@ pub fn request_digest(
     operation: &Operation,
 ) -> Result<[u8; 32]> {
     let raw = serde_json::to_vec(&(scope, crew, request, operation))?;
-    Ok(ring::digest::digest(&ring::digest::SHA256, &raw)
+    ring::digest::digest(&ring::digest::SHA256, &raw)
         .as_ref()
         .try_into()
-        .map_err(|_| bad())?)
+        .map_err(|_| bad())
 }
 fn valid_receipt(receipt: &Receipt, digest: &[u8; 32]) -> Result<()> {
     valid_job(&receipt.job)?;
@@ -667,7 +670,10 @@ pub fn receipt(
             return Err(bad());
         }
         valid_receipt(&receipt, &digest)?;
-        Ok(Saved::Active { digest, receipt })
+        Ok(Saved::Active {
+            digest,
+            receipt: Box::new(receipt),
+        })
     })
     .transpose()
 }

@@ -71,25 +71,30 @@ fn waits(c: &Connection, crew: &str, now_ms: i64) -> Result<(Vec<AdminHumanBrief
         })
         .collect();
     // Human-authored H items intentionally never participate in Ask escalation.
-    candidates.extend(book.state().asks.values().filter_map(|ask| {
-        (ask.human_task
-            && ask.state == AskState::Open
-            && book.state().ask_crew(ask.id) == Some(&scope))
-        .then(|| {
-            (
-                HumanWait {
-                    ask: ask.id,
-                    items: Vec::new(),
-                    owners: Vec::new(),
-                    waited_ms: now.since(ask.asked_at).max(0),
-                    tier: WaitTier::Fresh,
-                    default_due_at: None,
-                },
-                ask,
-                false,
-            )
-        })
-    }));
+    candidates.extend(
+        book.state()
+            .asks
+            .values()
+            .filter(|ask| {
+                ask.human_task
+                    && ask.state == AskState::Open
+                    && book.state().ask_crew(ask.id) == Some(&scope)
+            })
+            .map(|ask| {
+                (
+                    HumanWait {
+                        ask: ask.id,
+                        items: Vec::new(),
+                        owners: Vec::new(),
+                        waited_ms: now.since(ask.asked_at).max(0),
+                        tier: WaitTier::Fresh,
+                        default_due_at: None,
+                    },
+                    ask,
+                    false,
+                )
+            }),
+    );
     candidates.sort_by_key(|(wait, _, blocks)| {
         (
             !(*blocks && wait.tier != WaitTier::Fresh),

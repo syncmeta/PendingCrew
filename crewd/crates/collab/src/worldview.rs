@@ -347,7 +347,9 @@ mod tests {
     #[test]
     fn admin_identity_is_distinct_in_launch_and_live_worldviews() {
         let db = store();
-        db.conn().execute("UPDATE sessions SET role='admin' WHERE id='w-a1'", []).unwrap();
+        db.conn()
+            .execute("UPDATE sessions SET role='admin' WHERE id='w-a1'", [])
+            .unwrap();
         for locale in [Locale::Zh, Locale::En] {
             let ctx = context_for(db.conn(), "w-a1", locale).unwrap();
             assert_eq!(ctx.role, Role::Admin);
@@ -373,7 +375,10 @@ mod tests {
                 "mcp__crew__start_session",
                 "isolation",
             ] {
-                assert!(launch.contains(entry), "{locale:?} launch is missing {entry}");
+                assert!(
+                    launch.contains(entry),
+                    "{locale:?} launch is missing {entry}"
+                );
             }
             for session in ["w-a1", "w-a2", management.as_str()] {
                 let other = render(&context_for(db.conn(), session, locale).unwrap());

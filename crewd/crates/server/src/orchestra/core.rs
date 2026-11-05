@@ -1687,11 +1687,12 @@ impl<P: Port> Core<P> {
         if !exec.supports_native_policy(super::exec::NativeExecutionPolicy::AdminCaseRestricted) {
             return Ok(Some(Wait::ExecutorUnsupported));
         }
-        let Some(live) = self
-            .live
-            .get(permit.source_session())
-            .filter(|s| !s.stopping && !s.halting && !s.agent_session_id.is_empty() && s.executor == source.executor)
-        else {
+        let Some(live) = self.live.get(permit.source_session()).filter(|s| {
+            !s.stopping
+                && !s.halting
+                && !s.agent_session_id.is_empty()
+                && s.executor == source.executor
+        }) else {
             return Ok(Some(Wait::SourceNotRunning));
         };
         if source.executor == "codex" && !live.handle.supports_native_auth_export() {

@@ -184,6 +184,44 @@ pub(crate) fn followup_note(conn: &Connection, row: &wakes::WakeRow) -> Result<w
     Ok(work::FollowupNote::Current(serde_json::json!({"assignedWork":[n.work],"total":1,"partial":false,"reason":"verified_owner_lost"}).to_string()))
 }
 
+/// Typed identity of a particular reassignment notice, independent of later
+/// progress revisions. This does not grant a new delivery or execution right.
+pub(crate) fn assignment_notification(
+    c: &Connection,
+    work: &str,
+    owner: &str,
+    revision: &str,
+) -> Result<Option<wakes::WakeRow>> {
+    use rusqlite::OptionalExtension;
+    let source = format!("work-lost:{work}:{revision}");
+    let id = c
+        .query_row(
+            "SELECT id FROM wakes WHERE session_id=?1 AND kind='system' AND source=?2",
+            rusqlite::params![owner, source],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?;
+    let Some(id) = id else { return Ok(None) };
+    let row = wakes::by_ids(c, &[id])?
+        .pop()
+        .ok_or_else(|| invalid("missing reassignment notification"))?;
+    let note: Assigned = serde_json::from_str(row.note.as_deref().unwrap_or(""))
+        .map_err(|_| invalid("invalid reassignment notice"))?;
+    if note.work != work
+        || note.owner != owner
+        || note.revision != revision
+        || note.stop_floor < 0
+        || row.id <= note.stop_floor
+        || row.session != owner
+        || row.kind != wakes::WakeKind::System
+        || row.priority != wakes::WakePriority::System
+        || row.source != source
+    {
+        return Err(invalid("reassignment notice identity mismatch"));
+    }
+    Ok(Some(row))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,42 +315,4 @@ mod tests {
         assert_eq!(work::get(s.conn(), &p.id).unwrap().owner, out.owner);
         let _ = NOW;
     }
-}
-
-/// Typed identity of a particular reassignment notice, independent of later
-/// progress revisions. This does not grant a new delivery or execution right.
-pub(crate) fn assignment_notification(
-    c: &Connection,
-    work: &str,
-    owner: &str,
-    revision: &str,
-) -> Result<Option<wakes::WakeRow>> {
-    use rusqlite::OptionalExtension;
-    let source = format!("work-lost:{work}:{revision}");
-    let id = c
-        .query_row(
-            "SELECT id FROM wakes WHERE session_id=?1 AND kind='system' AND source=?2",
-            rusqlite::params![owner, source],
-            |r| r.get::<_, i64>(0),
-        )
-        .optional()?;
-    let Some(id) = id else { return Ok(None) };
-    let row = wakes::by_ids(c, &[id])?
-        .pop()
-        .ok_or_else(|| invalid("missing reassignment notification"))?;
-    let note: Assigned = serde_json::from_str(row.note.as_deref().unwrap_or(""))
-        .map_err(|_| invalid("invalid reassignment notice"))?;
-    if note.work != work
-        || note.owner != owner
-        || note.revision != revision
-        || note.stop_floor < 0
-        || row.id <= note.stop_floor
-        || row.session != owner
-        || row.kind != wakes::WakeKind::System
-        || row.priority != wakes::WakePriority::System
-        || row.source != source
-    {
-        return Err(invalid("reassignment notice identity mismatch"));
-    }
-    Ok(Some(row))
 }

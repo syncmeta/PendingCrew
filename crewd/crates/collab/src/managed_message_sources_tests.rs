@@ -620,7 +620,11 @@ fn protected_v26_migration_retains_existing_objects_and_original_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().canonicalize().unwrap();
     let mut s = crewd_store::testing::open_legacy_store(26).unwrap();
-    s.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew-a','A','t','t');").unwrap();
+    s.conn()
+        .execute_batch(
+            "INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew-a','A','t','t');",
+        )
+        .unwrap();
     let scope = objects::scope(s.conn()).unwrap();
     let prior = ok(&mut s, |tx| {
         objects::submit(
@@ -635,7 +639,12 @@ fn protected_v26_migration_retains_existing_objects_and_original_snapshot() {
         )
     });
     let prior_number: i64 = object_id(&prior.object)[1..].parse().unwrap();
-    s.conn().execute("VACUUM INTO ?1", [data.join(crewd_store::DB_FILE).to_str().unwrap()]).unwrap();
+    s.conn()
+        .execute(
+            "VACUUM INTO ?1",
+            [data.join(crewd_store::DB_FILE).to_str().unwrap()],
+        )
+        .unwrap();
     drop(s);
     let s = Store::open_data_dir(&data).unwrap();
     assert_eq!(
@@ -659,7 +668,10 @@ fn protected_v26_migration_retains_existing_objects_and_original_snapshot() {
             path.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with(&format!("crewd-v26-pre-v{}-", crewd_store::schema::SCHEMA_VERSION))
+                .starts_with(&format!(
+                    "crewd-v26-pre-v{}-",
+                    crewd_store::schema::SCHEMA_VERSION
+                ))
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -698,10 +710,12 @@ fn protected_v26_migration_retains_existing_objects_and_original_snapshot() {
         std::fs::read_dir(data.join("backups"))
             .unwrap()
             .filter_map(|entry| entry.ok())
-            .filter(|entry| entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(&format!("crewd-v26-pre-v{}-", crewd_store::schema::SCHEMA_VERSION)))
+            .filter(
+                |entry| entry.file_name().to_string_lossy().starts_with(&format!(
+                    "crewd-v26-pre-v{}-",
+                    crewd_store::schema::SCHEMA_VERSION
+                ))
+            )
             .count(),
         1,
         "ordinary reopen must not migrate again"

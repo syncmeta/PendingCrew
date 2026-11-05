@@ -36,6 +36,7 @@ struct CrewdWorkCloseView: View {
                 Text("关闭凭据：" + (current["closure"]["evidence"]["value"].string ?? "")).textSelection(.enabled)
             }
             if let workspace,!crew.isEmpty {
+                CrewdManagedLinksEntry(workspace:workspace,source:.init(kind:"work",id:id.raw),current:scopeIsCurrent)
                 CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:.work,id:id.raw),crew:crew,
                     frozen:current["frozen"] == .bool(true),current:scopeIsCurrent)
             }

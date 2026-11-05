@@ -627,14 +627,25 @@ pub fn purge_crew_in_tx(conn: &Connection, crew: &str) -> Result<()> {
 }
 
 /// Two genuine recent reports for this core item. Caller checks actor and current owner.
-pub fn recent_reports(conn:&Connection,crew:&str,id:crewd_work::WorkId)->Result<Vec<Event>> {
- let mut q=conn.prepare("SELECT seq,body FROM organization_work_events WHERE crew_id=?1 AND json_extract(body,'$.kind.type')='reported' AND json_extract(body,'$.kind.id')=?2 ORDER BY seq DESC LIMIT 2")?;
- let rows=q.query_map(params![crew,id.to_string()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?)))?.collect::<std::result::Result<Vec<_>,_>>()?;
- rows.into_iter().map(|(seq,body)| {
-  let event:Event=serde_json::from_str(&body)?;
-  if seq<=0 || event.seq!=seq as u64 || !matches!(event.kind,crewd_work::EventKind::Reported{id:i,..} if i==id) {return Err(invalid("report journal identity mismatch"));}
-  Ok(event)
- }).collect()
+pub fn recent_reports(conn: &Connection, crew: &str, id: crewd_work::WorkId) -> Result<Vec<Event>> {
+    let mut q=conn.prepare("SELECT seq,body FROM organization_work_events WHERE crew_id=?1 AND json_extract(body,'$.kind.type')='reported' AND json_extract(body,'$.kind.id')=?2 ORDER BY seq DESC LIMIT 2")?;
+    let rows = q
+        .query_map(params![crew, id.to_string()], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|(seq, body)| {
+            let event: Event = serde_json::from_str(&body)?;
+            if seq <= 0
+                || event.seq != seq as u64
+                || !matches!(event.kind,crewd_work::EventKind::Reported{id:i,..} if i==id)
+            {
+                return Err(invalid("report journal identity mismatch"));
+            }
+            Ok(event)
+        })
+        .collect()
 }
 
 /// Genuine latest request for one organization node. Legacy archive events are not relabelled.
