@@ -138,6 +138,15 @@ impl From<serde_json::Error> for KnowledgeError {
 fn error(e: impl Into<KnowledgeError>) -> KnowledgeError {
     e.into()
 }
+
+fn context_conflict() -> KnowledgeError {
+    RpcError::new(
+        RpcError::CONFLICT,
+        "knowledge generation or restore context changed before submission",
+    )
+    .with_refusal("data.context_conflict")
+    .into()
+}
 fn parse<T: DeserializeOwned>(v: Value) -> Result<T, KnowledgeError> {
     crewd_proto::parse_params(v).map_err(Into::into)
 }
@@ -357,12 +366,7 @@ fn route_sync(
                 return encode(result);
             }
             if knowledge.context().map_err(error)? != p.context {
-                return Err(RpcError::new(
-                    RpcError::CONFLICT,
-                    "knowledge generation or restore context changed before submission",
-                )
-                .with_refusal("data.context_conflict")
-                .into());
+                return Err(context_conflict());
             }
             match &p.change {
                 DataChange::Apply { message, edits } => {
@@ -622,7 +626,16 @@ fn route_sync(
                 return Err(error("historical SQL schema is not supported"));
             }
             crewd_store::team_data::bound(p.limit, 100).map_err(error)?;
-            let mut q=knowledge.conn.prepare("SELECT type,name,sql FROM sqlite_schema WHERE name NOT LIKE '_pc_%' AND name NOT LIKE 'sqlite_%' AND (?1 IS NULL OR name>?1) ORDER BY name LIMIT ?2").map_err(error)?;
+            let mut q = knowledge
+                .conn
+                .prepare(
+                    "SELECT type,name,sql FROM sqlite_schema
+                 WHERE substr(lower(name),1,4) <> '_pc_'
+                   AND substr(lower(name),1,7) <> 'sqlite_'
+                   AND substr(lower(name),1,7) <> 'pragma_'
+                   AND (?1 IS NULL OR name>?1) ORDER BY name LIMIT ?2",
+                )
+                .map_err(error)?;
             let rows = q
                 .query_map(rusqlite::params![p.after, p.limit + 1], |r| {
                     Ok((
@@ -634,22 +647,39 @@ fn route_sync(
                 .map_err(error)?
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(error)?;
-            let next = if rows.len() > p.limit as usize {
-                Some(rows[p.limit as usize - 1].1.clone())
-            } else {
-                None
-            };
-            let objects = rows
-                .into_iter()
-                .take(p.limit as usize)
-                .map(|(kind, name, sql)| DataSchemaObject {
+            let mut next = None;
+            let mut bytes = 0;
+            let mut objects = Vec::<DataSchemaObject>::new();
+            for (kind, name, sql) in rows {
+                if objects.len() == p.limit as usize {
+                    next = objects.last().map(|row| row.name.clone());
+                    break;
+                }
+                let (columns, attributes) = if matches!(kind.as_str(), "table" | "view") {
+                    knowledge.table_schema(&name).map_err(error)?
+                } else {
+                    (vec![], Value::Null)
+                };
+                let object = DataSchemaObject {
                     kind,
                     name,
                     create_sql: sql.unwrap_or_default(),
-                    columns: vec![],
-                    attributes: Value::Null,
-                })
-                .collect();
+                    columns,
+                    attributes,
+                };
+                bytes += serde_json::to_vec(&object).map_err(error)?.len();
+                if bytes > 1024 * 1024 {
+                    next = Some(
+                        objects
+                            .last()
+                            .ok_or_else(|| error("SQL schema object exceeds byte bound"))?
+                            .name
+                            .clone(),
+                    );
+                    break;
+                }
+                objects.push(object);
+            }
             encode(DataSchemaResult {
                 context: p.context,
                 generation: context.generation,
@@ -659,44 +689,24 @@ fn route_sync(
         }
         "data.table.get" => {
             let p: DataTableParams = parse(args)?;
-            knowledge.check(&p.context).map_err(error)?;
-            if p.at_revision.is_some() || p.after_key.is_some() {
-                return Err(error("historical or implicit table cursors not supported"));
-            }
-            if p.table.starts_with('_')
-                || !p
-                    .table
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-            {
-                return Err(error("invalid business table identifier"));
-            }
-            let (columns, rows, truncated) = knowledge
-                .query(
-                    &DataSql {
-                        sql: format!(
-                            "SELECT * FROM \"{}\" LIMIT {}",
-                            p.table,
-                            p.limit.saturating_add(1)
-                        ),
-                        params: vec![],
-                    },
-                    p.limit,
-                )
-                .map_err(error)?;
-            encode(DataTablePage {
-                context: p.context,
-                generation: context.generation,
-                columns,
-                rows,
-                next_key: None,
-                truncated,
-                stable_order: false,
-            })
+            encode(knowledge.table_page(p).map_err(error)?)
         }
         "data.preview.get" => encode(knowledge.preview_get(parse(args)?).map_err(error)?),
         "data.preview" => encode(knowledge.preview(parse(args)?, &principal).map_err(error)?),
-        "data.confirm" => encode(knowledge.confirm(parse(args)?, &principal).map_err(error)?),
+        "data.confirm" => {
+            let p: DataConfirmParams = parse(args)?;
+            let digest = store::digest(&p).map_err(error)?;
+            if let Some(result) = knowledge
+                .retry(&p.request_id, &p.context, &principal, &digest)
+                .map_err(error)?
+            {
+                return encode(result);
+            }
+            if context != p.context {
+                return Err(context_conflict());
+            }
+            encode(knowledge.confirm(p, &principal).map_err(error)?)
+        }
         "data.restore" => encode(knowledge.restore(parse(args)?, &principal).map_err(error)?),
         "data.snapshots" => {
             let p: DataSnapshotsParams = parse(args)?;
@@ -1122,6 +1132,104 @@ mod tests {
         let (server, _client) = tokio::net::UnixStream::pair().unwrap();
         Actor::Local(policy.accept(&server).unwrap())
     }
+    #[tokio::test]
+    async fn sqlite_business_schema_and_keyset_use_current_authorized_namespace() {
+        let f = Fixture::new().await;
+        let rt = runtime(&f).await;
+        let workspace = agent(&rt, &f, "data.workspace.get", json!({"crewId":f.crew})).await;
+        let old = workspace["context"].clone();
+        let submitted = agent(&rt, &f, "data.submit", json!({
+            "requestId": uuid::Uuid::new_v4().to_string(),
+            "context": old,
+            "change":{"kind":"apply","message":"Exact structured fixture","edits":[{"kind":"sql","statements":[
+                {"sql":"CREATE TABLE apc_business(id TEXT NOT NULL PRIMARY KEY, qty INTEGER DEFAULT 7, note TEXT) STRICT","params":[]},
+                {"sql":"INSERT INTO apc_business VALUES('z', 9, NULL), ('a', 2, 'original'), ('m', 3, NULL)","params":[]},
+                {"sql":"CREATE TABLE composite(a TEXT,b TEXT,PRIMARY KEY(a,b)) STRICT","params":[]}
+            ]}]}
+        })).await;
+        assert_eq!(submitted["phase"], "committed");
+        let context = submitted["context"].clone();
+        let catalog = agent(
+            &rt,
+            &f,
+            "data.schema.get",
+            json!({
+                "context":context,"atRevision":null,"after":null,"limit":1
+            }),
+        )
+        .await;
+        assert_eq!(catalog["objects"].as_array().unwrap().len(), 1);
+        assert_eq!(catalog["next"], "apc_business");
+        let table = &catalog["objects"][0];
+        assert_eq!(table["name"], "apc_business");
+        assert_eq!(
+            table["attributes"],
+            json!({"strict":true,"stablePrimaryKey":true})
+        );
+        assert_eq!(
+            table["columns"][0],
+            json!({
+                "name":"id","declaredType":"TEXT","notNull":true,"primaryKeyPosition":1,"defaultSql":null,"attributes":null
+            })
+        );
+        assert_eq!(table["columns"][1]["defaultSql"], "7");
+        let second = agent(
+            &rt,
+            &f,
+            "data.schema.get",
+            json!({
+                "context":context,"atRevision":null,"after":catalog["next"],"limit":100
+            }),
+        )
+        .await;
+        assert_eq!(second["objects"].as_array().unwrap().len(), 1);
+        assert_eq!(second["objects"][0]["name"], "composite");
+        assert_eq!(
+            second["objects"][0]["attributes"]["stablePrimaryKey"],
+            false
+        );
+        let first = agent(
+            &rt,
+            &f,
+            "data.table.get",
+            json!({
+                "context":context,"table":"apc_business","atRevision":null,"afterKey":null,"limit":2
+            }),
+        )
+        .await;
+        assert_eq!(first["columns"], json!(["id", "qty", "note"]));
+        assert_eq!(
+            first["rows"],
+            json!([
+                [{"type":"text","value":"a"},{"type":"integer","value":"2"},{"type":"text","value":"original"}],
+                [{"type":"text","value":"m"},{"type":"integer","value":"3"},{"type":"null"}]
+            ])
+        );
+        assert_eq!(first["nextKey"], json!([{"type":"text","value":"m"}]));
+        assert_eq!(first["stableOrder"], true);
+        let last = agent(&rt, &f, "data.table.get", json!({
+            "context":context,"table":"apc_business","atRevision":null,"afterKey":first["nextKey"],"limit":2
+        })).await;
+        assert_eq!(
+            last["rows"],
+            json!([[{"type":"text","value":"z"},{"type":"integer","value":"9"},{"type":"null"}]])
+        );
+        assert!(last["nextKey"].is_null());
+        assert_eq!(last["truncated"], false);
+        let stale = rt
+            .session(
+                f.state.clone(),
+                f.worker.clone(),
+                f.token(&f.worker),
+                ConnectionScope::new(),
+                "data.table.get",
+                json!({"context":old,"table":"apc_business","atRevision":null,
+                                   "afterKey":first["nextKey"],"limit":2}),
+            )
+            .await;
+        assert!(stale.is_err());
+    }
+
     async fn agent(rt: &Arc<Runtime>, f: &Fixture, method: &str, args: Value) -> Value {
         rt.session(
             f.state.clone(),
@@ -1475,6 +1583,81 @@ mod tests {
             {"kind":"createBlock","alias":"dailyKnowledge","attributes":{},"content":"日用版知识验收完成","contentType":"text/plain","sources":[]},
             {"kind":"createView","alias":"dailyPage","attributes":{},"definition":{"kind":"document","layout":{},"placements":[{"block":{"alias":"dailyKnowledge","kind":"created"},"kind":"set","layout":{}}]},"sources":[],"title":"日用版知识验收"}
         ]})
+    }
+
+    #[tokio::test]
+    async fn sqlite_confirm_context_conflict_is_definite_after_original_receipt_retry() {
+        let f = Fixture::new().await;
+        let rt = runtime(&f).await;
+        let admin = human();
+        let principal = admin.principal(&f.state).await.unwrap();
+        let call = |method: &'static str, args: Value| {
+            rt.route(
+                f.state.clone(),
+                Access::Human(admin.clone()),
+                principal.clone(),
+                method,
+                args,
+            )
+        };
+        let workspace = call("data.workspace.get", json!({"crewId":f.crew}))
+            .await
+            .unwrap();
+        let base = workspace["context"].clone();
+        let seeded = call("data.submit", json!({
+            "requestId":uuid::Uuid::new_v4().to_string(),"context":base,
+            "change":{"kind":"apply","message":"Confirm generation fixture","edits":[{"kind":"sql","statements":[
+                {"sql":"CREATE TABLE sample(id INTEGER PRIMARY KEY, value TEXT)","params":[]},
+                {"sql":"INSERT INTO sample VALUES(1,'original')","params":[]}
+            ]}]}
+        })).await.unwrap();
+        let context = seeded["context"].clone();
+        let make_preview = |value| {
+            json!({"context":context,"statements":[{
+                "sql":"UPDATE sample SET value=? WHERE id=1","params":[{"type":"text","value":value}]
+            }]})
+        };
+        let first = call("data.preview", make_preview("first")).await.unwrap();
+        let competing = call("data.preview", make_preview("stale")).await.unwrap();
+        assert_eq!(first["affectedRows"], 1);
+        assert_eq!(competing["affectedRows"], 1);
+        let packet = |preview: Value| {
+            json!({
+                "requestId":uuid::Uuid::new_v4().to_string(),"context":context,"token":preview["token"]
+            })
+        };
+        let original = packet(first);
+        let stale = packet(competing);
+        let receipt = call("data.confirm", original.clone()).await.unwrap();
+        let latest = receipt["context"].clone();
+        assert_eq!(receipt["phase"], "committed");
+        let snapshots = call("data.snapshots", json!({"context":latest}))
+            .await
+            .unwrap();
+        let refusal = call("data.confirm", stale.clone()).await.unwrap_err();
+        assert_eq!(refusal.code, RpcError::CONFLICT);
+        assert_eq!(refusal.data.unwrap().refusal, "data.context_conflict");
+        let absence = call(
+            "data.request.get",
+            json!({
+                "context":context,"requestId":stale["requestId"]
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(absence["lookup"]["status"], "notFound");
+        assert_eq!(call("data.confirm", original).await.unwrap(), receipt);
+        assert_eq!(
+            call("data.snapshots", json!({"context":latest}))
+                .await
+                .unwrap(),
+            snapshots
+        );
+        let rows = call("data.query", json!({
+            "context":latest,"statement":{"sql":"SELECT value FROM sample WHERE id=1","params":[]},
+            "atRevision":null,"cursor":null,"limit":2
+        })).await.unwrap();
+        assert_eq!(rows["rows"], json!([[{"type":"text","value":"first"}]]));
     }
 
     #[tokio::test]

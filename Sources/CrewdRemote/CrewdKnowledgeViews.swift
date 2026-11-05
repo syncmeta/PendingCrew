@@ -22,7 +22,13 @@ struct CrewdKnowledgeDocumentsEntry: View {
             .frame(maxWidth:.infinity,alignment:.leading)
             .padding(.horizontal,16).padding(.vertical,10)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
-            if library {
+            if collection == .tables {
+                if workspace.client.capabilities.contains("data.table.keyset.v1") {
+                    CrewdNativeTablesView(workspace:workspace,store:workspace.knowledge)
+                } else {
+                    CrewdEmptySurface(title:"表格暂不可用",detail:"当前连接未提供带主键的表格读取。",symbol:"tablecells")
+                }
+            } else if library {
                 CrewdKnowledgeWorkspaceView(workspace:workspace,store:workspace.knowledge,available:workspace.client.capabilities.contains("data"),returnToMessages:{workspace.originalSection="消息"},collection:collection,
                     workStore:workspace.client.capabilities.contains("data.documentWorkLinks") ? workspace.workStore : nil)
                     .id(workspace.crewID + "/" + collection.rawValue)
@@ -33,17 +39,20 @@ struct CrewdKnowledgeDocumentsEntry: View {
         .enableInjection()
         #endif
     }
-    private var scopePicker:some View{Picker("范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料范围")}
-    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档").tag(CrewdKnowledgeCollection.documents);Text("Agent 页面").tag(CrewdKnowledgeCollection.agentPages)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料类型")}
+    @ViewBuilder private var scopePicker:some View {
+        if collection == .tables { Text("机组资料库").foregroundStyle(.secondary) }
+        else { Picker("范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料范围") }
+    }
+    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档").tag(CrewdKnowledgeCollection.documents);Text("Agent 页面").tag(CrewdKnowledgeCollection.agentPages);Text("表格").tag(CrewdKnowledgeCollection.tables)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料类型")}
 
 }
 
 /// Native placements and free Agent-authored pages share stored blocks, while
 /// their navigation stays separate. The selector never executes page code.
 enum CrewdKnowledgeCollection: String {
-    case all, documents, agentPages
+    case all, documents, agentPages, tables
     func includes(_ kind: CrewdKnowledgeStore.ViewCatalogKind) -> Bool {
-        self == .all || (self == .documents ? kind == .document : kind == .web)
+        self == .all || (self == .documents && kind == .document) || (self == .agentPages && kind == .web)
     }
     func includes(_ object: CrewdDataObject) -> Bool {
         guard case let .view(_, _, _, definition, _, _) = object else { return false }
@@ -331,7 +340,10 @@ struct CrewdKnowledgeWorkspaceView: View {
             HStack { Text("页面与数据系统控制").font(.headline); Spacer(); Button("完成") { showSystem = false } }
             Text("作者页面不能代替这里的权限、原请求核对与恢复控制。").font(.caption)
             Button("停止页面并撤回写入权限") { store.renderer.revoke() }
-            ForEach(store.pending) { intent in
+            if store.pending.contains(where:{ $0.nativeTable != nil }) {
+                Text("有表格保存待核对。请在资料类型中选择表格，查询原回执。").font(.caption)
+            }
+            ForEach(store.pending.filter { $0.nativeTable == nil }) { intent in
                 HStack {
                     let label = intent.viewArchive.map{$0.archived ? "原归档" : "原恢复"} ?? (intent.composition == nil ? "待核对操作" : "原文档编排")
                     Text(label + " " + intent.id.uuidString).font(.caption).textSelection(.enabled)
@@ -1914,6 +1926,384 @@ private struct CrewdNativeDocumentCreation:View {
             } catch {
                 workspace.knowledgeLinkDrafts.finish(snapshot,accepted:false,uncertain:CrewdClientError.isUncertainSubmission(error))
                 if current { failure="原文已保存，未加入本群："+error.localizedDescription }
+            }
+        }
+    }
+}
+
+/// The table surface addresses the current crew's real SQLite namespace. Its
+/// editor only generates bounded, typed statements and never hosts Agent code.
+private struct CrewdNativeTablesView: View {
+    @ObservedObject var workspace: CrewdWorkspace
+    @ObservedObject var store: CrewdKnowledgeStore
+    @State private var catalog: CrewdDataSchemaResult?
+    @State private var table: CrewdDataSchemaObject?
+    @State private var page: CrewdDataTablePage?
+    @State private var firstCatalogPage = true
+    @State private var firstRowPage = true
+    @State private var request = UUID()
+    @State private var editor: EditTarget?
+    @State private var feedback: String?
+    @State private var loading = false
+
+    private struct Route: Hashable { let crew: String; let observation: UUID; let connection: UUID }
+    private struct EditTarget: Identifiable {
+        enum Mode {
+            case create
+            case row(CrewdNativeTable.Model, original: [CrewdDataCell]?)
+        }
+        let id = UUID()
+        let mode: Mode
+        let context: CrewdDataContext
+    }
+    private var route: Route { .init(crew:workspace.crewID,observation:workspace.observationGeneration,connection:workspace.client.connectionEpoch) }
+    private var pending: [CrewdKnowledgeStore.Intent] {
+        store.pending.filter { $0.nativeTable != nil && $0.context.crewId == workspace.crewID }
+    }
+    private var selectedModel: CrewdNativeTable.Model? {
+        guard let table, let page, page.stableOrder else { return nil }
+        guard let model = CrewdNativeTable.Model(table),
+              model.columns.map({Array($0.name.utf8)}) == page.columns.map({Array($0.utf8)}) else { return nil }
+        return model
+    }
+
+    var body: some View {
+        VStack(alignment:.leading,spacing:12) {
+            HStack {
+                Text("表格").font(.headline)
+                Spacer()
+                if loading || store.busy { ProgressView().controlSize(.small) }
+                Button("刷新",systemImage:"arrow.clockwise") { Task { await reload() } }.disabled(loading || store.busy)
+                Button("新建表格",systemImage:"plus") {
+                    if let context = catalog?.context { editor = .init(mode:.create,context:context) }
+                }.disabled(loading || store.busy || store.hasBlockingPending || catalog == nil)
+            }
+            if let feedback { Text(feedback).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+            ForEach(pending) { intent in
+                HStack {
+                    Text("原表格请求待核对 · " + (intent.nativeTable?.table ?? "")).font(.caption)
+                    Spacer()
+                    Button("查询原回执") { recover(intent) }.disabled(loading || store.busy)
+                }
+            }
+            if let table {
+                selected(table)
+            } else if let catalog {
+                list(catalog)
+            } else if !loading {
+                Text("表格尚未读取。").foregroundStyle(.secondary)
+            }
+            Spacer(minLength:0)
+        }
+        .padding(16)
+        .task(id:route) { await reload() }
+        .onChange(of:store.workspace?.context) { old, new in
+            if old != nil, new == nil, editor == nil, !loading { Task { await reload() } }
+        }
+        .sheet(item:$editor,onDismiss:{
+            Task { await reload(keepingFeedback:true) }
+        }) { target in
+            let captured = route
+            TableEditor(store:store,target:target,scopeIsCurrent:{
+                route == captured && editor?.id == target.id
+            }, completed:{ result in
+                feedback = result == .exact ? "已核实原回执和当前表格数据。" : "原提交已有回执。当前表格数据已经变化。"
+                editor = nil
+            })
+        }
+    }
+
+    private func list(_ catalog: CrewdDataSchemaResult) -> some View {
+        let tables = catalog.objects.filter { ["table","view"].contains($0.kind) && (try? CrewdNativeTable.identifier($0.name)) != nil }
+        return VStack(alignment:.leading,spacing:8) {
+            if tables.isEmpty {
+                Text(catalog.next == nil ? "本页没有可读的表格。" : "本页没有表格，可继续查看。").foregroundStyle(.secondary)
+            }
+            ScrollView {
+                LazyVStack(alignment:.leading,spacing:10) {
+                    ForEach(Array(tables.enumerated()),id:\.offset) { _, table in
+                        Button {
+                            self.table = table; self.page = nil; firstRowPage = true; feedback = nil
+                            Task { await loadRows(table,context:catalog.context) }
+                        } label: {
+                            HStack {
+                                Image(systemName:table.kind == "view" ? "eye" : "tablecells")
+                                Text(table.name); Spacer(); Image(systemName:"chevron.right").font(.caption)
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain).disabled(loading || store.busy)
+                    }
+                }
+            }
+            HStack {
+                if !firstCatalogPage { Button("表格首页") { Task { await loadCatalog() } }.disabled(loading || store.busy) }
+                if let next = catalog.next { Button("下一页表格") { Task { await loadCatalog(after:next) } }.disabled(loading || store.busy) }
+            }
+        }
+    }
+
+    @ViewBuilder private func selected(_ table: CrewdDataSchemaObject) -> some View {
+        HStack {
+            Button("表格列表",systemImage:"chevron.left") { request = UUID(); self.table = nil; self.page = nil; loading = false; feedback = nil }
+            Spacer()
+            Text(table.name).font(.subheadline.weight(.semibold))
+            if let model = selectedModel, let page {
+                Button("新增行",systemImage:"plus") { editor = .init(mode:.row(model,original:nil),context:page.context) }
+                    .disabled(loading || store.busy || store.hasBlockingPending)
+            }
+        }
+        if let page {
+            if selectedModel == nil {
+                Text(page.truncated && !page.stableOrder ? "只读。此表没有可续页的稳定主键，当前仅显示前一批结果。" :
+                        "只读。此表的结构超出当前表格编辑范围。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ScrollView([.horizontal,.vertical]) {
+                LazyVStack(alignment:.leading,spacing:8) {
+                    HStack {
+                        if selectedModel != nil { Text("操作").font(.caption.weight(.semibold)).frame(width:50,alignment:.leading) }
+                        ForEach(Array(page.columns.enumerated()),id:\.offset) { _, name in
+                            Text(name).font(.caption.weight(.semibold)).frame(width:128,alignment:.leading)
+                        }
+                    }
+                    Divider()
+                    if page.rows.isEmpty { Text("没有数据行。").foregroundStyle(.secondary) }
+                    ForEach(Array(page.rows.enumerated()),id:\.offset) { _, row in
+                        HStack(alignment:.top) {
+                            if let model = selectedModel {
+                                if zip(row,model.columns).allSatisfy({ CrewdNativeTable.accepts($0.0,column:$0.1) }) {
+                                    Button("编辑") { editor = .init(mode:.row(model,original:row),context:page.context) }
+                                        .disabled(loading || store.busy || store.hasBlockingPending).frame(width:50,alignment:.leading)
+                                } else { Text("只读").foregroundStyle(.secondary).frame(width:50,alignment:.leading) }
+                            }
+                            ForEach(Array(row.enumerated()),id:\.offset) { _, cell in
+                                Text(CrewdNativeTable.display(cell)).lineLimit(3).frame(width:128,alignment:.leading)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                }.font(.caption)
+            }
+            HStack {
+                if !firstRowPage { Button("数据首页") { Task { await loadRows(table,context:page.context) } }.disabled(loading || store.busy) }
+                if let next = page.nextKey {
+                    Button("下一页数据") { Task { await loadRows(table,context:page.context,after:next) } }
+                        .disabled(loading || store.busy)
+                }
+            }
+        }
+    }
+
+    private func reload(keepingFeedback: Bool = false) async {
+        let captured = route, token = UUID()
+        request = token; loading = true; catalog = nil; table = nil; page = nil
+        if !keepingFeedback { feedback = nil }
+        await store.refresh(loadViews:false)
+        guard !Task.isCancelled, route == captured, request == token else { return }
+        loading = false
+        await loadCatalog()
+    }
+
+    private func loadCatalog(after: String? = nil) async {
+        guard !loading else { return }
+        let captured = route, token = UUID()
+        request = token; loading = true
+        defer { if request == token { loading = false } }
+        do {
+            let result = try await store.nativeTableCatalog(after:after)
+            guard !Task.isCancelled, route == captured, request == token else { return }
+            catalog = result; firstCatalogPage = after == nil
+        } catch {
+            if route == captured, request == token { feedback = "无法读取当前表格列表。请刷新后再试。" }
+        }
+    }
+
+    private func loadRows(_ target: CrewdDataSchemaObject, context: CrewdDataContext, after: [CrewdDataCell]? = nil) async {
+        guard !loading else { return }
+        let captured = route, token = UUID()
+        request = token; loading = true
+        defer { if request == token { loading = false } }
+        do {
+            let result = try await store.nativeTablePage(target,context:context,after:after)
+            guard !Task.isCancelled, route == captured, request == token, table?.name.utf8.elementsEqual(target.name.utf8) == true else { return }
+            page = result; firstRowPage = after == nil
+        } catch {
+            if route == captured, request == token {
+                page = nil
+                feedback = "无法读取当前表格数据。请刷新后重新打开。"
+            }
+        }
+    }
+
+    private func recover(_ intent: CrewdKnowledgeStore.Intent) {
+        let captured = route, token = UUID()
+        request = token; loading = true; feedback = nil
+        Task {
+            defer { if request == token { loading = false } }
+            do {
+                let result = try await store.lookupNativeTable(intent.id,stillCurrent:{ route == captured && request == token })
+                guard !Task.isCancelled, route == captured, request == token else { return }
+                switch result {
+                case .exact: feedback = "已核实原回执和当前表格数据。"
+                case .currentDiffers: feedback = "原提交已有回执。当前表格数据已经变化。"
+                case nil: feedback = "原请求尚未获得可核实回执。"
+                }
+            } catch {
+                if route == captured, request == token { feedback = "原请求尚未获得完整核对结果。" }
+            }
+        }
+    }
+
+    private struct TableEditor: View {
+        @ObservedObject var store: CrewdKnowledgeStore
+        let target: EditTarget
+        let scopeIsCurrent: @MainActor () -> Bool
+        let completed: @MainActor (CrewdKnowledgeStore.NativeTableReadback) -> Void
+        @Environment(\.dismiss) private var dismiss
+        @State private var tableName = ""
+        @State private var columns: [ColumnInput] = [.init(name:"编号",notNull:true),.init(name:"内容")]
+        @State private var cells: [CellInput] = []
+        @State private var live = false
+        @State private var busy = false
+        @State private var attempted = false
+        @State private var preview: CrewdKnowledgeStore.NativeTablePreview?
+        @State private var feedback: String?
+        private struct ColumnInput: Identifiable {
+            let id = UUID()
+            var name: String
+            var type = CrewdNativeTable.ColumnType.text
+            var notNull = false
+        }
+        private struct CellInput {
+            var value: String
+            var null: Bool
+        }
+        private var title: String {
+            switch target.mode {
+            case .create: "新建表格"
+            case .row(_, let original): original == nil ? "新增数据行" : "编辑数据行"
+            }
+        }
+        var body: some View {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment:.leading,spacing:14) {
+                        if let preview {
+                            Text(preview.change.witness.table).font(.headline)
+                            Text(preview.preview.schemaChanged ? "将创建表格。" : "将更改一行数据。")
+                            if let row = preview.change.row {
+                                ForEach(Array(row.enumerated()),id:\.offset) { index, cell in
+                                    VStack(alignment:.leading,spacing:2) {
+                                        Text(preview.change.witness.columns[index]).font(.caption.weight(.semibold))
+                                        if cell == .null { Text("NULL").foregroundStyle(.secondary) }
+                                        else { Text(CrewdNativeTable.display(cell)).textSelection(.enabled) }
+                                    }
+                                }
+                            } else {
+                                Text(preview.change.statement.sql).font(.system(.caption,design:.monospaced)).textSelection(.enabled)
+                            }
+                            Text("确认时会保存恢复快照。").foregroundStyle(.secondary)
+                            Button("确认保存") { confirm(preview) }.disabled(busy || attempted)
+                            if !attempted { Button("返回修改") { self.preview = nil; feedback = nil }.disabled(busy) }
+                        } else {
+                            editorFields.disabled(busy || attempted)
+                            Button("核对变更") { makePreview() }.disabled(busy || attempted)
+                        }
+                        if busy { ProgressView().controlSize(.small) }
+                        if let feedback { Text(feedback).foregroundStyle(.orange).font(.caption) }
+                    }.padding(20).frame(maxWidth:560)
+                }
+                .navigationTitle(title)
+                .toolbar { Button("关闭") { dismiss() } }
+            }
+            #if os(macOS)
+            .frame(minWidth:480,minHeight:360)
+            #endif
+            .onAppear {
+                live = true
+                if case let .row(model,original) = target.mode, cells.isEmpty {
+                    cells = model.columns.enumerated().map { index, column in
+                        let old = original?[index]
+                        return .init(value:old == .null ? "" : old.map(CrewdNativeTable.display) ?? "",null:old == .null)
+                    }
+                }
+            }
+            .onDisappear { live = false }
+        }
+
+        @ViewBuilder private var editorFields: some View {
+            switch target.mode {
+            case .create:
+                TextField("表格名称",text:$tableName)
+                ForEach(Array(columns.indices),id:\.self) { index in
+                    VStack(alignment:.leading,spacing:6) {
+                        TextField(index == 0 ? "主键列名称" : "列名称",text:$columns[index].name)
+                        Picker("数据类型",selection:$columns[index].type) {
+                            ForEach(CrewdNativeTable.ColumnType.allCases.filter { index > 0 || $0 != .real }) { type in
+                                Text(typeName(type)).tag(type)
+                            }
+                        }
+                        if index == 0 { Text("主键唯一，保存后不能从表格编辑器修改。").font(.caption) }
+                        else {
+                            Toggle("必填",isOn:$columns[index].notNull)
+                            Button("移除此列",role:.destructive) { columns.remove(at:index) }
+                        }
+                    }
+                }
+                Button("添加列") { columns.append(.init(name:"")) }.disabled(columns.count >= 12)
+            case .row(let model, let original):
+                if cells.count == model.columns.count {
+                    ForEach(Array(model.columns.indices),id:\.self) { index in
+                        let column = model.columns[index]
+                        VStack(alignment:.leading,spacing:5) {
+                            Text(column.name + " · " + typeName(column.type)).font(.caption)
+                            TextField(column.name,text:$cells[index].value,axis:.vertical)
+                                .disabled(cells[index].null || (index == model.keyIndex && original != nil))
+                            if !column.notNull { Toggle("空值（NULL）",isOn:$cells[index].null) }
+                        }
+                    }
+                }
+            }
+        }
+        private func typeName(_ type: CrewdNativeTable.ColumnType) -> String {
+            switch type { case .text: "文字"; case .integer: "整数"; case .real: "小数" }
+        }
+        @MainActor private func current() -> Bool { live && scopeIsCurrent() && !Task.isCancelled }
+        private func makePreview() {
+            guard current(), !busy else { return }
+            busy = true; feedback = nil
+            Task {
+                defer { busy = false }
+                do {
+                    let change: CrewdKnowledgeStore.NativeTableChange
+                    switch target.mode {
+                    case .create:
+                        change = try store.newNativeTable(.init(name:tableName,
+                            columns:columns.map { .init(name:$0.name,type:$0.type,notNull:$0.notNull) }),context:target.context)
+                    case .row(let model, let original):
+                        guard cells.count == model.columns.count else { return }
+                        let row = try zip(cells,model.columns).map { try CrewdNativeTable.cell($0.0.value,null:$0.0.null,column:$0.1) }
+                        change = try store.saveNativeTableRow(model,row:row,original:original,context:target.context)
+                    }
+                    let value = try await store.previewNativeTable(change,stillCurrent:current)
+                    if current() { preview = value }
+                } catch {
+                    if current() { feedback = "无法核对此次变更。请检查字段、主键和当前表格状态。" }
+                }
+            }
+        }
+        private func confirm(_ staged: CrewdKnowledgeStore.NativeTablePreview) {
+            guard current(), !busy, !attempted else { return }
+            busy = true; attempted = true; feedback = nil
+            Task {
+                defer { busy = false }
+                do {
+                    let result = try await store.confirmNativeTable(staged,stillCurrent:current)
+                    guard current() else { return }
+                    if let result { completed(result) }
+                    else { feedback = "确认结果尚未核实。请关闭并查询原请求。" }
+                } catch {
+                    if current() { feedback = "此次保存尚未核实。请关闭并查看原请求或刷新表格。" }
+                }
             }
         }
     }

@@ -4,6 +4,7 @@ use crate::{
     team_data::*,
 };
 use serde_json::{Value, json};
+pub const TABLE_KEYSET_CAPABILITY: &str = "data.table.keyset.v1";
 pub const METHODS: &[&str] = &[
     "data.workspace.get",
     "data.submit",

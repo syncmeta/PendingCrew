@@ -809,3 +809,146 @@ struct CrewdChannelKnowledgeDrafts {
     }
     mutating func acknowledge(_ id:UUID){unknown.removeAll{$0.id == id}}
 }
+
+/// Controlled statements authored by the native table form. No user value is SQL.
+enum CrewdNativeTable {
+    enum ColumnType: String, CaseIterable, Codable, Identifiable {
+        case text = "TEXT", integer = "INTEGER", real = "REAL"
+        var id: String { rawValue }
+    }
+    struct Column: Equatable, Codable, Identifiable {
+        var name: String
+        var type: ColumnType
+        var notNull: Bool
+        var id: String { name }
+    }
+    struct Definition: Equatable, Codable {
+        var name: String
+        var columns: [Column] // First column is the declared primary key.
+        func createStatement() throws -> CrewdDataSql {
+            guard !columns.isEmpty, columns.count <= 12, columns[0].notNull,
+                  Set(columns.map { CrewdNativeTable.sqliteFold($0.name) }).count == columns.count else { throw Failure.invalid }
+            let fields = try columns.enumerated().map { index, column in
+                try CrewdNativeTable.identifier(column.name, new: true) + " " + column.type.rawValue +
+                    (column.notNull ? " NOT NULL" : "") + (index == 0 ? " PRIMARY KEY" : "")
+            }
+            return CrewdDataSql(sql:try "CREATE TABLE " + CrewdNativeTable.identifier(name,new:true) +
+                " (" + fields.joined(separator:", ") + ") STRICT",params:[])
+        }
+    }
+    struct Model: Equatable {
+        let schema: CrewdDataSchemaObject
+        let columns: [Column]
+        let keyIndex: Int
+        var key: Column { columns[keyIndex] }
+
+        init?(_ schema: CrewdDataSchemaObject) {
+            guard schema.kind == "table", schema.attributes["strict"] == .bool(true), schema.attributes["stablePrimaryKey"] == .bool(true),
+                  !schema.columns.isEmpty, schema.columns.count <= 12,
+                  Set(schema.columns.map { CrewdNativeTable.sqliteFold($0.name) }).count == schema.columns.count,
+                  let keyIndex = schema.columns.firstIndex(where: { $0.primaryKeyPosition == 1 }),
+                  schema.columns.filter({ $0.primaryKeyPosition != 0 }).count == 1,
+                  (try? CrewdNativeTable.identifier(schema.name)) != nil else { return nil }
+            var columns: [Column] = []
+            for column in schema.columns {
+                guard column.attributes["hidden"] == .null,
+                      let type = ColumnType(rawValue:column.declaredType.uppercased() == "INT" ? "INTEGER" : column.declaredType.uppercased()),
+                      (try? CrewdNativeTable.identifier(column.name)) != nil else { return nil }
+                columns.append(.init(name:column.name,type:type,notNull:column.notNull || column.primaryKeyPosition == 1))
+            }
+            guard columns[keyIndex].type != .real else { return nil }
+            self.schema = schema; self.columns = columns; self.keyIndex = keyIndex
+        }
+
+        func statement(row: [CrewdDataCell], original: [CrewdDataCell]?) throws -> CrewdDataSql {
+            guard row.count == columns.count,
+                  zip(row, columns).allSatisfy({ CrewdNativeTable.accepts($0.0, column:$0.1) }) else { throw Failure.invalid }
+            let table = try CrewdNativeTable.identifier(schema.name)
+            let names = try columns.map { try CrewdNativeTable.identifier($0.name) }
+            if let original {
+                guard original.count == columns.count, CrewdNativeTable.exact(original[keyIndex],row[keyIndex]) else {
+                    throw Failure.invalid
+                }
+                let changed = row.indices.filter { !CrewdNativeTable.exact(row[$0], original[$0]) }
+                guard !changed.isEmpty else { throw Failure.invalid }
+                let assignments = changed.map { names[$0] + " = ?" }
+                // Capture the full original row as a second, concrete compare-and-set
+                // fence alongside the authority generation in the preview token.
+                let comparisons = names.map { $0 + " COLLATE BINARY IS ?" }
+                return .init(sql:"UPDATE " + table + " SET " + assignments.joined(separator:", ") +
+                    " WHERE " + comparisons.joined(separator:" AND "),params:changed.map { row[$0] } + original)
+            }
+            return .init(sql:"INSERT INTO " + table + " (" + names.joined(separator:", ") + ") VALUES (" +
+                Array(repeating:"?",count:names.count).joined(separator:", ") + ")",params:row)
+        }
+    }
+    enum Failure: LocalizedError {
+        case invalid
+        var errorDescription: String? { "表名、列定义、主键或单元格值不符合此编辑器的范围。" }
+    }
+    static func sqliteFold(_ name: String) -> [UInt8] {
+        name.utf8.map { (65...90).contains($0) ? $0 + 32 : $0 }
+    }
+    static func identifier(_ name: String, new: Bool = false) throws -> String {
+        guard !name.isEmpty, name.utf8.count <= (new ? 64 : 1024),
+              !name.lowercased().hasPrefix("_pc_"), !name.lowercased().hasPrefix("sqlite_"),
+              name.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+              !new || name == name.trimmingCharacters(in:.whitespacesAndNewlines) else { throw Failure.invalid }
+        return "\"" + name.replacingOccurrences(of:"\"",with:"\"\"") + "\""
+    }
+    static func exact(_ a: CrewdDataCell, _ b: CrewdDataCell) -> Bool {
+        switch (a,b) {
+        case let (.text(a),.text(b)): a.utf8.elementsEqual(b.utf8)
+        default: a == b
+        }
+    }
+    static func keyPrecedes(_ left: CrewdDataCell, _ right: CrewdDataCell) -> Bool {
+        switch (left,right) {
+        case let (.text(left),.text(right)): left.utf8.lexicographicallyPrecedes(right.utf8)
+        case let (.integer(left),.integer(right)):
+            if let left = Int64(left), let right = Int64(right) { left < right } else { false }
+        default: false
+        }
+    }
+    static func accepts(_ cell: CrewdDataCell, column: Column) -> Bool {
+        switch (cell,column.type) {
+        case (.null,_): !column.notNull
+        case let (.integer(text),.integer): Int64(text).map(String.init) == text
+        case let (.real(value),.real): value.isFinite
+        case let (.text(text),.text): text.utf8.count <= 65536
+        default: false
+        }
+    }
+    static func cell(_ text: String, null: Bool, column: Column) throws -> CrewdDataCell {
+        if null {
+            guard !column.notNull else { throw Failure.invalid }
+            return .null
+        }
+        let cell: CrewdDataCell
+        switch column.type {
+        case .text: cell = .text(value:text)
+        case .integer:
+            guard let integer = Int64(text) else { throw Failure.invalid }
+            cell = .integer(value:String(integer))
+        case .real:
+            guard let number = Double(text), number.isFinite else { throw Failure.invalid }
+            cell = .real(value:number == 0 ? 0 : number)
+        }
+        guard accepts(cell,column:column) else { throw Failure.invalid }
+        return cell
+    }
+    static func display(_ cell: CrewdDataCell) -> String {
+        switch cell {
+        case .null: "NULL"
+        case let .text(value), let .integer(value): value
+        case let .real(value): String(value)
+        case let .blobHex(value): "BLOB · " + String(value.count / 2) + " 字节"
+        }
+    }
+    static func rowQuery(table: String, columns: [String], keyName: String, key: CrewdDataCell) throws -> CrewdDataSql {
+        guard !columns.isEmpty, columns.contains(keyName) else { throw Failure.invalid }
+        let names = try columns.map { try identifier($0) }.joined(separator:", ")
+        return .init(sql:try "SELECT " + names + " FROM " + identifier(table) + " WHERE " +
+            identifier(keyName) + " COLLATE BINARY = ? LIMIT 2",params:[key])
+    }
+}

@@ -32,6 +32,7 @@ enum CrewdKnowledgeTitleSearch {
         var viewArchive: NativeViewArchiveReceipt? = nil
         var documentWorkLink: DocumentWorkLinkReceipt? = nil
         var composition: DocumentCompositionReceipt? = nil
+        var nativeTable: NativeTableWitness? = nil
     }
     struct NativeDocumentCreationWitness: Codable, Equatable {
         let titleDigest: String
@@ -522,6 +523,199 @@ enum CrewdKnowledgeTitleSearch {
             apply(); status = "只读结果已更新。"
         } catch { if current(o, token) { status = "读取未完成；未重新提交任何写入。" } }
     }
+    // Native table confirmations share the existing knowledge observation journal.
+    struct NativeTableWitness: Codable, Equatable {
+        enum Operation: String, Codable { case create, add, edit }
+        let operation: Operation
+        let table: String
+        let columns: [String]
+        let keyName: String?
+        let key: CrewdDataCell?
+        let expectedDigest: String
+        var schemaDigest: String? = nil
+    }
+    struct NativeTableChange {
+        let context: CrewdDataContext
+        let statement: CrewdDataSql
+        let witness: NativeTableWitness
+        let row: [CrewdDataCell]?
+    }
+    struct NativeTablePreview {
+        let change: NativeTableChange
+        let preview: CrewdDataPreview
+        fileprivate let origin: Origin
+    }
+    enum NativeTableReadback: Equatable { case exact, currentDiffers }
+
+    func nativeTableCatalog(after: String? = nil) async throws -> CrewdDataSchemaResult {
+        let (o, token) = try begin()
+        defer { finish(o, token) }
+        guard let info = workspace else { throw Failure.unavailable }
+        try checked(info.context,o)
+        if info.state == "uninitialized", after == nil {
+            return .init(context:info.context,generation:info.context.generation,objects:[],next:nil)
+        }
+        guard info.state == "ready" else { throw Failure.unavailable }
+        let page: CrewdDataSchemaResult = try await call("data.schema.get",
+            CrewdDataSchemaParams(context:info.context,atRevision:nil,after:after,limit:30),preservingPresentation:true)
+        guard current(o,token), workspace?.context == info.context, page.context == info.context,
+              page.generation == info.context.generation, page.objects.count <= 30 else { throw Failure.stale }
+        if let next = page.next {
+            // Core may reach its byte budget before the requested row limit.
+            guard let last = page.objects.last, last.name.utf8.elementsEqual(next.utf8) else { throw Failure.invalid }
+        }
+        var cursor = after.map { Array($0.utf8) }
+        for object in page.objects {
+            let name = Array(object.name.utf8)
+            guard !name.isEmpty, cursor?.lexicographicallyPrecedes(name) ?? true else { throw Failure.invalid }
+            cursor = name
+        }
+        return page
+    }
+
+    func nativeTablePage(_ table: CrewdDataSchemaObject, context: CrewdDataContext,
+                         after: [CrewdDataCell]? = nil) async throws -> CrewdDataTablePage {
+        let (o, token) = try begin()
+        defer { finish(o, token) }
+        guard workspace?.context == context, workspace?.state == "ready" else { throw Failure.stale }
+        try checked(context,o)
+        let page: CrewdDataTablePage = try await call("data.table.get",
+            CrewdDataTableParams(context:context,table:table.name,afterKey:after,atRevision:nil,limit:16),preservingPresentation:true)
+        guard current(o,token), workspace?.context == context, page.context == context, page.generation == context.generation,
+              page.rows.count <= 16, !page.columns.isEmpty, page.rows.allSatisfy({ $0.count == page.columns.count }),
+              after == nil || page.stableOrder, page.nextKey == nil || (page.stableOrder && page.rows.count == 16),
+              !page.stableOrder || page.truncated == (page.nextKey != nil) else { throw Failure.invalid }
+        if page.stableOrder {
+            let keys = table.columns.filter { $0.primaryKeyPosition > 0 }
+            guard keys.count == 1, let key = keys.first,
+                  let index = page.columns.firstIndex(where: { $0.utf8.elementsEqual(key.name.utf8) }),
+                  page.rows.allSatisfy({ $0[index] != .null }) else { throw Failure.invalid }
+            if let next = page.nextKey {
+                guard next.count == 1, let last = page.rows.last, CrewdNativeTable.exact(next[0],last[index]) else { throw Failure.invalid }
+            }
+            guard after == nil || after?.count == 1 else { throw Failure.invalid }
+            var previous = after?.first
+            for row in page.rows {
+                let key = row[index]
+                guard previous.map({ CrewdNativeTable.keyPrecedes($0,key) }) ?? true else { throw Failure.invalid }
+                previous = key
+            }
+        }
+        return page
+    }
+
+    func newNativeTable(_ definition: CrewdNativeTable.Definition, context: CrewdDataContext) throws -> NativeTableChange {
+        guard workspace?.context == context, definition.columns.first?.type != .real else { throw Failure.stale }
+        let statement = try definition.createStatement()
+        let witness = NativeTableWitness(operation:.create,table:definition.name,columns:definition.columns.map(\.name),
+            keyName:nil,key:nil,expectedDigest:try Self.compositionDigest(statement.sql))
+        return .init(context:context,statement:statement,witness:witness,row:nil)
+    }
+
+    func saveNativeTableRow(_ model: CrewdNativeTable.Model, row: [CrewdDataCell], original: [CrewdDataCell]?,
+                            context: CrewdDataContext) throws -> NativeTableChange {
+        guard workspace?.context == context else { throw Failure.stale }
+        let statement = try model.statement(row:row,original:original)
+        let witness = NativeTableWitness(operation:original == nil ? .add : .edit,table:model.schema.name,
+            columns:model.columns.map(\.name),keyName:model.key.name,key:row[model.keyIndex],
+            expectedDigest:try Self.compositionDigest(row),schemaDigest:try Self.compositionDigest(model.schema.createSql))
+        return .init(context:context,statement:statement,witness:witness,row:row)
+    }
+
+    func previewNativeTable(_ change: NativeTableChange, stillCurrent: () -> Bool) async throws -> NativeTablePreview {
+        let (o, token) = try begin()
+        defer { finish(o, token) }
+        guard stillCurrent(), !hasBlockingPending, workspace?.context == change.context else { throw Failure.stale }
+        let p = CrewdDataPreviewParams(context:change.context,statements:[change.statement])
+        let preview: CrewdDataPreview = try await call("data.preview",p,preservingPresentation:true)
+        let creating = change.witness.operation == .create
+        guard stillCurrent(), current(o,token), workspace?.context == change.context,
+              preview.context == change.context, UUID(uuidString:preview.token)?.uuidString.lowercased() == preview.token,
+              try Self.compositionDigest(preview.statements) == Self.compositionDigest(p.statements),
+              preview.schemaChanged == creating, preview.affectedRows == (creating ? 0 : 1) else { throw Failure.invalid }
+        return .init(change:change,preview:preview,origin:o)
+    }
+
+    func confirmNativeTable(_ staged: NativeTablePreview, stillCurrent: () -> Bool) async throws -> NativeTableReadback? {
+        let (o, token) = try begin()
+        defer { finish(o, token) }
+        let context = staged.change.context
+        guard o == staged.origin, workspace?.context == context, stillCurrent(), !hasBlockingPending else { throw Failure.stale }
+        let ledger = try journal(), id = UUID()
+        let intent = Intent(id:id,context:context,method:"data.confirm",changeDigest:try Self.compositionDigest(staged.preview),
+                            nativeTable:staged.change.witness)
+        let record = try ledger.prepare(method:"data.submit.observation",params:Self.encode(intent),crew:o.crew)
+        records[id] = record; pending.append(intent)
+        let params = CrewdDataConfirmParams(requestId:id.uuidString.lowercased(),context:context,token:staged.preview.token)
+        let reply: CrewdDataChangeResult
+        do {
+            reply = try Self.decode(try await rpc("data.confirm",Self.encode(params)),CrewdDataChangeResult.self)
+        } catch let error as CrewdClientError where Self.definiteNativeRefusal(error) {
+            try ledger.finish(record,state:"refused")
+            if current(o,token) { try reconcilePending(o) }
+            throw error
+        }
+        guard origin() == o, stillCurrent(), !Task.isCancelled else { return nil }
+        try checkObservation(reply,intent:intent)
+        guard reply.phase == .committed else { return nil }
+        // An ordinary own data.changed can invalidate presentation before the reply.
+        // Read against the actual fresh Core context; durable evidence remains scoped to the original.
+        let fresh = try Self.decode(try await rpc("data.workspace.get",Self.encode(CrewdDataWorkspaceGetParams(crewId:o.crew))),CrewdDataWorkspaceInfo.self)
+        try checked(fresh.context,o)
+        let readback = try await verifyNativeTableReadback(reply,intent:intent,context:fresh.context,origin:o)
+        guard origin() == o, stillCurrent(), !Task.isCancelled else { return nil }
+        try observe(reply,intent:intent,record:record,ledger:ledger)
+        if current(o,token) { applyObservation(reply,intent:intent) }
+        return readback
+    }
+
+    private func verifyNativeTableReadback(_ receipt: CrewdDataChangeResult, intent: Intent, context: CrewdDataContext,
+                                           origin o: Origin) async throws -> NativeTableReadback {
+        try checkObservation(receipt,intent:intent)
+        guard let witness = intent.nativeTable, intent.method == "data.confirm", receipt.phase == .committed,
+              receipt.created.isEmpty, receipt.changed.isEmpty, receipt.conflicts.isEmpty,
+              receipt.snapshotId.flatMap(UUID.init(uuidString:)) != nil,
+              let before = UInt64(receipt.beforeGeneration), before < UInt64.max,
+              receipt.afterGeneration == String(before + 1), let actual = UInt64(context.generation), actual > before,
+              origin() == o, sameAuthority(intent.context,context) else { throw Failure.invalid }
+        let tableLookup = CrewdDataSql(sql:"SELECT sql FROM sqlite_schema WHERE type = 'table' AND name COLLATE BINARY = ? LIMIT 2",
+                                       params:[.text(value:witness.table)])
+        let statement: CrewdDataSql
+        if witness.operation == .create { statement = tableLookup }
+        else {
+            if context.generation != receipt.afterGeneration {
+                let currentTable: CrewdDataRows = try await call("data.query",
+                    CrewdDataQueryParams(context:context,statement:tableLookup,atRevision:nil,cursor:nil,limit:2),preservingPresentation:true)
+                guard origin() == o, currentTable.generation == context.generation, currentTable.columns == ["sql"],
+                      !currentTable.truncated, currentTable.next == nil, currentTable.rows.count <= 1 else { throw Failure.invalid }
+                if currentTable.rows.isEmpty { return .currentDiffers }
+                guard let row = currentTable.rows.first, row.count == 1, case .text(let sql) = row[0],
+                      let schemaDigest = witness.schemaDigest else { throw Failure.invalid }
+                if try Self.compositionDigest(sql) != schemaDigest { return .currentDiffers }
+            }
+            guard let keyName = witness.keyName, let key = witness.key else { throw Failure.invalid }
+            statement = try CrewdNativeTable.rowQuery(table:witness.table,columns:witness.columns,keyName:keyName,key:key)
+        }
+        let rows: CrewdDataRows = try await call("data.query",
+            CrewdDataQueryParams(context:context,statement:statement,atRevision:nil,cursor:nil,limit:2),preservingPresentation:true)
+        guard origin() == o, rows.generation == context.generation, !rows.truncated, rows.next == nil,
+              rows.rows.count <= 1 else { throw Failure.invalid }
+        let matches: Bool
+        if witness.operation == .create {
+            if rows.columns == ["sql"], let row = rows.rows.first, row.count == 1, case .text(let sql) = row[0] {
+                matches = try Self.compositionDigest(sql) == witness.expectedDigest
+            } else { matches = false }
+        } else {
+            guard rows.columns.map({Array($0.utf8)}) == witness.columns.map({Array($0.utf8)}) else { throw Failure.invalid }
+            if let row = rows.rows.first, row.count == witness.columns.count {
+                matches = try Self.compositionDigest(row) == witness.expectedDigest
+            } else { matches = false }
+        }
+        if matches { return .exact }
+        guard context.generation != receipt.afterGeneration else { throw Failure.invalid }
+        return .currentDiffers
+    }
+
     func loadSchema(after: String? = nil) async {
         await read { c in let value: CrewdDataSchemaResult = try await self.call("data.schema.get", CrewdDataSchemaParams(context:c, atRevision:nil, after:after, limit:50)); return { self.schema = value } }
     }
@@ -1439,12 +1633,30 @@ enum CrewdKnowledgeTitleSearch {
             return result
         }catch{status="原文档结果未确认；仅保留原UUID核对。";return nil}
     }
+    func lookupNativeTable(_ id: UUID, stillCurrent: () -> Bool) async throws -> NativeTableReadback? {
+        let (o, token) = try begin()
+        defer { finish(o, token) }
+        guard stillCurrent(), let intent = pending.first(where:{ $0.id == id && $0.nativeTable != nil }),
+              let record = records[id] else { throw Failure.invalid }
+        let ledger = try journal()
+        let read: CrewdDataRequestGetResult = try await call("data.request.get",
+            CrewdDataRequestGetParams(requestId:id.uuidString.lowercased(),context:intent.context),preservingPresentation:true)
+        try checked(read.workspace.context,o)
+        guard current(o,token), stillCurrent(), !Task.isCancelled else { return nil }
+        guard case .known(let original) = read.lookup, original.phase == .committed else { return nil }
+        let result = try await verifyNativeTableReadback(original,intent:intent,context:read.workspace.context,origin:o)
+        guard current(o,token), stillCurrent(), !Task.isCancelled else { return nil }
+        try observe(original,intent:intent,record:record,ledger:ledger)
+        applyObservation(original,intent:intent)
+        return result
+    }
+
     func lookup(_ id: UUID) async {
         let o: Origin, token: UUID
         do { (o,token) = try begin() } catch { return }
         defer { finish(o,token) }
         do {
-            guard let intent = pending.first(where:{$0.id == id}), let record = records[id], workspace != nil else { throw Failure.invalid }
+            guard let intent = pending.first(where:{$0.id == id && $0.nativeTable == nil}), let record = records[id], workspace != nil else { throw Failure.invalid }
             let ledger = try journal()
             let response: CrewdDataRequestGetResult = try await call("data.request.get", CrewdDataRequestGetParams(requestId:id.uuidString.lowercased(), context:intent.context))
             try checked(response.workspace.context,o)

@@ -20,6 +20,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "sqlite_knowledge/tables.rs"]
+mod tables;
+
 fn invalid(s: impl Into<String>) -> StoreError {
     StoreError::Invalid(s.into())
 }

@@ -274,6 +274,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             if state.data_runtime.get().is_some() {
                 capabilities.push("data".into());
                 capabilities.push("data.documentWorkLinks".into());
+                capabilities.push(crewd_proto::team_data_api::TABLE_KEYSET_CAPABILITY.into());
             }
             if state.management.get().is_some() {
                 capabilities.push("lifecycle.management".into());
