@@ -401,15 +401,7 @@ fn lifecycle_event_claim(s: &mut Store, session: &str, kind: crate::wakes::WakeK
     (c, id)
 }
 fn lifecycle_db(s: &Store) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
-    let mut q = s.conn().prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").unwrap();
-    let names = q.query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
-    names.into_iter().map(|name| {
-        let quoted = name.replace('"', "\"\"");
-        let mut rows = s.conn().prepare(&format!("SELECT * FROM \"{quoted}\" ORDER BY rowid")).unwrap();
-        let columns = rows.column_count();
-        let values = rows.query_map([], |r| (0..columns).map(|i| r.get::<_, rusqlite::types::Value>(i)).collect::<rusqlite::Result<Vec<_>>>()).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
-        (name, values)
-    }).collect()
+    crate::testkit::database_snapshot(s)
 }
 struct LifecycleHistory {
     doomed: Message, foreign: Message, descendant: Message,

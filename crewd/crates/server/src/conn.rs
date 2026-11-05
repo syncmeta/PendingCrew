@@ -1044,7 +1044,6 @@ async fn request_step(
         Ok(req) => {
             #[cfg(any(test, feature = "testkit"))]
             s5_poll_fault(state, req.id).await;
-            let id = req.id;
             let is_hello = req.method == methods::HELLO;
             let mut response = crate::dispatch::handle(state, req).await;
             if is_hello
@@ -1057,28 +1056,27 @@ async fn request_step(
                     serde_json::to_value(&principal.binding).expect("finite authenticated binding"),
                 );
             }
-            #[cfg(test)]
-            {
-                let armed = {
-                    let mut fault = state.s5_after_route_fault.lock().unwrap();
-                    if *fault == Some(id) {
-                        fault.take();
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if armed {
-                    // Actual route completed first; no fabricated commit, retry or rollback.
-                    tokio::task::yield_now().await;
-                    panic!("S5 owned after-route fault");
-                }
-            }
-            #[cfg(not(test))]
-            let _ = id;
             ServerFrame::Response(response)
         }
     };
+    #[cfg(test)]
+    if let ServerFrame::Response(response) = &frame {
+        let armed = {
+            let mut fault = state.s5_after_route_fault.lock().unwrap();
+            if *fault == Some(response.id) {
+                fault.take();
+                true
+            } else {
+                false
+            }
+        };
+        if armed {
+            // Every completed route is covered, including protected Human message.post.
+            // Actual route completed first; no fabricated commit, retry or rollback.
+            tokio::task::yield_now().await;
+            panic!("S5 owned after-route fault");
+        }
+    }
     RequestStep::Reply(frame)
 }
 

@@ -886,36 +886,7 @@ mod tests {
     fn relay_transaction_snapshot(
         s: &crewd_store::Store,
     ) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
-        let mut tables = s
-            .conn()
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            .unwrap();
-        let names = tables
-            .query_map([], |r| r.get::<_, String>(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        names
-            .into_iter()
-            .map(|name| {
-                let quoted = name.replace('"', "\"\"");
-                let mut st = s
-                    .conn()
-                    .prepare(&format!("SELECT * FROM \"{quoted}\" ORDER BY rowid"))
-                    .unwrap();
-                let columns = st.column_count();
-                let rows = st
-                    .query_map([], |r| {
-                        (0..columns)
-                            .map(|i| r.get::<_, rusqlite::types::Value>(i))
-                            .collect::<rusqlite::Result<Vec<_>>>()
-                    })
-                    .unwrap()
-                    .collect::<rusqlite::Result<Vec<_>>>()
-                    .unwrap();
-                (name, rows)
-            })
-            .collect()
+        crate::testkit::database_snapshot(s)
     }
 
     fn assert_real_relay_marker(s: &crewd_store::Store, id: &str, source: &str) {

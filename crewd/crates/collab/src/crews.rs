@@ -3190,36 +3190,7 @@ mod tests {
     fn provenance_purge_snapshot(
         s: &crewd_store::Store,
     ) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
-        let mut st = s
-            .conn()
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-            .unwrap();
-        let names = st
-            .query_map([], |r| r.get::<_, String>(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        names
-            .into_iter()
-            .map(|name| {
-                let quoted = name.replace('"', "\"\"");
-                let mut rows = s
-                    .conn()
-                    .prepare(&format!("SELECT * FROM \"{quoted}\" ORDER BY rowid"))
-                    .unwrap();
-                let columns = rows.column_count();
-                let values = rows
-                    .query_map([], |r| {
-                        (0..columns)
-                            .map(|i| r.get::<_, rusqlite::types::Value>(i))
-                            .collect::<rusqlite::Result<Vec<_>>>()
-                    })
-                    .unwrap()
-                    .collect::<rusqlite::Result<Vec<_>>>()
-                    .unwrap();
-                (name, values)
-            })
-            .collect()
+        crate::testkit::database_snapshot(s)
     }
 
     // Synthetic cleanup fixture only: Stop does not currently relay into a DM. Manually seeding a

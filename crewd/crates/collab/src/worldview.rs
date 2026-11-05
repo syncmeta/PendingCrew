@@ -1068,25 +1068,59 @@ mod tests {
     /// §24.2 / N1: @ only decides who is woken (no narrowing, no `broadcast` kind), and the single-root
     /// model is gone (human channels belong to the home, i.e. the top-level crew). Nothing an agent
     /// reads may still teach the old shapes.
+    fn retired_organization_term(text: &str) -> Option<&'static str> {
+        let low = text.to_lowercase();
+        [
+            "broadcast",
+            "visibility — only the named",
+            "——只有被点到的",
+            "根机组",
+            "root crew",
+            "内建机组",
+            "内建的机组",
+            "built-in crew",
+            "chief crew",
+        ]
+        .into_iter()
+        .find(|term| low.contains(term))
+    }
+
     #[test]
     fn nothing_the_agent_reads_teaches_narrowing_broadcast_or_a_root_crew() {
-        for (what, t) in &agent_texts() {
-            let low = t.to_lowercase();
-            for gone in [
-                "broadcast",
-                "visibility — only the named",
-                "——只有被点到的",
-                "根机组",
-                "root crew",
-                "内建",
-                "built-in",
-                "chief crew",
-            ] {
-                assert!(!low.contains(gone), "{what} still says {gone:?}");
-            }
+        for (what, text) in &agent_texts() {
+            assert_eq!(
+                retired_organization_term(text),
+                None,
+                "{what} teaches a retired organization term"
+            );
         }
     }
 
+    #[test]
+    fn retired_organization_terms_do_not_confuse_creating_tables_with_builtin_crews() {
+        for text in [
+            "在你当前有效的机组内建表、加行",
+            "Use a built-in integer type",
+        ] {
+            assert_eq!(retired_organization_term(text), None, "{text}");
+        }
+        for text in [
+            "broadcast",
+            "visibility — only the named",
+            "——只有被点到的",
+            "根机组",
+            "ROOT CREW",
+            "内建机组",
+            "内建的机组",
+            "built-in crew",
+            "chief crew",
+        ] {
+            assert!(
+                retired_organization_term(text).is_some(),
+                "missed retired term: {text}"
+            );
+        }
+    }
     /// PM: no auto-sort, no approvals, no narrowing in the world model (S84).
     #[test]
     fn the_world_model_does_not_mention_sorting_or_narrowing() {

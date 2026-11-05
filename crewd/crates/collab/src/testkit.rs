@@ -204,3 +204,134 @@ pub fn public_ask(s: &crewd_store::Store, core: &str) -> String {
     .unwrap();
     format!("H{}", r.number)
 }
+
+/// Full typed row snapshot, including accessible hidden row identity on ordinary tables.
+/// WITHOUT ROWID tables have their primary key in `*`; neither kind relies on scan order.
+pub(crate) fn database_snapshot(s: &Store) -> Vec<(String, Vec<Vec<rusqlite::types::Value>>)> {
+    let c = s.conn();
+    let mut q = c
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap();
+    let names = q
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    names
+        .into_iter()
+        .map(|name| {
+            let without_rowid: bool = c
+                .query_row(
+                    "SELECT wr FROM pragma_table_list WHERE schema='main' AND name=?1",
+                    [&name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let mut columns = c
+                .prepare("SELECT name FROM pragma_table_xinfo(?1)")
+                .unwrap();
+            let columns = columns
+                .query_map([&name], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            let rowid = (!without_rowid)
+                .then(|| {
+                    ["rowid", "_rowid_", "oid"]
+                        .into_iter()
+                        .find(|alias| !columns.iter().any(|name| name.eq_ignore_ascii_case(alias)))
+                })
+                .flatten();
+            let prefix = rowid.map(|alias| format!("{alias}, ")).unwrap_or_default();
+            let quoted = name.replace('"', "\"\"");
+            let mut q = c
+                .prepare(&format!("SELECT {prefix}* FROM \"{quoted}\""))
+                .unwrap();
+            let n = q.column_count();
+            let mut rows = q
+                .query_map([], |r| {
+                    (0..n)
+                        .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            rows.sort_by_cached_key(|r| format!("{r:?}"));
+            (name, rows)
+        })
+        .collect()
+}
+
+#[test]
+fn full_snapshot_preserves_row_identity_types_duplicates_and_without_rowid_tables() {
+    use rusqlite::types::Value;
+    let s = store();
+    s.conn().execute_batch(
+        "CREATE TABLE snapshot_rows(value);
+         INSERT INTO snapshot_rows(rowid,value) VALUES(8,NULL),(9,7),(10,7.0),(11,'7'),(12,X'37'),(13,'duplicate'),(14,'duplicate');
+         CREATE TABLE snapshot_keys(a TEXT,b INTEGER,value,PRIMARY KEY(a,b)) WITHOUT ROWID;
+         INSERT INTO snapshot_keys VALUES('b',2,NULL),('a',1,X'00FF');"
+    ).unwrap();
+    let before = database_snapshot(&s);
+    let ordinary = &before
+        .iter()
+        .find(|(name, _)| name == "snapshot_rows")
+        .unwrap()
+        .1;
+    assert_eq!(ordinary.len(), 7);
+    for value in [
+        Value::Null,
+        Value::Integer(7),
+        Value::Real(7.0),
+        Value::Text("7".into()),
+        Value::Blob(vec![0x37]),
+    ] {
+        assert!(
+            ordinary.iter().any(|row| row[1] == value),
+            "missing {value:?}"
+        );
+    }
+    assert_eq!(
+        ordinary
+            .iter()
+            .filter(|row| row[1] == Value::Text("duplicate".into()))
+            .count(),
+        2
+    );
+    let keyed = &before
+        .iter()
+        .find(|(name, _)| name == "snapshot_keys")
+        .unwrap()
+        .1;
+    assert_eq!(keyed.len(), 2);
+    assert_eq!(
+        keyed[0],
+        vec![
+            Value::Text("a".into()),
+            Value::Integer(1),
+            Value::Blob(vec![0, 255])
+        ]
+    );
+    // Same complete rows in a different insertion order remain equal.
+    s.conn().execute_batch("DELETE FROM snapshot_keys; INSERT INTO snapshot_keys VALUES('a',1,X'00FF'),('b',2,NULL);").unwrap();
+    assert_eq!(database_snapshot(&s), before);
+    // A lost duplicate, changed SQLite type, changed hidden identity or keyed value is visible.
+    for sql in [
+        "DELETE FROM snapshot_rows WHERE rowid=14",
+        "UPDATE snapshot_rows SET value='7' WHERE rowid=9",
+        "UPDATE snapshot_rows SET rowid=15 WHERE rowid=8",
+        "UPDATE snapshot_keys SET value=X'01FF' WHERE a='a'",
+        "UPDATE snapshot_keys SET a='new-key' WHERE a='a'",
+    ] {
+        s.conn()
+            .execute_batch("SAVEPOINT snapshot_mutation")
+            .unwrap();
+        s.conn().execute_batch(sql).unwrap();
+        assert_ne!(database_snapshot(&s), before, "missed mutation: {sql}");
+        s.conn()
+            .execute_batch("ROLLBACK TO snapshot_mutation; RELEASE snapshot_mutation")
+            .unwrap();
+        assert_eq!(database_snapshot(&s), before);
+    }
+}
