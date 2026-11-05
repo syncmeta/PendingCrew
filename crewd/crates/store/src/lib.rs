@@ -12,6 +12,7 @@ pub mod enrollment;
 pub mod fsutil;
 pub mod judgment_state;
 pub mod knowledge_channels;
+pub mod knowledge_purge;
 pub mod local_clients;
 pub mod message_evidence;
 pub mod messages;
@@ -368,6 +369,8 @@ impl Store {
                 Some(format!("{ID_FILE} 还在"))
             } else if backup::has_backups(&dir.join(backup::BACKUPS_DIR))? {
                 Some("backups/ 里有备份".to_string())
+            } else if knowledge_purge::has_recovery_material(dir)? {
+                Some("机组永久删除仍有安全快照或待核对的原操作".to_string())
             } else {
                 None
             };

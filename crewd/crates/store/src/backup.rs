@@ -536,6 +536,7 @@ fn tick_inner(
         report
             .removed
             .extend(expire_pre_delete(&dir, now_ms, policy)?);
+        report.removed.extend(crate::knowledge_purge::expire_completed(&dir, now_ms, policy)?);
     }
     Ok(report)
 }

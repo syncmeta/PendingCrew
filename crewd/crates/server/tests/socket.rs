@@ -1430,3 +1430,111 @@ async fn host_directory_browse_real_socket_is_read_only_and_preserves_paths() {
     assert_eq!(crew["workingDirectory"], chosen);
     stop.send(()).unwrap();
 }
+
+#[tokio::test]
+async fn crew_purge_preserves_one_verified_pair_and_removes_only_its_live_knowledge() {
+    let dir = tempfile::tempdir().unwrap();
+    let stop = start(dir.path()).await;
+    let mut c = Client::connect(dir.path()).await;
+    let mut crew = Vec::new();
+    for (request, title) in [(1, "Purge source"), (5, "Unchanged neighbor")] {
+        let id = c
+            .call(
+                request,
+                "crew.create",
+                json!({"title":title,"workingDirectory":dir.path()}),
+            )
+            .await["id"]
+            .clone();
+        let initial = c
+            .call(request + 1, "data.workspace.get", json!({"crewId":id}))
+            .await;
+        assert_eq!(initial["state"], "uninitialized");
+        let preview = c.call(request + 2, "data.preview", json!({
+            "context":initial["context"],
+            "statements":[
+                {"sql":"CREATE TABLE crew_rows(id INTEGER PRIMARY KEY, title TEXT NOT NULL)","params":[]},
+                {"sql":"INSERT INTO crew_rows VALUES(1, 'retained evidence')","params":[]}
+            ]
+        })).await;
+        let saved = c.call(request + 3, "data.confirm", json!({
+            "requestId":uuid::Uuid::new_v4().to_string(),"context":initial["context"],"token":preview["token"]
+        })).await;
+        assert_eq!(saved["phase"], "committed");
+        crew.push((id, saved["context"].clone()));
+    }
+    let (source, context) = &crew[0];
+    let root = dir.path().join("knowledge");
+    let active =
+        |context: &Value| root.join(format!("{}.sqlite", context["namespace"].as_str().unwrap()));
+    let history = root.join(format!(
+        "{}-snapshots",
+        context["namespace"].as_str().unwrap()
+    ));
+    let source_db = active(context);
+    let neighbor = active(&crew[1].1);
+    let original_neighbor = std::fs::read(&neighbor).unwrap();
+    c.call(10, "crew.remove", json!({"crewId":source})).await;
+    let read = json!({"context":context,"statement":{"sql":"SELECT title FROM crew_rows","params":[]},"atRevision":null,"cursor":null,"limit":10});
+    let before = c.call(11, "data.query", read.clone()).await;
+    assert_eq!(before["rows"].as_array().unwrap().len(), 1);
+    assert!(
+        c.call_err(
+            12,
+            "data.preview",
+            json!({"context":context,"statements":[{"sql":"DELETE FROM crew_rows","params":[]}]})
+        )
+        .await
+            != 0
+    );
+    c.call(13, "crew.restore", json!({"crewId":source})).await;
+    assert_eq!(c.call(14, "data.query", read).await, before);
+    c.call(15, "crew.remove", json!({"crewId":source})).await;
+    assert_eq!(
+        c.call(16, "crew.purge", json!({"crewId":source})).await,
+        json!({})
+    );
+    assert_eq!(
+        c.call_err(17, "crew.get", json!({"crewId":source})).await,
+        crewd_proto::RpcError::NOT_FOUND
+    );
+    assert!(!source_db.exists() && !history.exists());
+    assert_eq!(std::fs::read(neighbor).unwrap(), original_neighbor);
+
+    let base = dir.path().join("backups").join("crew-purge-v1");
+    let paths: Vec<_> = std::fs::read_dir(base)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(paths.len(), 1);
+    let pair = &paths[0];
+    assert!(pair.join("completed.json").is_file());
+    let saved = rusqlite::Connection::open_with_flags(
+        pair.join("knowledge.sqlite"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        saved
+            .query_row("SELECT title FROM crew_rows WHERE id=1", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "retained evidence"
+    );
+    assert_eq!(std::fs::read_dir(pair.join("history")).unwrap().count(), 1);
+    let core = rusqlite::Connection::open_with_flags(
+        pair.join("core.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        core.query_row(
+            "SELECT count(*) FROM crews WHERE id=?1",
+            [source.as_str().unwrap()],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    stop.send(()).unwrap();
+}

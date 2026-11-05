@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::Read,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -123,6 +124,10 @@ pub fn private_dir(path: &Path) -> Result<()> {
 }
 fn private_file(path: &Path) -> Result<()> {
     let m = std::fs::symlink_metadata(path)?;
+    check_private_file(&m)
+}
+
+fn check_private_file(m: &std::fs::Metadata) -> Result<()> {
     if !m.is_file()
         || m.nlink() != 1
         || m.uid() != unsafe { libc::geteuid() }
@@ -131,6 +136,80 @@ fn private_file(path: &Path) -> Result<()> {
         return Err(invalid("private non-aliased knowledge file required"));
     }
     Ok(())
+}
+
+// Older read-only restores could leave a zero-byte WAL and its empty index.
+// Accept only that known SQLite state, so an immutable read cannot skip data.
+pub(crate) fn legacy_snapshot_sidecars(path: &Path) -> Result<bool> {
+    let sidecar = |suffix| -> Result<Option<(PathBuf, std::fs::Metadata)>> {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        let name = PathBuf::from(name);
+        match std::fs::symlink_metadata(&name) {
+            Ok(metadata) => {
+                check_private_file(&metadata)?;
+                Ok(Some((name, metadata)))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    };
+    if sidecar("-journal")?.is_some() {
+        return Err(invalid("recovery snapshot has a rollback journal"));
+    }
+    let wal = sidecar("-wal")?;
+    let shm = sidecar("-shm")?;
+    match (wal, shm) {
+        (None, None) => Ok(false),
+        (Some((_, wal)), Some((shm_path, shm))) if wal.len() == 0 && shm.len() == 32768 => {
+            let mut db_header = [0; 20];
+            std::fs::File::open(path)?.read_exact(&mut db_header)?;
+            let mut index = Vec::with_capacity(32768);
+            std::fs::File::open(shm_path)?
+                .take(32769)
+                .read_to_end(&mut index)?;
+            if &db_header[..16] != b"SQLite format 3\0"
+                || db_header[18..20] != [2, 2]
+                || !empty_wal_index(&index)
+            {
+                return Err(invalid("recovery snapshot has an unknown SQLite index"));
+            }
+            Ok(true)
+        }
+        _ => Err(invalid("recovery snapshot has unverified SQLite sidecars")),
+    }
+}
+
+fn empty_wal_index(index: &[u8]) -> bool {
+    // SQLite's first index region has duplicate 48-byte headers and five
+    // reader marks. Only reader zero is initialized when there are no frames.
+    let mut header = [0u8; 48];
+    header[..4].copy_from_slice(&3_007_000u32.to_ne_bytes());
+    header[12] = 1;
+    let (mut s0, mut s1) = (0u32, 0u32);
+    for pair in header[..40].chunks_exact(8) {
+        let first = u32::from_ne_bytes(pair[..4].try_into().unwrap());
+        let second = u32::from_ne_bytes(pair[4..].try_into().unwrap());
+        s0 = s0.wrapping_add(first).wrapping_add(s1);
+        s1 = s1.wrapping_add(second).wrapping_add(s0);
+    }
+    header[40..44].copy_from_slice(&s0.to_ne_bytes());
+    header[44..48].copy_from_slice(&s1.to_ne_bytes());
+    index.len() == 32768
+        && index[..48] == header
+        && index[48..96] == header
+        && index[96..104] == [0; 8]
+        && index[104..120] == [0xff; 16]
+        && index[120..].iter().all(|byte| *byte == 0)
+}
+
+pub(crate) fn open_recovery_snapshot(path: &Path) -> Result<Connection> {
+    private_file(path)?;
+    legacy_snapshot_sidecars(path)?;
+    Ok(Connection::open_with_flags(
+        crate::file_uri(path, "immutable=1"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )?)
 }
 pub fn object_fields(o: &DataObject) -> (&str, &str, &str, bool) {
     match o {
@@ -730,9 +809,7 @@ impl Knowledge {
         let path = self
             .snapshots_dir()?
             .join(format!("{}.sqlite", p.snapshot_id));
-        private_file(&path)?;
-        let source =
-            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let source = open_recovery_snapshot(&path)?;
         let ok: String = source.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
         if ok != "ok" {
             return Err(invalid("recovery snapshot failed integrity check"));

@@ -13,6 +13,7 @@ mod codex_inputs;
 pub(crate) mod conn;
 mod connection_scope;
 pub mod control;
+mod crew_lifecycle;
 pub mod dispatch;
 mod group_knowledge;
 pub mod host_admin;
@@ -165,33 +166,6 @@ impl AppState {
                         .map_err(crewd_store::StoreError::Io)?;
                 }
                 hub.emit(s.conn(), &changes);
-                Ok(v)
-            })
-            .await
-            .map_err(crewd_collab::CollabError::from)?
-    }
-}
-
-impl AppState {
-    /// 和 `collab` 一样，但先拍 pre-delete 快照（N4 / S22）：快照与事务在**同一个**库线程任务里，中间插不进
-    /// 别的写；快照拍不成就返回存储错误，`f` 不跑。给永久删除用。
-    /// `check` 是只读的前置条件，先于快照跑：删不了（没有、不准、冲突）就不拍整库快照（复审 2 轮 1）。
-    pub async fn collab_after_snapshot<T: Send + 'static>(
-        &self,
-        what: String,
-        check: impl FnOnce(&rusqlite::Connection) -> crewd_collab::Result<()> + Send + 'static,
-        f: impl FnOnce(&mut crewd_collab::Tx<'_>) -> crewd_collab::Result<T> + Send + 'static,
-    ) -> crewd_collab::Result<T> {
-        let hub = self.hub.clone();
-        let context = crewd_collab::TxContext::new(self.causal_fence.clone());
-        self.db
-            .call_result(move |s| {
-                let (v, _snapshot) = s.snapshot_then(&what, check, |s| {
-                    let now = crewd_store::now_ms();
-                    let (v, changes) = crewd_collab::run_with_context(s, now, context, f)?;
-                    hub.emit(s.conn(), &changes);
-                    Ok::<T, crewd_collab::CollabError>(v)
-                })?;
                 Ok(v)
             })
             .await
@@ -467,6 +441,7 @@ async fn serve_with_hooks_inner(
         ensure_data_dir(o.runtime_dir.as_deref().unwrap_or(&data_dir.join("run")))?;
     }
     let mut store = Store::open_data_dir(&data_dir)?;
+    crewd_store::knowledge_purge::recover(&store, &std::fs::canonicalize(&data_dir)?)?;
     let previous_clean =
         crewd_store::meta_get(store.conn(), "lifecycle.clean")?.as_deref() != Some("false");
     crewd_store::meta_set(store.conn(), "lifecycle.clean", "false")?;
