@@ -13,7 +13,7 @@ use crewd_proto::{
     },
     orchestra::WakePriorityView,
 };
-use crewd_store::{StoreError, judgment_state};
+use crewd_store::{StoreError, message_evidence::Authority};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -100,13 +100,6 @@ fn key(id: &str) -> String {
     format!("{PREFIX}{id}")
 }
 
-fn authority(c: &Connection) -> Result<(String, String)> {
-    Ok((
-        crewd_store::meta_get(c, "dbId")?.unwrap_or_default(),
-        judgment_state::epoch(c)?,
-    ))
-}
-
 fn load(
     c: &Connection,
     message: &str,
@@ -189,14 +182,15 @@ pub(crate) fn record_post(
 ) -> Result<()> {
     let c = tx.conn();
     optional_write(c, || {
-        let (database, epoch) = authority(c)?;
+        let authority = Authority::load(c)?;
+        let (database, epoch) = authority.current().ok_or_else(invalid)?;
         let mut trace = new_trace(
             &message.id,
             &message.channel_id,
             crew.into(),
             message.seq,
-            database,
-            epoch,
+            database.into(),
+            epoch.into(),
         );
         trace.direct = Some(Direct {
             explicit,
@@ -234,11 +228,14 @@ fn with_trace(
     let Some(crew) = crew else {
         return Ok(());
     };
-    let (database, epoch) = authority(c)?;
+    let authority = Authority::load(c)?;
+    let (database, epoch) = authority.current().ok_or_else(invalid)?;
     let mut trace = load(c, message, channel, &crew, seq)?
-        .filter(|trace| trace.database == database && trace.epoch == epoch)
-        .unwrap_or_else(|| new_trace(message, channel, crew, seq, database, epoch));
+        .filter(|trace| authority.matches(&trace.database, &trace.epoch))
+        .unwrap_or_else(|| new_trace(message, channel, crew, seq, database.into(), epoch.into()));
     if update(&mut trace) {
+        // Only a real new routing observation can reseal qualified legacy evidence.
+        trace.epoch = epoch.into();
         save(c, trace)?;
     }
     Ok(())
@@ -390,8 +387,7 @@ pub fn read(c: &Connection, by: &Sender, p: MessageDeliveryParams) -> Result<Mes
     let Some(trace) = trace else {
         return Ok(view);
     };
-    let (database, epoch) = authority(c)?;
-    if trace.database != database || trace.epoch != epoch {
+    if !Authority::load(c)?.matches(&trace.database, &trace.epoch) {
         return Ok(view);
     }
     if trace.items.is_empty() {
@@ -452,6 +448,15 @@ mod tests {
     };
     use crewd_proto::{Message, Role, Session};
     use crewd_store::Store;
+
+    fn rotate_restore_stamp(s: &Store) {
+        crewd_store::meta_set(
+            s.conn(),
+            "personalDraft.restoreStamp.v1",
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+    }
 
     fn post(
         s: &mut Store,
@@ -569,7 +574,7 @@ mod tests {
         let pruned = observation(&s, &m);
         assert_eq!(pruned.items[0].state, State::Unknown);
         assert_eq!(pruned.items[0].reasons, row.reasons);
-        judgment_state::restored(s.conn()).unwrap();
+        rotate_restore_stamp(&s);
         assert_eq!(observation(&s, &m).routing, Routing::Unknown);
     }
 
@@ -631,6 +636,100 @@ mod tests {
             observation(&s, &old).items[0].reasons,
             [Reason::DirectedUnknown]
         );
+    }
+
+    #[test]
+    fn routed_and_no_target_evidence_survive_only_their_real_restore_cut() {
+        use crewd_store::{judgment_state, message_evidence, remote};
+        let mut s = store();
+        let initially_stale = post(&mut s, Sender::Human, None, vec![]);
+        ok(&mut s, |tx| {
+            no_targets(
+                tx,
+                &initially_stale.id,
+                &initially_stale.channel_id,
+                initially_stale.seq,
+            )
+        });
+        let old_epoch = judgment_state::epoch(s.conn()).unwrap();
+        let as_legacy = |s: &Store, m: &Message, epoch: &str| {
+            let mut trace = load(s.conn(), &m.id, &m.channel_id, "crew-a", m.seq)
+                .unwrap()
+                .unwrap();
+            trace.epoch = epoch.into();
+            save(s.conn(), trace).unwrap();
+        };
+        as_legacy(&s, &initially_stale, &old_epoch);
+
+        assert!(
+            s.with_tx(|c| remote::configure(c, 1, false, "127.0.0.1", 7423))
+                .unwrap()
+        );
+        let exact = judgment_state::epoch(s.conn()).unwrap();
+        assert_ne!(old_epoch, exact);
+        let routed = post(&mut s, Sender::Human, None, vec![]);
+        let empty = post(&mut s, Sender::Human, None, vec![]);
+        recorded(
+            &mut s,
+            &routed,
+            "w-a1",
+            Path::Live,
+            vec![Reason::ExplicitMention],
+        );
+        ok(&mut s, |tx| {
+            no_targets(tx, &empty.id, &empty.channel_id, empty.seq)
+        });
+        as_legacy(&s, &routed, &exact);
+        as_legacy(&s, &empty, &exact);
+        assert_eq!(observation(&s, &routed).routing, Routing::Unknown);
+        s.with_tx(|tx| message_evidence::capture_legacy(tx))
+            .unwrap();
+        assert_eq!(observation(&s, &initially_stale).routing, Routing::Unknown);
+        let routed_before = observation(&s, &routed);
+        let empty_before = observation(&s, &empty);
+        assert_eq!(routed_before.items[0].state, State::Queued);
+        assert_eq!(empty_before.routing, Routing::NoEligibleTarget);
+
+        assert!(
+            s.with_tx(|c| remote::configure(c, 2, false, "127.0.0.1", 7424))
+                .unwrap()
+        );
+        s.with_tx(|c| judgment_state::prepare_configuration(c))
+            .unwrap();
+        assert_eq!(observation(&s, &routed), routed_before);
+        assert_eq!(observation(&s, &empty), empty_before);
+        assert_eq!(observation(&s, &initially_stale).routing, Routing::Unknown);
+        recorded(
+            &mut s,
+            &routed,
+            "w-a2",
+            Path::Backlog,
+            vec![Reason::Subscription],
+        );
+        let current = observation(&s, &routed);
+        assert_eq!(current.items.len(), 2);
+        assert_eq!(current.items[0], routed_before.items[0]);
+        let stored = load(
+            s.conn(),
+            &routed.id,
+            &routed.channel_id,
+            "crew-a",
+            routed.seq,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(stored.epoch.starts_with("restore-v1:"));
+
+        crewd_store::meta_set(
+            s.conn(),
+            "personalDraft.restoreStamp.v1",
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap();
+        s.with_tx(|tx| message_evidence::capture_legacy(tx))
+            .unwrap();
+        assert_eq!(observation(&s, &routed).routing, Routing::Unknown);
+        assert_eq!(observation(&s, &empty).routing, Routing::Unknown);
     }
 
     #[test]

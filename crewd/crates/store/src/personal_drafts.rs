@@ -5,7 +5,7 @@ use crewd_proto::{commands::PublicCommand, personal_drafts::*};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 const KEY: &str = "personalDraft.spaces.v1";
-const RESTORE_KEY: &str = "personalDraft.restoreStamp.v1";
+pub(crate) const RESTORE_KEY: &str = "personalDraft.restoreStamp.v1";
 /// Initialized only by the protected schema transaction; never by a read.
 #[cfg(test)]
 pub(crate) fn initialize(c: &Connection) -> Result<()> {

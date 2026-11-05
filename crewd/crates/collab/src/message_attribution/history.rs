@@ -1,5 +1,5 @@
 //! Read-only verification and scope projection for the original v1 correction journal.
-use super::{AUDIT_PREFIX, Saved, db, invalid, key};
+use super::{AUDIT_PREFIX, Saved, invalid, key};
 use crate::{
     CollabError, Result, Sender, asks, judgments,
     refusal::{Code, Refusal},
@@ -15,7 +15,8 @@ use crewd_proto::{
     },
 };
 use crewd_store::{
-    StoreError, judgment_state,
+    StoreError,
+    message_evidence::Authority,
     object_refs::{self, ObjectKind},
     work_organization,
 };
@@ -306,17 +307,15 @@ pub fn read(c: &Connection, by: &Sender, p: Params) -> Result<Page> {
         .ok_or_else(bad)?;
 
     let root: Option<Saved> = read_record(c, &key(&p.message_id))?;
-    let current_db = db(c)?;
-    let epoch = judgment_state::epoch(c)?;
+    let authority = Authority::load(c)?;
     let cursor = |index: usize| -> Result<String> {
         let proof = judgments::fingerprint(&(
-            "message-attribution-history-v1",
+            "message-attribution-history-restore-v1",
             &p.crew_id,
             &p.channel_id,
             &p.message_id,
             seq,
-            &current_db,
-            &epoch,
+            authority.fingerprint(),
             &root,
             index,
         ))?;
@@ -375,7 +374,7 @@ pub fn read(c: &Connection, by: &Sender, p: Params) -> Result<Page> {
         }
         if index >= start {
             items.push(Item {
-                historical: row.after.db != current_db || row.after.epoch != epoch,
+                historical: !authority.matches(&row.after.db, &row.after.epoch),
                 action: row.action,
                 at_ms: row.at_ms,
                 before: projection.value(row.before.as_ref())?,
@@ -487,7 +486,7 @@ mod tests {
         };
         change(&mut s, &m, AttributionAction::Set, Some(link), NOW + 10);
         change(&mut s, &m, AttributionAction::Clear, None, NOW + 10);
-        judgment_state::restored(s.conn()).unwrap();
+        super::super::rotate_restore_stamp(s.conn());
         change(&mut s, &m, AttributionAction::Reset, None, NOW);
         let before = s.conn().total_changes();
         let history = read(s.conn(), &Sender::Human, p.clone()).unwrap();
@@ -550,6 +549,105 @@ mod tests {
         let redacted = read(s.conn(), &Sender::Human, p).unwrap();
         let old = redacted.items[2].after.as_ref().unwrap();
         assert!(old.target_unavailable && old.target.is_none());
+    }
+
+    #[test]
+    fn qualified_legacy_and_new_corrections_survive_normal_settings_and_keep_a_cursor() {
+        use crewd_store::{judgment_state, message_evidence, remote};
+        let mut s = store();
+        let m = post(&mut s, "source");
+        let legacy = judgment_state::epoch(s.conn()).unwrap();
+        let query = MessageAttributionGet {
+            crew_id: "crew-a".into(),
+            message_id: m.id.clone(),
+            target: None,
+        };
+        change(&mut s, &m, AttributionAction::Clear, None, NOW);
+        let mut legacy_head = read_record::<Saved>(s.conn(), &key(&m.id))
+            .unwrap()
+            .unwrap();
+        let audit_key = format!("{AUDIT_PREFIX}{}:{}", m.id, legacy_head.revision);
+        legacy_head.epoch = legacy.clone();
+        meta_set(
+            s.conn(),
+            &key(&m.id),
+            &serde_json::to_string(&legacy_head).unwrap(),
+        )
+        .unwrap();
+        let raw = meta_get(s.conn(), &audit_key).unwrap().unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        json["after"]["epoch"] = legacy.into();
+        meta_set(s.conn(), &audit_key, &serde_json::to_string(&json).unwrap()).unwrap();
+        assert_eq!(
+            get(s.conn(), &Sender::Human, query.clone()).unwrap().source,
+            crewd_proto::message_attribution::AttributionSource::Stale
+        );
+        s.with_tx(|tx| message_evidence::capture_legacy(tx))
+            .unwrap();
+        let legacy_current = get(s.conn(), &Sender::Human, query.clone()).unwrap();
+        assert_eq!(
+            legacy_current.source,
+            crewd_proto::message_attribution::AttributionSource::Human
+        );
+        assert!(
+            s.with_tx(|c| remote::configure(c, 1, false, "127.0.0.1", 7423))
+                .unwrap()
+        );
+        assert_eq!(
+            get(s.conn(), &Sender::Human, query.clone()).unwrap(),
+            legacy_current
+        );
+        for i in 0..20 {
+            change(
+                &mut s,
+                &m,
+                if i % 2 == 0 {
+                    AttributionAction::Reset
+                } else {
+                    AttributionAction::Clear
+                },
+                None,
+                NOW + i,
+            );
+        }
+        let current = get(s.conn(), &Sender::Human, query.clone()).unwrap();
+        let first = read(s.conn(), &Sender::Human, scope(&m)).unwrap();
+        let older = Params {
+            cursor: first.next_cursor.clone(),
+            ..scope(&m)
+        };
+        let last = read(s.conn(), &Sender::Human, older.clone()).unwrap();
+        assert_eq!(last.items.len(), 1);
+        assert!(!last.items[0].historical);
+        s.with_tx(|c| judgment_state::prepare_configuration(c))
+            .unwrap();
+        assert!(
+            s.with_tx(|c| remote::configure(c, 2, false, "127.0.0.1", 7424))
+                .unwrap()
+        );
+        assert_eq!(
+            get(s.conn(), &Sender::Human, query.clone()).unwrap(),
+            current
+        );
+        assert_eq!(read(s.conn(), &Sender::Human, scope(&m)).unwrap(), first);
+        assert_eq!(read(s.conn(), &Sender::Human, older.clone()).unwrap(), last);
+
+        super::super::rotate_restore_stamp(s.conn());
+        assert!(matches!(
+            read(s.conn(), &Sender::Human, older),
+            Err(CollabError::Conflict(_))
+        ));
+        assert!(
+            read(s.conn(), &Sender::Human, scope(&m))
+                .unwrap()
+                .items
+                .iter()
+                .all(|row| row.historical)
+        );
+        assert_eq!(
+            get(s.conn(), &Sender::Human, query).unwrap().source,
+            crewd_proto::message_attribution::AttributionSource::Stale
+        );
     }
 
     #[test]
@@ -684,7 +782,7 @@ mod tests {
             read(reopened.conn(), &Sender::Human, more.clone()),
             Err(CollabError::Conflict(_))
         ));
-        judgment_state::restored(s.conn()).unwrap();
+        super::super::rotate_restore_stamp(s.conn());
         assert!(matches!(
             read(s.conn(), &Sender::Human, more),
             Err(CollabError::Conflict(_))

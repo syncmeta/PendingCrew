@@ -13,6 +13,7 @@ pub mod fsutil;
 pub mod judgment_state;
 pub mod knowledge_channels;
 pub mod local_clients;
+pub mod message_evidence;
 pub mod messages;
 pub mod native_execution;
 pub mod native_history;

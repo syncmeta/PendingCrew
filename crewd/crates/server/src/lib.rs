@@ -486,6 +486,11 @@ async fn serve_with_hooks_inner(
         crewd_store::now_ms(),
         crewd_collab::work_followups::baseline,
     )?;
+    // Freeze the exact legacy evidence cut before settings can change it.
+    // Missing optional history never prevents ordinary service startup.
+    if let Err(error) = store.with_tx(|tx| crewd_store::message_evidence::capture_legacy(tx)) {
+        eprintln!("crewd: message evidence compatibility unavailable: {error}");
+    }
     // Cache only an identity actually read from the opened store before public
     // readiness. Hello must remain available when the FIFO later closes/fails.
     let current_db_id = crewd_store::meta_get(store.conn(), "dbId")?

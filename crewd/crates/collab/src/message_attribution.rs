@@ -3,6 +3,7 @@ use crate::{Result, Sender, Tx, channels, crews, judgments, messages};
 use crewd_proto::{
     ChannelWorkKind, ChannelWorkObject, Message, judgments::*, message_attribution::*,
 };
+use crewd_store::message_evidence::Authority;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 mod history;
@@ -34,9 +35,6 @@ fn invalid(detail: &str) -> crate::CollabError {
 }
 fn key(id: &str) -> String {
     format!("{PREFIX}{id}")
-}
-fn db(c: &Connection) -> Result<String> {
-    Ok(crewd_store::meta_get(c, "dbId")?.unwrap_or_default())
 }
 fn saved(c: &Connection, id: &str) -> Result<Option<Saved>> {
     let result: Option<Saved> = crewd_store::meta_get(c, &key(id))?
@@ -190,13 +188,12 @@ fn model(c: &Connection, m: &Message) -> Result<(AttributionSource, Option<Judgm
         Ok((AttributionSource::Stale, None))
     }
 }
-fn revision(c: &Connection, m: &Message, s: Option<&Saved>) -> Result<String> {
+fn revision(m: &Message, s: Option<&Saved>, authority: &Authority) -> Result<String> {
     judgments::fingerprint(&(
-        "attribution",
+        "attribution-restore-v1",
         &m.id,
         m.seq,
-        db(c)?,
-        crewd_store::judgment_state::epoch(c)?,
+        authority.fingerprint(),
         s.map(|s| &s.revision),
     ))
 }
@@ -207,7 +204,8 @@ pub fn get(
 ) -> Result<MessageAttributionView> {
     let m = source(c, by, &p)?;
     let s = saved(c, &m.id)?;
-    let rev = revision(c, &m, s.as_ref())?;
+    let authority = Authority::load(c)?;
+    let rev = revision(&m, s.as_ref(), &authority)?;
     let mut candidates = Vec::new();
     let mut truncated = false;
     if active(c, &m)? {
@@ -273,11 +271,9 @@ pub fn get(
     let resolved_candidate = p.target.as_ref().map(|t| target(c, &m, t)).transpose()?;
     let value = s.as_ref().and_then(|s| s.value.clone());
     let (src, link) = if let Some(v) = &value {
-        let epoch = crewd_store::judgment_state::epoch(c)?;
-        let database = db(c)?;
         let current = s
             .as_ref()
-            .is_some_and(|s| s.epoch == epoch && s.db == database);
+            .is_some_and(|s| authority.matches(&s.db, &s.epoch));
         let valid = current
             && active(c, &m)?
             && match &v.link {
@@ -325,7 +321,11 @@ pub fn set(
         return Err(invalid("archived source"));
     }
     let before = saved(tx.conn(), &m.id)?;
-    if revision(tx.conn(), &m, before.as_ref())? != p.expected_revision {
+    let authority = Authority::load(tx.conn())?;
+    let (database, epoch) = authority
+        .current()
+        .ok_or_else(|| invalid("message correction authority unavailable"))?;
+    if revision(&m, before.as_ref(), &authority)? != p.expected_revision {
         return Err(crate::CollabError::Conflict(
             crate::refusal::Refusal::new(crate::refusal::Code::ResourceRequestConflict)
                 .arg("request", "message attribution revision"),
@@ -351,8 +351,8 @@ pub fn set(
     };
     let after = Saved {
         version: 1,
-        epoch: crewd_store::judgment_state::epoch(tx.conn())?,
-        db: db(tx.conn())?,
+        epoch: epoch.into(),
+        db: database.into(),
         revision: uuid::Uuid::new_v4().to_string(),
         value,
     };
@@ -380,6 +380,16 @@ pub fn set(
     });
     get(tx.conn(), by, query)
 }
+#[cfg(test)]
+fn rotate_restore_stamp(c: &Connection) {
+    crewd_store::meta_set(
+        c,
+        "personalDraft.restoreStamp.v1",
+        &uuid::Uuid::new_v4().to_string(),
+    )
+    .unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,7 +566,7 @@ mod tests {
             ))
             .is_err()
         );
-        crewd_store::judgment_state::restored(s.conn()).unwrap();
+        rotate_restore_stamp(s.conn());
         let stale = get(s.conn(), &Sender::Human, query(&m)).unwrap();
         assert_eq!(stale.source, AttributionSource::Stale);
         assert!(stale.link.is_none());
