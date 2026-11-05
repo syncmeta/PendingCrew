@@ -55,6 +55,8 @@ Mac 修正 `3931d202` 将裁决入口放到已完成的巡检简报分组中。�
 
 `8055279f` 按原设计 §29.4 接通逐消息的会话唤醒与投递说明。界面分别显示实际入队原因、队列状态、判断记录和真实回复。只在有完整零目标规划证据时显示零对象。历史理由或队列结果缺少证据时，对应字段显示未知。实际普通 Core 验证明确 `@` 只产生一条投递记录，人工停止后实际退出并重启，读回同一记录。也验证了真实零目标、旧数据、错机组或频道拒绝，以及只读查询前后原消息、队列和证据相同。见 `/private/tmp/pcw-delivery.jp1ydy62/result.json`。受控执行器投递确认、模拟判断服务选中对象、本机读取和配对撤权验收通过。普通后台打印的 API 与仓库定义逐字相同。
 
+`c9f099a9` 将实际投递和人工纠正绑定到正式工作数据恢复标记。启动只接纳可证明属于当前数据库和恢复代次的旧证据。实测 `ead879a2` 产生定向投递和 21 条纠正，准确新版重开同一库后读回原事实，并换发旧分页和写入版本。修改远程配置及首次保存停用的 Jev 设置后，投递、当前纠正、分页和写入版本均保持一致。新版原生记录也通过同样的设置和重启验收。见 `/private/tmp/pcw-msg-settings.0aak0bpv/result.json` 和 `/private/tmp/pcw-msg-settings.6ylg798r/result.json`。Store 的实际 Core 单库恢复验证旧兼容记录失效。普通后台实际拒绝把含知识工作区的备份作为单库恢复，并验证原库与备份仍可读取。协作 721 项、存储 203 项测试通过，另有 5 项历史专项保留原忽略条件。见 `/private/tmp/pcw-msg-authority-gate.ptPaFwjZ/store-collab.log`。
+
 该提交的 Mac 私有 Release 预览通过严格签名和独立动态库验证，iPhoneOS arm64 Debug 完整编译通过。见 `/private/tmp/pcw-delivery-gate.7DVpfTYo/mac-release-preview/candidate.json` 和 `/private/tmp/pcw-delivery-gate.7DVpfTYo/ios-debug-proof.json`。Mac Debug 预览在工具改写 `__LINKEDIT` 后被原严格封装检查拒绝。修正后在同一编译产物的私有副本仅移除两条 Xcode 临时加载路径，保留原有段大小和负载字节。最终签名、代码等价和动态库验证通过，见 `/private/tmp/pcw-debug-rpath-exact.FKOqj5/proof.json`。正式窗口、真机和日用验收分别推进。
 
 `2d485b56` 纠正新机组的首条回复提示。实时消息和消息列表回读共用同一判断，原机长必须明确回复原群的首条消息才结束等待。旧实现用同机长的无关发言复现误判，改后两条入口均通过专项回归。见 `/private/tmp/pcw-delivery-gate.7DVpfTYo/first-reply-integrated.log`。既有 Tirkadavur 机组的原会话另行验收。
