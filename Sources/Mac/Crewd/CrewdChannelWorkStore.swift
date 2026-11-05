@@ -12,12 +12,14 @@ import Combine
     @Published private(set) var linkRevision:String?
     @Published private(set) var sourceRevision:String?
     @Published private(set) var loaded=false
+    @Published private(set) var linksNeedVerification = false
     @Published private(set) var loading=false
     @Published private(set) var writing=false
     @Published private(set) var activationEpoch=UUID()
     @Published private(set) var failure:CrewdClientError?
     private let call:Call
     private var generation=UUID(),query=UUID()
+    private var linkVerificationEpoch = UUID()
     var readScope: UUID { generation }
     private var activeOwners=Set<UUID>()
     private let defaultActiveOwner=UUID()
@@ -28,7 +30,7 @@ import Combine
     }
     private var refreshTask:Task<Void,Never>?
     init(call:@escaping Call){self.call=call}
-    func selectChannel(crew:String,channel:String){guard self.crew != crew || self.channel != channel else{return};generation=UUID();query=UUID();refreshTask?.cancel();self.crew=crew;self.channel=channel;items=[];todoAttributes=[:];linkRevision=nil;sourceRevision=nil;loaded=false;loading=false;failure=nil}
+    func selectChannel(crew:String,channel:String){guard self.crew != crew || self.channel != channel else{return};generation=UUID();query=UUID();refreshTask?.cancel();self.crew=crew;self.channel=channel;items=[];todoAttributes=[:];linkRevision=nil;sourceRevision=nil;linksNeedVerification=false;loaded=false;loading=false;failure=nil}
     func configureCapabilities(_ value:Set<String>){capabilities=value}
     func invalidateConnection(){generation=UUID();query=UUID();refreshTask?.cancel();capabilities=[];loaded=false;loading=false;activationEpoch=UUID()}
     private func check(_ token:UUID,_ request:UUID?=nil)throws{guard generation == token,!Task.isCancelled,request == nil || query == request else{throw CancellationError()}}
@@ -54,14 +56,26 @@ import Combine
         guard owner == .null || owner["kind"] == .string("human") || (owner["kind"] == .string("session") && owner["id"].string?.isEmpty == false) else{return false}
         return value["manualState"] == .null || ["open","done"].contains(value["manualState"].string ?? "")
     }
+    func hasCurrentPlanLink(_ id: CrewdWorkID, sourceCrew: String) -> Bool {
+        guard id.kind == .plan, loaded, !linksNeedVerification, !writing else { return false }
+        return items.contains {
+            Self.workID($0["object"]) == id && $0["crewId"].string?.utf8.elementsEqual(sourceCrew.utf8) == true
+        }
+    }
+
     func handleEvent(_ name:String,_ value:CrewdValue){
         guard name == "events.lagged" || (name == "channel.workChanged" && value["channelId"] == .string(channel)) || name.hasPrefix("work.") || name.hasPrefix("ask.") || name == "todo.attributesChanged" else{return}
+        if name == "events.lagged" || (name == "channel.workChanged" && value["linkRevision"].string != linkRevision) {
+            linkVerificationEpoch = UUID()
+            linksNeedVerification = true
+        }
         guard !activeOwners.isEmpty,capabilities.contains("channelWork"),!channel.isEmpty else{return}
         refreshTask?.cancel();let token=generation
         refreshTask=Task{[weak self] in try? await Task.sleep(for:.milliseconds(150));guard let self,!Task.isCancelled,self.generation == token else{return};do{try await self.refresh()}catch{}}
     }
     func refresh()async throws{
         try require();let token=generation,request=UUID(),scope=channel;query=request;loading=true;failure=nil
+        let verification = linkVerificationEpoch
         defer{if query == request{loading=false}}
         do{
             var result:[CrewdValue]=[],seen=Set<String>(),cursors=Set<String>(),cursor:String?,links:String?,source:String?
@@ -103,6 +117,7 @@ import Combine
                 guard expectedCounts.filter({$0.value > 0}) == counts else{throw CrewdClientError(message:"群标签计数与完整引用快照不符。")}
             }
             try check(token,request);items=result;linkRevision=links;sourceRevision=source;loaded=true
+            if verification == linkVerificationEpoch { linksNeedVerification = false }
             todoAttributes=Dictionary(result.compactMap { item in
                 guard item["todo"] != .null,let key=Self.workID(item["object"])?.raw else{return nil}
                 return (key,item["todo"])

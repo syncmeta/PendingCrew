@@ -704,6 +704,7 @@ pub fn api_schema() -> Value {
     let _ = sub::<notifications::NotificationOpenContext>(g);
     let _ = sub::<AskResolutionReceipt>(g);
     let _ = sub::<AskInboxScheduleReceipt>(g);
+    let _ = sub::<WorkCloseReceipt>(g);
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
         (

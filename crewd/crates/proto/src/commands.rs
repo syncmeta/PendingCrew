@@ -17,6 +17,7 @@ pub const LOCAL_CLIENT_TRUST_STATUS: &str = "local.clientTrust.status";
 pub const ASK_RESOLVE: &str = "ask.resolve";
 pub const ASK_INBOX_SCHEDULE: &str = "ask.inboxSchedule";
 pub const TODO_RULE_CLOSE: &str = "todo.ruleClose";
+pub const WORK_CLOSE_WITH_RECEIPT: &str = "work.closeWithReceipt";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocalClientTrustStatusParams {}
@@ -154,6 +155,8 @@ pub enum PublicCommand {
     RequirementReview(crate::admin_cases::RequirementReviewParams),
     #[serde(rename = "adminCase.workDuplicateClose")]
     WorkDuplicateClose(crate::WorkDuplicateCloseParams),
+    #[serde(rename = "work.closeWithReceipt")]
+    WorkCloseWithReceipt(crate::WorkCloseWithReceiptParams),
     #[serde(rename = "ask.resolve")]
     AskResolve(crate::AskResolutionParams),
     #[serde(rename = "ask.inboxSchedule")]
@@ -245,6 +248,7 @@ impl PublicCommand {
             Self::PatrolStart(_) => &[crate::PATROL_START],
             Self::RequirementReview(_) => &[crate::admin_cases::REQUIREMENT_REVIEW],
             Self::WorkDuplicateClose(_) => &[crate::admin_cases::WORK_DUPLICATE_CLOSE],
+            Self::WorkCloseWithReceipt(_) => &[crate::methods::WORK_CLOSE],
             Self::AskResolve(_) => &[ASK_RESOLVE],
             Self::AskInboxSchedule(_) => &[ASK_INBOX_SCHEDULE],
             Self::RequirementRuleClose(_) => &[TODO_RULE_CLOSE],
@@ -287,6 +291,7 @@ impl PublicCommand {
             Self::PatrolStart(_) => crate::PATROL_START,
             Self::RequirementReview(_) => crate::admin_cases::REQUIREMENT_REVIEW,
             Self::WorkDuplicateClose(_) => crate::admin_cases::WORK_DUPLICATE_CLOSE,
+            Self::WorkCloseWithReceipt(_) => WORK_CLOSE_WITH_RECEIPT,
             Self::AskResolve(_) => ASK_RESOLVE,
             Self::AskInboxSchedule(_) => ASK_INBOX_SCHEDULE,
             Self::RequirementRuleClose(_) => TODO_RULE_CLOSE,

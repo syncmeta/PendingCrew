@@ -337,6 +337,32 @@ pub struct WorkCloseParams {
     pub evidence: WorkEvidenceParam,
     pub note: String,
 }
+/// Factual close inside the authenticated public-command receipt transaction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkCloseWithReceiptParams {
+    pub crew_id: String,
+    pub id: String,
+    pub expected_revision: String,
+    pub kind: WorkClosureKind,
+    pub evidence: WorkEvidenceParam,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkCloseReceipt {
+    pub crew_id: String,
+    pub id: String,
+    pub original_revision: String,
+    pub result_revision: String,
+    pub event_seq: String,
+    pub closed_at_ms: i64,
+    pub kind: WorkClosureKind,
+    pub evidence: WorkEvidenceParam,
+    pub note: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkClosure {

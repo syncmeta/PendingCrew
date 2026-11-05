@@ -65,6 +65,13 @@ struct CrewdPublicReceipt {
         if originalCommand["operation"] == .string(CrewdPublicOperation.requirementReview.rawValue), phase == .committed {
             try CrewdRequirementReviewWire.validateResult(value["result"], params: originalCommand["params"])
         }
+        if originalCommand["operation"] == .string(CrewdPublicOperation.workCloseWithReceipt.rawValue) {
+            let params = originalCommand["params"]
+            guard phase == .committed, CrewdFactualWorkCloseWire.exactText(value["command"]["params"], params) else {
+                throw CrewdPublicWire.invalid()
+            }
+            try CrewdFactualWorkCloseWire.validateResult(value["result"], params: params)
+        }
         if originalCommand["operation"] == .string(CrewdPublicOperation.workDuplicateClose.rawValue), phase == .committed {
             try CrewdWorkDuplicateWire.validateResult(value["result"],params:originalCommand["params"])
         }
@@ -227,6 +234,7 @@ enum CrewdPublicOperation: String, Codable {
     case firstMessage = "crew.createFirstMessage"
     case patrolStart = "work.patrolStart"
     case requirementReview = "adminCase.requirementReview"
+    case workCloseWithReceipt = "work.closeWithReceipt"
     case workDuplicateClose = "adminCase.workDuplicateClose"
     case askResolve = "ask.resolve"
     case askInboxSchedule = "ask.inboxSchedule"
@@ -333,6 +341,8 @@ private enum CrewdPublicParameters {
             _ = try CrewdPublicWire.token(fields["crewId"] ?? .null)
         case .requirementReview:
             return try CrewdRequirementReviewWire.canonical(value)
+        case .workCloseWithReceipt:
+            return try CrewdFactualWorkCloseWire.canonical(value)
         case .workDuplicateClose:
             return try CrewdWorkDuplicateWire.canonical(value)
         case .askResolve:
@@ -489,5 +499,73 @@ struct CrewdExecutorProfile: Identifiable, Equatable, Sendable {
         case "unsupportedPlatform": return "所连接后台的平台不支持此能力。"
         default: return "当前后台未开放此执行器。"
         }
+    }
+}
+
+enum CrewdFactualWorkCloseWire {
+    static let operation = CrewdPublicOperation.workCloseWithReceipt
+
+    static func matchesOriginal(method: String, params: CrewdValue, journalCrew: String, id: String, crew: String) -> Bool {
+        guard !crew.isEmpty, journalCrew.utf8.elementsEqual(crew.utf8) else { return false }
+        if method == "work.close" { return params["id"] == .string(id) }
+        let command = params["command"]
+        return method == "command.submit" && command["operation"] == .string(operation.rawValue) &&
+            command["params"]["id"] == .string(id) && exact(command["params"]["crewId"], .string(crew))
+    }
+
+    static func canonical(_ value: CrewdValue) throws -> CrewdValue {
+        guard case .object(let fields) = value,
+              Set(fields.keys) == ["crewId", "id", "expectedRevision", "kind", "evidence", "note"],
+              let id = value["id"].string, CrewdWorkID(id, kind: .plan)?.raw == id,
+              positive(value["expectedRevision"]) != nil,
+              ["done", "duplicate", "superseded"].contains(value["kind"].string ?? ""),
+              case .object(let evidence) = value["evidence"], Set(evidence.keys) == ["kind", "value"],
+              ["commit", "url", "text"].contains(value["evidence"]["kind"].string ?? ""),
+              nonblank(value["evidence"]["value"]), nonblank(value["note"]) else {
+            throw CrewdPublicWire.invalid()
+        }
+        _ = try CrewdPublicWire.token(value["crewId"])
+        return value
+    }
+
+    static func exactText(_ a: CrewdValue, _ b: CrewdValue) -> Bool {
+        exact(a["crewId"], b["crewId"]) && exact(a["note"], b["note"]) &&
+            exact(a["evidence"]["value"], b["evidence"]["value"])
+    }
+
+    static func validateResult(_ result: CrewdValue, params: CrewdValue) throws {
+        _ = try canonical(params)
+        guard case .object(let fields) = result,
+              Set(fields.keys) == ["crewId", "id", "originalRevision", "resultRevision", "eventSeq", "closedAtMs", "kind", "evidence", "note"],
+              exact(result["crewId"], params["crewId"]), result["id"] == params["id"],
+              result["originalRevision"] == params["expectedRevision"],
+              let original = positive(result["originalRevision"]), original < UInt64.max,
+              positive(result["resultRevision"]) == original + 1,
+              positive(result["eventSeq"]) != nil, case .integer = result["closedAtMs"],
+              result["kind"] == params["kind"], result["evidence"] == params["evidence"],
+              exactText(result, params) else { throw CrewdPublicWire.invalid() }
+    }
+
+    static func definitivelyRefused(_ error: Error) -> Bool {
+        guard let failure = error as? CrewdClientError, let refusal = failure.data["refusal"].string else { return false }
+        switch failure.code {
+        case -32009: return ["work.revision_conflict", "work.terminal", "work.dependents_active", "crew.removed"].contains(refusal)
+        case -32602: return ["work.bad_revision", "work.bad_update", "work.bad_id", "resource.invalid"].contains(refusal)
+        case -32004: return refusal == "work.not_found"
+        case -32003: return ["work.actor_forbidden", "resource.forbidden"].contains(refusal)
+        default: return false
+        }
+    }
+
+    private static func exact(_ a: CrewdValue, _ b: CrewdValue) -> Bool {
+        guard let a = a.string, let b = b.string else { return false }
+        return a.utf8.elementsEqual(b.utf8)
+    }
+    private static func nonblank(_ value: CrewdValue) -> Bool {
+        value.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+    private static func positive(_ value: CrewdValue) -> UInt64? {
+        guard let text = value.string, let number = UInt64(text), number > 0, String(number) == text else { return nil }
+        return number
     }
 }

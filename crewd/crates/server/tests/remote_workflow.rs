@@ -3634,3 +3634,161 @@ async fn paired_human_reads_exact_message_delivery_until_revocation() {
     drop(remote);
     stopped(reopened).await;
 }
+
+#[tokio::test]
+async fn paired_work_close_recovers_unread_original_after_restart_and_obeys_revocation() {
+    use crewd_proto::{RpcError, commands::WORK_CLOSE_WITH_RECEIPT};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert_eq!(hello["remoteBinding"]["grantId"], accepted.grant.id);
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == WORK_CLOSE_WITH_RECEIPT)
+    );
+    let crew = remote
+        .call(
+            "crew.create",
+            json!({
+                "title":"isolated factual close receipt","workingDirectory":dir.path()
+            }),
+        )
+        .await["id"]
+        .clone();
+    let work = remote
+        .call(
+            "work.create",
+            json!({
+                "crewId":crew,"title":"factual close over paired TLS"
+            }),
+        )
+        .await;
+    let untouched = remote
+        .call(
+            "work.create",
+            json!({
+                "crewId":crew,"title":"never close after revocation"
+            }),
+        )
+        .await;
+    let close = |hello: &Value, work: &Value| {
+        draft_packet(
+            hello,
+            WORK_CLOSE_WITH_RECEIPT,
+            json!({
+                "crewId":crew,"id":work["id"],"expectedRevision":work["revision"],"kind":"done",
+                "evidence":{"kind":"text","value":" paired evidence e\u{301} "},"note":" paired original close "
+            }),
+        )
+    };
+    let packet = close(&hello, &work);
+    let lookup = json!({"dbId":packet["dbId"],"requestId":packet["requestId"]});
+    let unread = json!({"id":1000,"method":"command.submit","params":packet});
+    remote
+        .io
+        .get_mut()
+        .write_all(format!("{unread}\n").as_bytes())
+        .await
+        .unwrap();
+
+    let mut observer = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let committed = tokio::time::timeout(LIMIT, async {
+        loop {
+            let receipt = observer.call("command.lookup", lookup.clone()).await;
+            if receipt["phase"] == "committed" {
+                break receipt;
+            }
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(committed["requestId"], packet["requestId"]);
+    assert_eq!(committed["command"], packet["command"]);
+    assert_eq!(committed["historical"], false);
+    assert_eq!(
+        committed["result"]["note"],
+        packet["command"]["params"]["note"]
+    );
+    assert_eq!(
+        committed["result"]["evidence"],
+        packet["command"]["params"]["evidence"]
+    );
+
+    let (other_cert, _, _) = approved(&mut running.owner, &identity).await;
+    let mut other = RemoteRpc::connect(port, &other_cert, &identity.spki_sha256).await;
+    assert!(other.call("command.lookup", lookup.clone()).await.is_null());
+    let copied = tokio::time::timeout(LIMIT, other.frame("command.submit", packet.clone()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(copied["error"]["code"], RpcError::CONFLICT);
+    assert!(other.call("command.lookup", lookup.clone()).await.is_null());
+    drop((other, observer, remote));
+    stopped(running).await;
+
+    let mut running = service(dir.path()).await;
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            if local(&mut running.owner, "remote.status", json!({})).await["listening"] == true {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let reopened_hello = remote.call("system.hello", json!({})).await;
+    let historical = remote.call("command.lookup", lookup.clone()).await;
+    assert_eq!(historical["phase"], "committed");
+    assert_eq!(historical["historical"], true);
+    assert_eq!(historical["result"], committed["result"]);
+    assert_eq!(remote.call("command.submit", packet).await, historical);
+    let history = remote
+        .call("work.closureHistory", json!({"id":work["id"]}))
+        .await;
+    assert_eq!(history["items"].as_array().unwrap().len(), 1);
+    assert_eq!(history["items"][0]["seq"], historical["result"]["eventSeq"]);
+
+    let denied_packet = close(&reopened_hello, &untouched);
+    let denied_lookup =
+        json!({"dbId":denied_packet["dbId"],"requestId":denied_packet["requestId"]});
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"fixture complete"
+    })).await;
+    for (method, params) in [
+        ("command.submit", denied_packet),
+        ("command.lookup", lookup),
+    ] {
+        if let Ok(frame) = tokio::time::timeout(LIMIT, remote.frame(method, params))
+            .await
+            .unwrap()
+        {
+            assert_eq!(frame["error"]["code"], RpcError::FORBIDDEN);
+        }
+    }
+    assert_eq!(
+        local(
+            &mut running.owner,
+            "work.get",
+            json!({"id":untouched["id"]})
+        )
+        .await,
+        untouched
+    );
+    assert!(
+        local(&mut running.owner, "command.lookup", denied_lookup)
+            .await
+            .is_null()
+    );
+    drop(remote);
+    stopped(running).await;
+}

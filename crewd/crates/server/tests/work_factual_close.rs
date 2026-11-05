@@ -537,3 +537,208 @@ async fn attached_foreign_admin_cannot_bypass_factual_close_via_legacy_human_wri
     drop((human, foreign));
     close_socket(task, stop).await;
 }
+
+#[tokio::test]
+async fn original_factual_close_keeps_exact_event_and_replays_only_receipt() {
+    use crewd_proto::{RpcError, commands::WORK_CLOSE_WITH_RECEIPT};
+
+    let f = Fixture::new().await;
+    f.enable_public_command_identity().await;
+    let foreign = f.add_crew("foreign receipt scope", None).await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let mut agent = attach(&f, &socket, &f.worker).await;
+    let hello = rpc(&mut human, "system.hello", json!({})).await;
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|method| method == WORK_CLOSE_WITH_RECEIPT)
+    );
+    let packet = |params: Value| {
+        json!({
+            "requestId":uuid::Uuid::new_v4().to_string(),
+            "dbId":hello["runtimeIdentity"]["dbId"],
+            "runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],
+            "command":{"operation":WORK_CLOSE_WITH_RECEIPT,"params":params}
+        })
+    };
+    let lookup = |request: &Value| json!({"dbId":request["dbId"],"requestId":request["requestId"]});
+
+    for (kind, evidence_kind) in [
+        ("done", "text"),
+        ("duplicate", "commit"),
+        ("superseded", "url"),
+    ] {
+        let work = make(&mut human, &f, kind).await;
+        let dependent = make(&mut human, &f, "receipt closure real blocker").await;
+        let blocked = rpc(
+            &mut human,
+            "work.block",
+            json!({
+                "id":dependent["id"],"expectedRevision":dependent["revision"],
+                "on":[{"type":"work","id":work["id"]}],"canContinue":{"type":"nothing"}
+            }),
+        )
+        .await;
+        assert!(!blocked["item"]["blockedOn"].as_array().unwrap().is_empty());
+        let params = json!({
+            "crewId":f.crew,"id":work["id"],"expectedRevision":work["revision"],"kind":kind,
+            "evidence":{"kind":evidence_kind,"value":" evidence e\u{301} "},"note":" exact e\u{301} note "
+        });
+        let request = packet(params.clone());
+        let mut other_crew = params.clone();
+        other_crew["crewId"] = json!(foreign);
+        let other_crew = packet(other_crew);
+        let mut stale = params.clone();
+        stale["expectedRevision"] = json!("999999");
+        let stale = packet(stale);
+        let before = snapshot(&f).await;
+        for (request, code) in [
+            (&other_crew, RpcError::INVALID_PARAMS),
+            (&stale, RpcError::CONFLICT),
+        ] {
+            assert_eq!(
+                call(&mut human, "command.submit", request.clone())
+                    .await
+                    .unwrap_err()
+                    .0,
+                code
+            );
+            assert!(
+                rpc(&mut human, "command.lookup", lookup(request))
+                    .await
+                    .is_null()
+            );
+        }
+        assert_eq!(
+            call(&mut agent, "command.submit", request.clone())
+                .await
+                .unwrap_err()
+                .0,
+            RpcError::FORBIDDEN
+        );
+        assert_eq!(snapshot(&f).await, before);
+
+        let receipt = rpc(&mut human, "command.submit", request.clone()).await;
+        assert_eq!(receipt["requestId"], request["requestId"]);
+        assert_eq!(receipt["command"], request["command"]);
+        assert_eq!(receipt["phase"], "committed");
+        assert_eq!(receipt["historical"], false);
+        let result = &receipt["result"];
+        let history = rpc(&mut human, "work.closureHistory", json!({"id":work["id"]})).await;
+        assert_eq!(history["items"].as_array().unwrap().len(), 1);
+        let event = &history["items"][0];
+        let closed = rpc(&mut human, "work.get", json!({"id":work["id"]})).await;
+        assert_eq!(
+            result,
+            &json!({
+                "crewId":f.crew,"id":work["id"],"originalRevision":work["revision"],
+                "resultRevision":closed["revision"],"eventSeq":event["seq"],
+                "closedAtMs":result["closedAtMs"],"kind":kind,"evidence":params["evidence"],"note":params["note"]
+            })
+        );
+        let revision: u64 = work["revision"].as_str().unwrap().parse().unwrap();
+        assert_eq!(result["resultRevision"], (revision + 1).to_string());
+        assert_eq!(event["actor"]["kind"], "human");
+        assert_eq!(event["closure"], closed["closure"]);
+        assert_eq!(event["closure"]["evidence"], result["evidence"]);
+        assert_eq!(event["closure"]["note"], result["note"]);
+        assert_eq!(
+            event["at"],
+            crewd_store::ts_from_ms(result["closedAtMs"].as_i64().unwrap())
+        );
+        let released = rpc(&mut human, "work.get", json!({"id":dependent["id"]})).await;
+        assert!(released["blockedOn"].as_array().unwrap().is_empty());
+        let committed = snapshot(&f).await;
+        assert_eq!(
+            rpc(&mut human, "command.submit", request.clone()).await,
+            receipt
+        );
+        assert_eq!(
+            rpc(&mut human, "command.lookup", lookup(&request)).await,
+            receipt
+        );
+        assert_eq!(
+            call(&mut agent, "command.lookup", lookup(&request))
+                .await
+                .unwrap_err()
+                .0,
+            RpcError::FORBIDDEN
+        );
+        let mut changed = request.clone();
+        changed["command"]["params"]["note"] = json!("different immutable intent");
+        assert_eq!(
+            call(&mut human, "command.submit", changed)
+                .await
+                .unwrap_err()
+                .0,
+            RpcError::CONFLICT
+        );
+        assert_eq!(
+            snapshot(&f).await,
+            committed,
+            "no duplicate closure, release, wake or receipt"
+        );
+    }
+    drop((human, agent));
+    close_socket(task, stop).await;
+}
+
+#[tokio::test]
+async fn original_factual_close_rolls_back_work_and_release_if_receipt_cannot_commit() {
+    let f = Fixture::new().await;
+    f.enable_public_command_identity().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let task = f.spawn_owned_socket(stopping).await;
+    let socket = f.data_dir().join("crewd.sock");
+    let mut human = RpcClient::connect(&socket).await;
+    let work = make(&mut human, &f, "original receipt rollback").await;
+    let dependent = make(&mut human, &f, "keep this blocker on rollback").await;
+    rpc(
+        &mut human,
+        "work.block",
+        json!({
+            "id":dependent["id"],"expectedRevision":dependent["revision"],
+            "on":[{"type":"work","id":work["id"]}],"canContinue":{"type":"nothing"}
+        }),
+    )
+    .await;
+    let hello = rpc(&mut human, "system.hello", json!({})).await;
+    let mut params = close_args(&work, "done");
+    params["crewId"] = json!(f.crew);
+    let request = json!({
+        "requestId":uuid::Uuid::new_v4().to_string(),"dbId":hello["runtimeIdentity"]["dbId"],
+        "runtimeBindingId":hello["runtimeIdentity"]["runtimeBindingId"],
+        "command":{"operation":"work.closeWithReceipt","params":params}
+    });
+    f.state.db.call_result(|s| {
+        s.conn().execute_batch("CREATE TRIGGER fail_closure_receipt BEFORE UPDATE OF phase ON public_command_receipts
+            WHEN NEW.phase='committed' BEGIN SELECT RAISE(ABORT,'synthetic receipt settlement failure'); END;")
+            .map_err(crewd_store::StoreError::from)
+    }).await.unwrap().unwrap();
+    let before = snapshot(&f).await;
+    assert_eq!(
+        call(&mut human, "command.submit", request.clone())
+            .await
+            .unwrap_err().0,
+        crewd_proto::RpcError::INTERNAL
+    );
+    assert_eq!(snapshot(&f).await, before);
+    assert!(
+        rpc(
+            &mut human,
+            "command.lookup",
+            json!({
+                "dbId":request["dbId"],"requestId":request["requestId"]
+            })
+        )
+        .await
+        .is_null()
+    );
+    drop(human);
+    close_socket(task, stop).await;
+}

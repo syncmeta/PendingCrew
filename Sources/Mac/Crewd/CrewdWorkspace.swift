@@ -108,7 +108,12 @@ final class CrewdWorkspace: ObservableObject {
                 }
                 firstMessageExecutor = draft.executor
             }
-            let record=try journal.prepare(method: "command.submit", params: envelope.value, crew: crew, firstMessageExecutor: firstMessageExecutor)
+            let record: CrewdPresentationJournal.Prepared
+            if envelope.operation == .workCloseWithReceipt {
+                record = try journal.prepareWorkClose(method:"command.submit",params:envelope.value,crew:crew)
+            } else {
+                record = try journal.prepare(method:"command.submit",params:envelope.value,crew:crew,firstMessageExecutor:firstMessageExecutor)
+            }
             if envelope.params["codexInputs"] != .null || envelope.params["inputs"] != .null{self?.codexInputs.refreshProjection()}
             return record
         },
@@ -1219,6 +1224,16 @@ final class CrewdWorkspace: ObservableObject {
         }
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
         if method == "todo.create" { return try await submitRequirementCreate(params) }
+        let legacyCloseCrew: String?
+        if method == "work.close" {
+            guard !client.capabilities.contains(CrewdFactualWorkCloseWire.operation.rawValue),
+                  !workStore.offersFactualWorkClose, let raw = params["id"].string, let id = CrewdWorkID(raw,kind:.plan),
+                  let crew = workStore.plans[id]?.crew, !crew.isEmpty,
+                  try refreshWorkCloseOriginals(raw,crew:crew).isEmpty else {
+                throw CrewdClientError(message:"请核对当前计划，使用原回执关闭入口或查询已有原请求。",kind:.notSubmitted)
+            }
+            legacyCloseCrew = crew
+        } else { legacyCloseCrew = nil }
         if ["ask.answer","ask.withdraw"].contains(method) {
             guard !workStore.offersAskResolution,
                   originalAskRecords(crew:params["crewId"].string,ask:params["ask"].string).isEmpty else {
@@ -1280,7 +1295,11 @@ final class CrewdWorkspace: ObservableObject {
             catch{durableUnknown=(try? journal.unknownRecords()) ?? durableUnknown;throw error}
         }
         let prepared: CrewdPresentationJournal.Prepared?
-        do { prepared = try journal?.prepare(method: method, params: params, crew: params["crewId"].string ?? crewID) }
+        do {
+            let crew = legacyCloseCrew ?? params["crewId"].string ?? crewID
+            if method == "work.close" { prepared = try journal?.prepareWorkClose(method:method,params:params,crew:crew) }
+            else { prepared = try journal?.prepare(method:method,params:params,crew:crew) }
+        }
         catch { throw CrewdClientError(message: "本次提交快照未能耐久保存，尚未发送后台操作：" + error.localizedDescription, kind: .notSubmitted) }
         do {
             let result = try await client.call(method, params)
@@ -1288,13 +1307,18 @@ final class CrewdWorkspace: ObservableObject {
             if ["crew.create", "session.start"].contains(method) {
                 guard let id = result["id"].string, !id.isEmpty else { throw CrewdClientError(message: "创建回复缺少正式编号，原提交结果待确认。") }
             }
-            if let prepared { try journal?.finish(prepared, state: "replyObserved") }
+            if method == "work.close" {
+                if let prepared, let journal { try journal.observeLegacyWorkClose(prepared,result:result,expectedCrew:legacyCloseCrew) }
+                else { try CrewdLegacyWorkClose.validate(result,params:params,expectedCrew:legacyCloseCrew) }
+            } else if let prepared { try journal?.finish(prepared, state: "replyObserved") }
             return result
         } catch {
             if let prepared {
                 let uncertain = CrewdClientError.isUncertainSubmission(error)
-                do { try journal?.finish(prepared, state: uncertain ? "unknown" : "refused", detail: error.localizedDescription) }
-                catch { self.error = "原请求返回结果与历史未能同时确认，保留提交快照。" }
+                do {
+                    if method == "work.close" { try journal?.finishLegacyWorkClose(prepared,error:error) }
+                    else { try journal?.finish(prepared, state: uncertain ? "unknown" : "refused", detail: error.localizedDescription) }
+                } catch { self.error = "原请求返回结果与历史未能同时确认，保留提交快照。" }
                 if let journal, journal === originalJournal { do { durableUnknown = try journal.unknownRecords() } catch { self.error = error.localizedDescription } }
             }
             throw error
@@ -1475,6 +1499,20 @@ final class CrewdWorkspace: ObservableObject {
                           $0.envelope.params["crewId"] == .string(crew) && $0.envelope.params["ask"] == .string(ask)
                   }) else { throw CrewdClientError(message:"此问题已有原请求待核对，或当前连接尚未具备回执资格。",kind:.notSubmitted) }
         }
+        if operation == .workCloseWithReceipt {
+            guard workStore.supportsFactualWorkClose, client.readyForWork,
+                  client.capabilities.contains(operation.rawValue),
+                  originalJournalReady, originalJournal != nil,
+                  params["crewId"] == .string(crew), let id = params["id"].string,
+                  try refreshWorkCloseOriginals(id,crew:crew).isEmpty,
+                  !publicCommands.observations.values.contains(where: {
+                      publicCommands.pending.contains($0.id) && $0.envelope.operation == .workCloseWithReceipt &&
+                          $0.envelope.params["id"] == .string(id) &&
+                          $0.envelope.params["crewId"].string?.utf8.elementsEqual(crew.utf8) == true
+                  }) else {
+                throw CrewdClientError(message:"当前连接无法保存原关闭回执，或此计划已有原请求待核对。",kind:.notSubmitted)
+            }
+        }
         if operation == .requirementRuleClose {
             guard workStore.supportsRequirementRuling, originalJournalReady, let journal = originalJournal,
                   !crew.isEmpty, crew == crewID, crew == workStore.selectedCrew,
@@ -1601,6 +1639,71 @@ final class CrewdWorkspace: ObservableObject {
         }
         return receipt
     }
+    func originalWorkCloseRecords(_ id: String, crew: String, in records: [CrewdPresentationJournal.Prepared]? = nil) -> [CrewdPresentationJournal.Prepared] {
+        (records ?? durableUnknown).filter { record in
+            isCurrentOriginalObservation(record) &&
+                CrewdFactualWorkCloseWire.matchesOriginal(method:record.method,params:record.params,journalCrew:record.crew,id:id,crew:crew)
+        }
+    }
+
+    func refreshWorkCloseOriginals(_ id: String, crew: String) throws -> [CrewdPresentationJournal.Prepared] {
+        guard originalJournalReady || !originalJournalRequired else {
+            throw CrewdClientError(message:"原关闭记录尚未读取。",kind:.notSubmitted)
+        }
+        if let journal = originalJournal {
+            do { durableUnknown = try journal.unknownRecords() }
+            catch { throw CrewdClientError(message:"无法读取原关闭记录。",kind:.notSubmitted) }
+        }
+        return originalWorkCloseRecords(id,crew:crew)
+    }
+
+    func submitFactualWorkClose(_ params: CrewdValue, stillCurrent: () -> Bool) async throws -> CrewdPublicReceipt {
+        guard let crew = params["crewId"].string, let raw = params["id"].string,
+              let id = CrewdWorkID(raw, kind: .plan), stillCurrent(), !Task.isCancelled else { throw CancellationError() }
+        let route = selection, epoch = observationGeneration, connection = client.connectionEpoch
+        let origin = presentationScope, scope = workStore.readScope
+        let plan = try await workStore.detail(id)
+        guard stillCurrent(), !Task.isCancelled, selection == route, observationGeneration == epoch,
+              client.connectionEpoch == connection, presentationScope == origin, workStore.readScope == scope else {
+            throw CancellationError()
+        }
+        guard plan.crew.utf8.elementsEqual(crew.utf8), plan.value["revision"] == params["expectedRevision"],
+              !plan.frozen, !["done", "dropped"].contains(plan.status) else {
+            throw CrewdClientError(message:"计划已变化。请核对当前版本和凭据后再确认。",kind:.notSubmitted)
+        }
+        let receipt = try await submitPublicCommand(.workCloseWithReceipt, params:params, crew:crew)
+        workDirty = true
+        scheduleSync()
+        return receipt
+    }
+
+    func acknowledgeFactualWorkClose(_ receipt: CrewdPublicReceipt, lookedUp: CrewdPresentationJournal.Prepared? = nil) throws {
+        guard receipt.phase == .committed, !receipt.historical || lookedUp != nil,
+              let original = publicCommands.observations[receipt.requestID],
+              original.envelope.operation == .workCloseWithReceipt,
+              lookedUp == nil || lookedUp?.id == original.prepared.id else { throw CrewdPublicWire.invalid() }
+        try acknowledgeOriginalCommand(original.prepared, receipt:receipt, detail:"已在计划详情核对原关闭回执。")
+        workDirty = true
+        scheduleSync()
+    }
+
+    func recoverFactualWorkClose(_ original: CrewdPresentationJournal.Prepared, id: String, crew: String,
+                                 stillCurrent: () -> Bool) async throws -> CrewdPublicReceipt? {
+        let route = selection, epoch = observationGeneration, connection = client.connectionEpoch
+        let origin = presentationScope, scope = workStore.readScope
+        @MainActor func current() -> Bool {
+            stillCurrent() && !Task.isCancelled && selection == route && observationGeneration == epoch &&
+                client.connectionEpoch == connection && presentationScope == origin && workStore.readScope == scope
+        }
+        guard current(), original.method == "command.submit",
+              original.params["command"]["operation"] == .string(CrewdFactualWorkCloseWire.operation.rawValue),
+              original.params["command"]["params"]["crewId"] == .string(crew),
+              try refreshWorkCloseOriginals(id,crew:crew).contains(where: { $0.id == original.id }) else { throw CrewdPublicWire.invalid() }
+        let receipt = try await lookupOriginalCommand(original)
+        guard current() else { throw CancellationError() }
+        return receipt
+    }
+
     func originalRequirementRulingRecords(crew: String, id: String? = nil) -> [CrewdPresentationJournal.Prepared] {
         durableUnknown.filter { record in
             let command = record.params["command"], params = command["params"]
@@ -1823,7 +1926,8 @@ final class CrewdWorkspace: ObservableObject {
         let historicalRecordedRequest = receipt.historical &&
             [CrewdPublicOperation.patrolStart.rawValue, CrewdPublicOperation.requirementReview.rawValue,
              CrewdPublicOperation.workDuplicateClose.rawValue,CrewdPublicOperation.askResolve.rawValue,
-             CrewdPublicOperation.askInboxSchedule.rawValue,CrewdPublicOperation.requirementRuleClose.rawValue].contains(operation ?? "") &&
+             CrewdPublicOperation.askInboxSchedule.rawValue,CrewdPublicOperation.requirementRuleClose.rawValue,
+             CrewdPublicOperation.workCloseWithReceipt.rawValue].contains(operation ?? "") &&
             [.committed, .rejected, .suppressed].contains(receipt.phase)
         guard record.scope == presentationScope, !receipt.historical || historicalRecordedRequest,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,

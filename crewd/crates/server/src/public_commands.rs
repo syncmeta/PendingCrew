@@ -326,6 +326,7 @@ fn sql_effect(
         PublicCommand::PatrolStart(p) => serde_json::to_value(collab::patrol_manual::start(tx, &p.crew_id)?),
         PublicCommand::RequirementReview(p) => serde_json::to_value(collab::requirement_review::apply(tx, p)?),
         PublicCommand::WorkDuplicateClose(p) => serde_json::to_value(collab::work_duplicate_review::close(tx, p)?),
+        PublicCommand::WorkCloseWithReceipt(p) => serde_json::to_value(collab::work_close::close_with_receipt(tx, p)?),
         PublicCommand::AskResolve(p) => serde_json::to_value(collab::ask_resolution::resolve(tx, p)?),
         PublicCommand::AskInboxSchedule(p) => serde_json::to_value(collab::ask_inbox::schedule(tx, p)?),
         PublicCommand::RequirementRuleClose(p) => serde_json::to_value(
@@ -362,6 +363,7 @@ async fn submit(
         | PublicCommand::PatrolStart(_)
         | PublicCommand::RequirementReview(_)
         | PublicCommand::WorkDuplicateClose(_)
+        | PublicCommand::WorkCloseWithReceipt(_)
         | PublicCommand::AskResolve(_)
         | PublicCommand::AskInboxSchedule(_)
         | PublicCommand::RequirementRuleClose(_)
@@ -445,6 +447,7 @@ async fn submit_sql_with_home(
             | PublicCommand::PatrolStart(_)
             | PublicCommand::RequirementReview(_)
             | PublicCommand::WorkDuplicateClose(_)
+            | PublicCommand::WorkCloseWithReceipt(_)
             | PublicCommand::AskResolve(_)
             | PublicCommand::AskInboxSchedule(_)
             | PublicCommand::RequirementRuleClose(_)

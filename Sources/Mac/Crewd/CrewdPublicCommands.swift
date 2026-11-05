@@ -80,7 +80,10 @@ final class CrewdPublicCommands: ObservableObject {
             observations[envelope.requestID]?.receipt = receipt
             // A real response can itself report Unknown. Historical or merely
             // dispatched external work remains unresolved, never auto-replayed.
-            let unresolved = receipt.historical || [.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase)
+            // A Work event may replace its group detail before the reply arrives.
+            // Leave that original available until the live close view records receipt observation.
+            let unresolved = envelope.operation == .workCloseWithReceipt || receipt.historical ||
+                [.reserved, .admitted, .dispatched, .unknown].contains(receipt.phase)
             try finish(prepared, unresolved ? "unknown" : "replyObserved", nil)
             return receipt
         } catch {
@@ -88,7 +91,12 @@ final class CrewdPublicCommands: ObservableObject {
             // This named refusal rolls back both the receipt reservation and ruling.
             let rulingWithoutReceipt = envelope.operation == .requirementRuleClose && failure?.kind != .notSubmitted &&
                 !CrewdRequirementRulingWire.requiresFreshReview(error)
-            let uncertain = rulingWithoutReceipt || CrewdClientError.isUncertainSubmission(error) || failure?.code == -32603
+            let uncertain: Bool
+            if envelope.operation == .workCloseWithReceipt {
+                uncertain = failure?.kind != .notSubmitted && !CrewdFactualWorkCloseWire.definitivelyRefused(error)
+            } else {
+                uncertain = rulingWithoutReceipt || CrewdClientError.isUncertainSubmission(error) || failure?.code == -32603
+            }
             observations[envelope.requestID]?.failure = error.localizedDescription
             // If receipt decoding/presentation persistence failed, the single
             // submitted identity stays unresolved even if SQL may have committed.

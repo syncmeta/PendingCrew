@@ -478,7 +478,15 @@ struct CrewdWorkPanels: View {
                         if let evidence=detail["evidence"]["value"].string {planDetail("凭据",evidence)}
                         CrewdCoordinationView(store:store,crew:plan.value["crewId"].string ?? store.selectedCrew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
                         CrewdReassignmentView(store:store,crew:plan.value["crewId"].string ?? store.selectedCrew,id:id.raw,revision:detail["revision"].string ?? "",members:members)
-                        CrewdWorkCloseView(store:store,id:id,detail:detail)
+                        let closeScope = planScope()
+                        let group = visiblePlanIDs == nil ? nil : patrolWorkspace?.channelWork
+                        let groupScope = group?.readScope
+                        CrewdWorkCloseView(store:store,id:id,detail:detail,workspace:patrolWorkspace,
+                                           scopeIsCurrent:{
+                            guard closeScope(), selected == id.raw else { return false }
+                            if let group { return group.readScope == groupScope && group.hasCurrentPlanLink(id,sourceCrew:plan.crew) }
+                            return visiblePlanIDs == nil
+                        })
                         CrewdHandoffView(store:store,id:id,members:members).id(store.selectedCrew+":"+id.raw)
                         documentLinksButton(id, crew: plan.crew)
                         HStack {

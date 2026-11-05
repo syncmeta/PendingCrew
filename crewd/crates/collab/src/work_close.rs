@@ -6,7 +6,7 @@ use crewd_store::{
     StoreError,
     object_refs::{self, ObjectKind},
 };
-use crewd_work::{Evidence, Status};
+use crewd_work::{Actor, Event, EventKind, Evidence, Status, WorkId};
 use rusqlite::{Connection, params};
 fn invalid() -> CollabError {
     StoreError::Invalid("invalid factual closure authority".into()).into()
@@ -46,8 +46,105 @@ fn drop_view(r: &crewd_work::DropReason) -> Option<WorkClosure> {
     })
 }
 pub fn close(tx: &mut Tx<'_>, by: &Sender, p: WorkCloseParams) -> Result<WorkPlan> {
+    Ok(close_scoped(tx, by, p, None)?.0)
+}
+
+pub fn close_with_receipt(
+    tx: &mut Tx<'_>,
+    p: WorkCloseWithReceiptParams,
+) -> Result<WorkCloseReceipt> {
+    let (closed, local, events) = close_scoped(
+        tx,
+        &Sender::Human,
+        WorkCloseParams {
+            id: p.id.clone(),
+            expected_revision: p.expected_revision.clone(),
+            kind: p.kind,
+            evidence: p.evidence.clone(),
+            note: p.note.clone(),
+        },
+        Some(&p.crew_id),
+    )?;
+    // WorkBook emits the exact factual close first, before dependent releases.
+    // with_book has persisted this same event and its effects inside this SQL cut.
+    let event = events
+        .first()
+        .filter(|e| e.seq > 0 && e.by == Actor::Human)
+        .ok_or_else(invalid)?;
+    let actual = event_closure(&event.kind, local)?;
+    let expected = WorkClosure {
+        kind: p.kind,
+        note: Some(p.note.clone()),
+        evidence: Some(evidence(&input_evidence(p.evidence.clone()))),
+    };
+    let next_revision = p
+        .expected_revision
+        .parse::<u64>()
+        .ok()
+        .and_then(|revision| revision.checked_add(1))
+        .ok_or_else(invalid)?;
+    let status = if p.kind == WorkClosureKind::Done {
+        "done"
+    } else {
+        "dropped"
+    };
+    if actual != expected
+        || closed.closure.as_ref() != Some(&actual)
+        || closed.crew_id != p.crew_id
+        || closed.id != p.id
+        || closed.status != status
+        || closed.revision != next_revision.to_string()
+    {
+        return Err(invalid());
+    }
+    Ok(WorkCloseReceipt {
+        crew_id: p.crew_id,
+        id: p.id,
+        original_revision: p.expected_revision,
+        result_revision: closed.revision,
+        event_seq: event.seq.to_string(),
+        closed_at_ms: event.at.0,
+        kind: p.kind,
+        evidence: p.evidence,
+        note: p.note,
+    })
+}
+
+fn input_evidence(input: WorkEvidenceParam) -> Evidence {
+    match input.kind {
+        WorkEvidenceKind::Commit => Evidence::Commit(input.value),
+        WorkEvidenceKind::Url => Evidence::Url(input.value),
+        WorkEvidenceKind::Text => Evidence::Text(input.value),
+    }
+}
+
+fn event_closure(event: &EventKind, core: WorkId) -> Result<WorkClosure> {
+    match event {
+        EventKind::Done {
+            id,
+            evidence: proof,
+            note,
+        } if *id == core => Ok(WorkClosure {
+            kind: WorkClosureKind::Done,
+            note: note.clone(),
+            evidence: proof.as_ref().map(evidence),
+        }),
+        EventKind::Dropped { id, reason } if *id == core => drop_view(reason).ok_or_else(invalid),
+        _ => Err(invalid()),
+    }
+}
+
+fn close_scoped(
+    tx: &mut Tx<'_>,
+    by: &Sender,
+    p: WorkCloseParams,
+    scope: Option<&str>,
+) -> Result<(WorkPlan, WorkId, Vec<Event>)> {
     let r = object_refs::get(tx.conn(), ObjectKind::Plan, work::number(&p.id)?)?
         .ok_or_else(|| CollabError::NotFound(Refusal::new(Code::WorkNotFound).arg("id", &p.id)))?;
+    if scope.is_some_and(|crew| crew != r.crew_id) {
+        return Err(crate::resource_acl::invalid("crewId"));
+    }
     crews::refuse_archived(tx.conn(), &r.crew_id)?;
     let actor = work::actor(tx.conn(), by, &r.crew_id)?;
     let local = work::core_plan(tx.conn(), &r)?;
@@ -60,11 +157,7 @@ pub fn close(tx: &mut Tx<'_>, by: &Sender, p: WorkCloseParams) -> Result<WorkPla
     if p.note.trim().is_empty() || p.evidence.value.trim().is_empty() {
         return Err(CollabError::Invalid(Refusal::new(Code::WorkBadUpdate)));
     }
-    let proof = match p.evidence.kind {
-        WorkEvidenceKind::Commit => Evidence::Commit(p.evidence.value),
-        WorkEvidenceKind::Url => Evidence::Url(p.evidence.value),
-        WorkEvidenceKind::Text => Evidence::Text(p.evidence.value),
-    };
+    let proof = input_evidence(p.evidence);
     let current = asks::load_org(tx.conn())?;
     work::check_revision(current.item(local).ok_or_else(invalid)?, &p.id, revision)?;
     let (events, ready) = asks::with_book(tx, &r.crew_id, |b, now| {
@@ -125,8 +218,9 @@ pub fn close(tx: &mut Tx<'_>, by: &Sender, p: WorkCloseParams) -> Result<WorkPla
         &format!("work-close:{}:{}", p.id, p.expected_revision),
     )?;
     work::changed(tx, by, &r.crew_id, &p.id)?;
-    work::get(tx.conn(), &p.id)
+    Ok((work::get(tx.conn(), &p.id)?, local, events))
 }
+
 pub fn history(c: &Connection, p: WorkClosureHistoryParams) -> Result<WorkClosureHistoryPage> {
     history_scoped(c, p, None)
 }
@@ -176,21 +270,7 @@ pub(crate) fn history_scoped(
         } else {
             None
         };
-        let closure = match e.kind {
-            crewd_work::EventKind::Done {
-                id,
-                evidence: proof,
-                note,
-            } if id == core => WorkClosure {
-                kind: WorkClosureKind::Done,
-                note,
-                evidence: proof.as_ref().map(evidence),
-            },
-            crewd_work::EventKind::Dropped { id, reason } if id == core => {
-                drop_view(&reason).ok_or_else(invalid)?
-            }
-            _ => return Err(invalid()),
-        };
+        let closure = event_closure(&e.kind, core)?;
         let actor = match e.by {
             crewd_work::Actor::Human => WorkHistoryActor::Human,
             crewd_work::Actor::System => WorkHistoryActor::System,

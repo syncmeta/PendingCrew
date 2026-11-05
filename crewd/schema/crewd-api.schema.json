@@ -14049,6 +14049,23 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "work.closeWithReceipt",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/WorkCloseWithReceiptParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "ask.resolve",
               "type": "string"
             },
@@ -18145,6 +18162,84 @@
         }
       },
       "required": [
+        "id",
+        "expectedRevision",
+        "kind",
+        "evidence",
+        "note"
+      ],
+      "type": "object"
+    },
+    "WorkCloseReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "closedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "eventSeq": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/WorkEvidenceParam"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkClosureKind"
+        },
+        "note": {
+          "type": "string"
+        },
+        "originalRevision": {
+          "type": "string"
+        },
+        "resultRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "id",
+        "originalRevision",
+        "resultRevision",
+        "eventSeq",
+        "closedAtMs",
+        "kind",
+        "evidence",
+        "note"
+      ],
+      "type": "object"
+    },
+    "WorkCloseWithReceiptParams": {
+      "additionalProperties": false,
+      "description": "Factual close inside the authenticated public-command receipt transaction.",
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/WorkEvidenceParam"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkClosureKind"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
         "id",
         "expectedRevision",
         "kind",

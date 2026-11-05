@@ -33,6 +33,7 @@ final class CrewdPresentationJournal {
         let detail: String?
     }
     let scope: Scope
+    private static let legacyWorkCloseNotSubmitted = "work.close.notSubmitted.v1"
     private static let requirementCreateNotSubmitted = "todo.create.notSubmitted.v1"
 
     struct RequirementCreateIntent {
@@ -55,6 +56,35 @@ final class CrewdPresentationJournal {
             }
         }
         return intents.values.sorted { $0.original.requestID < $1.original.requestID }
+    }
+
+    func prepareWorkClose(method: String, params: CrewdValue, crew: String) throws -> Prepared {
+        let plan = method == "work.close" ? params["id"].string : params["command"]["params"]["id"].string
+        guard let plan, CrewdWorkID(plan, kind: .plan)?.raw == plan,
+              CrewdFactualWorkCloseWire.matchesOriginal(method:method,params:params,journalCrew:crew,id:plan,crew:crew) else {
+            throw CrewdPublicWire.invalid()
+        }
+        return try withPrivateLock("work-close.lock", message:"原关闭记录正在核对或锁不可用。") {
+            guard try !unknownRecords().contains(where: {
+                $0.scope == scope && CrewdFactualWorkCloseWire.matchesOriginal(method:$0.method,params:$0.params,journalCrew:$0.crew,id:plan,crew:crew)
+            }) else {
+                throw CrewdClientError(message:"该计划已有原关闭请求待核对。",kind:.notSubmitted)
+            }
+            return try prepare(method:method, params:params, crew:crew)
+        }
+    }
+
+    func observeLegacyWorkClose(_ record: Prepared, result: CrewdValue, expectedCrew: String?) throws {
+        guard record.method == "work.close", record.scope == scope else { throw CrewdPublicWire.invalid() }
+        try CrewdLegacyWorkClose.validate(result,params:record.params,expectedCrew:expectedCrew)
+        try finish(record,state:"replyObserved")
+    }
+
+    func finishLegacyWorkClose(_ record: Prepared, error: Error) throws {
+        let refused = (error as? CrewdClientError)?.kind == .notSubmitted ||
+            CrewdFactualWorkCloseWire.definitivelyRefused(error)
+        try finish(record, state:refused ? "refused" : "unknown",
+                   detail:refused ? Self.legacyWorkCloseNotSubmitted : error.localizedDescription)
     }
 
     func prepareRequirementCreate(_ params: CrewdValue, original: CrewdRequirementCreateWire.Original) throws -> Prepared {
@@ -239,6 +269,11 @@ final class CrewdPresentationJournal {
             guard try CrewdRequirementCreateWire.Original(saved.params).matches(.init(record.params)) else {
                 throw CrewdRequirementCreateWire.invalid()
             }
+        }
+        if record.method == "command.submit",
+           record.params["command"]["operation"] == .string(CrewdFactualWorkCloseWire.operation.rawValue),
+           !CrewdFactualWorkCloseWire.exactText(saved.params["command"]["params"], record.params["command"]["params"]) {
+            throw CrewdPublicWire.invalid()
         }
         let hash = Self.hash(bytes)
         let destination = directory.appendingPathComponent("reconciled").appendingPathComponent(name)
@@ -554,6 +589,11 @@ final class CrewdPresentationJournal {
             else if includeCodexInputs, record.method.hasPrefix("session.codex.input") || record.method == "command.submit" {rows.append(record)}
             else if includeNotifications, ["notification.installationRegister","notification.installationRevoke"].contains(record.method) {rows.append(record)}
             else if outcome.state == "unknown" { rows.append(record) }
+            else if record.method == "work.close", outcome.state == "refused",
+                    outcome.detail != Self.legacyWorkCloseNotSubmitted {
+                // Older observations used the generic refusal classifier.
+                rows.append(record)
+            }
             else if record.method == "todo.create",
                     outcome.state == "refused" ? outcome.detail != Self.requirementCreateNotSubmitted : includeRequirementCreateAttempts {
                 // Older generic refusals did not distinguish post-send SQL or

@@ -304,6 +304,34 @@ struct CrewdPlan: Equatable, Sendable {
     var frozen: Bool { summary["frozen"] == .bool(true) }
 }
 
+enum CrewdLegacyWorkClose {
+    static func validate(_ result: CrewdValue, params: CrewdValue, expectedCrew: String?) throws {
+        let closure = result["closure"], evidence = params["evidence"]
+        let kind = params["kind"].string ?? ""
+        guard ["done", "duplicate", "superseded"].contains(kind),
+              let id = params["id"].string, CrewdWorkID(id, kind:.plan) != nil, result["id"] == .string(id),
+              let crew = result["crewId"].string, !crew.isEmpty,
+              expectedCrew.map({ crew.utf8.elementsEqual($0.utf8) }) ?? true,
+              let revisionText = params["expectedRevision"].string, let revision = UInt64(revisionText),
+              revision > 0, revision < UInt64.max, String(revision) == revisionText,
+              result["revision"] == .string(String(revision + 1)),
+              result["status"] == .string(kind == "done" ? "done" : "dropped"),
+              closure["kind"] == .string(kind), exact(closure["note"], params["note"]),
+              ["commit", "url", "text"].contains(evidence["kind"].string ?? ""),
+              closure["evidence"]["kind"] == evidence["kind"],
+              exact(closure["evidence"]["value"], evidence["value"]),
+              case .array(let sources) = result["sources"],
+              sources.allSatisfy({ $0.string.flatMap { CrewdWorkID($0, kind:.requirement) } != nil }) else {
+            throw CrewdClientError(message:"旧版关闭答复与原计划、版本或凭据不符；保留待核对记录。")
+        }
+    }
+
+    private static func exact(_ value: CrewdValue, _ original: CrewdValue) -> Bool {
+        guard let value = value.string, let original = original.string else { return false }
+        return value.utf8.elementsEqual(original.utf8)
+    }
+}
+
 struct CrewdChannelResponsibilityPage {
     static let method = "work.channelResponsibility"
 
@@ -1724,13 +1752,15 @@ final class CrewdWorkStore: ObservableObject {
     }
     /// A failed mutation retains structured facts for UI and leaves drafts to their owner.
     /// Transport loss is an uncertain commit, never a reason to repeat the command.
-    @discardableResult func closePlan(_ id: CrewdWorkID, expectedRevision: String, kind: String, evidenceKind: String, evidence: String, note: String) async throws -> CrewdValue {
-        guard id.kind == .plan, ["done","duplicate","superseded"].contains(kind), ["commit","url","text"].contains(evidenceKind),
+    var offersFactualWorkClose: Bool { capabilities.contains("work.closeWithReceipt") }
+    var supportsFactualWorkClose: Bool { offersFactualWorkClose && capabilities.contains("command.receipts") }
+    @discardableResult func closePlan(_ id: CrewdWorkID, expectedRevision: String, kind: String, evidenceKind: String, evidence: String, note: String, scopeIsCurrent: @MainActor () -> Bool = { true }) async throws -> CrewdValue {
+        guard !offersFactualWorkClose, id.kind == .plan, ["done","duplicate","superseded"].contains(kind), ["commit","url","text"].contains(evidenceKind),
               !evidence.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty, !note.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,
               let revision = UInt64(expectedRevision), String(revision) == expectedRevision else {
             throw CrewdClientError(message:"关闭计划需要当前版本、明确类型、凭据和说明。",kind:.notSubmitted)
         }
-        return try await mutate("work.close",.object(["id":.string(id.raw),"expectedRevision":.string(expectedRevision),"kind":.string(kind),"evidence":.object(["kind":.string(evidenceKind),"value":.string(evidence.trimmingCharacters(in:.whitespacesAndNewlines))]),"note":.string(note.trimmingCharacters(in:.whitespacesAndNewlines))]))
+        return try await mutate("work.close",.object(["id":.string(id.raw),"expectedRevision":.string(expectedRevision),"kind":.string(kind),"evidence":.object(["kind":.string(evidenceKind),"value":.string(evidence.trimmingCharacters(in:.whitespacesAndNewlines))]),"note":.string(note.trimmingCharacters(in:.whitespacesAndNewlines))]),scopeIsCurrent:scopeIsCurrent)
     }
     @discardableResult func mutate(
         _ method: String, _ params: CrewdValue, planSourceCrew: String? = nil,
@@ -1768,6 +1798,7 @@ final class CrewdWorkStore: ObservableObject {
             }
         }
         let target = params["id"].string.flatMap { CrewdWorkID($0, kind: .plan) }
+        let legacyCloseCrew = target.flatMap { plans[$0]?.crew }
         if let target, plans[target]?.frozen == true { throw CrewdClientError(message: "已归档工作只读。", code: -32009, data: .object(["refusal": .string("crew.removed")])) }
         generation = UUID(); refreshID = UUID(); loading = false; pendingDetails.removeAll()
         let token = generation; activeMutations += 1; lastFailure = nil
@@ -1778,11 +1809,7 @@ final class CrewdWorkStore: ObservableObject {
             try check(token)
             try validateAssociation(value,params)
             if method == "work.close" {
-                guard value["id"] == params["id"], value["status"] == .string(params["kind"] == .string("done") ? "done":"dropped"),
-                      value["evidence"]["kind"] == params["evidence"]["kind"],
-                      value["evidence"]["value"].string == params["evidence"]["value"].string?.trimmingCharacters(in:.whitespacesAndNewlines) else {
-                    throw CrewdClientError(message:"关闭回执与原计划、终态或凭据不符，请读取当前详情核对；不会自动重发。")
-                }
+                try CrewdLegacyWorkClose.validate(value,params:params,expectedCrew:legacyCloseCrew)
             }
             if method == "work.block" { adopt(try parsePlan(value["item"], full: true)) }
             else if method.hasPrefix("work.") { adopt(try parsePlan(value, full: true)) }
