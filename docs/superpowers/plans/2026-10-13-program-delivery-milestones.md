@@ -51,6 +51,14 @@
 
 11 项组织对象、9 项编号、7 项拒绝文案、真实配对撤权与 Agent 权限回归通过。普通后台公开协议与仓库定义逐字节一致，工具目录核对通过。Mac 私有 Debug 预览通过嵌入后台、严格签名和动态库验证，iPhoneOS arm64 Debug 验证 iPhone、iPad 目标和实际 Swift 调试动态库。见 `/private/tmp/pcw-decisions-integration.NlqhOO7P/exact-decisions-agent-wire.log`、`/private/tmp/pcw-decisions-integration.NlqhOO7P/mac-decisions-debug-preview/candidate.json` 和 `/private/tmp/pcw-decisions-integration.NlqhOO7P/ios-decisions-debug-proof.json`。
 
+`c48faf9d` 接通组织风险板 R 和教训库 L。风险默认由登记人负责，七天后复核，当前负责人复核或编辑后顺延。风险发生时，后台在同一事务更新风险、建立教训、关联两条记录并保存原请求回执。回执保存两个对象的编号和版本。组织成员可读取并确认有效教训，原确认回执按实际请求者隔离。归档保持只读，永久删除清理所属对象和回执。决定可以引用真实 R。风险板在复核逾期超过七天时同时显示红色和文字。
+
+普通后台实测 v24→25 保留原工作、决定和回执。风险发生的提交答复未读取，物理重启后查回原始两项结果，过期版本被拒，教训只建一条。外机组 Agent 只能查回自己的确认回执，归档和永久删除后相邻机组保持原样。到期测试在隔离库设定日期，观察两秒没有新增唤醒或群消息。单独向准确负责人发一条正常消息，实际 Codex 传输只带出对应风险提示。四个普通后台进程均正常退出，见 `/private/tmp/pcw-rl-run.0vn4sy_k/result.json`。
+
+Swift 客户端与同源普通后台实测实际退出并重开。原提交回执返回风险第 2 版和教训第 1 版，当前记录分别保留已关闭的第 3 版与已过时的第 2 版。客户端查询原 UUID 一次，零重发，见 `/private/tmp/pcw-rl-c48-swift-43416/result.json`。组织对象 16 项、编号 9 项、工作上下文 4 项、Agent 与真实配对撤权测试通过。托管及旧版 Claude 的本地守卫与注入测试通过，未调用真实 Claude 服务。普通后台公开协议与仓库定义逐字节一致。
+
+Mac 私有 Debug 预览通过签名、同源后台内容和独立动态库验证，普通 iPhoneOS arm64 Debug 构建通过。见 `/private/tmp/pcw-risk-integration.s3cqlfwo/mac-risk-debug-preview/candidate.json` 和 `/private/tmp/pcw-risk-integration.s3cqlfwo/ios-risk-debug-proof.json`。正式窗口、真机和日用安装另行验收。带权限过滤的消息证据、产物自然键、组织对象变更推送和结构化 H 自动采集仍待接入。
+
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
 早先 `2ef0998d` 的隔离升级及回滚也通过，Apple 回执为 `09351a3b-b20d-40e9-91fe-00c5a40eeff2`。`945cd2c6`（0.2.3，构建 `20761.65326`）通过 Apple 公证、票据及 Gatekeeper 检查，回执为 `59254362-f660-49e3-ba3c-61f331ddfddc`。首条回复的后续修正在 `9a5a6a08`。
