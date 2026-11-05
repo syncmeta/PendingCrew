@@ -565,6 +565,16 @@ final class CrewdWorkspace: ObservableObject {
         }
         client.onEvent = { [weak self] name, data in
             guard let self, !self.retired else { return }
+            switch name {
+            case "onto.changed":
+                if self.client.capabilities.contains("managedObjects.events.v1") {
+                    self.managedDirectory.handleEvent(name,data,connection:self.client.connectionEpoch)
+                }
+                return
+            case "events.lagged", "crew.changed", "crew.purged":
+                self.managedDirectory.handleEvent(name,data,connection:self.client.connectionEpoch)
+            default: break
+            }
             if name == "message.appended" { self.observeFirstCaptainReply(data) }
             if name == "message.appended", let id = data["id"].string, self.observedMessageIDs.insert(id).inserted,
                let sender = data["senderSessionId"].string, sender != self.sessionID {

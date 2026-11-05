@@ -1959,10 +1959,41 @@ struct CrewdPendingKnowledgeLink: Identifiable {
 }
 
 /// Native access to Core-owned organization objects, separate from SQLite knowledge.
-@MainActor final class CrewdManagedDirectoryStore {
+@MainActor final class CrewdManagedDirectoryStore: ObservableObject {
     typealias Wire = CrewdManagedDirectoryWire
     typealias Origin = CrewdKnowledgeStore.Origin
     typealias RPC = CrewdKnowledgeStore.RPC
+
+    struct Invalidation: Equatable {
+        let id = UUID()
+        fileprivate let origin: Origin
+    }
+    @Published private(set) var invalidation: Invalidation?
+
+    // The event is only a hint. Cross-crew reads are legal and a row event
+    // does not disclose its table, so re-read the active projection.
+    func handleEvent(_ name: String, _ data: CrewdValue, connection: UUID) {
+        guard let active = origin(), active.connection == connection else { return }
+        switch name {
+        case "onto.changed":
+            guard case .object(let fields) = data, Set(fields.keys) == ["crewId","objectIds"],
+                  let crew = fields["crewId"]?.string, Wire.DecisionAbout(kind:.crew,id:crew).valid,
+                  case .array(let objects) = fields["objectIds"],
+                  (1...2).contains(objects.count) else { return }
+            let ids = objects.compactMap(\.string)
+            guard ids.count == objects.count, Set(ids).count == ids.count, ids.allSatisfy({ id in
+                guard let prefix = id.first, "TODRL".contains(prefix) else { return false }
+                return Wire.objectNumber(id,prefix:prefix) != nil
+            }) else { return }
+        case "events.lagged", "crew.changed", "crew.purged": break
+        default: return
+        }
+        invalidation = .init(origin:active)
+    }
+
+    func owns(_ candidate: Invalidation, scope: BrowseScope? = nil) -> Bool {
+        origin() == candidate.origin && (scope.map { $0.origin == candidate.origin } ?? true)
+    }
 
     struct BrowseScope: Equatable {
         let origin: Origin

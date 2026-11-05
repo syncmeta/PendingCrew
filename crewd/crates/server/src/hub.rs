@@ -192,6 +192,13 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
             events::ASK_INBOX_CHANGED,
             &CrewRef { crew_id: crew_id.clone() },
         )?],
+        Change::OntologyChanged { crew_id, object_ids } => vec![ev(
+            events::ONTO_CHANGED,
+            &crewd_proto::managed_objects_api::OntologyChanged {
+                crew_id: crew_id.clone(),
+                object_ids: object_ids.clone(),
+            },
+        )?],
         Change::AskChanged { crew_id, ask } => gone(asks::get(conn, crew_id, ask))?
             .map(|a| ev(events::ASK_CHANGED, &a))
             .transpose()?

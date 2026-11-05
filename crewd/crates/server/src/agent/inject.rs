@@ -44,9 +44,11 @@ pub fn is_crewd_tool(tool_name: &str) -> bool {
 /// that only read or talk do not (`ToolSpec::passive`, derived from the catalog's annotations,
 /// S76): a session answering another through `post` is not output, or two sessions replying to
 /// each other would keep the breaker from ever firing. Everything else counts, an unknown
-/// `mcp__crew__*` name included (fail toward counting).
+/// `mcp__crew__*` name included (fail toward counting). Managed writes record
+/// progress in their receipt transaction, since a hook can see a replay or refusal.
 pub fn counts_as_progress(tool_name: &str) -> bool {
     match tool_name.strip_prefix(CREWD_TOOL_PREFIX) {
+        Some("managed_object_submit") => false,
         Some(own) => !crate::agent::catalog::find(own).is_some_and(|t| t.passive()),
         None => true,
     }
@@ -732,6 +734,7 @@ mod tests {
             "get_quota",
             "inspect_session",
             "list_sessions",
+            "managed_object_submit",
         ];
         let tools: Vec<String> = passive.iter().map(|t| format!("mcp__crew__{t}")).collect();
         let tools: Vec<&str> = tools.iter().map(String::as_str).collect();
@@ -774,12 +777,15 @@ mod tests {
         for t in crate::agent::catalog::CATALOG {
             assert_eq!(
                 counts_as_progress(&format!("mcp__crew__{}", t.name)),
-                !t.passive(),
+                !t.passive() && t.name != "managed_object_submit",
                 "{}",
                 t.name
             );
         }
         assert!(!counts_as_progress("mcp__crew__post"));
+        assert!(!counts_as_progress("mcp__crew__managed_object_submit"));
+        assert!(counts_as_progress("mcp__crew__managed_object_submit_other"));
+        assert!(counts_as_progress("mcp__other__managed_object_submit"));
         assert!(counts_as_progress("mcp__crew__channel_create"));
         assert!(
             counts_as_progress("mcp__crew__read_delegation_policy"),

@@ -295,8 +295,7 @@ final class CrewdClient: ObservableObject {
         version = hello["version"].string ?? "未知"
         capabilities = Set(hello["capabilities"].array.compactMap(\.string))
         qualifiedForWork = true
-        let topics = ["crew", "session", "message", "channel", "ask", "work", "todo", "restart", "system"]
-            + ["documents", "viewFolders", "data"].filter { capabilities.contains($0) }
+        let topics = Self.eventTopics(capabilities:capabilities,includePersonalDraft:false)
         _ = try await call("events.subscribe", .object(["topics": .array(topics.map(CrewdValue.string))]))
         guard generation == current, !Task.isCancelled else { throw CancellationError() }
         readyForWork = true
@@ -363,12 +362,20 @@ final class CrewdClient: ObservableObject {
     func disconnect() { resetConnection(); onManualDisconnect?() }
     private func resetConnection() { fail("连接已断开。", notify: false, recovery: .manual); lastError = nil }
 
+    static func eventTopics(capabilities: Set<String>, includePersonalDraft: Bool) -> [String] {
+        var topics = ["crew","session","message","channel","ask","work","todo","restart","system"]
+        if includePersonalDraft { topics.append("personalDraft") }
+        topics += ["documents","viewFolders","data"].filter { capabilities.contains($0) }
+        if capabilities.contains("managedObjects.events.v1") { topics.append("onto") }
+        return topics
+    }
+
     private var personalDraftEventEpoch:UUID?
     /// Only after a successful typed status read on this exact connection.
     func subscribePersonalDraftEvents()async throws{
         let epoch=connectionEpoch
         guard readyForWork,personalDraftEventEpoch != epoch else{return}
-        let topics=["crew","session","message","channel","ask","work","todo","restart","system","personalDraft"]+["documents","viewFolders","data"].filter{capabilities.contains($0)}
+        let topics=Self.eventTopics(capabilities:capabilities,includePersonalDraft:true)
         _ = try await call("events.subscribe",.object(["topics":.array(topics.map(CrewdValue.string))]))
         guard connectionEpoch==epoch,readyForWork else{throw CancellationError()};personalDraftEventEpoch=epoch
     }

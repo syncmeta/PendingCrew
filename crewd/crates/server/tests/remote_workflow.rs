@@ -1479,6 +1479,13 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
             .iter()
             .any(|cap| cap == "managedRiskLessons.v1")
     );
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == crewd_proto::managed_objects_api::EVENTS_CAPABILITY)
+    );
     let owner = local(
         &mut running.owner,
         "crew.create",
@@ -1577,12 +1584,26 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
             "lessonDraft":{"happened":"The deadline passed","lesson":"Check the dependency",
                 "learnedFrom":[],"evidence":[],"appliesTo":[]}}
     });
+    let mut updates = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    updates.call("system.hello", json!({})).await;
+    assert_eq!(
+        updates.call("events.subscribe", json!({"topics":["onto"]})).await,
+        json!({"topics":["onto"]})
+    );
     let linked = remote
         .call("managedObject.submit", occurrence.clone())
         .await;
     let lesson = &linked["object"]["lesson"];
     assert_eq!(linked["occurrence"]["riskId"], risk["id"]);
     assert_eq!(linked["occurrence"]["lessonId"], lesson["id"]);
+    assert_eq!(
+        updates.event().await,
+        json!({"event":"onto.changed","data":{"crewId":owner,"objectIds":[risk["id"],lesson["id"]]}})
+    );
+    assert_eq!(
+        updates.call("managedObject.get", json!({"id":lesson["id"]})).await,
+        linked["object"]
+    );
     assert_eq!(
         remote.call("managedObject.risks", json!({})).await["items"][0]["becameLessonId"],
         lesson["id"]
@@ -1608,8 +1629,28 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
         .await,
         json!({"status":"notFound"})
     );
+    assert_eq!(remote.call("managedObject.submit", occurrence).await, linked);
+    let confirmation = json!({
+        "scope":scope,"crewId":owner,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"confirmLesson","lessonId":lesson["id"],"expectedRevision":lesson["revision"]}
+    });
+    local(&mut running.owner, "managedObject.submit", confirmation).await;
+    assert_eq!(
+        updates.event().await,
+        json!({"event":"onto.changed","data":{"crewId":owner,"objectIds":[lesson["id"]]}})
+    );
     local(&mut running.owner, "remote.revoke",
         json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"managed fixture complete"})).await;
+    local(&mut running.owner, "managedObject.submit", json!({
+        "scope":scope,"crewId":other,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"recordLesson","draft":{"happened":"The test grant was revoked",
+            "lesson":"Recheck authority before notifying","learnedFrom":[],"evidence":[],"appliesTo":[]}}
+    })).await;
+    let mut after_revoke = String::new();
+    assert!(matches!(
+        tokio::time::timeout(LIMIT, updates.io.read_line(&mut after_revoke)).await,
+        Ok(Ok(0) | Err(_))
+    ), "revoked subscriber received {after_revoke}");
     for (method, params) in [
         ("managedObject.get", json!({"id":table})),
         ("managedObject.request.get", lookup),

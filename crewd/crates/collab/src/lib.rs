@@ -126,6 +126,11 @@ pub enum Change {
     DataChanged {
         crew_id: String,
     },
+    /// Committed managed-object invalidation. The original receipt remains authoritative.
+    OntologyChanged {
+        crew_id: String,
+        object_ids: Vec<String>,
+    },
     DocumentChanged {
         crew_id: String,
         id: String,
@@ -177,6 +182,8 @@ pub enum ProgressKind {
     ToolCall,
     /// 名下工作项有变化（M4b 的工作项命令必须报）。
     WorkItem,
+    /// A new, receipted managed-object mutation by this session.
+    Ontology,
 }
 
 #[derive(Debug, thiserror::Error)]

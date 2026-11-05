@@ -23,11 +23,7 @@ struct CrewdKnowledgeDocumentsEntry: View {
             .padding(.horizontal,16).padding(.vertical,10)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
             if collection == .managedDirectory {
-                if workspace.client.capabilities.contains(CrewdManagedDirectoryWire.capability) {
-                    CrewdManagedDirectoryView(workspace:workspace,store:workspace.managedDirectory)
-                } else {
-                    CrewdEmptySurface(title:"组织目录暂不可用",detail:"当前连接尚未提供组织目录。",symbol:"list.bullet.rectangle")
-                }
+                CrewdManagedDirectoryView(workspace:workspace,store:workspace.managedDirectory)
             } else if collection == .tables {
                 if workspace.client.capabilities.contains("data.table.keyset.v1") {
                     CrewdNativeTablesView(workspace:workspace,store:workspace.knowledge)
@@ -2320,7 +2316,14 @@ private struct CrewdManagedDirectoryView: View {
     typealias Wire = CrewdManagedDirectoryWire
     typealias Store = CrewdManagedDirectoryStore
     @ObservedObject var workspace: CrewdWorkspace
-    let store: Store
+    @ObservedObject private var client: CrewdClient
+    @ObservedObject var store: Store
+
+    init(workspace:CrewdWorkspace,store:Store) {
+        self.workspace = workspace
+        self.client = workspace.client
+        self.store = store
+    }
     private enum SectionMode: Hashable {
         case tables, decisions, risks, lessons
         var riskLesson: Bool { self == .risks || self == .lessons }
@@ -2346,13 +2349,24 @@ private struct CrewdManagedDirectoryView: View {
     @State private var busy = false
     @State private var problem: String?
     @State private var notice: String?
+    @State private var presentationRoute: PresentationRoute?
+    @State private var queuedInvalidation: Store.Invalidation?
+    @State private var refreshWake: UUID?
 
+    private struct PresentationRoute: Equatable {
+        let authority: UUID
+        let crew: String
+        let section: SectionMode
+    }
+    private enum ReloadKind: Equatable { case ordinary, reconnect, invalidation }
     private struct Route: Equatable, Hashable {
         let crew: String
         let observation: UUID
         let connection: UUID
         let journalReady: Bool
         let section: SectionMode
+        let authority: UUID
+        var presentation: PresentationRoute { .init(authority:authority,crew:crew,section:section) }
     }
     private struct RiskLessonNavigation {
         let id: String
@@ -2363,11 +2377,12 @@ private struct CrewdManagedDirectoryView: View {
         .init(crew:workspace.crewID,observation:workspace.observationGeneration,
               connection:workspace.client.connectionEpoch,
               journalReady:workspace.originalJournalReady && workspace.client.readyForWork,
-              section:visibleSection)
+              section:visibleSection,authority:workspace.authorityRecordID)
     }
-    private var decisionsAvailable: Bool { workspace.client.capabilities.contains(Wire.decisionsCapability) }
-    private var riskLessonsAvailable: Bool { workspace.client.capabilities.contains(Wire.riskLessonsCapability) }
+    private var decisionsAvailable: Bool { client.capabilities.contains(Wire.decisionsCapability) }
+    private var riskLessonsAvailable: Bool { client.capabilities.contains(Wire.riskLessonsCapability) }
     private var visibleSection: SectionMode {
+        if !client.readyForWork { return section }
         if section.riskLesson && !riskLessonsAvailable { return .tables }
         if section == .decisions && !decisionsAvailable { return .tables }
         return section
@@ -2378,7 +2393,8 @@ private struct CrewdManagedDirectoryView: View {
     }
     private var presentsCurrentScope: Bool {
         guard let active = scope?.origin else { return false }
-        return route.journalReady && shownSection == route.section && active.observation == route.observation &&
+        return route.journalReady && presentationRoute == route.presentation && shownSection == route.section &&
+            active.observation == route.observation &&
             active.connection == route.connection && Wire.exact(active.crew,route.crew)
     }
     private enum RiskLessonMode {
@@ -2442,34 +2458,56 @@ private struct CrewdManagedDirectoryView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                header
-                if let problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
-                if presentsCurrentScope {
-                    if let notice { Text(notice).foregroundStyle(.secondary).textSelection(.enabled) }
-                    if !pending.isEmpty { pendingPanel }
-                    if route.section.riskLesson {
-                        if let riskLessonDetail { riskLessonObject(riskLessonDetail) } else { riskLessonCatalog }
-                    } else if route.section == .decisions {
-                        if let decision { decisionDetail(decision) } else { decisionLog }
-                    } else if let table { records(table) } else { catalog }
+        Group {
+            if client.readyForWork && !client.capabilities.contains(Wire.capability) {
+                CrewdEmptySurface(title:"组织目录暂不可用",detail:"当前连接尚未提供组织目录。",symbol:"list.bullet.rectangle")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        header
+                        if let problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
+                        if presentsCurrentScope {
+                            if let notice { Text(notice).foregroundStyle(.secondary).textSelection(.enabled) }
+                            if !pending.isEmpty { pendingPanel }
+                            if route.section.riskLesson {
+                                if let riskLessonDetail { riskLessonObject(riskLessonDetail) } else { riskLessonCatalog }
+                            } else if route.section == .decisions {
+                                if let decision { decisionDetail(decision) } else { decisionLog }
+                            } else if let table { records(table) } else { catalog }
+                        }
+                    }
+                    .frame(maxWidth:760,alignment:.leading)
+                    .padding(16)
+                    .frame(maxWidth:.infinity)
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(16)
-            .frame(maxWidth: .infinity)
         }
-        .task(id: route) {
+        .task(id:route) {
             let captured = route, link = linkedRiskLesson
             linkedRiskLesson = nil
+            let preserve = presentationRoute == captured.presentation
+            presentationRoute = captured.presentation
             let matches = link.map {
-                $0.section == captured.section && $0.origin.observation == captured.observation &&
-                    $0.origin.connection == captured.connection && Wire.exact($0.origin.crew,captured.crew)
+                $0.section == captured.section && $0.origin.authority == captured.authority &&
+                    $0.origin.observation == captured.observation && $0.origin.connection == captured.connection &&
+                    Wire.exact($0.origin.crew,captured.crew)
             } ?? false
-            await reload(captured,target:matches ? link?.id:nil,reset:true)
+            if preserve && !captured.journalReady {
+                ticket = UUID()
+                busy = false
+                return
+            }
+            await reload(captured,target:matches ? link?.id : (preserve ? selectedID:nil),
+                         reset:!preserve,kind:preserve ? .reconnect:.ordinary)
         }
-        .onDisappear { ticket = UUID(); editor = nil }
+        .onChange(of:store.invalidation) { _, change in
+            guard let change, store.owns(change) else { return }
+            queuedInvalidation = change
+            scheduleInvalidation()
+        }
+        .onChange(of:editor?.id) { _,_ in scheduleInvalidation() }
+        .onChange(of:busy) { _,_ in scheduleInvalidation() }
+        .onDisappear { ticket = UUID(); editor = nil; refreshWake = nil; queuedInvalidation = nil }
         .sheet(item: $editor) { target in
             Editor(target: target, allowRiskReferences:riskLessonsAvailable, riskOwners:workspace.sessions,
                    current: { editor?.id == target.id && route == target.route && scope == target.scope &&
@@ -2873,23 +2911,27 @@ private struct CrewdManagedDirectoryView: View {
         do { pending = try store.pending(scope) }
         catch { problem = error.localizedDescription }
     }
-    private func reload(_ captured: Route, target: String?, reset: Bool) async {
+    private func reload(_ captured: Route, target requested: String?, reset: Bool,
+                        kind: ReloadKind = .ordinary) async {
         guard route == captured, !Task.isCancelled else { return }
         let token = UUID()
         ticket = token
-        if reset {
-            scope = nil; shownSection = nil; tables = []; table = nil; rows = []; nextTable = nil; nextRow = nil
-            decisions = []; decision = nil; nextDecision = nil
-            riskLessonItems = []; riskLessonDetail = nil; nextRiskLesson = nil
-            pending = []; editor = nil
-            if target == nil { notice = nil }
-        }
+        if reset { resetProjection(clearNotice:requested == nil) }
         guard captured.journalReady else { busy = false; return }
-        busy = true; problem = nil
+        busy = true
+        if kind != .invalidation { problem = nil }
         @MainActor func current() -> Bool { ticket == token && route == captured && !Task.isCancelled }
         defer { if current() { busy = false } }
         do {
             let active = try await store.scope(stillCurrent:current)
+            var target = requested
+            let authorityChanged = scope.map { prior in
+                prior.origin.scope != active.origin.scope || prior.authority != active.authority
+            } ?? false
+            if authorityChanged {
+                resetProjection(clearNotice:true)
+                target = nil
+            }
             if captured.section.riskLesson {
                 if let target {
                     let item = try await store.riskLesson(active,id:target,stillCurrent:current)
@@ -2921,8 +2963,50 @@ private struct CrewdManagedDirectoryView: View {
             }
             scope = active
             shownSection = captured.section
-            refreshPending(active)
-        } catch { if current() { scope = nil; problem = error.localizedDescription } }
+            if kind != .invalidation || authorityChanged { refreshPending(active) }
+        } catch {
+            guard current() else { return }
+            if let requested, Self.provenMissing(error) {
+                // A committed purge can remove the selected object. Clear only
+                // that projection and return to the active catalogue.
+                table = nil; rows = []; nextRow = nil; decision = nil; riskLessonDetail = nil
+                tables.removeAll { $0.id == requested }
+                decisions.removeAll { $0.id == requested }
+                riskLessonItems.removeAll { $0.id == requested }
+                await reload(captured,target:nil,reset:false,kind:kind)
+            } else if kind != .invalidation {
+                if kind == .ordinary { scope = nil }
+                problem = error.localizedDescription
+            }
+        }
+    }
+    private func resetProjection(clearNotice: Bool) {
+        scope = nil; shownSection = nil; tables = []; table = nil; rows = []; nextTable = nil; nextRow = nil
+        decisions = []; decision = nil; nextDecision = nil
+        riskLessonItems = []; riskLessonDetail = nil; nextRiskLesson = nil
+        pending = []; editor = nil; problem = nil
+        if clearNotice { notice = nil }
+    }
+    private static func provenMissing(_ error: Error) -> Bool {
+        guard let refusal = error as? CrewdClientError else { return false }
+        return refusal.code == -32004 && refusal.refusal == "resource.not_found"
+    }
+    private func scheduleInvalidation() {
+        guard let pending = queuedInvalidation, store.owns(pending),
+              !busy, editor == nil, refreshWake == nil else { return }
+        let wake = UUID()
+        refreshWake = wake
+        Task {
+            try? await Task.sleep(for:.milliseconds(150))
+            guard refreshWake == wake else { return }
+            refreshWake = nil
+            guard let pending = queuedInvalidation, store.owns(pending,scope:scope), route.journalReady,
+                  scope == nil || presentsCurrentScope, !busy, editor == nil else { return }
+            queuedInvalidation = nil
+            let captured = route
+            await reload(captured,target:selectedID,reset:false,kind:.invalidation)
+            scheduleInvalidation()
+        }
     }
     private func loadMore(after: String, table target: String?) {
         guard let scope, !busy else { return }
@@ -3041,20 +3125,24 @@ private struct CrewdManagedDirectoryView: View {
                         }.disabled(fields.count >= Wire.fieldLimit)
                     }
                     if let problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
+                    if !current() {
+                        Text("原连接或资料范围已改变。输入仍保留，请重新打开当前对象后再提交。")
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .disabled(busy || stopped)
                 .navigationTitle(target.title)
                 .toolbar {
                     ToolbarItem(placement:.cancellationAction) {
-                        Button(stopped ? "关闭" : "取消") { dismiss() }.disabled(busy)
+                        Button(stopped || !current() ? "关闭" : "取消") { dismiss() }.disabled(busy && current())
                     }
                     ToolbarItem(placement:.confirmationAction) {
                         Button(target.isWithdrawal ? "确认撤回" : "保存") { save() }
-                            .disabled(busy || stopped || (model != nil && inputs.isEmpty))
+                            .disabled(busy || stopped || !current() || (model != nil && inputs.isEmpty))
                     }
                 }
             }
-            .interactiveDismissDisabled(busy)
+            .interactiveDismissDisabled(busy && current())
             .task {
                 switch target.mode {
                 case .riskLesson(let operation):
@@ -3278,7 +3366,7 @@ private struct CrewdManagedDirectoryView: View {
             catch { problem = error.localizedDescription; return }
             busy = true; problem = nil
             Task {
-                defer { if current() { busy = false } }
+                defer { busy = false }
                 do {
                     let result = try await submit(change,current)
                     guard current() else { return }

@@ -23,6 +23,7 @@ pub struct AgentConn {
     data_token: Option<String>,
     attached_flag: Arc<std::sync::atomic::AtomicBool>,
     watcher: Option<JoinHandle<()>>,
+    human_event_stream: bool,
 }
 
 impl AgentConn {
@@ -36,6 +37,12 @@ impl AgentConn {
 
     pub(crate) fn is_attached(&self) -> bool {
         self.session.is_some()
+    }
+
+    /// A buffered Human notification must never arrive on an Agent connection,
+    /// even after a later subscription replaces the Human-only topic.
+    pub(crate) fn reserve_human_event_stream(&mut self) {
+        self.human_event_stream = true;
     }
 }
 
@@ -113,6 +120,13 @@ async fn route(
     scope: &crate::connection_scope::ConnectionScope,
 ) -> Result<Value, RpcError> {
     if req.method == methods::ATTACH {
+        if conn.human_event_stream {
+            return Err(RpcError::new(
+                RpcError::FORBIDDEN,
+                "Human event streams cannot attach as agents",
+            )
+            .with_refusal("resource.forbidden"));
+        }
         let p: AttachParams = parse_params(req.params)?;
         if !port::verify_token(state, &p.session_id, &p.token) {
             return Err(invalid());

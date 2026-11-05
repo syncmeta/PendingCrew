@@ -359,6 +359,7 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
     }
     let now = tx.now_ts();
     let mut occurrence = None;
+    let mut replaced_decision_id = None;
     let object = match request.change {
         Change::CreateTable { title, fields } => {
             if !db::definition_valid(&title, &fields) {
@@ -426,6 +427,7 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
             let revision = active_decision(&expected_revision, &predecessor)?;
             check_decision_draft(c, &draft)?;
             decisions_db::supersede(c, number, revision)?;
+            replaced_decision_id = Some(predecessor.id);
             Object::Decision {
                 decision: decisions_db::record(
                     c,
@@ -472,7 +474,30 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         occurrence,
     };
     db::record(c, &principal, &digest, &receipt, member_confirmation)?;
+    if let Actor::Session(session) = actor {
+        sessions::note_progress(tx, session, crate::ProgressKind::Ontology)?;
+    }
+    tx.note(crate::Change::OntologyChanged {
+        crew_id: receipt.crew_id.clone(),
+        object_ids: affected_objects(&receipt, replaced_decision_id),
+    });
     Ok(receipt)
+}
+
+fn affected_objects(receipt: &Receipt, replaced_decision_id: Option<String>) -> Vec<String> {
+    match &receipt.object {
+        Object::Table { table } => vec![table.id.clone()],
+        Object::Row { row } => vec![row.table_id.clone(), row.id.clone()],
+        Object::Decision { decision } => replaced_decision_id
+            .into_iter()
+            .chain(std::iter::once(decision.id.clone()))
+            .collect(),
+        Object::Risk { risk } => vec![risk.id.clone()],
+        Object::Lesson { lesson } => match &receipt.occurrence {
+            Some(effect) => vec![effect.risk_id.clone(), lesson.id.clone()],
+            None => vec![lesson.id.clone()],
+        },
+    }
 }
 
 #[cfg(test)]
@@ -563,6 +588,129 @@ mod tests {
                 ],
             },
         )
+    }
+
+    #[test]
+    fn ontology_first_commit_notes_exact_actor_and_ids_but_replay_and_fault_do_not() {
+        use crate::{Change as Fact, ProgressKind, testkit::ok_at};
+
+        let mut s = store();
+        let wake_count = count(&s, "SELECT count(*) FROM wakes");
+        let message_count = count(&s, "SELECT count(*) FROM messages");
+        let (created, facts) = ok_at(&mut s, NOW, |tx| {
+            submit(tx, HUMAN, request("crew-a", definition()))
+        });
+        let table_id = table(&created).id.clone();
+        let change = |object_ids| Fact::OntologyChanged {
+            crew_id: "crew-a".into(),
+            object_ids,
+        };
+        assert_eq!(facts, [change(vec![table_id.clone()])]);
+        assert!(
+            sessions::get(s.conn(), "w-a1")
+                .unwrap()
+                .last_progress_at
+                .is_none()
+        );
+
+        let row_request = add("crew-a", &table_id);
+        let (added, facts) = ok_at(&mut s, NOW + 1, |tx| {
+            submit(tx, AUTHOR, row_request.clone())
+        });
+        let row_id = row(&added).id.clone();
+        assert_eq!(
+            facts,
+            [
+                Fact::Progress {
+                    session_id: "w-a1".into(),
+                    kind: ProgressKind::Ontology
+                },
+                change(vec![table_id.clone(), row_id.clone()]),
+            ]
+        );
+        let progress = |store: &Store| {
+            sessions::get(store.conn(), "w-a1")
+                .unwrap()
+                .last_progress_at
+        };
+        let causal =
+            |store: &Store| crewd_store::meta_get(store.conn(), "causal.session.v1.w-a1").unwrap();
+        let committed_progress = progress(&s);
+        let committed_causal = causal(&s);
+        assert_eq!(committed_progress, Some(crewd_store::ts_from_ms(NOW + 1)));
+        let epoch: serde_json::Value =
+            serde_json::from_str(committed_causal.as_ref().unwrap()).unwrap();
+        assert_eq!(epoch["value"]["epoch"], 1);
+        assert!(
+            sessions::get(s.conn(), "w-b1")
+                .unwrap()
+                .last_progress_at
+                .is_none()
+        );
+
+        let (replayed, facts) = ok_at(&mut s, NOW + 2, |tx| {
+            submit(tx, AUTHOR, row_request.clone())
+        });
+        assert_eq!(replayed, added);
+        assert!(facts.is_empty());
+        let mut collision = row_request;
+        collision.change = Change::AddRow {
+            table_id: table_id.clone(),
+            values: vec![Cell::Text("different".into()), Cell::Null],
+        };
+        assert!(matches!(
+            crate::run(&mut s, NOW + 3, |tx| submit(tx, AUTHOR, collision)),
+            Err(CollabError::Conflict(r)) if r.code == Code::ResourceRequestConflict
+        ));
+
+        let edit = request(
+            "crew-a",
+            Change::EditRow {
+                row_id: row_id.clone(),
+                expected_revision: "1".into(),
+                values: vec![Cell::Text("edited".into()), Cell::Null],
+            },
+        );
+        s.conn().execute_batch(
+            "CREATE TRIGGER reject_ontology_progress BEFORE UPDATE OF last_progress_at ON sessions
+             WHEN NEW.id='w-a1' BEGIN SELECT RAISE(ABORT,'synthetic progress fault'); END;",
+        ).unwrap();
+        assert!(crate::run(&mut s, NOW + 4, |tx| submit(tx, AUTHOR, edit.clone())).is_err());
+        assert!(
+            lookup(s.conn(), AUTHOR, "crew-a", &edit.request_id)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(get(s.conn(), OTHER, &row_id).unwrap(), added.object);
+        assert_eq!(progress(&s), committed_progress);
+        assert_eq!(causal(&s), committed_causal);
+        s.conn()
+            .execute_batch("DROP TRIGGER reject_ontology_progress")
+            .unwrap();
+
+        let (updated, facts) = ok_at(&mut s, NOW + 5, |tx| submit(tx, AUTHOR, edit.clone()));
+        assert_eq!(row(&updated).revision, "2");
+        assert_eq!(
+            facts,
+            [
+                Fact::Progress {
+                    session_id: "w-a1".into(),
+                    kind: ProgressKind::Ontology
+                },
+                change(vec![table_id, row_id]),
+            ]
+        );
+        let stale = Submit {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            ..edit
+        };
+        assert!(matches!(
+            crate::run(&mut s, NOW + 6, |tx| submit(tx, AUTHOR, stale)),
+            Err(CollabError::Conflict(r)) if r.code == Code::ManagedRowChanged
+        ));
+        assert_eq!(progress(&s), Some(crewd_store::ts_from_ms(NOW + 5)));
+        assert_eq!(count(&s, "SELECT count(*) FROM wakes"), wake_count);
+        assert_eq!(count(&s, "SELECT count(*) FROM messages"), message_count);
     }
 
     #[test]
@@ -966,6 +1114,136 @@ mod decision_tests {
             panic!("not a decision")
         };
         decision
+    }
+
+    #[test]
+    fn ontology_pairs_decision_predecessor_and_occurrence_and_credits_foreign_confirmer() {
+        use crate::{
+            Change as Fact, ProgressKind,
+            testkit::{NOW, ok_at},
+        };
+        use crewd_proto::managed_objects::{LessonDraft, RiskAbout, RiskDraft, RiskLevel};
+
+        let mut s = fixture();
+        let invalidation = |object_ids| Fact::OntologyChanged {
+            crew_id: "crew-a".into(),
+            object_ids,
+        };
+        let record = request(
+            &s,
+            "crew-a",
+            Change::RecordDecision {
+                draft: draft("crew-a", "先暂停"),
+            },
+        );
+        let first = ok(&mut s, |tx| submit(tx, HUMAN, record));
+        let first_id = saved(&first).id.clone();
+        let replacement = request(
+            &s,
+            "crew-a",
+            Change::ReplaceDecision {
+                decision_id: first_id.clone(),
+                expected_revision: "1".into(),
+                draft: draft("crew-a", "现在恢复"),
+            },
+        );
+        let (next, facts) = ok_at(&mut s, NOW, |tx| submit(tx, OWNER_CAPTAIN, replacement));
+        let next_id = saved(&next).id.clone();
+        assert_eq!(
+            facts,
+            [
+                Fact::Progress {
+                    session_id: "cap-a".into(),
+                    kind: ProgressKind::Ontology
+                },
+                invalidation(vec![first_id, next_id.clone()]),
+            ]
+        );
+        let withdraw = request(
+            &s,
+            "crew-a",
+            Change::WithdrawDecision {
+                decision_id: next_id.clone(),
+                expected_revision: "1".into(),
+                reason: "等待证据".into(),
+            },
+        );
+        let (_, facts) = ok_at(&mut s, NOW + 1, |tx| submit(tx, HUMAN, withdraw));
+        assert_eq!(facts, [invalidation(vec![next_id])]);
+
+        let risk = request(
+            &s,
+            "crew-a",
+            Change::RecordRisk {
+                owner: None,
+                draft: RiskDraft {
+                    summary: "旧版本会继续接收数据".into(),
+                    impact: RiskLevel::High,
+                    likelihood: None,
+                    mitigation: None,
+                    about: vec![RiskAbout::Crew {
+                        id: "crew-a".into(),
+                    }],
+                    mitigated_by: vec![],
+                },
+            },
+        );
+        let (risk, facts) = ok_at(&mut s, NOW + 2, |tx| submit(tx, HUMAN, risk));
+        let Object::Risk { risk } = risk.object else {
+            panic!("risk")
+        };
+        assert_eq!(facts, [invalidation(vec![risk.id.clone()])]);
+        let occurrence = request(
+            &s,
+            "crew-a",
+            Change::RecordRiskOccurrence {
+                risk_id: risk.id.clone(),
+                expected_revision: "1".into(),
+                lesson_draft: LessonDraft {
+                    happened: "切换时旧版本继续接收数据。".into(),
+                    lesson: "切换前停止旧版写入".into(),
+                    detection: None,
+                    learned_from: vec![],
+                    evidence: vec![],
+                    applies_to: vec![],
+                },
+            },
+        );
+        let (result, facts) = ok_at(&mut s, NOW + 3, |tx| submit(tx, HUMAN, occurrence));
+        let effect = result.occurrence.unwrap();
+        assert_eq!(
+            facts,
+            [invalidation(vec![risk.id, effect.lesson_id.clone()])]
+        );
+
+        let confirm = request(
+            &s,
+            "crew-a",
+            Change::ConfirmLesson {
+                lesson_id: effect.lesson_id.clone(),
+                expected_revision: "1".into(),
+            },
+        );
+        let (confirmed, facts) = ok_at(&mut s, NOW + 4, |tx| {
+            submit(tx, OTHER_WORKER, confirm.clone())
+        });
+        assert_eq!(
+            facts,
+            [
+                Fact::Progress {
+                    session_id: "w-b1".into(),
+                    kind: ProgressKind::Ontology
+                },
+                invalidation(vec![effect.lesson_id]),
+            ]
+        );
+        let (repeat, facts) = ok_at(&mut s, NOW + 5, |tx| submit(tx, OTHER_WORKER, confirm));
+        assert_eq!(confirmed, repeat);
+        assert!(facts.is_empty());
+        assert_eq!(
+            sessions::get(s.conn(), "w-b1").unwrap().last_progress_at,
+            Some(crewd_store::ts_from_ms(NOW + 4))
+        );
     }
 
     #[test]

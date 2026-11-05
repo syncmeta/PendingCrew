@@ -116,6 +116,19 @@ pub enum Object {
     Risk { risk: Risk },
     Lesson { lesson: Lesson },
 }
+
+impl Object {
+    pub fn crew_id(&self) -> &str {
+        match self {
+            Self::Table { table } => &table.crew_id,
+            Self::Row { row } => &row.crew_id,
+            Self::Decision { decision } => &decision.crew_id,
+            Self::Risk { risk } => &risk.crew_id,
+            Self::Lesson { lesson } => &lesson.crew_id,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "kind",

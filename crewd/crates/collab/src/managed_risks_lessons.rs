@@ -562,8 +562,11 @@ mod tests {
     fn call(s: &mut Store, actor: Actor<'_>, req: Submit, now_ms: i64) -> Result<Receipt> {
         let (value, changes) = crate::run(s, now_ms, |tx| managed::submit(tx, actor, req))?;
         assert!(
-            changes.is_empty(),
-            "risk and lesson commands must not schedule or post"
+            changes.iter().all(|change| matches!(
+                change,
+                crate::Change::OntologyChanged { .. } | crate::Change::Progress { .. }
+            )),
+            "risk and lesson commands must only publish invalidation and progress"
         );
         Ok(value)
     }

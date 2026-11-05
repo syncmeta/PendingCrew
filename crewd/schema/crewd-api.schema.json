@@ -10215,6 +10215,22 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/OntologyChanged"
+            },
+            "event": {
+              "const": "onto.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/WorkChanged"
             },
             "event": {
@@ -13871,6 +13887,28 @@
           "type": "object"
         }
       ]
+    },
+    "OntologyChanged": {
+      "additionalProperties": false,
+      "description": "An invalidation, not a write receipt or an object snapshot.",
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "objectIds": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "crewId",
+        "objectIds"
+      ],
+      "type": "object"
     },
     "PatrolCaptainBrief": {
       "properties": {
@@ -18420,7 +18458,8 @@
               "documents",
               "viewFolders",
               "personalDraft",
-              "data"
+              "data",
+              "onto"
             ],
             "type": "string"
           },
@@ -21405,6 +21444,9 @@
     "message.appended": {
       "$ref": "#/$defs/Message"
     },
+    "onto.changed": {
+      "$ref": "#/$defs/OntologyChanged"
+    },
     "personalDraft.changed": {
       "$ref": "#/$defs/PersonalDraftChanged"
     },
@@ -23133,7 +23175,8 @@
     "documents",
     "viewFolders",
     "personalDraft",
-    "data"
+    "data",
+    "onto"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

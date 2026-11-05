@@ -101,6 +101,7 @@ where
     let writer_scope = connection_scope.clone();
     let remote_writer = peer.remote().cloned();
     let writer_state = state.clone();
+    let writer_actor = peer.command_actor();
 
     let (tx, mut rx) = mpsc::channel::<ServerFrame>(256);
     let (writer_done_tx, mut writer_done) = oneshot::channel::<()>();
@@ -130,6 +131,13 @@ where
                 && principal.check_live(&writer_state).await.is_err()
             {
                 break;
+            }
+            if let ServerFrame::Event(event) = &frame
+                && event.event == events::ONTO_CHANGED
+                && !crate::managed_objects::event_allowed(&writer_state, &writer_actor, &event.data)
+                    .await
+            {
+                continue;
             }
             let mut line = match serde_json::to_vec(&frame) {
                 Ok(l) => l,
@@ -853,7 +861,7 @@ async fn request_step(
                 && p.topics.iter().any(|t| {
                     matches!(
                         t.as_str(),
-                        "documents" | "viewFolders" | "data" | "personalDraft"
+                        "documents" | "viewFolders" | "data" | "personalDraft" | events::ONTO_TOPIC
                     )
                 })
             {
@@ -866,6 +874,16 @@ async fn request_step(
                         ),
                     ),
                 )));
+            }
+            if p.topics.iter().any(|topic| topic == events::ONTO_TOPIC) {
+                let actor = peer.command_actor();
+                if let Err(error) = actor
+                    .authorize(state, crewd_proto::managed_objects_api::GET)
+                    .await
+                {
+                    return RequestStep::Reply(ServerFrame::Response(Response::err(id, error)));
+                }
+                agent.reserve_human_event_stream();
             }
             // 先订阅，再排队 ack，最后才起转发任务：事件不会抢在 ack 前面，
             // 也不会丢（接收端会缓冲）。重复订阅替换旧的转发任务。
@@ -1187,6 +1205,7 @@ fn spawn_forwarder(
                             e.event.as_str(),
                             "personalDraft.changed"
                                 | events::ASK_INBOX_CHANGED
+                                | events::ONTO_CHANGED
                                 | events::TODO_ATTRIBUTES_CHANGED
                                 | events::DATA_CHANGED
                                 | events::DOCUMENT_CHANGED

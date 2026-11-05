@@ -357,6 +357,8 @@ pub mod methods {
 
 pub mod events {
     pub const TODO_ATTRIBUTES_CHANGED: &str = "todo.attributesChanged";
+    pub const ONTO_TOPIC: &str = "onto";
+    pub const ONTO_CHANGED: &str = "onto.changed";
     /// `events.subscribe` 接受的主题（= 事件名第一个点之前的部分）；其他一律 -32602。
     /// `session` 与 `wake`（排障用的 `wake.changed`，常量在 M3c 的 `proto::orchestra::events`）主题的事件由 M3c 发；
     /// 主题名在这里一次列全，M3c 不改 conn.rs / 这张表。
@@ -376,6 +378,7 @@ pub mod events {
         "viewFolders",
         "personalDraft",
         "data",
+        ONTO_TOPIC,
     ];
     pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
     pub const MESSAGE_APPENDED: &str = "message.appended";
@@ -597,6 +600,7 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         ),
         (events::ASK_CHANGED, sub::<Ask>(g)),
         (events::ASK_INBOX_CHANGED, sub::<CrewRef>(g)),
+        (events::ONTO_CHANGED, sub::<managed_objects_api::OntologyChanged>(g)),
         (events::WORK_CHANGED, sub::<WorkChanged>(g)),
         (events::CHANNEL_WORK_CHANGED, sub::<ChannelWorkChanged>(g)),
         (events::DATA_CHANGED, sub::<CrewRef>(g)),

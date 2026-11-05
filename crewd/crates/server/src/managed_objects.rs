@@ -14,6 +14,36 @@ pub(crate) async fn handle(state: &Arc<AppState>, actor: &Actor, request: Reques
     }
 }
 
+/// Check the whole invalidation against the same current read authority as
+/// managedObject.get. A purged or mismatched object suppresses the entire hint.
+pub(crate) async fn event_allowed(state: &Arc<AppState>, actor: &Actor, data: &Value) -> bool {
+    let Ok(hint) = serde_json::from_value::<OntologyChanged>(data.clone()) else {
+        return false;
+    };
+    match hint.object_ids.as_slice() {
+        [_] => {}
+        [first, second] if first != second => {}
+        _ => return false,
+    }
+    let Ok(principal) = actor.principal(state).await else {
+        return false;
+    };
+    let actor = actor.clone();
+    let owner = state.clone();
+    state
+        .db
+        .call(move |store| {
+            let conn = store.conn();
+            actor.authorize_tx(&owner, conn, GET).is_ok()
+                && hint.object_ids.iter().all(|id| {
+                    domain::get(conn, domain::Actor::Human(&principal), id)
+                        .is_ok_and(|object| object.crew_id() == hint.crew_id)
+                })
+        })
+        .await
+        .unwrap_or(false)
+}
+
 fn value<T: serde::Serialize>(value: T) -> Result<Value, RpcError> {
     serde_json::to_value(value).map_err(dispatch::internal)
 }
