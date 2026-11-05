@@ -15,15 +15,18 @@ import Foundation
         let schema = CrewdDataSchemaObject(kind:"table",name:definition.name,createSql:create.sql,
             columns:definition.columns.enumerated().map { i, column in .init(name:column.name,declaredType:column.type.rawValue,
                 notNull:column.notNull,primaryKeyPosition:i == 0 ? 1 : 0,defaultSql:nil,attributes:.null) },
-            attributes:.object(["strict":.bool(true),"stablePrimaryKey":.bool(true)]))
+            attributes:.object(["strict":.bool(true),"stablePrimaryKey":.bool(true),"nativeRowWrites":.bool(true)]))
         let model = CrewdNativeTable.Model(schema)!
         let decomposed = "e\u{301}"
         let original: [CrewdDataCell] = [.text(value:decomposed),.integer(value:"-9223372036854775808"),.null]
         let edited: [CrewdDataCell] = [original[0], original[1], .text(value:"é'; DELETE FROM x; --")]
         let insert = try model.statement(row:original,original:nil)
         let update = try model.statement(row:edited,original:original)
-        precondition(!update.sql.contains("DELETE") && update.params == [edited[2]] + original)
-        precondition(insert.params == original && !CrewdNativeTable.exact(.text(value:"é"),original[0]))
+        precondition(update.sql.hasPrefix("UPDATE OR ABORT ") && !update.sql.contains("DELETE") && update.params == [edited[2]] + original)
+        precondition(insert.sql.hasPrefix("INSERT OR ABORT INTO ") && insert.params == original && !CrewdNativeTable.exact(.text(value:"é"),original[0]))
+        let readOnly = CrewdDataSchemaObject(kind:schema.kind,name:schema.name,createSql:schema.createSql,columns:schema.columns,
+            attributes:.object(["strict":.bool(true),"stablePrimaryKey":.bool(true),"nativeRowWrites":.bool(false)]))
+        precondition(CrewdNativeTable.Model(readOnly) == nil)
         do {
             _ = try model.statement(row:[.text(value:"é"),edited[1],edited[2]],original:original)
             preconditionFailure("canonical-equivalent key rewrite accepted")

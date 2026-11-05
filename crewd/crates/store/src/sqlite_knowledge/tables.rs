@@ -148,15 +148,27 @@ impl KeyKind {
 
 impl Knowledge {
     pub fn table_schema(&self, name: &str) -> Result<(Vec<DataColumn>, Value)> {
-        Ok(metadata(&self.conn, name)?.map_or_else(
-            || (vec![], Value::Null),
-            |data| {
-                let attributes = json!({
-                    "strict": data.strict,
-                    "stablePrimaryKey": data.key.is_some(),
-                });
-                (data.columns, attributes)
-            },
+        let Some(data) = metadata(&self.conn, name)? else {
+            return Ok((vec![], Value::Null));
+        };
+        // Triggers can redirect an attempted write. Deferred foreign keys can
+        // pass the rolled-back preview and fail only when confirmation commits.
+        let native_row_writes = data.strict
+            && data.key.is_some()
+            && self.conn.query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM main.sqlite_schema
+                        WHERE type='trigger' AND tbl_name=?1 COLLATE NOCASE)
+                    AND NOT EXISTS(SELECT 1 FROM pragma_foreign_key_list(?1,'main'))",
+                [name],
+                |row| row.get::<_, bool>(0),
+            )?;
+        Ok((
+            data.columns,
+            json!({
+                "strict": data.strict,
+                "stablePrimaryKey": data.key.is_some(),
+                "nativeRowWrites": native_row_writes,
+            }),
         ))
     }
 
@@ -274,7 +286,10 @@ mod tests {
                 ('minimum',-9223372036854775808,NULL),('negative',-1,NULL);",
         );
         let (columns, attrs) = k.table_schema("ledger").unwrap();
-        assert_eq!(attrs, json!({"strict":false,"stablePrimaryKey":true}));
+        assert_eq!(
+            attrs,
+            json!({"strict":false,"stablePrimaryKey":true,"nativeRowWrites":false})
+        );
         assert_eq!(columns[1].name, "row_key");
         assert_eq!(columns[1].declared_type, "INTEGER");
         assert!(columns[1].not_null);
@@ -327,10 +342,23 @@ mod tests {
               CREATE TABLE composite(a INTEGER,b TEXT,PRIMARY KEY(a,b)) STRICT;
               CREATE TABLE descending(id INTEGER PRIMARY KEY DESC);
               CREATE TABLE folded(id TEXT NOT NULL PRIMARY KEY COLLATE NOCASE) STRICT;
-              CREATE VIEW legacy_view AS SELECT id,memo FROM nullable;"#,
+              CREATE VIEW legacy_view AS SELECT id,memo FROM nullable;
+              CREATE TABLE guarded(id INTEGER PRIMARY KEY, note TEXT) STRICT;
+              CREATE TRIGGER guarded_add BEFORE INSERT ON guarded
+              BEGIN INSERT INTO nullable VALUES(NULL, 'unexpected'); SELECT RAISE(IGNORE); END;
+              CREATE TABLE related(id INTEGER PRIMARY KEY, parent INTEGER REFERENCES guarded(id)
+                DEFERRABLE INITIALLY DEFERRED) STRICT;"#,
         );
         let (columns, attrs) = k.table_schema("账\"簿").unwrap();
-        assert_eq!(attrs, json!({"strict":true,"stablePrimaryKey":true}));
+        assert_eq!(
+            attrs,
+            json!({"strict":true,"stablePrimaryKey":true,"nativeRowWrites":true})
+        );
+        for table in ["guarded", "related"] {
+            let (_, attributes) = k.table_schema(table).unwrap();
+            assert_eq!(attributes["nativeRowWrites"], false);
+            assert!(k.table_page(page(&k, table, 1, None)).unwrap().stable_order);
+        }
         assert_eq!(columns[0].name, "主\"键");
         assert_eq!(columns[2].attributes, json!({"hidden":2}));
         let mut next = None;

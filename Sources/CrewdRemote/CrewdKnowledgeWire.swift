@@ -843,7 +843,7 @@ enum CrewdNativeTable {
         var key: Column { columns[keyIndex] }
 
         init?(_ schema: CrewdDataSchemaObject) {
-            guard schema.kind == "table", schema.attributes["strict"] == .bool(true), schema.attributes["stablePrimaryKey"] == .bool(true),
+            guard schema.kind == "table", schema.attributes["nativeRowWrites"] == .bool(true),
                   !schema.columns.isEmpty, schema.columns.count <= 12,
                   Set(schema.columns.map { CrewdNativeTable.sqliteFold($0.name) }).count == schema.columns.count,
                   let keyIndex = schema.columns.firstIndex(where: { $0.primaryKeyPosition == 1 }),
@@ -875,10 +875,10 @@ enum CrewdNativeTable {
                 // Capture the full original row as a second, concrete compare-and-set
                 // fence alongside the authority generation in the preview token.
                 let comparisons = names.map { $0 + " COLLATE BINARY IS ?" }
-                return .init(sql:"UPDATE " + table + " SET " + assignments.joined(separator:", ") +
+                return .init(sql:"UPDATE OR ABORT " + table + " SET " + assignments.joined(separator:", ") +
                     " WHERE " + comparisons.joined(separator:" AND "),params:changed.map { row[$0] } + original)
             }
-            return .init(sql:"INSERT INTO " + table + " (" + names.joined(separator:", ") + ") VALUES (" +
+            return .init(sql:"INSERT OR ABORT INTO " + table + " (" + names.joined(separator:", ") + ") VALUES (" +
                 Array(repeating:"?",count:names.count).joined(separator:", ") + ")",params:row)
         }
     }

@@ -1164,7 +1164,7 @@ mod tests {
         assert_eq!(table["name"], "apc_business");
         assert_eq!(
             table["attributes"],
-            json!({"strict":true,"stablePrimaryKey":true})
+            json!({"strict":true,"stablePrimaryKey":true,"nativeRowWrites":true})
         );
         assert_eq!(
             table["columns"][0],
