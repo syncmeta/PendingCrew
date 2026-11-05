@@ -29,6 +29,10 @@
 
 行政协调的 macOS 普通后台 `08a3c48e` 已在隔离机组实测 Jev 本机 HTTPS 证书拒绝。捕获实际 TLS 拒绝，后台持久记录服务不可用，保留原工作，没有新增协调唤醒、指派或拆项。实际退出重开后记录一致，未重试该轮请求。此验收使用合成证书及仅回环服务。成功 HTTPS 响应和真实提供方分别验收，见 `/private/tmp/pcw-jev-tls.f9dc78wn/result.json`。
 
+`0f0c8146` 接通归档机组的知识库永久删除。后台在移动原文件前核验 Core、知识库和历史快照的配对备份。Core 提交前中断会还原暂存文件，提交后中断会继续清理。未收尾的备份会保留，完成后按 30 天规则轮转。旧版恢复留下的、已登记且验证为空的 SQLite 日志和索引随历史快照原样保留。新版恢复使用不可变只读方式，避免再生成此类文件。
+
+普通 Core 在全新机组和从 `d277ff08` 原地升级的隔离数据分别完成永久删除。实际重启后原机组及知识文件仍已删除，精确提交标记与配对备份一致，相邻机组逐字节未变。旧历史及其两个辅助文件的摘要保持一致，新版恢复实测未生成辅助文件。已接入 Agent 的三个机组生命周期调用均被拒绝，数据库、备份、提交标记和事件保持原样。4 项删除存储回归及 6 项知识存储回归通过，普通后台导出的公开协议与仓库定义逐字节一致。同源 Mac 私有 Debug 预览核对嵌入后台、严格签名和动态库。见 `/private/tmp/pcw-purge-0f0c-standard-GuFkDNsL/result.json`、`/private/tmp/pcw-purge-0f0c-legacy-GuFkDNsL/result.json`、`/private/tmp/pcw-purge-deny.hvckju4r/result.json` 和 `/private/tmp/pcw-purge-integration.GuFkDNsL/mac-final-debug-preview/candidate.json`。
+
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
 早先 `2ef0998d` 的隔离升级及回滚也通过，Apple 回执为 `09351a3b-b20d-40e9-91fe-00c5a40eeff2`。`945cd2c6`（0.2.3，构建 `20761.65326`）通过 Apple 公证、票据及 Gatekeeper 检查，回执为 `59254362-f660-49e3-ba3c-61f331ddfddc`。首条回复的后续修正在 `9a5a6a08`。
