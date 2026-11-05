@@ -897,6 +897,7 @@ pub fn search(c: &Connection, a: Actor<'_>, mut q: Search, clock: ReadClock) -> 
     a.principal(c)?;
     let kinds = validate(c, &mut q)?;
     let scope = fence(c, a, q.scope.as_ref())?;
+    q.scope = Some(scope.clone());
     let token = q.cursor.take();
     let query = serde_json::to_string(&q)?;
     let mut cut = cursor(c, a, &query, token.as_deref(), &scope, &clock)?;
@@ -1146,6 +1147,7 @@ pub fn expand(
         return Err(invalid());
     }
     let scope = fence(c, a, q.scope.as_ref())?;
+    q.scope = Some(scope.clone());
     let token = q.cursor.take();
     let query = serde_json::to_string(&q)?;
     let mut cut = cursor(c, a, &query, token.as_deref(), &scope, &clock)?;

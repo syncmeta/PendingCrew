@@ -540,3 +540,6 @@ mod recency;
 
 #[path = "organization_search_purpose_tests.rs"]
 mod purpose;
+
+#[path = "organization_search_scope_tests.rs"]
+mod canonical_scope;
