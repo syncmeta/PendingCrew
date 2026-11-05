@@ -9,6 +9,8 @@
 | 文档数据 | 原文档编辑、搜索、恢复、回收站及待办双向链接已联调。原生端新增同机组内容块编排，可引用指定版本、排序、移除，并从历史恢复排列。实际普通 Core 与 Swift 数据层验证两份文档引用同一块，原块更新后引用仍固定在原版本。丢回执后，后台重启且文档已有后续编辑，客户端仍只查原请求及其确切版本。恢复保留后续标题和工作关联。组合 Mac Debug 编译通过。 | 从正式窗口验收文档编排和待办的双向操作，以及移动端共享入口。 |
 | iOS 与跨端 | `1aaf0876` 普通 iPhoneOS arm64 Debug 完整编译通过，与已验证的 Mac 预览同源，覆盖共享的裁决和待办恢复代码。iPhone、iPad 目标和实际 Swift 调试动态库均已核对。早先 `09ac03f5` 已用 macOS 原生传输与 `0947711d` Core 验证短链接配对、原授权回执、重连查原巡检和撤权。最近一次读取手机 PendingCrew 版本时设备明确返回锁屏。 | 真机的应用配对、读取、答复及恢复待设备解锁后独立验收。 |
 
+`a99f433d` 的 macOS Apple Silicon Release 候选为 0.2.8，构建 `20762.18587`，包含结构化 H 到决定日志。Apple 公证 `77390289-1305-44ac-a856-7a31f4a7a099` 为 Accepted，开发者日志与送审 ZIP 摘要一致，记录零问题。附票 ZIP 重新解包后通过严格签名、票据和 Gatekeeper 检查，SHA-256 为 `f877da925355598c1ba3dab8c736b55ceebfbbe3452f61919d7daed29227b657`。签名包的 Core 与实测 Core 内容等价，生成的公开接口与仓库定义逐字节一致。交付物是 `/private/tmp/pcw-028-notary.xSoJ9cSZ/notarized-output/PendingCrew-0.2.8-20762.18587-notarized.zip`，供手动安装。正式窗口、日用安装和公开交付分别验收。
+
 `ba9851d0` 的 macOS Apple Silicon Release 候选为 0.2.7，构建 `20762.12888`，包含组织级受管表和决定日志。Apple 公证 `e07de62c-5e5a-4772-86c3-4f09a6b7b36d` 为 Accepted，开发者日志与送审 ZIP 摘要一致，记录零问题。附票 ZIP 重新解包后通过严格签名、票据和 Gatekeeper 检查，SHA-256 为 `4714095af668b406f45e1f631921ef005cef4f869e878df0322746c1cf3c8d6e`。公证包及验证记录在 `/private/tmp/pcw-027-notary.sn9ZeLLi/notarized-output/`。
 
 同一签名后台在隔离库实际退出并重开。原取代决定的提交答复未读取，后继决定随后撤回。重开后按原 UUID 查询一次，取代回执返回原第 1 版，当前后继保持已撤回的第 2 版，原决定保持已被取代，零重发。见 `/private/tmp/pcw-027-d-signed-run-36293/result.json`。本次交付为私有附票 ZIP，正式窗口、整包更新和公开交付分别验收。
@@ -57,7 +59,7 @@
 
 Swift 客户端与同源普通后台实测实际退出并重开。原提交回执返回风险第 2 版和教训第 1 版，当前记录分别保留已关闭的第 3 版与已过时的第 2 版。客户端查询原 UUID 一次，零重发，见 `/private/tmp/pcw-rl-c48-swift-43416/result.json`。组织对象 16 项、编号 9 项、工作上下文 4 项、Agent 与真实配对撤权测试通过。托管及旧版 Claude 的本地守卫与注入测试通过，未调用真实 Claude 服务。普通后台公开协议与仓库定义逐字节一致。
 
-Mac 私有 Debug 预览通过签名、同源后台内容和独立动态库验证，普通 iPhoneOS arm64 Debug 构建通过。见 `/private/tmp/pcw-risk-integration.s3cqlfwo/mac-risk-debug-preview/candidate.json` 和 `/private/tmp/pcw-risk-integration.s3cqlfwo/ios-risk-debug-proof.json`。正式窗口、真机和日用安装另行验收。带权限过滤的消息证据、产物自然键和结构化 H 自动采集仍待接入。
+Mac 私有 Debug 预览通过签名、同源后台内容和独立动态库验证，普通 iPhoneOS arm64 Debug 构建通过。见 `/private/tmp/pcw-risk-integration.s3cqlfwo/mac-risk-debug-preview/candidate.json` 和 `/private/tmp/pcw-risk-integration.s3cqlfwo/ios-risk-debug-proof.json`。正式窗口、真机和日用安装另行验收。带权限过滤的消息证据和产物自然键仍待接入。
 
 `838af5fd` 接通组织目录的提交后通知和真实 Agent 进展。首次成功写入在原回执事务中记录变更，后台提交后才向有人类读取权限的连接发送所属机组与对象编号。表格行变更通知包含表和行，决定取代包含新旧决定，风险发生包含 R 和 L。普通后台实测八次写入各收到一条通知，收件方随即读回正确对象。重放、拒绝及工具回调没有额外通知或进展，重启不重播旧通知，原回执仍可读。真实配对通过跨连接读回、重复提交和撤权。见 `/private/tmp/pcw-onto-evidence.bpnn8v8m/result.json`、`/private/tmp/pcw-onto-integration.LSxfOI2t/paired-onto.log`。
 
@@ -66,6 +68,16 @@ Mac 私有 Debug 预览通过签名、同源后台内容和独立动态库验证
 组织对象 18 项、Agent 注入 29 项、附着 Agent 与真实配对专项通过。普通后台生成的 API 与仓库定义逐字节一致。Mac 私有 Debug 预览通过严格签名、独立动态库和嵌入后台验证，iPhoneOS arm64 Debug 构建通过。见 `/private/tmp/pcw-onto-integration.LSxfOI2t/mac-onto-debug-preview/candidate.json` 和 `/private/tmp/pcw-onto-integration.LSxfOI2t/ios-onto-debug-proof.json`。
 
 扩大回归时，协作全套 728 项通过、11 项失败，连接组 3 项通过、1 项失败。用前一提交 `3bf6b837` 的干净源码独立构建，逐项复现了这 12 项相同失败。其中 10 项快照夹具假定所有表都带 rowid，另有一项旧提示词断言与一项消息提交故障注入断言。见 `/private/tmp/pcw-onto-integration.LSxfOI2t/baseline-collab-reproductions.log` 和 `/private/tmp/pcw-onto-integration.LSxfOI2t/baseline-s5-reproduction.log`。
+
+`a99f433d` 接通 §4.1 的结构化 H 到决定日志 D。发起人显式提供问题、选项、背景及关联对象，创建前会说明答案和理由可由组织成员读取。人类可在原生界面选择，或在原群消息下用明确选项答复。配置到期默认时，后台在同一事务结案并记录所选项和来源，系统默认与人工选择分开标记。普通 H 继续支持自由文本和历史编号。永久删除清除对应结构化回执的正文与结果，仅保留阻止原请求号重用的标记。仍由上级机组保留的频道回复遵循该频道的既有规则。
+
+普通 Core 生成的 API 与仓库定义逐字节一致。结构化问答、决定目录、旧版唤醒、永久删除和原回执通过定向测试。真实配对验证直接选择、群内明确选择、到期默认和撤权。Agent 工具保留原发起回执，旧客户端默认继续读取原决定目录。见 `/private/tmp/pcw-h-integration.GlGVkrDq/` 内的 `*-compat.log` 与 `final-ordinary-h-witness.json`。
+
+用 `838af5fd` 普通 Core 建立隔离 v25 数据库，由 `a99f433d` 实际升级到 v26，再退出并重开。旧 H 和 D 均可读，旧自由文本走原答复路径。三条新 H 分别由直接选择、群回复和实际约 88 秒计时生成一条 D。直接选择的提交答复刻意未读，重开后按原 UUID 查回原结果。现有唤醒分别携带选项和 D 编号。见 `/private/tmp/pcw-hd-evidence.j7b7f2ej/result.json`。
+
+同源 Swift 客户端用实际本机连接提交明确选项和 Unicode 理由。模拟收到回执后、本地确认前中断，Core 和 Swift 均重开后查原 UUID 一次，零重发，读回同一 H 来源、选项和理由，决定仍只有一条。旧 Core 使用普通问题路径。见 `/private/tmp/pcw-native-hd-proof.xjuxg6fw/result.json`。两项隔离验收使用模拟 Agent，正式窗口和真机操作单独验收。
+
+`a99f433d` 的 iPhoneOS Debug 两次编译均成功，实际产物的版本戳核验仍待通过。两次日志都显示写入版本戳后 Xcode 重建了 `Info.plist`。见 `/private/tmp/pcw-h-integration.GlGVkrDq/ios-h-final-debug.log` 与 `ios-h-final-debug-restamp.log`。
 
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
