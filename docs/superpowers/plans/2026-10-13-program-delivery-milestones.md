@@ -43,6 +43,10 @@ Mac 修正 `3931d202` 将裁决入口放到已完成的巡检简报分组中。�
 
 `f55bfc28` 接通多内容块文档的单位置编辑。资料库和群内原文使用同一入口。保存保持原位置 ID、其他位置、顺序和布局。编辑固定版本时，新块以原固定版本为来源，其他引用保留。普通 Core 与实际 Swift 数据层在提交答复未读的情况下分别重启，客户端只查原请求，并在文档已更新到第 4 版时核对原保存的第 3 版。跨范围位置和过期版本拒绝写入。见 `/private/tmp/pcw-placement.he_rykl3/result.json`。Mac 私有预览和 iPhoneOS 完整构建记录见 `/private/tmp/pcw-doc-placement-gate.ojhUY5/mac-preview-final/candidate.json`、`/private/tmp/pcw-doc-placement-gate.ojhUY5/ios-debug-proof.json`。两次源码之间后台 Rust 输入一致。
 
+`890fe05b` 接通机组资料库直接新建原文，无需选群。原文的正文块、文档视图和位置一次保存。群内仍可独立选择加入当前群。六个实际 Swift 进程争用同一原请求时只有一个取得提交资格。全新普通后台实测原保存答复未读，同一文档和正文随后更新到第 2 版。客户端与后台均实际退出重开，按原 UUID 查回第 1 版的原文和位置，再打开当前第 2 版。原保存只有一份回执，未生成群引用。见 `/private/tmp/pcw-library-wire.etnwwzw2/result.json`。Swift 的拒绝、跨连接、恢复代次及既有群内保存回归通过，既有知识接口的配对读取和撤权通过。
+
+该提交的 Mac Debug 私有预览通过签名、临时加载路径规范化和独立动态库检查，iPhoneOS arm64 Debug 完整编译通过。Mac 包复用 `8055279f` 的普通后台，两提交的 Rust 输入一致。见 `/private/tmp/pcw-library-integration.vlbbMIE7/mac-debug-preview/candidate.json` 和 `/private/tmp/pcw-library-integration.vlbbMIE7/ios-debug-proof.json`。正式窗口及真机操作仍待验收。
+
 `46e6d630` 让用户从 Mac、iPad 和两套 iPhone 消息入口查看人工归属纠正历史。模型原判断、当前有效归属和人工设置、清除、重置分开展示。查询按原消息、群和机组校验，每页 20 条，最多展示 256 条并明确提示还有更早记录。普通 Core 实际退出并重开后查回 24 条，原消息、回复关系和判断状态一致，已解除群关联的工作隐藏编号。配对撤权、附着代理拒绝、旧分页失效和损坏记录的回归通过。见 `/private/tmp/pcw-attr.w0f26jop/result.json`、`/private/tmp/pcw-attribution-gate.m3vDtI/paired.log`。同源 Mac 私有预览封装和 iPhoneOS 完整构建均通过，见 `/private/tmp/pcw-attribution-gate.m3vDtI/mac-preview/candidate.json`、`/private/tmp/pcw-attribution-gate.m3vDtI/ios-debug-proof.json`。
 
 `8055279f` 按原设计 §29.4 接通逐消息的会话唤醒与投递说明。界面分别显示实际入队原因、队列状态、判断记录和真实回复。只在有完整零目标规划证据时显示零对象。历史理由或队列结果缺少证据时，对应字段显示未知。实际普通 Core 验证明确 `@` 只产生一条投递记录，人工停止后实际退出并重启，读回同一记录。也验证了真实零目标、旧数据、错机组或频道拒绝，以及只读查询前后原消息、队列和证据相同。见 `/private/tmp/pcw-delivery.jp1ydy62/result.json`。受控执行器投递确认、模拟判断服务选中对象、本机读取和配对撤权验收通过。普通后台打印的 API 与仓库定义逐字相同。
