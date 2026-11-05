@@ -35,6 +35,7 @@ pub mod message_attribution;
 pub mod message_delivery;
 pub mod message_provenance;
 pub mod messages;
+pub mod managed_objects;
 pub mod patrol_brief;
 pub mod channel_responsibility;
 pub mod patrol_manual;

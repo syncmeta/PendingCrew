@@ -152,7 +152,7 @@ pub fn vacuum_into(conn: &Connection, dest: &Path) -> Result<()> {
 
 /// 同 `vacuum_into`，另外要求拍完之后还剩 `reserve` 字节可用空间。
 pub fn vacuum_into_reserving(conn: &Connection, dest: &Path, reserve: u64) -> Result<()> {
-    snapshot_steps(conn, dest, reserve, false).map_err(|e| StoreError::Snapshot {
+    snapshot_steps(conn, dest, reserve, None, false).map_err(|e| StoreError::Snapshot {
         dest: dest.to_path_buf(),
         source: Box::new(e),
     })
@@ -162,7 +162,8 @@ fn snapshot_steps(
     conn: &Connection,
     dest: &Path,
     reserve: u64,
-    invalidate_remote_trust: bool,
+    restore_floor: Option<i64>,
+    qualify_empty_knowledge: bool,
 ) -> Result<()> {
     let dir = dest
         .parent()
@@ -202,7 +203,7 @@ fn snapshot_steps(
                 .open(&tmp)?;
         }
         conn.execute("VACUUM INTO ?1", [tmp_str])?;
-        if invalidate_remote_trust {
+        if restore_floor.is_some() || qualify_empty_knowledge {
             // Never install an old active grant even if the process crashes just
             // after rename. Transform only this private staging copy, not the backup.
             let mut copy =
@@ -219,16 +220,28 @@ fn snapshot_steps(
                 "PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;"
             })?;
             let tx = copy.transaction()?;
-            crate::remote::invalidate_for_work_replacement(&tx, "work_restore", &crate::now_ts())?;
-            crate::native_execution::invalidate_unknown(&tx)?;
-            crate::work_followups::restored(&tx)?;
-            crate::command_receipts::restored(&tx, &crate::now_ts())?;
-            crate::local_clients::restored(&tx)?;
-            crate::judgment_state::restored(&tx)?;
-            crate::personal_drafts::restored(&tx)?;
-            crate::notifications::restored(&tx)?;
-            crate::codex_inputs::restored(&tx)?;
-            crate::codex_controls::restored(&tx)?;
+            clear_empty_knowledge_cut(&tx)?;
+            if let Some(floor) = restore_floor {
+                crate::remote::invalidate_for_work_replacement(
+                    &tx,
+                    "work_restore",
+                    &crate::now_ts(),
+                )?;
+                crate::native_execution::invalidate_unknown(&tx)?;
+                crate::work_followups::restored(&tx)?;
+                crate::command_receipts::restored(&tx, &crate::now_ts())?;
+                crate::local_clients::restored(&tx)?;
+                crate::judgment_state::restored(&tx)?;
+                crate::personal_drafts::restored(&tx)?;
+                crate::notifications::restored(&tx)?;
+                crate::codex_inputs::restored(&tx)?;
+                crate::codex_controls::restored(&tx)?;
+                if floor > 0 {
+                    crate::object_refs::preserve_restore_floor(&tx, floor)?;
+                }
+            } else {
+                record_empty_knowledge_cut(&tx)?;
+            }
             tx.commit()?;
         }
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。
@@ -316,7 +329,21 @@ pub fn backup_db(db: &Path, dest: &Path) -> Result<()> {
 /// is opened by SQLite. Online backup retains its concurrent-writer contract.
 pub fn backup_db_quiescent(db: &Path, dest: &Path) -> Result<()> {
     require_file(db)?;
-    crate::version_guard::with_quiescent_copy(db, |c| vacuum_into(c, dest))
+    let data = db.parent().unwrap_or(Path::new("."));
+    crate::version_guard::with_quiescent_copy(db, |c| {
+        let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let qualifies = db.file_name().and_then(|n| n.to_str()) == Some(crate::DB_FILE)
+            && version >= 23
+            && empty_knowledge_root(data)?;
+        if qualifies {
+            snapshot_steps(c, dest, 0, None, true).map_err(|e| StoreError::Snapshot {
+                dest: dest.to_path_buf(),
+                source: Box::new(e),
+            })
+        } else {
+            vacuum_into(c, dest)
+        }
+    })
 }
 
 /// 定时备份的保留策略。
@@ -536,7 +563,11 @@ fn tick_inner(
         report
             .removed
             .extend(expire_pre_delete(&dir, now_ms, policy)?);
-        report.removed.extend(crate::knowledge_purge::expire_completed(&dir, now_ms, policy)?);
+        report
+            .removed
+            .extend(crate::knowledge_purge::expire_completed(
+                &dir, now_ms, policy,
+            )?);
     }
     Ok(report)
 }
@@ -898,6 +929,127 @@ pub struct RestoreReport {
     pub replaced: Option<PathBuf>,
 }
 
+const EMPTY_KNOWLEDGE_CUT: &str = "backup.emptyKnowledgeCut.v1";
+
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct EmptyKnowledgeCut {
+    database: String,
+    restore_epoch: String,
+    floor: i64,
+}
+
+fn empty_knowledge_root(data: &Path) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let data = std::fs::canonicalize(data)?;
+    if crate::knowledge_purge::has_recovery_material(&data)? {
+        return Ok(false);
+    }
+    let root = data.join("knowledge");
+    let metadata = match std::fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(e) => return Err(e.into()),
+    };
+    if !metadata.is_dir()
+        || metadata.mode() & 0o7777 != 0o700
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Ok(false);
+    }
+    Ok(std::fs::read_dir(root)?.next().transpose()?.is_none())
+}
+
+fn observed_empty_knowledge_cut(c: &Connection) -> Result<EmptyKnowledgeCut> {
+    let database = crate::meta_get(c, "dbId")?
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| StoreError::Invalid("offline backup database identity missing".into()))?;
+    Ok(EmptyKnowledgeCut {
+        database,
+        restore_epoch: crate::personal_drafts::epoch(c)?,
+        floor: crate::object_refs::allocator_floor(c)?,
+    })
+}
+fn record_empty_knowledge_cut(c: &Connection) -> Result<()> {
+    crate::meta_set(
+        c,
+        EMPTY_KNOWLEDGE_CUT,
+        &serde_json::to_string(&observed_empty_knowledge_cut(c)?)?,
+    )
+}
+fn qualified_empty_knowledge_cut(c: &Connection, source: &Path) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(source)?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o7777 != 0o600
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Ok(false);
+    }
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut name = source.as_os_str().to_owned();
+        name.push(suffix);
+        match std::fs::symlink_metadata(Path::new(&name)) {
+            Ok(_) => return Ok(false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    let Some(raw) = crate::meta_get(c, EMPTY_KNOWLEDGE_CUT)? else {
+        return Ok(false);
+    };
+    if raw.len() > 1024 {
+        return Ok(false);
+    }
+    let Ok(captured) = serde_json::from_str::<EmptyKnowledgeCut>(&raw) else {
+        return Ok(false);
+    };
+    Ok(captured == observed_empty_knowledge_cut(c)?)
+}
+
+pub(crate) fn clear_empty_knowledge_cut(c: &Connection) -> Result<()> {
+    // A live Core must never retain a snapshot-only attestation.
+    if crate::meta_get(c, EMPTY_KNOWLEDGE_CUT)?.is_some() {
+        c.execute("DELETE FROM meta WHERE key=?1", [EMPTY_KNOWLEDGE_CUT])?;
+    }
+    Ok(())
+}
+
+// Local monotone proof survives interruption between archiving the old
+// database and publishing its verified replacement. It contains one integer,
+// no crew identity, receipt, or content from the discarded generation.
+const RESTORE_ALLOCATOR_WITNESS: &str = ".object-refs-restore-floor.v1";
+
+pub(crate) fn restore_allocator_floor(data_dir: &Path) -> Result<i64> {
+    let path = data_dir.join(RESTORE_ALLOCATOR_WITNESS);
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o7777 != 0o600
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(StoreError::Invalid(
+            "unqualified object reference restore floor".into(),
+        ));
+    }
+    let mut raw = String::new();
+    file.take(24).read_to_string(&mut raw)?;
+    crate::object_refs::parse_floor(raw.strip_suffix('\n').unwrap_or(&raw))
+}
+
 /// 从备份恢复（S21）。**调用方必须先拿到数据目录锁**（serve 在跑时不能恢复）。
 /// 先核来源（是 crewd 的库、版本不比本程序新、`integrity_check` 通过、不是在用的库自己）；
 /// 原来的库（连同 -wal / -shm）改名为 `crewd.db.replaced-{时间}`，永不覆盖；再把来源 `VACUUM INTO` 成新的
@@ -921,8 +1073,14 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
             from.display()
         )));
     }
-    if crate::meta_get(&src, "knowledge.sqlite.v1")?.as_deref() == Some("1")
-        || data_dir.join("knowledge").exists()
+    let source_enabled = crate::meta_get(&src, "knowledge.sqlite.v1")?.as_deref() == Some("1");
+    let target_has_root = match std::fs::symlink_metadata(data_dir.join("knowledge")) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e.into()),
+    };
+    if !empty_knowledge_root(data_dir)?
+        || ((source_enabled || target_has_root) && !qualified_empty_knowledge_cut(&src, from)?)
     {
         return Err(StoreError::Invalid("Core-only restore cannot replace a knowledge workspace; restore a knowledge snapshot under current ACL".into()));
     }
@@ -939,28 +1097,31 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
             "paired Core16/native-data restore required; legacy standalone restore refused".into(),
         ));
     }
-    if db.try_exists()?
-        && crate::version_guard::with_quiescent_copy(&db, |c| {
-            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                .map_err(StoreError::from)
-        })? == 16
-    {
-        return Err(StoreError::Invalid(
-            "pre16 backup cannot replace a native authority in place; use an isolated target"
-                .into(),
-        ));
-    }
     ensure_ok(&open_for_check(from)?, Check::Integrity)?;
     let src_id = crate::meta_get(&src, "dbId")?;
-
-    let side = |suffix: &str| data_dir.join(format!("{}{suffix}", crate::DB_FILE));
-    let db_present = db.exists();
-    if db_present {
-        // 先把 WAL 折回主库，挪走的那份自成一体；做不成也照样连 -wal / -shm 一起挪（名字跟着改）。
-        if let Ok(c) = open_for_checkpoint(&db) {
-            let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
-        }
+    let floor_witness = data_dir.join(RESTORE_ALLOCATOR_WITNESS);
+    let recorded = restore_allocator_floor(data_dir)?;
+    let source_floor = crate::object_refs::allocator_floor(&src)?;
+    let (live_id, live_floor) = if db.try_exists()? {
+        crate::version_guard::with_quiescent_copy(&db, |current| {
+            Ok((
+                crate::meta_get(current, "dbId")?,
+                crate::object_refs::allocator_floor(current)?,
+            ))
+        })?
+    } else {
+        // A failed cut may already have moved the predecessor. Its identity
+        // record remains until a replacement has been durably published.
+        let recorded = crate::read_id_file(&data_dir.join(crate::ID_FILE))?.map(|id| id.id);
+        (recorded, 0)
+    };
+    if target_has_root && (src_id.is_none() || live_id != src_id) {
+        return Err(StoreError::Invalid(
+            "offline empty knowledge cut belongs to another Core authority".into(),
+        ));
     }
+    let floor = recorded.max(source_floor).max(live_floor);
+
     let aside = data_dir.join(format!(
         "{}.replaced-{}",
         crate::DB_FILE,
@@ -969,25 +1130,45 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     if aside.exists() {
         return Err(StoreError::Invalid(format!("{} 已存在", aside.display())));
     }
-    // 不管库文件在不在，残留的 -wal / -shm 一律挪开（复审 2 轮 2）：库不在时崩溃留下的旧 WAL
-    // 会被 SQLite 回放到恢复出来的新文件上，把它弄坏。
-    for suffix in ["-wal", "-shm"] {
-        if side(suffix).exists() {
-            let mut to = aside.as_os_str().to_owned();
-            to.push(suffix);
-            fsutil::rename_durably(&side(suffix), Path::new(&to))?;
+    let stage = data_dir.join(format!(".core-restore-{}.db", uuid::Uuid::new_v4()));
+    let cut = (|| -> Result<Option<PathBuf>> {
+        // Finish and verify the entire replacement before changing any active
+        // path. Its allocator floor and restore stamp share one SQLite commit.
+        snapshot_steps(&src, &stage, 0, Some(floor), false).map_err(|e| StoreError::Snapshot {
+            dest: db.clone(),
+            source: Box::new(e),
+        })?;
+        if floor > recorded {
+            fsutil::atomic_write(&floor_witness, format!("{floor}\n").as_bytes(), 0o600)?;
         }
+        let db_present = db.exists();
+        if db_present {
+            // Preserve the previous physical authority and any committed WAL.
+            if let Ok(c) = open_for_checkpoint(&db) {
+                let _ = c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+            }
+        }
+        for suffix in ["-wal", "-shm"] {
+            let side = data_dir.join(format!("{}{suffix}", crate::DB_FILE));
+            if side.exists() {
+                let mut to = aside.as_os_str().to_owned();
+                to.push(suffix);
+                fsutil::rename_durably(&side, Path::new(&to))?;
+            }
+        }
+        let replaced = if db_present {
+            fsutil::rename_durably(&db, &aside)?;
+            Some(aside)
+        } else {
+            None
+        };
+        fsutil::rename_durably(&stage, &db)?;
+        Ok(replaced)
+    })();
+    if cut.is_err() && stage.exists() {
+        let _ = std::fs::remove_file(&stage);
     }
-    let replaced = if db_present {
-        fsutil::rename_durably(&db, &aside)?;
-        Some(aside)
-    } else {
-        None
-    };
-    snapshot_steps(&src, &db, 0, true).map_err(|e| StoreError::Snapshot {
-        dest: db.clone(),
-        source: Box::new(e),
-    })?;
+    let replaced = cut?;
     let id_path = data_dir.join(crate::ID_FILE);
     match src_id {
         Some(id) => fsutil::atomic_write(&id_path, format!("{id}\n").as_bytes(), 0o600)?,
@@ -1004,6 +1185,93 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn served_core_backup_attests_only_the_offline_empty_knowledge_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().canonicalize().unwrap();
+        let live = data.join(crate::DB_FILE);
+        let online = data.join("unqualified-online.db");
+        let qualified = data.join("qualified-offline.db");
+        let dirty = data.join("unqualified-staging.db");
+        let knowledge = data.join("knowledge");
+        let s = crate::Store::open_data_dir(&data).unwrap();
+        crate::meta_set(s.conn(), "knowledge.sqlite.v1", "1").unwrap();
+        crate::meta_set(s.conn(), "fixture.cut", "old").unwrap();
+        crate::team_data::private_dir(&knowledge).unwrap();
+        drop(s);
+        backup_db(&live, &online).unwrap();
+        assert!(restore(&data, &online).is_err());
+        backup_db_quiescent(&live, &qualified).unwrap();
+        let original = std::fs::read(&qualified).unwrap();
+
+        let pending = knowledge.join("unknown.stage");
+        std::fs::write(&pending, b"private fixture").unwrap();
+        backup_db_quiescent(&live, &dirty).unwrap();
+        assert!(restore(&data, &qualified).is_err());
+        assert_eq!(std::fs::read(&pending).unwrap(), b"private fixture");
+        std::fs::remove_file(&pending).unwrap();
+        assert!(restore(&data, &dirty).is_err());
+        let s = crate::Store::open_data_dir(&data).unwrap();
+        crate::meta_set(s.conn(), "fixture.cut", "current").unwrap();
+        drop(s);
+
+        restore(&data, &qualified).unwrap();
+        assert_eq!(std::fs::read(&qualified).unwrap(), original);
+        let s = crate::Store::open_data_dir(&data).unwrap();
+        assert_eq!(
+            crate::meta_get(s.conn(), "fixture.cut").unwrap().as_deref(),
+            Some("old")
+        );
+        assert!(
+            crate::meta_get(s.conn(), EMPTY_KNOWLEDGE_CUT)
+                .unwrap()
+                .is_none()
+        );
+        assert!(std::fs::read_dir(&knowledge).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn restore_floor_survives_an_interrupted_publish_with_no_active_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join(crate::DB_FILE);
+        let source = dir.path().join("old-backup.db");
+        let store = crate::Store::open_data_dir(dir.path()).unwrap();
+        vacuum_into(store.conn(), &source).unwrap();
+        drop(store);
+        let held = dir.path().join("predecessor.db");
+        std::fs::rename(&active, &held).unwrap();
+        fsutil::atomic_write(&dir.path().join(RESTORE_ALLOCATOR_WITNESS), b"73\n", 0o600).unwrap();
+
+        let restored = restore(dir.path(), &source).unwrap();
+        assert!(restored.replaced.is_none());
+        let store = crate::Store::open_data_dir(dir.path()).unwrap();
+        assert_eq!(
+            crate::object_refs::allocator_floor(store.conn()).unwrap(),
+            73
+        );
+        assert!(held.is_file());
+    }
+
+    #[test]
+    fn corrupt_restore_floor_refuses_without_moving_active_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join(crate::DB_FILE);
+        let source = dir.path().join("old-backup.db");
+        let store = crate::Store::open_data_dir(dir.path()).unwrap();
+        vacuum_into(store.conn(), &source).unwrap();
+        drop(store);
+        let before = std::fs::read(&active).unwrap();
+        fsutil::atomic_write(&dir.path().join(RESTORE_ALLOCATOR_WITNESS), b"bad\n", 0o600).unwrap();
+        assert!(restore(dir.path(), &source).is_err());
+        assert_eq!(std::fs::read(&active).unwrap(), before);
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|item| {
+            item.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".replaced-")
+        }));
+    }
 
     fn s4_maintenance_fixture(data: bool) -> (tempfile::TempDir, PathBuf, crate::Db) {
         let dir = tempfile::tempdir().unwrap();
@@ -1351,7 +1619,7 @@ pub fn native_restore_stage(from: &Path, destination: &Path) -> Result<()> {
     }
     crate::team_data::validate_active(&source)?;
     ensure_ok(&source, Check::Integrity)?;
-    snapshot_steps(&source, destination, 0, true)
+    snapshot_steps(&source, destination, 0, Some(0), false)
 }
 
 #[cfg(test)]

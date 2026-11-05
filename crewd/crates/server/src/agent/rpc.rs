@@ -178,6 +178,12 @@ async fn route(
                 return to_value(catalog::case_tools_for(&me, loc));
             }
             let mut list = catalog::tools_for(&me, loc);
+            if !scope.is_live()
+                || !conn.data_token.as_ref().is_some_and(|token| state.tokens.verify(&session, token))
+                || (state.management.get().is_some() && !state.admission.contains(&session))
+            {
+                list.retain(|tool| !catalog::requires_managed_scope(&tool.name));
+            }
             if state.data_runtime.get().is_some() {
                 list.retain(|tool| !tool.name.starts_with("document_"));
             }
@@ -252,7 +258,7 @@ async fn route(
                     "Agent execution requires current-run Human admission",
                 ));
             }
-            if matches!(
+            if catalog::requires_managed_scope(&p.tool) || matches!(
                 p.tool.as_str(),
                 "channel_archive_check" | "channel_archive_verified" | "channel_restore_verified"
                     | crewd_collab::work_coordination::SPLIT_TOOL
@@ -394,6 +400,137 @@ mod tests {
     use crate::agent::testkit::{Fixture, RpcClient};
     use crate::agent::text::{self, Locale};
     use crewd_collab::Change;
+
+    #[tokio::test]
+    async fn managed_object_tools_use_the_exact_attached_session_and_original_request() {
+        use serde_json::Value;
+
+        async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
+            peer.call(methods::CALL, json!({"tool": name, "args": args}))
+                .await
+                .unwrap()
+        }
+
+        fn decoded(result: Value) -> Value {
+            assert_eq!(result["isError"], false, "{result}");
+            serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
+        }
+
+        let f = Fixture::new().await;
+        let foreign = f.add_crew("Foreign managed object fixture", None).await;
+        let other = "foreign-managed-worker";
+        f.add_session(&foreign, other, Role::Worker, "Foreign worker")
+            .await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let task = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut writer = RpcClient::connect(&socket).await;
+        let mut reader = RpcClient::connect(&socket).await;
+        for (peer, id) in [(&mut writer, f.worker.as_str()), (&mut reader, other)] {
+            peer.call(methods::ATTACH, json!({"sessionId":id,"token":f.token(id)}))
+                .await
+                .unwrap();
+        }
+        let tools = writer.call(methods::TOOLS, json!({})).await.unwrap();
+        assert!(
+            tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["name"] == "managed_object_submit")
+        );
+        let captured = decoded(tool(&mut writer, "managed_object_scope_get", json!({})).await);
+        assert_eq!(captured["crewId"], f.crew);
+        assert!(
+            captured["scope"]["dbId"].is_string() && captured["scope"]["restoreEpoch"].is_string()
+        );
+        let scope = captured["scope"].clone();
+        let request = json!({
+            "scope": scope, "crewId": f.crew, "requestId": uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"createTable","title":"Original managed fixture",
+                      "fields":[{"name":"Name","fieldType":"text","nullable":false}]},
+        });
+        let committed = decoded(tool(&mut writer, "managed_object_submit", request.clone()).await);
+        assert_eq!(committed["scope"], scope);
+        assert_eq!(committed["requestId"], request["requestId"]);
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_object_submit", request.clone()).await),
+            committed
+        );
+        let original = json!({"scope":scope,"crewId":f.crew,"requestId":request["requestId"]});
+        let known =
+            decoded(tool(&mut writer, "managed_object_request_get", original.clone()).await);
+        assert_eq!(known["status"], "known");
+        assert_eq!(known["receipt"], committed);
+        assert_eq!(
+            tool(&mut reader, "managed_object_request_get", original.clone()).await["isError"],
+            true
+        );
+        let table_id = committed["object"]["table"]["id"].as_str().unwrap();
+        assert!(table_id.starts_with('T'));
+        assert_eq!(
+            decoded(tool(&mut reader, "managed_object_get", json!({"id":table_id})).await),
+            committed["object"]
+        );
+        let tables = decoded(tool(&mut reader, "managed_tables_list", json!({})).await);
+        assert!(
+            tables["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|table| table["id"] == table_id)
+        );
+        let add = json!({
+            "scope":scope, "crewId":f.crew, "requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"addRow","tableId":table_id,"values":[{"type":"text","value":"original"}]},
+        });
+        let refused = tool(&mut reader, "managed_object_submit", add.clone()).await;
+        assert_eq!(refused["isError"], true);
+        let added = decoded(tool(&mut writer, "managed_object_submit", add).await);
+        let row = &added["object"]["row"];
+        assert!(row["id"].as_str().unwrap().starts_with('O'));
+        let rows = decoded(
+            tool(
+                &mut reader,
+                "managed_rows_list",
+                json!({"tableId":table_id}),
+            )
+            .await,
+        );
+        assert_eq!(rows["items"], json!([row]));
+        let edit = json!({
+            "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"editRow","rowId":row["id"],"expectedRevision":row["revision"],
+                      "values":[{"type":"text","value":"must not be written"}]},
+        });
+        f.state.tokens.revoke(&f.worker);
+        let catalog = writer.call(methods::TOOLS, json!({})).await.unwrap();
+        assert!(
+            catalog
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| { !item["name"].as_str().unwrap().starts_with("managed_") })
+        );
+        assert_eq!(
+            tool(&mut writer, "managed_object_submit", edit).await["isError"],
+            true
+        );
+        assert_eq!(
+            tool(&mut writer, "managed_object_request_get", original).await["isError"],
+            true
+        );
+        assert_eq!(
+            decoded(tool(&mut reader, "managed_object_get", json!({"id":row["id"]})).await),
+            added["object"]
+        );
+        drop((writer, reader));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 
     fn assert_role_tools(value: &serde_json::Value, role: Role) {
         use std::collections::BTreeSet;

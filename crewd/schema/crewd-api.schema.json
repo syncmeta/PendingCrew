@@ -2814,6 +2814,155 @@
       ],
       "type": "object"
     },
+    "Cell": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "real",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Change": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/Field"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "createTable",
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "title",
+            "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "addRow",
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            },
+            "values": {
+              "items": {
+                "$ref": "#/$defs/Cell"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "editRow",
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            },
+            "values": {
+              "items": {
+                "$ref": "#/$defs/Cell"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "rowId",
+            "expectedRevision",
+            "values"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Channel": {
       "properties": {
         "archivedAt": {
@@ -9824,6 +9973,34 @@
       ],
       "type": "string"
     },
+    "Field": {
+      "additionalProperties": false,
+      "properties": {
+        "fieldType": {
+          "$ref": "#/$defs/FieldType"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nullable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "fieldType",
+        "nullable"
+      ],
+      "type": "object"
+    },
+    "FieldType": {
+      "enum": [
+        "text",
+        "integer",
+        "real"
+      ],
+      "type": "string"
+    },
     "FirstMessageCrewParams": {
       "additionalProperties": false,
       "properties": {
@@ -10165,6 +10342,18 @@
         "progress"
       ],
       "type": "string"
+    },
+    "GetParams": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
     },
     "HealthKindView": {
       "enum": [
@@ -11346,6 +11535,63 @@
         "en"
       ],
       "type": "string"
+    },
+    "Lookup": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/Receipt"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Receipt"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "LoopRecoverParams": {
       "additionalProperties": false,
@@ -12766,6 +13012,44 @@
         "revision"
       ],
       "type": "object"
+    },
+    "Object": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "table",
+              "type": "string"
+            },
+            "table": {
+              "$ref": "#/$defs/Table"
+            }
+          },
+          "required": [
+            "kind",
+            "table"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "row",
+              "type": "string"
+            },
+            "row": {
+              "$ref": "#/$defs/Row"
+            }
+          },
+          "required": [
+            "kind",
+            "row"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "PatrolCaptainBrief": {
       "properties": {
@@ -14695,6 +14979,34 @@
       "type": "object"
     },
     "Receipt": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "object": {
+          "$ref": "#/$defs/Object"
+        },
+        "recordedAt": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "recordedAt",
+        "object"
+      ],
+      "type": "object"
+    },
+    "Receipt2": {
       "description": "`message.receipts` 的一行：一条消息叫醒的一个 session（S54；N2 再加「开始了 / 回复了」）。",
       "properties": {
         "attempts": {
@@ -15090,6 +15402,26 @@
       "required": [
         "id",
         "method"
+      ],
+      "type": "object"
+    },
+    "RequestParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId"
       ],
       "type": "object"
     },
@@ -15860,6 +16192,84 @@
       ],
       "type": "string"
     },
+    "Row": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "tableId": {
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "$ref": "#/$defs/Cell"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "tableId",
+        "revision",
+        "values",
+        "frozen"
+      ],
+      "type": "object"
+    },
+    "RowPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Row"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/Table"
+        }
+      },
+      "required": [
+        "table",
+        "items"
+      ],
+      "type": "object"
+    },
+    "RowsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tableId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tableId"
+      ],
+      "type": "object"
+    },
     "RpcError": {
       "properties": {
         "code": {
@@ -16169,6 +16579,22 @@
       "required": [
         "target",
         "reason"
+      ],
+      "type": "object"
+    },
+    "Scope": {
+      "additionalProperties": false,
+      "properties": {
+        "dbId": {
+          "type": "string"
+        },
+        "restoreEpoch": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dbId",
+        "restoreEpoch"
       ],
       "type": "object"
     },
@@ -16815,6 +17241,30 @@
       ],
       "type": "object"
     },
+    "Submit": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/Change"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "change"
+      ],
+      "type": "object"
+    },
     "SubscribeParams": {
       "additionalProperties": false,
       "properties": {
@@ -16873,6 +17323,70 @@
       "required": [
         "reason"
       ],
+      "type": "object"
+    },
+    "Table": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/Field"
+          },
+          "type": "array"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "title",
+        "fields",
+        "frozen"
+      ],
+      "type": "object"
+    },
+    "TablePage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Table"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "TablesParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "TagCount": {
@@ -20547,6 +21061,68 @@
         "$ref": "#/$defs/LoopRecovered"
       }
     },
+    "managedObject.get": {
+      "params": {
+        "$ref": "#/$defs/GetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Object"
+      }
+    },
+    "managedObject.request.get": {
+      "params": {
+        "$ref": "#/$defs/RequestParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Lookup"
+      }
+    },
+    "managedObject.rows": {
+      "params": {
+        "$ref": "#/$defs/RowsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RowPage"
+      }
+    },
+    "managedObject.scope": {
+      "params": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Empty"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/Scope"
+      }
+    },
+    "managedObject.submit": {
+      "params": {
+        "$ref": "#/$defs/Submit"
+      },
+      "result": {
+        "$ref": "#/$defs/Receipt"
+      }
+    },
+    "managedObject.tables": {
+      "params": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TablesParams"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/TablePage"
+      }
+    },
     "message.attribution.get": {
       "params": {
         "$ref": "#/$defs/MessageAttributionGet"
@@ -20604,7 +21180,7 @@
       },
       "result": {
         "items": {
-          "$ref": "#/$defs/Receipt"
+          "$ref": "#/$defs/Receipt2"
         },
         "type": "array"
       }

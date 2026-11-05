@@ -953,3 +953,214 @@ enum CrewdNativeTable {
             identifier(keyName) + " COLLATE BINARY = ? LIMIT 2",params:[key])
     }
 }
+
+// The organization directory has opaque T/O identities and a separate Core
+// restore fence. It never interprets a private SQLite table name as an object.
+enum CrewdManagedDirectoryWire {
+    static let capability = "managedObjects.v1"
+    static let observation = "managedObject.submit.observation"
+    static let pageLimit = 16
+    static let fieldLimit = 32
+    static let rowByteLimit = 65_536
+
+    struct Scope: Codable, Equatable {
+        let dbId: String
+        let restoreEpoch: String
+    }
+    enum FieldType: String, Codable, CaseIterable, Identifiable {
+        case text, integer, real
+        var id: Self { self }
+        var title: String {
+            switch self { case .text: "文字"; case .integer: "整数"; case .real: "小数" }
+        }
+    }
+    struct Field: Codable, Equatable {
+        var name: String
+        var fieldType: FieldType
+        var nullable: Bool
+    }
+    enum Cell: Codable, Equatable {
+        case null, text(String), integer(String), real(Double)
+        private enum Key: String, CodingKey { case type, value }
+        init(from decoder: Decoder) throws {
+            let value = try decoder.container(keyedBy: Key.self)
+            switch try value.decode(String.self, forKey: .type) {
+            case "null":
+                guard !value.contains(.value) else { throw Problem.invalid }
+                self = .null
+            case "text": self = .text(try value.decode(String.self, forKey: .value))
+            case "integer": self = .integer(try value.decode(String.self, forKey: .value))
+            case "real": self = .real(try value.decode(Double.self, forKey: .value))
+            default: throw Problem.invalid
+            }
+        }
+        func encode(to encoder: Encoder) throws {
+            var value = encoder.container(keyedBy: Key.self)
+            switch self {
+            case .null: try value.encode("null", forKey: .type)
+            case .text(let text):
+                try value.encode("text", forKey: .type); try value.encode(text, forKey: .value)
+            case .integer(let text):
+                try value.encode("integer", forKey: .type); try value.encode(text, forKey: .value)
+            case .real(let number):
+                try value.encode("real", forKey: .type); try value.encode(number == 0 ? 0 : number, forKey: .value)
+            }
+        }
+        var display: String {
+            switch self {
+            case .null: "空值"
+            case .text(let value), .integer(let value): value
+            case .real(let value): String(value)
+            }
+        }
+        static func parse(_ input: String, null: Bool, field: Field) throws -> Self {
+            if null {
+                guard field.nullable else { throw Problem.invalid }
+                return .null
+            }
+            switch field.fieldType {
+            case .text: return .text(input)
+            case .integer:
+                guard let value = Int64(input) else { throw Problem.invalid }
+                return .integer(String(value))
+            case .real:
+                guard let value = Double(input), value.isFinite else { throw Problem.invalid }
+                return .real(value == 0 ? 0 : value)
+            }
+        }
+        func accepts(_ field: Field) -> Bool {
+            switch (self, field.fieldType) {
+            case (.null, _): field.nullable
+            case (.text(let value), .text): value.utf8.count <= rowByteLimit
+            case (.integer(let value), .integer): Int64(value).map { String($0) == value } ?? false
+            case (.real(let value), .real): value.isFinite
+            default: false
+            }
+        }
+    }
+    struct Table: Codable, Equatable, Identifiable {
+        let id: String
+        let crewId: String
+        let title: String
+        let fields: [Field]
+        let frozen: Bool
+        var valid: Bool {
+            objectNumber(id, prefix: "T") != nil && !crewId.isEmpty &&
+                validDefinition(title: title, fields: fields)
+        }
+    }
+    struct Row: Codable, Equatable, Identifiable {
+        let id: String
+        let crewId: String
+        let tableId: String
+        let revision: String
+        let values: [Cell]
+        let frozen: Bool
+        var valid: Bool {
+            objectNumber(id, prefix: "O") != nil && objectNumber(tableId, prefix: "T") != nil &&
+                !crewId.isEmpty && positive(revision) != nil && (1...fieldLimit).contains(values.count)
+        }
+        func matches(_ table: Table) -> Bool {
+            valid && exact(crewId, table.crewId) && tableId == table.id && frozen == table.frozen &&
+                validValues(values, fields: table.fields)
+        }
+    }
+    struct Object: Decodable {
+        let kind: String
+        let table: Table?
+        let row: Row?
+        var valid: Bool {
+            (kind == "table" && table?.valid == true && row == nil) ||
+                (kind == "row" && row?.valid == true && table == nil)
+        }
+        var id: String? { table?.id ?? row?.id }
+    }
+    struct Change: Encodable {
+        let kind: String
+        var title: String? = nil
+        var fields: [Field]? = nil
+        var tableId: String? = nil
+        var rowId: String? = nil
+        var expectedRevision: String? = nil
+        var values: [Cell]? = nil
+    }
+    struct Submit: Encodable {
+        let scope: Scope
+        let crewId: String
+        let requestId: String
+        let change: Change
+    }
+    struct Receipt: Decodable {
+        let scope: Scope
+        let crewId: String
+        let requestId: String
+        let recordedAt: String
+        let object: Object
+    }
+    struct Lookup: Decodable {
+        let status: String
+        let receipt: Receipt?
+    }
+    struct TablePage: Decodable {
+        let items: [Table]
+        let nextAfter: String?
+    }
+    struct RowPage: Decodable {
+        let table: Table
+        let items: [Row]
+        let nextAfter: String?
+    }
+    enum Problem: LocalizedError {
+        case unavailable, invalid, stale, unresolved
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: "当前连接暂时无法读取组织目录。"
+            case .invalid: "组织目录的字段、编号或回执不符合约定。"
+            case .stale: "资料来源或记录版本已改变，请刷新。"
+            case .unresolved: "已有原请求待核对。请先查看原回执。"
+            }
+        }
+    }
+
+    static func exact(_ left: String, _ right: String) -> Bool { left.utf8.elementsEqual(right.utf8) }
+    static func positive(_ value: String) -> Int64? {
+        guard let n = Int64(value), n > 0, String(n) == value else { return nil }
+        return n
+    }
+    static func objectNumber(_ id: String, prefix: Character) -> Int64? {
+        guard id.first == prefix else { return nil }
+        return positive(String(id.dropFirst()))
+    }
+    static func titleValid(_ title: String) -> Bool {
+        !title.isEmpty && title.utf8.count <= 256 && title == title.trimmingCharacters(in: .whitespacesAndNewlines)
+            && !title.unicodeScalars.contains { $0.properties.generalCategory == .control }
+    }
+    static func validDefinition(title: String, fields: [Field]) -> Bool {
+        titleValid(title) && (1...fieldLimit).contains(fields.count) &&
+            fields.allSatisfy { titleValid($0.name) } &&
+            Set(fields.map { Data($0.name.utf8) }).count == fields.count
+    }
+    static func validValues(_ values: [Cell], fields: [Field]) -> Bool {
+        guard values.count == fields.count, zip(values, fields).allSatisfy({ $0.0.accepts($0.1) }),
+              let bytes = try? canonical(values) else { return false }
+        return bytes.count <= rowByteLimit
+    }
+    static func canonical<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(value)
+    }
+    static func validPage(_ ids: [String], after: String?, next: String?, prefix: Character) -> Bool {
+        guard ids.count <= pageLimit else { return false }
+        var previous: Int64 = 0
+        if let after {
+            guard let start = objectNumber(after, prefix: prefix) else { return false }
+            previous = start
+        }
+        for id in ids {
+            guard let number = objectNumber(id, prefix: prefix), number > previous else { return false }
+            previous = number
+        }
+        return next == nil || (!ids.isEmpty && next == ids.last)
+    }
+}

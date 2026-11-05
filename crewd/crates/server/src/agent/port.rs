@@ -930,6 +930,42 @@ fn validate_scoped_actor(
     }
     Ok(())
 }
+pub(crate) async fn managed_read<T>(
+    st: &AppState,
+    by: &Identity,
+    operation: impl FnOnce(&Connection, &Identity) -> crewd_collab::Result<T> + Send + 'static,
+) -> PortResult<T>
+where
+    T: Send + 'static,
+{
+    let scoped = scoped_actor(st, by)?;
+    let by = by.clone();
+    read(st, move |c| {
+        validate_scoped_actor(c, &scoped, &by)?;
+        let result = operation(c, &by)?;
+        validate_scoped_actor(c, &scoped, &by)?;
+        Ok(result)
+    })
+    .await
+}
+
+pub(crate) async fn managed_submit(
+    st: &AppState,
+    by: &Identity,
+    request: crewd_proto::managed_objects::Submit,
+) -> PortResult<crewd_proto::managed_objects::Receipt> {
+    let scoped = scoped_actor(st, by)?;
+    let by = by.clone();
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        let actor = crewd_collab::managed_objects::Actor::Session(&by.session_id);
+        let receipt = crewd_collab::managed_objects::submit(tx, actor, request)?;
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        Ok(receipt)
+    })
+    .await
+}
+
 pub async fn channel_archive_check(
     st: &AppState,
     by: &Identity,

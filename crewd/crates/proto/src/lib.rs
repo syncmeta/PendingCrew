@@ -22,6 +22,8 @@ pub use patrol_runtime::*;
 pub mod commands;
 pub mod host;
 pub mod judgments;
+pub mod managed_objects;
+pub mod managed_objects_api;
 pub mod message_attribution;
 pub mod message_delivery;
 mod model;
@@ -196,6 +198,12 @@ pub mod methods {
         crate::message_attribution::SET,
         crate::message_attribution::HISTORY,
         crate::message_delivery::EXPLAIN,
+        crate::managed_objects_api::SCOPE,
+        crate::managed_objects_api::GET,
+        crate::managed_objects_api::TABLES,
+        crate::managed_objects_api::ROWS,
+        crate::managed_objects_api::SUBMIT,
+        crate::managed_objects_api::REQUEST_GET,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
         crate::commands::COMMAND_SUBMIT,
         crate::commands::COMMAND_LOOKUP,
@@ -698,6 +706,7 @@ fn m(params: Value, result: Value) -> Value {
 /// 全部类型只在顶层 `$defs` 出现一次；方法 / 事件 / 帧都是 `$ref`，Swift 端可以直接据此生成代码。
 /// 参数类型是 `object | null` 的方法 = 解析器也收 `null`（R11：契约与解析器一致，见 params.rs）。
 pub fn api_schema() -> Value {
+    use managed_objects_api as managed;
     // R8：`gen` 在 edition 2024 是保留字。
     let mut generator = schemars::SchemaGenerator::default();
     let g = &mut generator;
@@ -707,6 +716,30 @@ pub fn api_schema() -> Value {
     let _ = sub::<WorkCloseReceipt>(g);
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
+        (
+            managed::SCOPE,
+            m(nullable(sub::<Empty>(g)), sub::<managed_objects::Scope>(g)),
+        ),
+        (
+            managed::GET,
+            m(sub::<managed::GetParams>(g), sub::<managed_objects::Object>(g)),
+        ),
+        (
+            managed::TABLES,
+            m(nullable(sub::<managed::TablesParams>(g)), sub::<managed_objects::TablePage>(g)),
+        ),
+        (
+            managed::ROWS,
+            m(sub::<managed::RowsParams>(g), sub::<managed_objects::RowPage>(g)),
+        ),
+        (
+            managed::SUBMIT,
+            m(sub::<managed_objects::Submit>(g), sub::<managed_objects::Receipt>(g)),
+        ),
+        (
+            managed::REQUEST_GET,
+            m(sub::<managed::RequestParams>(g), sub::<managed_objects::Lookup>(g)),
+        ),
         (
             "notification.status",
             m(sub::<Empty>(g), sub::<notifications::NotificationStatus>(g)),
@@ -2305,7 +2338,6 @@ mod tests {
 
 /// SQLite knowledge API; only implemented methods are registered.
 pub mod team_data;
-
 #[path = "sqlite_data_api.rs"]
 pub mod team_data_api;
 

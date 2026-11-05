@@ -14,6 +14,7 @@ pub mod judgment_state;
 pub mod knowledge_channels;
 pub mod knowledge_purge;
 pub mod local_clients;
+pub mod managed_objects;
 pub mod message_evidence;
 pub mod messages;
 pub mod native_execution;
@@ -361,6 +362,7 @@ impl Store {
         // Runs under the caller’s data-directory lock, before even an identity
         // peek (SQLite read-only connections can still create/remove sidecars).
         let guard = version_guard::preflight(&db)?;
+        let allocator_floor = backup::restore_allocator_floor(dir)?;
         let id_path = dir.join(ID_FILE);
         let record = read_id_file(&id_path)?;
         let recorded = record.as_ref().map(|r| r.id.clone());
@@ -369,6 +371,8 @@ impl Store {
                 Some(format!("{ID_FILE} 还在"))
             } else if backup::has_backups(&dir.join(backup::BACKUPS_DIR))? {
                 Some("backups/ 里有备份".to_string())
+            } else if allocator_floor > 0 {
+                Some("已保留恢复所需的公开编号上限".to_string())
             } else if knowledge_purge::has_recovery_material(dir)? {
                 Some("机组永久删除仍有安全快照或待核对的原操作".to_string())
             } else {
@@ -427,6 +431,12 @@ impl Store {
                 found: id,
             });
         }
+        if allocator_floor > 0 && object_refs::allocator_floor(store.conn())? < allocator_floor {
+            let tx = store.conn().unchecked_transaction()?;
+            object_refs::preserve_restore_floor(&tx, allocator_floor)?;
+            tx.commit()?;
+        }
+        backup::clear_empty_knowledge_cut(store.conn())?;
         // 偷看只读主文件，所以标识文件写下之前，dbId 必须已经落进主文件：先做一次检查点（我们拿着数据目录锁，
         // 最多有个只读的 crewd backup / check 在读）。没落进去（检查点被挡）就这次先不写，下次打开再写。
         let _ = store

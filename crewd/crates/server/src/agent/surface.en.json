@@ -2780,6 +2780,420 @@
         "type": "object"
       },
       "name": "crew_structure"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the current managed-object database and restore scope and your own crew ID. Use the complete returned scope for new requests and keep the original scope with every request ID.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "managed_object_scope_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a managed table or row by its exact organization T or O ID. Archived-crew objects are still readable and marked frozen.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The exact T table ID or O row ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read one page of managed tables visible across the organization.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous page's nextAfter T ID. Omit for the first page.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_tables_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read one page of rows for one managed table.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous page's nextAfter O ID for this table. Omit for the first page.",
+            "type": "string"
+          },
+          "tableId": {
+            "description": "The exact T ID returned by managed_tables_list or managed_object_get.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tableId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_rows_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Create a managed table, add a row, or edit a row owned by your own active crew. Use the current scope, one original UUID, and the full typed intent. Edits require the latest row revision and replace the full row. Use request lookup after an uncertain response and keep the same UUID and original scope.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "Typed table definition or full row values in field order. Integers use decimal strings and null is valid only for a nullable field.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fields": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fieldType": {
+                          "enum": [
+                            "text",
+                            "integer",
+                            "real"
+                          ],
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "nullable": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "fieldType",
+                        "nullable"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "createTable"
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "title",
+                  "fields"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "addRow"
+                  },
+                  "tableId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tableId",
+                  "values"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "editRow"
+                  },
+                  "rowId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "rowId",
+                  "expectedRevision",
+                  "values"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "crewId": {
+            "description": "Your current crew ID returned by managed_object_scope_get.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "One original canonical UUID for this exact intent. Keep it for receipt lookup.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "change"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_submit"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the original receipt for a request submitted by this session. Lookup is read-only. A missing or historical receipt does not authorize another execution.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The original owner crew ID of this request.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "The exact original request UUID.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "The exact original dbId and restoreEpoch for the original request.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_request_get"
     }
   ],
   "instructions": "Crew tools are how you talk to your crew and the human.\nPost key moments with post; use ask when you need a human decision, then keep working without blocking.",
@@ -4978,6 +5392,420 @@
         "type": "object"
       },
       "name": "set_session_profile"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the current managed-object database and restore scope and your own crew ID. Use the complete returned scope for new requests and keep the original scope with every request ID.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "managed_object_scope_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a managed table or row by its exact organization T or O ID. Archived-crew objects are still readable and marked frozen.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The exact T table ID or O row ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read one page of managed tables visible across the organization.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous page's nextAfter T ID. Omit for the first page.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_tables_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read one page of rows for one managed table.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The previous page's nextAfter O ID for this table. Omit for the first page.",
+            "type": "string"
+          },
+          "tableId": {
+            "description": "The exact T ID returned by managed_tables_list or managed_object_get.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tableId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_rows_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Create a managed table, add a row, or edit a row owned by your own active crew. Use the current scope, one original UUID, and the full typed intent. Edits require the latest row revision and replace the full row. Use request lookup after an uncertain response and keep the same UUID and original scope.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "Typed table definition or full row values in field order. Integers use decimal strings and null is valid only for a nullable field.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fields": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fieldType": {
+                          "enum": [
+                            "text",
+                            "integer",
+                            "real"
+                          ],
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "nullable": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "fieldType",
+                        "nullable"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "createTable"
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "title",
+                  "fields"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "addRow"
+                  },
+                  "tableId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tableId",
+                  "values"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "editRow"
+                  },
+                  "rowId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "rowId",
+                  "expectedRevision",
+                  "values"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "crewId": {
+            "description": "Your current crew ID returned by managed_object_scope_get.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "One original canonical UUID for this exact intent. Keep it for receipt lookup.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "change"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_submit"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the original receipt for a request submitted by this session. Lookup is read-only. A missing or historical receipt does not authorize another execution.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The original owner crew ID of this request.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "The exact original request UUID.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "The exact original dbId and restoreEpoch for the original request.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_request_get"
     }
   ]
 }

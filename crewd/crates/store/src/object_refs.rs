@@ -119,9 +119,110 @@ pub fn bind(
     resolve(conn, kind, crew, source)?
         .ok_or_else(|| StoreError::Invalid("object reference binding missing after insert".into()))
 }
+const RESTORE_FLOOR: &str = "objectRefs.restoreFloor.v1";
+
+pub(crate) fn parse_floor(value: &str) -> Result<i64> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|n| *n >= 0 && n.to_string() == value)
+        .ok_or_else(|| StoreError::Invalid("invalid object reference allocator floor".into()))
+}
+
+/// The AUTOINCREMENT sequence includes retired aliases; max(live rows) does not.
+pub(crate) fn allocator_floor(c: &Connection) -> Result<i64> {
+    let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let pending = crate::meta_get(c, RESTORE_FLOOR)?
+        .as_deref()
+        .map(parse_floor)
+        .transpose()?
+        .unwrap_or(0);
+    if version < 5 {
+        return Ok(pending);
+    }
+    let mut q = c.prepare("SELECT seq FROM sqlite_sequence WHERE name='object_refs' LIMIT 2")?;
+    let sequences = q
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let maximum: i64 = c.query_row("SELECT COALESCE(MAX(number),0) FROM object_refs", [], |r| {
+        r.get(0)
+    })?;
+    let floor = match sequences.as_slice() {
+        [] if maximum == 0 => 0,
+        [floor] if *floor >= maximum && *floor >= 0 => *floor,
+        _ => {
+            return Err(StoreError::Invalid(
+                "object reference sequence cannot prove issued-number floor".into(),
+            ));
+        }
+    };
+    Ok(floor.max(pending))
+}
+
+fn set_sequence_floor(c: &Connection, floor: i64) -> Result<()> {
+    let updated = c.execute(
+        "UPDATE sqlite_sequence SET seq=MAX(seq,?1) WHERE name='object_refs'",
+        [floor],
+    )?;
+    if updated == 0 {
+        c.execute(
+            "INSERT INTO sqlite_sequence(name,seq) VALUES('object_refs',?1)",
+            [floor],
+        )?;
+    }
+    Ok(())
+}
+
+/// Called on the private, unpublished restore stage with remote trust revoked.
+pub(crate) fn preserve_restore_floor(c: &Connection, incoming: i64) -> Result<()> {
+    if c.is_autocommit() || incoming < 0 {
+        return Err(StoreError::Invalid(
+            "invalid object reference restore transaction".into(),
+        ));
+    }
+    let floor = allocator_floor(c)?.max(incoming);
+    if floor == 0 {
+        return Ok(());
+    }
+    let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    crate::meta_set(c, RESTORE_FLOOR, &floor.to_string())?;
+    if version >= 5 {
+        set_sequence_floor(c, floor)?;
+    }
+    Ok(())
+}
+
+/// Older protected sources migrate through v5 before later code can bind aliases.
+pub(crate) fn apply_pre_v5_restore_floor(c: &Connection) -> Result<()> {
+    if let Some(raw) = crate::meta_get(c, RESTORE_FLOOR)? {
+        set_sequence_floor(c, parse_floor(&raw)?)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pre_v5_stage_retains_floor_before_first_allocator_use() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); PRAGMA user_version=4;",
+        )
+        .unwrap();
+        let tx = c.unchecked_transaction().unwrap();
+        preserve_restore_floor(&tx, 89).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(allocator_floor(&c).unwrap(), 89);
+        let tx = c.unchecked_transaction().unwrap();
+        tx.execute_batch("CREATE TABLE object_refs(number INTEGER PRIMARY KEY AUTOINCREMENT); PRAGMA user_version=5;").unwrap();
+        apply_pre_v5_restore_floor(&tx).unwrap();
+        tx.execute("INSERT INTO object_refs DEFAULT VALUES", [])
+            .unwrap();
+        assert_eq!(tx.last_insert_rowid(), 90);
+        tx.commit().unwrap();
+    }
+
     use crate::Store;
     fn setup(conn: &Connection) {
         conn.execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('a','A','t','t'),('b','B','t','t');").unwrap();

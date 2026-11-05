@@ -8,6 +8,7 @@ use crewd_proto::agent::{ToolDef, ToolHints};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     All,
+    CrewMember,
     Captain,
     CaseAdmin,
 }
@@ -30,6 +31,8 @@ pub enum Ty {
     DocumentEdits,
     WorkContinuation,
     CoordinationChildren,
+    ManagedObjectScope,
+    ManagedObjectChange,
     /// `[{text, category?}]`
     Messages,
 }
@@ -137,6 +140,12 @@ const fn all(name: &'static str, params: &'static [Param]) -> ToolSpec {
         destructive: false,
         idempotent: false,
         talk: false,
+    }
+}
+const fn crew_member(name: &'static str, params: &'static [Param]) -> ToolSpec {
+    ToolSpec {
+        scope: Scope::CrewMember,
+        ..all(name, params)
     }
 }
 const fn cap(name: &'static str, params: &'static [Param]) -> ToolSpec {
@@ -658,6 +667,37 @@ pub const CATALOG: &[ToolSpec] = &[
             c("runner", false, RUNNERS),
         ],
     )),
+    ro(crew_member("managed_object_scope_get", &[])),
+    ro(crew_member("managed_object_get", &[p("id", Str, true)])),
+    ro(crew_member(
+        "managed_tables_list",
+        &[p("after", Str, false)],
+    )),
+    ro(crew_member(
+        "managed_rows_list",
+        &[p("tableId", Str, true), p("after", Str, false)],
+    )),
+    ToolSpec {
+        destructive: true,
+        idempotent: true,
+        ..crew_member(
+            "managed_object_submit",
+            &[
+                p("scope", ManagedObjectScope, true),
+                p("crewId", Str, true),
+                p("requestId", Str, true),
+                p("change", ManagedObjectChange, true),
+            ],
+        )
+    },
+    ro(crew_member(
+        "managed_object_request_get",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("crewId", Str, true),
+            p("requestId", Str, true),
+        ],
+    )),
 ];
 
 /// Removed or renamed tool names (§9, §22.3, §22.7 Q4, S65, S70) and what replaces each, written
@@ -718,6 +758,10 @@ pub fn replacement(name: &str) -> Option<&'static str> {
         .filter(|new| !new.is_empty())
 }
 
+pub(crate) fn requires_managed_scope(name: &str) -> bool {
+    find(name).is_some_and(|spec| spec.scope == Scope::CrewMember)
+}
+
 pub fn find(name: &str) -> Option<&'static ToolSpec> {
     CATALOG.iter().find(|t| t.name == name)
 }
@@ -725,7 +769,12 @@ pub fn find(name: &str) -> Option<&'static ToolSpec> {
 /// 这个身份此刻能不能看见 / 调这个工具：只看角色。总机组没有特例（S68）：它的机长与任何机组的机长同一张表，
 /// 它的其他 session 与任何 worker 同一张表。
 pub fn visible(t: &ToolSpec, me: &Identity) -> bool {
-    t.scope == Scope::All || (t.scope == Scope::Captain && me.role == Role::Captain)
+    match t.scope {
+        Scope::All => true,
+        Scope::CrewMember => matches!(me.role, Role::Worker | Role::Captain),
+        Scope::Captain => me.role == Role::Captain,
+        Scope::CaseAdmin => false,
+    }
 }
 
 pub(crate) fn visible_in_case(t: &ToolSpec, me: &Identity) -> bool {
@@ -779,6 +828,34 @@ fn work_continuation_schema(loc: Locale) -> Value {
     ]})
 }
 
+fn managed_change_schema() -> Value {
+    let text = json!({"type":"string"});
+    let object = |properties: Value, required: &[&str]| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
+    let field = object(
+        json!({
+            "name":{"type":"string","minLength":1,"maxLength":256},
+            "fieldType":{"type":"string","enum":["text","integer","real"]},
+            "nullable":{"type":"boolean"},
+        }),
+        &["name", "fieldType", "nullable"],
+    );
+    let values = json!({"type":"array","minItems":1,"maxItems":32,"items":{"oneOf":[
+        object(json!({"type":{"const":"null"}}), &["type"]),
+        object(json!({"type":{"const":"text"},"value":{"type":"string","maxLength":65536}}), &["type","value"]),
+        object(json!({"type":{"const":"integer"},"value":{"type":"string","pattern":"^(0|-?[1-9][0-9]*)$"}}), &["type","value"]),
+        object(json!({"type":{"const":"real"},"value":{"type":"number"}}), &["type","value"]),
+    ]}});
+    json!({"oneOf":[
+        object(json!({"kind":{"const":"createTable"},"title":{"type":"string","minLength":1,"maxLength":256},
+                      "fields":{"type":"array","minItems":1,"maxItems":32,"items":field}}),
+               &["kind","title","fields"]),
+        object(json!({"kind":{"const":"addRow"},"tableId":text,"values":values}),
+               &["kind","tableId","values"]),
+        object(json!({"kind":{"const":"editRow"},"rowId":text,"expectedRevision":text,"values":values}),
+               &["kind","rowId","expectedRevision","values"]),
+    ]})
+}
+
 pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
@@ -804,6 +881,10 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
             }
             WorkBlockers => work_blockers_schema(),
             WorkContinuation => work_continuation_schema(loc),
+            ManagedObjectScope => json!({"type":"object","properties":{
+                "dbId":{"type":"string"},"restoreEpoch":{"type":"string"}
+            },"required":["dbId","restoreEpoch"],"additionalProperties":false}),
+            ManagedObjectChange => managed_change_schema(),
             CoordinationChildren => json!({"type":"array","minItems":2,"maxItems":8,"items":{
                 "type":"object",
                 "properties":{
@@ -1005,7 +1086,12 @@ mod tests {
                 "directory",
                 "get_quota",
                 "inspect_session",
-                "list_sessions"
+                "list_sessions",
+                "managed_object_scope_get",
+                "managed_object_get",
+                "managed_tables_list",
+                "managed_rows_list",
+                "managed_object_request_get",
             ]
         );
         assert_eq!(
@@ -1019,7 +1105,8 @@ mod tests {
                 "change_workdir",
                 "stop_session",
                 "handoff_captain",
-                "crew_structure"
+                "crew_structure",
+                "managed_object_submit",
             ]
         );
         assert_eq!(
@@ -1054,7 +1141,8 @@ mod tests {
                 "rename_crew",
                 "change_workdir",
                 "set_crew_status",
-                "delegation_policy"
+                "delegation_policy",
+                "managed_object_submit",
             ]
         );
         assert_eq!(
@@ -1083,7 +1171,12 @@ mod tests {
                 "directory",
                 "get_quota",
                 "inspect_session",
-                "list_sessions"
+                "list_sessions",
+                "managed_object_scope_get",
+                "managed_object_get",
+                "managed_tables_list",
+                "managed_rows_list",
+                "managed_object_request_get",
             ]
         );
         let stop = find("stop_session").unwrap();
@@ -1196,8 +1289,12 @@ mod tests {
     }
 
     #[test]
-    fn admin_sees_exactly_the_worker_set() {
-        assert_eq!(names(&who(Role::Admin)), names(&who(Role::Worker)));
+    fn admin_sees_the_existing_worker_set_without_managed_object_tools() {
+        let worker: Vec<_> = names(&who(Role::Worker))
+            .into_iter()
+            .filter(|name| !requires_managed_scope(name))
+            .collect();
+        assert_eq!(names(&who(Role::Admin)), worker);
     }
 
     /// S68: no management special case. The management crew's captain gets the table of any

@@ -1957,3 +1957,214 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         }
     }
 }
+
+/// Native access to Core-owned organization objects, separate from SQLite knowledge.
+@MainActor final class CrewdManagedDirectoryStore {
+    typealias Wire = CrewdManagedDirectoryWire
+    typealias Origin = CrewdKnowledgeStore.Origin
+    typealias RPC = CrewdKnowledgeStore.RPC
+
+    struct BrowseScope: Equatable {
+        let origin: Origin
+        let authority: Wire.Scope
+    }
+    struct Witness: Codable, Equatable {
+        let scope: Wire.Scope
+        let crewId: String
+        let requestId: String
+        let kind: String
+        let target: String
+        let tableId: String?
+        let expectedRevision: String?
+        let digest: String
+    }
+    struct Pending: Identifiable {
+        let record: CrewdPresentationJournal.Prepared
+        let witness: Witness
+        var id: UUID { record.id }
+    }
+    struct Observation {
+        let receipt: Wire.Receipt
+        let historical: Bool
+    }
+    enum Mutation {
+        case create(String, [Wire.Field])
+        case add(Wire.Table, [Wire.Cell])
+        case edit(Wire.Table, Wire.Row, [Wire.Cell])
+
+        func encode(crew: String) throws -> (Wire.Change, String, String?, String?, String) {
+            switch self {
+            case .create(let title, let fields):
+                guard Wire.validDefinition(title: title, fields: fields) else { throw Wire.Problem.invalid }
+                let change = Wire.Change(kind: "createTable", title: title, fields: fields)
+                return (change, "createTable", nil, nil, try Self.definitionDigest(title, fields))
+            case .add(let table, let values):
+                guard table.valid, !table.frozen, Wire.exact(crew, table.crewId),
+                      Wire.validValues(values, fields: table.fields) else { throw Wire.Problem.invalid }
+                return (.init(kind: "addRow", tableId: table.id, values: values), table.id,
+                        table.id, nil, try Self.digest(values))
+            case .edit(let table, let row, let values):
+                guard table.valid, row.matches(table), !row.frozen, Wire.exact(crew, row.crewId),
+                      Wire.validValues(values, fields: table.fields) else { throw Wire.Problem.invalid }
+                return (.init(kind: "editRow", rowId: row.id, expectedRevision: row.revision, values: values),
+                        row.id, table.id, row.revision, try Self.digest(values))
+            }
+        }
+        static func definitionDigest(_ title: String, _ fields: [Wire.Field]) throws -> String {
+            try digest(Wire.Change(kind: "createTable", title: title, fields: fields))
+        }
+        static func digest<T: Encodable>(_ value: T) throws -> String {
+            try SHA256.hash(data: Wire.canonical(value)).map { String(format: "%02x", $0) }.joined()
+        }
+    }
+
+    private let origin: () -> Origin?
+    private let rpc: RPC
+    private let journal: () throws -> CrewdPresentationJournal
+
+    init(origin: @escaping () -> Origin?, rpc: @escaping RPC, journal: @escaping () throws -> CrewdPresentationJournal) {
+        self.origin = origin
+        self.rpc = rpc
+        self.journal = journal
+    }
+
+    func scope(stillCurrent: @MainActor () -> Bool) async throws -> BrowseScope {
+        guard let active = origin(), !active.crew.isEmpty else { throw Wire.Problem.unavailable }
+        let scope: Wire.Scope = try await call("managedObject.scope", .object([:]), active, stillCurrent)
+        guard let db = active.scope.databaseID, Wire.exact(db, scope.dbId), !scope.restoreEpoch.isEmpty
+        else { throw Wire.Problem.invalid }
+        return .init(origin: active, authority: scope)
+    }
+    func tables(_ scope: BrowseScope, after: String?, stillCurrent: @MainActor () -> Bool) async throws -> Wire.TablePage {
+        let page: Wire.TablePage = try await call("managedObject.tables",
+            .object(["after": after.map(CrewdValue.string) ?? .null]), scope.origin, stillCurrent)
+        guard page.items.allSatisfy(\.valid), Wire.validPage(page.items.map(\.id), after: after,
+              next: page.nextAfter, prefix: "T") else { throw Wire.Problem.invalid }
+        try await check(scope, stillCurrent)
+        return page
+    }
+    func rows(_ scope: BrowseScope, table: String, after: String?, stillCurrent: @MainActor () -> Bool) async throws -> Wire.RowPage {
+        guard Wire.objectNumber(table, prefix: "T") != nil else { throw Wire.Problem.invalid }
+        let page: Wire.RowPage = try await call("managedObject.rows",
+            .object(["tableId": .string(table), "after": after.map(CrewdValue.string) ?? .null]),
+            scope.origin, stillCurrent)
+        guard page.table.valid, page.table.id == table, page.items.allSatisfy({ $0.matches(page.table) }),
+              Wire.validPage(page.items.map(\.id), after: after, next: page.nextAfter, prefix: "O")
+        else { throw Wire.Problem.invalid }
+        try await check(scope, stillCurrent)
+        return page
+    }
+
+    func pending(_ scope: BrowseScope) throws -> [Pending] {
+        guard valid(scope.origin, { true }) else { throw Wire.Problem.stale }
+        let ledger = try journal()
+        guard ledger.scope == scope.origin.scope else { throw Wire.Problem.stale }
+        return try ledger.unknownRecords().filter {
+            $0.method == Wire.observation && $0.scope == ledger.scope && Wire.exact($0.crew, scope.origin.crew)
+        }.map {
+            let witness = try CrewdKnowledgeStore.decode($0.params, Witness.self)
+            guard Wire.exact(witness.crewId, $0.crew), witness.scope.dbId == scope.authority.dbId,
+                  UUID(uuidString: witness.requestId)?.uuidString.lowercased() == witness.requestId
+            else { throw Wire.Problem.invalid }
+            return .init(record: $0, witness: witness)
+        }
+    }
+
+    func submit(_ mutation: Mutation, scope: BrowseScope, stillCurrent: @MainActor () -> Bool) async throws -> Observation {
+        try await check(scope, stillCurrent)
+        let crew = scope.origin.crew
+        let (change, target, tableID, revision, digest) = try mutation.encode(crew: crew)
+        let request = UUID().uuidString.lowercased()
+        let witness = Witness(scope: scope.authority, crewId: crew, requestId: request,
+                              kind: change.kind, target: target, tableId: tableID,
+                              expectedRevision: revision, digest: digest)
+        let params = try CrewdKnowledgeStore.encode(Wire.Submit(scope: scope.authority, crewId: crew,
+                                                               requestId: request, change: change))
+        let ledger = try journal()
+        guard ledger.scope == scope.origin.scope, valid(scope.origin, stillCurrent) else { throw Wire.Problem.stale }
+        // The durable observation keeps identity and a payload digest only.
+        let prepared = try ledger.prepareManagedDirectory(CrewdKnowledgeStore.encode(witness), crew: crew)
+        do {
+            let receipt: Wire.Receipt = try await call("managedObject.submit", params, scope.origin, stillCurrent)
+            try verify(receipt, witness)
+            try await check(scope, stillCurrent)
+            try ledger.finish(prepared, state: "replyObserved")
+            return .init(receipt: receipt, historical: false)
+        } catch {
+            let client = error as? CrewdClientError
+            let definitelyRefused = client?.kind == .notSubmitted ||
+                (client?.code == -32009 && client?.refusal == "managed_object.row_changed")
+            try? ledger.finish(prepared, state: definitelyRefused ? "refused" : "unknown")
+            throw error
+        }
+    }
+
+    func lookup(_ pending: Pending, scope: BrowseScope, stillCurrent: @MainActor () -> Bool) async throws -> Observation? {
+        let ledger = try journal()
+        let witness = pending.witness
+        guard ledger.scope == scope.origin.scope, pending.record.scope == ledger.scope,
+              Wire.exact(witness.crewId, scope.origin.crew), witness.scope.dbId == scope.authority.dbId,
+              try self.pending(scope).contains(where: { $0.id == pending.id && $0.witness == witness })
+        else { throw Wire.Problem.stale }
+        let params = try CrewdKnowledgeStore.encode(LookupParams(scope: witness.scope, crewId: witness.crewId,
+                                                               requestId: witness.requestId))
+        let result: Wire.Lookup = try await call("managedObject.request.get", params, scope.origin, stillCurrent)
+        try await check(scope, stillCurrent)
+        switch (result.status, result.receipt) {
+        case ("notFound", nil):
+            guard witness.scope == scope.authority else { throw Wire.Problem.invalid }
+            return nil
+        case ("historical", nil):
+            guard witness.scope != scope.authority else { throw Wire.Problem.invalid }
+            return nil
+        case ("known", .some(let receipt)), ("historical", .some(let receipt)):
+            guard (result.status == "known") == (witness.scope == scope.authority) else { throw Wire.Problem.invalid }
+            try verify(receipt, witness)
+            try ledger.acknowledge(pending.record, detail: "已核对组织目录原请求，未再次提交。")
+            return .init(receipt: receipt, historical: result.status == "historical")
+        default: throw Wire.Problem.invalid
+        }
+    }
+
+    private struct LookupParams: Encodable {
+        let scope: Wire.Scope
+        let crewId: String
+        let requestId: String
+    }
+    private func verify(_ receipt: Wire.Receipt, _ original: Witness) throws {
+        guard receipt.scope == original.scope, Wire.exact(receipt.crewId, original.crewId),
+              receipt.requestId == original.requestId, !receipt.recordedAt.isEmpty, receipt.object.valid
+        else { throw Wire.Problem.invalid }
+        switch original.kind {
+        case "createTable":
+            guard let table = receipt.object.table, !table.frozen, Wire.exact(table.crewId, original.crewId),
+                  try Mutation.definitionDigest(table.title, table.fields) == original.digest else { throw Wire.Problem.invalid }
+        case "addRow", "editRow":
+            guard let row = receipt.object.row, !row.frozen, Wire.exact(row.crewId, original.crewId),
+                  row.tableId == original.tableId, try Mutation.digest(row.values) == original.digest
+            else { throw Wire.Problem.invalid }
+            if original.kind == "addRow" {
+                guard row.revision == "1" else { throw Wire.Problem.invalid }
+            } else {
+                guard row.id == original.target, let originalRevision = original.expectedRevision.flatMap(Wire.positive),
+                      originalRevision < Int64.max, row.revision == String(originalRevision + 1)
+                else { throw Wire.Problem.invalid }
+            }
+        default: throw Wire.Problem.invalid
+        }
+    }
+    private func valid(_ active: Origin, _ stillCurrent: @MainActor () -> Bool) -> Bool {
+        !Task.isCancelled && stillCurrent() && origin() == active
+    }
+    private func call<T: Decodable>(_ method: String, _ value: CrewdValue, _ active: Origin,
+                                    _ stillCurrent: @MainActor () -> Bool) async throws -> T {
+        guard valid(active, stillCurrent) else { throw Wire.Problem.stale }
+        let raw = try await rpc(method, value)
+        guard valid(active, stillCurrent) else { throw Wire.Problem.stale }
+        return try CrewdKnowledgeStore.decode(raw, T.self)
+    }
+    private func check(_ expected: BrowseScope, _ stillCurrent: @MainActor () -> Bool) async throws {
+        guard valid(expected.origin, stillCurrent),
+              try await scope(stillCurrent: stillCurrent) == expected else { throw Wire.Problem.stale }
+    }
+}

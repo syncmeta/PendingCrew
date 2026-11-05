@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent schema. Core21 remains the personal draft
 /// writer barrier; Core22 adds an indexed historical escalation discovery source.
-pub const SCHEMA_VERSION: i64 = 22;
+pub const SCHEMA_VERSION: i64 = 23;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 #[cfg(test)]
@@ -748,6 +748,7 @@ fn migrate_v5(conn: &Connection) -> Result<()> {
         created_at TEXT NOT NULL,
         UNIQUE(kind,crew_id,source_id)
     ); CREATE INDEX object_refs_by_source_crew ON object_refs(crew_id,source_id); PRAGMA user_version = 5;")?;
+    crate::object_refs::apply_pre_v5_restore_floor(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -1042,6 +1043,12 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         // chat rows must not cost one background scan turn each.
         tx.execute_batch("CREATE INDEX messages_stop_escalations_seq ON messages(seq) WHERE category='work_stop_escalation';
             PRAGMA user_version=22;")?;
+        tx.commit()?;
+    }
+    if v < 23 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_objects::DDL)?;
+        tx.execute_batch("PRAGMA user_version=23;")?;
         tx.commit()?;
     }
     Ok(())

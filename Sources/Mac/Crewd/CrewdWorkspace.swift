@@ -213,6 +213,24 @@ final class CrewdWorkspace: ObservableObject {
     },journal:{[weak self] in
         guard let self,self.originalJournalBound,let journal=self.originalJournal else{throw CrewdClientError(message:"原通知历史尚未就绪，未发送。",kind:.notSubmitted)};return journal
     })
+    lazy var managedDirectory = CrewdManagedDirectoryStore(origin: { [weak self] in
+        guard let self, !self.retired, self.client.readyForWork,
+              self.client.capabilities.contains(CrewdManagedDirectoryWire.capability),
+              self.originalJournalReady, let scope = self.presentationScope else { return nil }
+        return .init(scope: scope, observation: self.observationGeneration,
+                     connection: self.client.connectionEpoch, crew: self.crewID)
+    }, rpc: { [weak self] method, params in
+        guard let self, !self.retired, self.client.readyForWork, self.originalJournalReady,
+              self.client.capabilities.contains(CrewdManagedDirectoryWire.capability),
+              method != "managedObject.submit" || !self.stopping else {
+            throw CrewdClientError(message:"原组织目录连接已变更，未提交。", kind:.notSubmitted)
+        }
+        return try await self.client.call(method, params)
+    }, journal: { [weak self] in
+        guard let self, self.originalJournalReady, let journal = self.originalJournal
+        else { throw CrewdManagedDirectoryWire.Problem.unavailable }
+        return journal
+    })
     lazy var knowledge: CrewdKnowledgeStore = CrewdKnowledgeStore(origin: { [weak self] in
         guard let self, self.client.capabilities.contains("data"), self.originalJournalReady,
               self.acceptsObservation(self.observationGeneration), let scope = self.presentationScope else { return nil }

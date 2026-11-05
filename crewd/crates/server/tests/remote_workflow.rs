@@ -1451,6 +1451,95 @@ async fn paired_human_manual_patrol_has_original_receipt_and_scoped_progress_aft
 }
 
 #[tokio::test]
+async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == "managedObjects.v1")
+    );
+    let owner = local(
+        &mut running.owner,
+        "crew.create",
+        json!({"title":"managed owner", "workingDirectory":dir.path()}),
+    )
+    .await["id"]
+        .clone();
+    let other = local(
+        &mut running.owner,
+        "crew.create",
+        json!({"title":"managed reader", "workingDirectory":dir.path()}),
+    )
+    .await["id"]
+        .clone();
+    let scope = remote.call("managedObject.scope", json!({})).await;
+    assert_eq!(
+        scope,
+        local(&mut running.owner, "managedObject.scope", json!({})).await
+    );
+    let original = json!({"scope":scope,"crewId":owner,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"createTable","title":"Shared fixture","fields":[{"name":"Label","fieldType":"text","nullable":false}]}});
+    let receipt = remote.call("managedObject.submit", original.clone()).await;
+    let table = receipt["object"]["table"]["id"].clone();
+    let lookup = json!({"scope":scope,"crewId":owner,"requestId":original["requestId"]});
+    assert_eq!(
+        remote
+            .call("managedObject.request.get", lookup.clone())
+            .await,
+        json!({"status":"known","receipt":receipt})
+    );
+    assert_eq!(
+        local(
+            &mut running.owner,
+            "managedObject.request.get",
+            lookup.clone()
+        )
+        .await,
+        json!({"status":"notFound"})
+    );
+    assert_eq!(
+        local(&mut running.owner, "managedObject.get", json!({"id":table})).await,
+        receipt["object"]
+    );
+    let wrong_owner = json!({"scope":scope,"crewId":other,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"addRow","tableId":table,"values":[{"type":"text","value":"denied"}]}});
+    assert_eq!(
+        remote
+            .frame("managedObject.submit", wrong_owner)
+            .await
+            .unwrap()["error"]["code"],
+        crewd_proto::RpcError::FORBIDDEN
+    );
+    assert_eq!(
+        remote
+            .call("managedObject.rows", json!({"tableId":table}))
+            .await["items"],
+        json!([])
+    );
+    local(&mut running.owner, "remote.revoke",
+        json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"managed fixture complete"})).await;
+    for (method, params) in [
+        ("managedObject.get", json!({"id":table})),
+        ("managedObject.request.get", lookup),
+        ("managedObject.submit", original),
+    ] {
+        let response = tokio::time::timeout(LIMIT, remote.frame(method, params))
+            .await
+            .unwrap();
+        assert!(response.is_err() || response.unwrap()["error"].is_object());
+    }
+    drop(remote);
+    stopped(running).await;
+}
+
+#[tokio::test]
 async fn remote_human_knowledge_recovery_routes_keep_context_and_live_grant() {
     let root = tempfile::tempdir().unwrap().keep();
     eprintln!("Remote knowledge evidence: {}", root.display());

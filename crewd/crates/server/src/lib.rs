@@ -17,6 +17,7 @@ mod crew_lifecycle;
 pub mod dispatch;
 mod group_knowledge;
 pub mod host_admin;
+mod managed_objects;
 pub mod hub;
 mod judgments;
 pub mod ledger;

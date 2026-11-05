@@ -481,6 +481,10 @@ This connection lacks the actual crew or object access required.
 ## resource.request_conflict
 Request {request} already has a different original payload.
 
+## managed_object.row_changed
+
+This row has changed. Read its current values and version before editing again.
+
 ## document.revision_conflict
 Document {id} changed; review its current metadata before editing.
 

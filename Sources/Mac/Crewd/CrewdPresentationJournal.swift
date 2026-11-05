@@ -74,6 +74,21 @@ final class CrewdPresentationJournal {
         }
     }
 
+    func prepareManagedDirectory(_ params: CrewdValue, crew: String) throws -> Prepared {
+        let method = "managedObject.submit.observation"
+        guard params["crewId"].string?.utf8.elementsEqual(crew.utf8) == true,
+              let target = params["target"].string, !target.isEmpty else { throw CrewdPublicWire.invalid() }
+        return try withPrivateLock("managed-directory.lock", message:"组织目录原请求正在核对或锁不可用。") {
+            guard try !unknownRecords().contains(where: {
+                $0.method == method && $0.scope == scope && $0.crew.utf8.elementsEqual(crew.utf8) &&
+                    $0.params["target"].string?.utf8.elementsEqual(target.utf8) == true
+            }) else {
+                throw CrewdClientError(message:"该组织对象已有原请求待核对。",kind:.notSubmitted)
+            }
+            return try prepare(method:method, params:params, crew:crew)
+        }
+    }
+
     func observeLegacyWorkClose(_ record: Prepared, result: CrewdValue, expectedCrew: String?) throws {
         guard record.method == "work.close", record.scope == scope else { throw CrewdPublicWire.invalid() }
         try CrewdLegacyWorkClose.validate(result,params:record.params,expectedCrew:expectedCrew)

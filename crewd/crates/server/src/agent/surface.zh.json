@@ -2780,6 +2780,420 @@
         "type": "object"
       },
       "name": "crew_structure"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取当前受管对象的数据库、恢复范围和你所在的机组编号。新提交要携带完整范围，并将原范围与请求编号一同保留。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "managed_object_scope_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按组织内的准确 T 或 O 编号读取受管表或行。归档机组的对象仍可读取，并标为冻结。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "准确的 T 表编号或 O 行编号。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取组织内可见的受管表，一次一页。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页返回的 nextAfter T 编号。首页省略。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_tables_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取一张受管表中的行，一次一页。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "此表上一页返回的 nextAfter O 编号。首页省略。",
+            "type": "string"
+          },
+          "tableId": {
+            "description": "managed_tables_list 或 managed_object_get 返回的准确 T 编号。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tableId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_rows_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "在你当前有效的机组内建表、加行或编辑行。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑需要最新的行版本，并替换完整一行。回执不确定时查询原请求，保留原 UUID 与范围。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fields": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fieldType": {
+                          "enum": [
+                            "text",
+                            "integer",
+                            "real"
+                          ],
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "nullable": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "fieldType",
+                        "nullable"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "createTable"
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "title",
+                  "fields"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "addRow"
+                  },
+                  "tableId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tableId",
+                  "values"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "editRow"
+                  },
+                  "rowId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "rowId",
+                  "expectedRevision",
+                  "values"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "crewId": {
+            "description": "managed_object_scope_get 返回的当前机组编号。",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "为这项确切意图生成一个规范的原始 UUID，保留它供查询回执。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "准确复制 managed_object_scope_get 返回的 dbId 与 restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "change"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_submit"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取本会话提交的原请求回执。查询是只读的。回执缺失或仅为历史记录时，不能据此重执行。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "该原请求的归属机组编号。",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "准确的原始请求 UUID。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "该原请求的准确 dbId 与 restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_request_get"
     }
   ],
   "instructions": "crew 工具是你和机组、人类说话的方式。\n关键节点用 post 发到群里；需要人拍板用 ask，然后继续做不依赖答案的事，不阻塞等待。",
@@ -4978,6 +5392,420 @@
         "type": "object"
       },
       "name": "set_session_profile"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取当前受管对象的数据库、恢复范围和你所在的机组编号。新提交要携带完整范围，并将原范围与请求编号一同保留。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "managed_object_scope_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按组织内的准确 T 或 O 编号读取受管表或行。归档机组的对象仍可读取，并标为冻结。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "准确的 T 表编号或 O 行编号。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取组织内可见的受管表，一次一页。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页返回的 nextAfter T 编号。首页省略。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_tables_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取一张受管表中的行，一次一页。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "此表上一页返回的 nextAfter O 编号。首页省略。",
+            "type": "string"
+          },
+          "tableId": {
+            "description": "managed_tables_list 或 managed_object_get 返回的准确 T 编号。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tableId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_rows_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "在你当前有效的机组内建表、加行或编辑行。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑需要最新的行版本，并替换完整一行。回执不确定时查询原请求，保留原 UUID 与范围。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "fields": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "fieldType": {
+                          "enum": [
+                            "text",
+                            "integer",
+                            "real"
+                          ],
+                          "type": "string"
+                        },
+                        "name": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "nullable": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "fieldType",
+                        "nullable"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "kind": {
+                    "const": "createTable"
+                  },
+                  "title": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "title",
+                  "fields"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "addRow"
+                  },
+                  "tableId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tableId",
+                  "values"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "editRow"
+                  },
+                  "rowId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "rowId",
+                  "expectedRevision",
+                  "values"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "crewId": {
+            "description": "managed_object_scope_get 返回的当前机组编号。",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "为这项确切意图生成一个规范的原始 UUID，保留它供查询回执。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "准确复制 managed_object_scope_get 返回的 dbId 与 restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "change"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_submit"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "读取本会话提交的原请求回执。查询是只读的。回执缺失或仅为历史记录时，不能据此重执行。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "该原请求的归属机组编号。",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "准确的原始请求 UUID。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "该原请求的准确 dbId 与 restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_request_get"
     }
   ]
 }

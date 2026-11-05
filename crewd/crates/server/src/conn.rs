@@ -784,6 +784,21 @@ async fn request_step(
                 )
             }
         }
+        Ok(req) if crewd_proto::managed_objects_api::METHODS.contains(&req.method.as_str()) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::managed_objects::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
         Ok(req) if crate::crew_lifecycle::is_method(&req.method) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(

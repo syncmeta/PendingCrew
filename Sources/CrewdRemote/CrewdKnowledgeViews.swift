@@ -22,7 +22,13 @@ struct CrewdKnowledgeDocumentsEntry: View {
             .frame(maxWidth:.infinity,alignment:.leading)
             .padding(.horizontal,16).padding(.vertical,10)
             .help(library ? "当前机组可访问的共享资料；群内分类不会改写这里的原文。":"仅显示当前群已关联的资料；文档原文与其他群共享，分类属于当前群。")
-            if collection == .tables {
+            if collection == .managedDirectory {
+                if workspace.client.capabilities.contains(CrewdManagedDirectoryWire.capability) {
+                    CrewdManagedDirectoryView(workspace:workspace,store:workspace.managedDirectory)
+                } else {
+                    CrewdEmptySurface(title:"组织目录暂不可用",detail:"当前连接尚未提供组织目录。",symbol:"list.bullet.rectangle")
+                }
+            } else if collection == .tables {
                 if workspace.client.capabilities.contains("data.table.keyset.v1") {
                     CrewdNativeTablesView(workspace:workspace,store:workspace.knowledge)
                 } else {
@@ -41,16 +47,17 @@ struct CrewdKnowledgeDocumentsEntry: View {
     }
     @ViewBuilder private var scopePicker:some View {
         if collection == .tables { Text("机组资料库").foregroundStyle(.secondary) }
+        else if collection == .managedDirectory { Text("组织共享 · 本机组可维护").foregroundStyle(.secondary) }
         else { Picker("范围",selection:$library){Text("本群引用").tag(false);Text("机组资料库").tag(true)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料范围") }
     }
-    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档").tag(CrewdKnowledgeCollection.documents);Text("Agent 页面").tag(CrewdKnowledgeCollection.agentPages);Text("表格").tag(CrewdKnowledgeCollection.tables)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料类型")}
+    private var collectionPicker:some View{Picker("类型",selection:$collection){Text("文档").tag(CrewdKnowledgeCollection.documents);Text("Agent 页面").tag(CrewdKnowledgeCollection.agentPages);Text("本机组表格").tag(CrewdKnowledgeCollection.tables);Text("组织目录").tag(CrewdKnowledgeCollection.managedDirectory)}.pickerStyle(.menu).labelsHidden().fixedSize(horizontal:true,vertical:false).accessibilityLabel("资料类型")}
 
 }
 
 /// Native placements and free Agent-authored pages share stored blocks, while
 /// their navigation stays separate. The selector never executes page code.
 enum CrewdKnowledgeCollection: String {
-    case all, documents, agentPages, tables
+    case all, documents, agentPages, tables, managedDirectory
     func includes(_ kind: CrewdKnowledgeStore.ViewCatalogKind) -> Bool {
         self == .all || (self == .documents && kind == .document) || (self == .agentPages && kind == .web)
     }
@@ -2303,6 +2310,377 @@ private struct CrewdNativeTablesView: View {
                     else { feedback = "确认结果尚未核实。请关闭并查询原请求。" }
                 } catch {
                     if current() { feedback = "此次保存尚未核实。请关闭并查看原请求或刷新表格。" }
+                }
+            }
+        }
+    }
+}
+
+private struct CrewdManagedDirectoryView: View {
+    typealias Wire = CrewdManagedDirectoryWire
+    typealias Store = CrewdManagedDirectoryStore
+    @ObservedObject var workspace: CrewdWorkspace
+    let store: Store
+    @State private var scope: Store.BrowseScope?
+    @State private var tables: [Wire.Table] = []
+    @State private var table: Wire.Table?
+    @State private var rows: [Wire.Row] = []
+    @State private var nextTable: String?
+    @State private var nextRow: String?
+    @State private var pending: [Store.Pending] = []
+    @State private var editor: EditorTarget?
+    @State private var ticket = UUID()
+    @State private var busy = false
+    @State private var problem: String?
+    @State private var notice: String?
+
+    private struct Route: Equatable, Hashable {
+        let crew: String
+        let observation: UUID
+        let connection: UUID
+        let journalReady: Bool
+    }
+    private var route: Route {
+        .init(crew:workspace.crewID,observation:workspace.observationGeneration,
+              connection:workspace.client.connectionEpoch,
+              journalReady:workspace.originalJournalReady && workspace.client.readyForWork)
+    }
+    private var presentsCurrentScope: Bool {
+        guard let active = scope?.origin else { return false }
+        return route.journalReady && active.observation == route.observation &&
+            active.connection == route.connection && Wire.exact(active.crew,route.crew)
+    }
+    private struct EditorTarget: Identifiable {
+        enum Mode { case create; case add(Wire.Table); case edit(Wire.Table, Wire.Row) }
+        let id = UUID()
+        let mode: Mode
+        let scope: Store.BrowseScope
+        let route: Route
+        var title: String {
+            switch mode { case .create: "新建组织表"; case .add: "新增记录"; case .edit: "编辑记录" }
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                header
+                if let problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
+                if presentsCurrentScope {
+                    if let notice { Text(notice).foregroundStyle(.secondary).textSelection(.enabled) }
+                    if !pending.isEmpty { pendingPanel }
+                    if let table { records(table) } else { catalog }
+                }
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(16)
+            .frame(maxWidth: .infinity)
+        }
+        .task(id: route) { await reload(route, target: nil, reset: true) }
+        .onDisappear { ticket = UUID(); editor = nil }
+        .sheet(item: $editor) { target in
+            Editor(target: target, current: { editor?.id == target.id && route == target.route && scope == target.scope && !currentCrewFrozen },
+                   submit: { mutation, current in
+                try await store.submit(mutation, scope: target.scope, stillCurrent: current)
+            }, complete: { result in
+                guard editor?.id == target.id && route == target.route else { return }
+                editor = nil
+                notice = "已保存 " + (result.receipt.object.id ?? "组织对象") + "。"
+                let selected = table?.id
+                Task { await reload(target.route, target: selected, reset: false) }
+            }, refreshPending: {
+                guard route == target.route && scope == target.scope else { return }
+                refreshPending(target.scope)
+            })
+        }
+    }
+    private var header: some View {
+        VStack(alignment:.leading,spacing:6) {
+            HStack {
+                Text("组织目录").font(.headline)
+                if busy { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("刷新",systemImage:"arrow.clockwise") {
+                    let captured = route, selected = table?.id
+                    Task { await reload(captured, target: selected, reset: false) }
+                }.disabled(busy)
+            }
+            Text("其他机组的组织表可阅读。本机组维护自己的表和记录。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private var catalog: some View {
+        VStack(alignment:.leading,spacing:10) {
+            Button("新建组织表",systemImage:"plus") { open(.create) }
+                .disabled(busy || scope == nil || currentCrewFrozen || blocked("createTable"))
+            if tables.isEmpty && !busy && scope != nil {
+                Text("组织目录还没有表。").foregroundStyle(.secondary)
+            }
+            ForEach(tables) { item in
+                Button {
+                    let captured = route
+                    Task { await reload(captured, target: item.id, reset: false) }
+                } label: {
+                    HStack {
+                        VStack(alignment:.leading,spacing:3) {
+                            Text(item.title).foregroundStyle(.primary)
+                            Text(item.id + " · " + owner(item.crewId) + (item.frozen ? " · 已归档" : ""))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName:"chevron.right").font(.caption)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).disabled(busy)
+                Divider()
+            }
+            if let nextTable {
+                Button("更多组织表") { loadMore(after: nextTable, table: nil) }.disabled(busy)
+            }
+        }
+    }
+    private func records(_ selected: Wire.Table) -> some View {
+        VStack(alignment:.leading,spacing:10) {
+            Button("返回组织目录",systemImage:"chevron.backward") {
+                let captured = route
+                Task { await reload(captured, target: nil, reset: false) }
+            }.disabled(busy)
+            Text(selected.title).font(.title3)
+            Text(selected.id + " · " + owner(selected.crewId) + (selected.frozen ? " · 已归档，只读" : ""))
+                .font(.caption).foregroundStyle(.secondary)
+            if canWrite(selected) {
+                Button("新增记录",systemImage:"plus") { open(.add(selected)) }
+                    .disabled(busy || blocked(selected.id))
+            }
+            if rows.isEmpty && !busy { Text("这张组织表还没有记录。").foregroundStyle(.secondary) }
+            ForEach(rows) { row in
+                VStack(alignment:.leading,spacing:6) {
+                    HStack {
+                        Text(row.id).font(.subheadline)
+                        Spacer()
+                        if canWrite(selected) && !row.frozen {
+                            Button("编辑",systemImage:"pencil") { open(.edit(selected,row)) }
+                                .disabled(busy || blocked(row.id))
+                        }
+                    }
+                    ForEach(selected.fields.indices,id:\.self) { index in
+                        LabeledContent(selected.fields[index].name) {
+                            Text(row.values[index].display).textSelection(.enabled)
+                        }
+                    }
+                }.padding(.vertical,4)
+                Divider()
+            }
+            if let nextRow {
+                Button("更多记录") { loadMore(after: nextRow, table: selected.id) }.disabled(busy)
+            }
+        }
+    }
+    private var pendingPanel: some View {
+        VStack(alignment:.leading,spacing:5) {
+            Text("原请求待核对").font(.subheadline)
+            ForEach(pending) { item in
+                HStack {
+                    let label = item.witness.kind == "createTable" ? "新建组织表" : item.witness.target
+                    Text(label + " · " + String(item.witness.requestId.prefix(8))).font(.caption)
+                    Spacer()
+                    Button("查看原回执") { lookup(item) }.disabled(busy)
+                }
+            }
+        }.padding(10).background(.secondary.opacity(0.10),in:RoundedRectangle(cornerRadius:8))
+    }
+
+    private func owner(_ crew: String) -> String {
+        Wire.exact(crew, route.crew) ? "本机组" : "其他机组 · " + crew
+    }
+    private var currentCrewFrozen: Bool {
+        workspace.crews.first { $0["id"].string == route.crew }?["removedAt"].string != nil
+    }
+    private func canWrite(_ table: Wire.Table) -> Bool {
+        !table.frozen && !currentCrewFrozen && Wire.exact(table.crewId,route.crew) && scope != nil
+    }
+    private func blocked(_ target: String) -> Bool { pending.contains { $0.witness.target == target } }
+    private func open(_ mode: EditorTarget.Mode) {
+        guard let scope, !busy, !currentCrewFrozen else { return }
+        editor = .init(mode:mode,scope:scope,route:route)
+    }
+    private func refreshPending(_ scope: Store.BrowseScope) {
+        do { pending = try store.pending(scope) }
+        catch { problem = error.localizedDescription }
+    }
+    private func reload(_ captured: Route, target: String?, reset: Bool) async {
+        guard route == captured, !Task.isCancelled else { return }
+        let token = UUID()
+        ticket = token
+        if reset {
+            scope = nil; tables = []; table = nil; rows = []; nextTable = nil; nextRow = nil
+            pending = []; editor = nil; notice = nil
+        }
+        guard captured.journalReady else { busy = false; return }
+        busy = true; problem = nil
+        @MainActor func current() -> Bool { ticket == token && route == captured && !Task.isCancelled }
+        defer { if current() { busy = false } }
+        do {
+            let active = try await store.scope(stillCurrent:current)
+            if let target {
+                let page = try await store.rows(active,table:target,after:nil,stillCurrent:current)
+                guard current() else { return }
+                table = page.table; rows = page.items; nextRow = page.nextAfter
+            } else {
+                let page = try await store.tables(active,after:nil,stillCurrent:current)
+                guard current() else { return }
+                tables = page.items; nextTable = page.nextAfter; table = nil; rows = []; nextRow = nil
+            }
+            scope = active
+            refreshPending(active)
+        } catch { if current() { scope = nil; problem = error.localizedDescription } }
+    }
+    private func loadMore(after: String, table target: String?) {
+        guard let scope, !busy else { return }
+        let captured = route, token = UUID()
+        ticket = token; busy = true; problem = nil
+        Task {
+            @MainActor func current() -> Bool { ticket == token && route == captured && self.scope == scope && !Task.isCancelled }
+            defer { if current() { busy = false } }
+            do {
+                if let target {
+                    let page = try await store.rows(scope,table:target,after:after,stillCurrent:current)
+                    guard current(), table?.id == target else { return }
+                    table = page.table; rows += page.items; nextRow = page.nextAfter
+                } else {
+                    let page = try await store.tables(scope,after:after,stillCurrent:current)
+                    guard current(), table == nil else { return }
+                    tables += page.items; nextTable = page.nextAfter
+                }
+            } catch { if current() { problem = error.localizedDescription } }
+        }
+    }
+    private func lookup(_ item: Store.Pending) {
+        guard let scope, !busy else { return }
+        let captured = route, token = UUID()
+        ticket = token; busy = true; problem = nil; notice = nil
+        Task {
+            @MainActor func current() -> Bool { ticket == token && route == captured && self.scope == scope && !Task.isCancelled }
+            defer { if current() { busy = false } }
+            do {
+                let observed = try await store.lookup(item,scope:scope,stillCurrent:current)
+                guard current() else { return }
+                refreshPending(scope)
+                if let observed, let id = observed.receipt.object.id {
+                    notice = observed.historical ? "已核对历史回执 " + id + "。当前状态请另行刷新。" :
+                        "已核对原回执 " + id + "。"
+                } else {
+                    notice = "还没有可验证的原回执。原请求保留，可以稍后再查询。"
+                }
+            } catch { if current() { problem = error.localizedDescription } }
+        }
+    }
+
+    private struct Editor: View {
+        let target: EditorTarget
+        let current: @MainActor () -> Bool
+        let submit: @MainActor (Store.Mutation, @MainActor () -> Bool) async throws -> Store.Observation
+        let complete: @MainActor (Store.Observation) -> Void
+        let refreshPending: @MainActor () -> Void
+        @Environment(\.dismiss) private var dismiss
+        @State private var title = ""
+        @State private var fields: [Wire.Field] = [.init(name:"",fieldType:.text,nullable:false)]
+        @State private var inputs: [Input] = []
+        @State private var busy = false
+        @State private var stopped = false
+        @State private var problem: String?
+        private struct Input { var text = ""; var null = false }
+        private var model: (Wire.Table, Wire.Row?)? {
+            switch target.mode {
+            case .create: nil
+            case .add(let table): (table,nil)
+            case .edit(let table,let row): (table,row)
+            }
+        }
+        var body: some View {
+            NavigationStack {
+                Form {
+                    if let (table,row) = model {
+                        Section(row.map { "记录 " + $0.id + " · 版本 " + $0.revision } ?? "填写记录") {
+                            ForEach(inputs.indices,id:\.self) { index in
+                                let field = table.fields[index]
+                                if field.nullable { Toggle("空值 · " + field.name,isOn:$inputs[index].null) }
+                                if !inputs[index].null {
+                                    TextField(field.name + " · " + field.fieldType.title,text:$inputs[index].text,axis:.vertical)
+                                }
+                            }
+                        }
+                    } else {
+                        TextField("组织表名称",text:$title)
+                        ForEach(fields.indices,id:\.self) { index in
+                            Section("字段 " + String(index + 1)) {
+                                TextField("字段名称",text:$fields[index].name)
+                                Picker("类型",selection:$fields[index].fieldType) {
+                                    ForEach(Wire.FieldType.allCases) { type in Text(type.title).tag(type) }
+                                }
+                                Toggle("允许空值",isOn:$fields[index].nullable)
+                                if fields.count > 1 {
+                                    Button("移除此字段",role:.destructive) { fields.remove(at:index) }
+                                }
+                            }
+                        }
+                        Button("添加字段",systemImage:"plus") {
+                            fields.append(.init(name:"",fieldType:.text,nullable:false))
+                        }.disabled(fields.count >= Wire.fieldLimit)
+                    }
+                    if let problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
+                }
+                .disabled(busy || stopped)
+                .navigationTitle(target.title)
+                .toolbar {
+                    ToolbarItem(placement:.cancellationAction) {
+                        Button(stopped ? "关闭" : "取消") { dismiss() }.disabled(busy)
+                    }
+                    ToolbarItem(placement:.confirmationAction) {
+                        Button("保存") { save() }.disabled(busy || stopped || (model != nil && inputs.isEmpty))
+                    }
+                }
+            }
+            .interactiveDismissDisabled(busy)
+            .task {
+                if let (table,row) = model {
+                    inputs = table.fields.indices.map { index in
+                        let original = row?.values[index]
+                        return .init(text:original == .null ? "" : original?.display ?? "",null:original == .null)
+                    }
+                }
+            }
+            #if os(macOS)
+            .frame(minWidth:440,minHeight:350)
+            #endif
+        }
+        private func mutation() throws -> Store.Mutation {
+            if let (table,row) = model {
+                let values = try zip(inputs,table.fields).map { try Wire.Cell.parse($0.0.text,null:$0.0.null,field:$0.1) }
+                guard Wire.validValues(values, fields:table.fields) else { throw Wire.Problem.invalid }
+                if let row { return .edit(table,row,values) }
+                return .add(table,values)
+            }
+            guard Wire.validDefinition(title:title,fields:fields) else { throw Wire.Problem.invalid }
+            return .create(title,fields)
+        }
+        private func save() {
+            guard !busy, !stopped, current() else { return }
+            let change: Store.Mutation
+            do { change = try mutation() }
+            catch { problem = error.localizedDescription; return }
+            busy = true; problem = nil
+            Task {
+                defer { if current() { busy = false } }
+                do {
+                    let result = try await submit(change,current)
+                    guard current() else { return }
+                    complete(result)
+                } catch {
+                    guard current() else { return }
+                    refreshPending()
+                    problem = error.localizedDescription
+                    stopped = true
                 }
             }
         }
