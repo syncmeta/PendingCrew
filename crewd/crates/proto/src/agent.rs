@@ -195,6 +195,42 @@ pub struct HookResult {
     pub stdout: Option<String>,
 }
 
+/// Closed stdout dialect for the fail-closed managed UserPromptSubmit guard.
+pub const MANAGED_PROMPT_ALLOW: &str = r#"{"continue":true}"#;
+pub const MANAGED_RISK_ALLOW_PREFIX: &str = r#"{"continue":true,"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"R"#;
+pub const MANAGED_RISK_ALLOW_SUFFIX: &str = r#" is due for review."}}"#;
+
+pub fn managed_risk_number(id: &str) -> Option<i64> {
+    positive_risk_number(id.strip_prefix('R')?)
+}
+
+fn positive_risk_number(digits: &str) -> Option<i64> {
+    if digits.starts_with('0') || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<i64>().ok().filter(|n| *n > 0)
+}
+
+pub fn managed_risk_line(risk: i64) -> String {
+    format!("R{risk} is due for review.")
+}
+
+pub fn managed_prompt_allow(risk: Option<i64>) -> String {
+    match risk.filter(|risk| *risk > 0) {
+        Some(risk) => format!("{MANAGED_RISK_ALLOW_PREFIX}{risk}{MANAGED_RISK_ALLOW_SUFFIX}"),
+        None => MANAGED_PROMPT_ALLOW.into(),
+    }
+}
+
+pub fn is_managed_prompt_allow(stdout: &str) -> bool {
+    stdout == MANAGED_PROMPT_ALLOW
+        || stdout
+            .strip_prefix(MANAGED_RISK_ALLOW_PREFIX)
+            .and_then(|body| body.strip_suffix(MANAGED_RISK_ALLOW_SUFFIX))
+            .and_then(positive_risk_number)
+            .is_some()
+}
+
 /// 契约里 agent 那一段（`api_schema()["agent"]`）。**必须用 `api_schema` 的同一个 `SchemaGenerator`**
 /// （`crate::sub::<T>(g)`，父模块的私有函数子模块看得见）：类型只进顶层 `$defs`、这里全是 `$ref`。
 /// 用 `schema_for!` 会给每个类型自带一份 `$defs`，M3a 的 `every_ref_resolves_to_a_single_top_level_def` 会红。

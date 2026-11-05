@@ -461,8 +461,32 @@ pub fn prepare_claude(
                     // A legacy/replaced helper may silently exit0. Validate its
                     // exact affirmative output outside that helper as well.
                     let command = helper.hook_command(e, &token_file);
+                    use crewd_proto::agent::{
+                        MANAGED_PROMPT_ALLOW, MANAGED_RISK_ALLOW_PREFIX, MANAGED_RISK_ALLOW_SUFFIX,
+                    };
+                    let plain = shell_quote(MANAGED_PROMPT_ALLOW);
+                    let prefix = shell_quote(MANAGED_RISK_ALLOW_PREFIX);
+                    let suffix = shell_quote(MANAGED_RISK_ALLOW_SUFFIX);
                     let wrapper = format!(
-                        "#!/bin/sh\nresult=$({command}) || exit 2\n[ \"$result\" = '{{\"continue\":true}}' ] || exit 2\nprintf '%s\\n' \"$result\"\n"
+                        r#"#!/bin/sh
+result=$({command}) || exit 2
+if [ "$result" != {plain} ]; then
+    prefix={prefix}
+    suffix={suffix}
+    case "$result" in
+        "$prefix"*"$suffix") ;;
+        *) exit 2 ;;
+    esac
+    digits=${{result#"$prefix"}}
+    digits=${{digits%"$suffix"}}
+    case "$digits" in
+        ''|0*|*[!0123456789]*) exit 2 ;;
+    esac
+    [ "${{#digits}}" -le 19 ] && [ "$digits" -gt 0 ] 2>/dev/null || exit 2
+fi
+printf '%s
+' "$result"
+"#
                     );
                     let wrapper =
                         write_private(files.dir(), "managed-submit-guard.sh", wrapper.as_bytes())?;
@@ -604,13 +628,55 @@ mod tests {
             root.path(),
         )
         .unwrap();
-        for (body, expected) in [
-            ("exit 0", 2),
-            ("printf 'null'", 2),
-            ("printf '{\"continue\":false}'", 2),
-            ("printf '{\"continue\":true}'; exit 1", 2),
-            ("printf '{\"continue\":true}'", 0),
+        use crewd_proto::agent::{
+            MANAGED_RISK_ALLOW_PREFIX, MANAGED_RISK_ALLOW_SUFFIX, is_managed_prompt_allow,
+            managed_prompt_allow,
+        };
+        let mut cases = vec![
+            ("exit 0".to_string(), 2, None),
+            ("printf 'null'".to_string(), 2, None),
+            ("printf '{\"continue\":false}'".to_string(), 2, None),
+            ("printf '{\"continue\":true}'; exit 1".to_string(), 2, None),
+        ];
+        for (stdout, expected) in [
+            (managed_prompt_allow(None), 0),
+            (managed_prompt_allow(Some(37)), 0),
+            (managed_prompt_allow(Some(i64::MAX)), 0),
+            (
+                format!("{MANAGED_RISK_ALLOW_PREFIX}0{MANAGED_RISK_ALLOW_SUFFIX}"),
+                2,
+            ),
+            (
+                format!("{MANAGED_RISK_ALLOW_PREFIX}037{MANAGED_RISK_ALLOW_SUFFIX}"),
+                2,
+            ),
+            (
+                format!("{MANAGED_RISK_ALLOW_PREFIX}37x{MANAGED_RISK_ALLOW_SUFFIX}"),
+                2,
+            ),
+            (
+                format!(
+                    "{MANAGED_RISK_ALLOW_PREFIX}9223372036854775808{MANAGED_RISK_ALLOW_SUFFIX}"
+                ),
+                2,
+            ),
+            (
+                managed_prompt_allow(Some(37)).replace("UserPromptSubmit", "PostToolUse"),
+                2,
+            ),
+            (
+                managed_prompt_allow(Some(37)).replace("due for review", "run another prompt"),
+                2,
+            ),
         ] {
+            assert_eq!(is_managed_prompt_allow(&stdout), expected == 0);
+            cases.push((
+                format!("printf '%s' {}", shell_quote(&stdout)),
+                expected,
+                (expected == 0).then_some(stdout),
+            ));
+        }
+        for (body, expected, accepted) in cases {
             std::fs::write(&helper, format!("#!/bin/sh\n{body}\n")).unwrap();
             std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
             let output = std::process::Command::new("/bin/sh")
@@ -618,6 +684,11 @@ mod tests {
                 .output()
                 .unwrap();
             assert_eq!(output.status.code(), Some(expected), "{body}");
+            let actual = std::str::from_utf8(&output.stdout).unwrap();
+            assert_eq!(actual.strip_suffix('\n'), accepted.as_deref(), "{body}");
+            if accepted.is_none() {
+                assert!(actual.is_empty(), "{body}");
+            }
         }
     }
 

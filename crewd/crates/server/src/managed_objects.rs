@@ -74,6 +74,20 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
                             .map_err(dispatch::collab_err)?,
                     )
                 }
+                RISKS => {
+                    let params: TablesParams = crewd_proto::parse_params_or_default(params)?;
+                    value(
+                        domain::risks(conn, human, params.after.as_deref())
+                            .map_err(dispatch::collab_err)?,
+                    )
+                }
+                LESSONS => {
+                    let params: TablesParams = crewd_proto::parse_params_or_default(params)?;
+                    value(
+                        domain::lessons(conn, human, params.after.as_deref())
+                            .map_err(dispatch::collab_err)?,
+                    )
+                }
                 REQUEST_GET => {
                     let params: RequestParams = crewd_proto::parse_params(params)?;
                     value(

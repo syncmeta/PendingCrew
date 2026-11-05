@@ -2321,13 +2321,20 @@ private struct CrewdManagedDirectoryView: View {
     typealias Store = CrewdManagedDirectoryStore
     @ObservedObject var workspace: CrewdWorkspace
     let store: Store
-    private enum SectionMode: Hashable { case tables, decisions }
+    private enum SectionMode: Hashable {
+        case tables, decisions, risks, lessons
+        var riskLesson: Bool { self == .risks || self == .lessons }
+    }
     @State private var section: SectionMode = .tables
     @State private var shownSection: SectionMode?
     @State private var scope: Store.BrowseScope?
     @State private var decisions: [Wire.Decision] = []
     @State private var decision: Wire.Decision?
     @State private var nextDecision: String?
+    @State private var riskLessonItems: [Wire.RiskLessonEntry] = []
+    @State private var riskLessonDetail: Wire.RiskLessonEntry?
+    @State private var nextRiskLesson: String?
+    @State private var linkedRiskLesson: RiskLessonNavigation?
     @State private var tables: [Wire.Table] = []
     @State private var table: Wire.Table?
     @State private var rows: [Wire.Row] = []
@@ -2347,23 +2354,61 @@ private struct CrewdManagedDirectoryView: View {
         let journalReady: Bool
         let section: SectionMode
     }
+    private struct RiskLessonNavigation {
+        let id: String
+        let origin: Route
+        let section: SectionMode
+    }
     private var route: Route {
         .init(crew:workspace.crewID,observation:workspace.observationGeneration,
               connection:workspace.client.connectionEpoch,
               journalReady:workspace.originalJournalReady && workspace.client.readyForWork,
-              section:decisionsAvailable ? section : .tables)
+              section:visibleSection)
     }
     private var decisionsAvailable: Bool { workspace.client.capabilities.contains(Wire.decisionsCapability) }
-    private var selectedID: String? { route.section == .decisions ? decision?.id : table?.id }
+    private var riskLessonsAvailable: Bool { workspace.client.capabilities.contains(Wire.riskLessonsCapability) }
+    private var visibleSection: SectionMode {
+        if section.riskLesson && !riskLessonsAvailable { return .tables }
+        if section == .decisions && !decisionsAvailable { return .tables }
+        return section
+    }
+    private var selectedID: String? {
+        if route.section.riskLesson { return riskLessonDetail?.id }
+        return route.section == .decisions ? decision?.id : table?.id
+    }
     private var presentsCurrentScope: Bool {
         guard let active = scope?.origin else { return false }
         return route.journalReady && shownSection == route.section && active.observation == route.observation &&
             active.connection == route.connection && Wire.exact(active.crew,route.crew)
     }
+    private enum RiskLessonMode {
+        case registerRisk, updateRisk(Wire.Risk), assignRisk(Wire.Risk), reviewRisk(Wire.Risk)
+        case riskStatus(Wire.Risk,Wire.RiskStatus), occurrence(Wire.Risk)
+        case recordLesson, confirmLesson(Wire.Lesson), staleLesson(Wire.Lesson)
+
+        var title: String {
+            switch self {
+            case .registerRisk: "登记风险"
+            case .updateRisk(let item): "编辑 " + item.id
+            case .assignRisk(let item): "转交 " + item.id
+            case .reviewRisk(let item): "复核 " + item.id
+            case .riskStatus(let item,let status): status.label + " " + item.id
+            case .occurrence(let item): "登记 " + item.id + " 已发生"
+            case .recordLesson: "记录教训"
+            case .confirmLesson(let item): "确认 " + item.id + " 仍适用"
+            case .staleLesson(let item): "将 " + item.id + " 标为过时"
+            }
+        }
+        var confirmLesson: Bool {
+            if case .confirmLesson = self { return true }
+            return false
+        }
+    }
     private struct EditorTarget: Identifiable {
         enum Mode {
             case create, add(Wire.Table), edit(Wire.Table, Wire.Row)
             case recordDecision, replaceDecision(Wire.Decision), withdrawDecision(Wire.Decision)
+            case riskLesson(RiskLessonMode)
         }
         let id = UUID()
         let mode: Mode
@@ -2377,7 +2422,12 @@ private struct CrewdManagedDirectoryView: View {
             case .recordDecision: "记录决定"
             case .replaceDecision(let old): "取代 " + old.id
             case .withdrawDecision(let old): "撤回 " + old.id
+            case .riskLesson(let operation): operation.title
             }
+        }
+        var riskLessonMode: RiskLessonMode? {
+            if case .riskLesson(let operation) = mode { return operation }
+            return nil
         }
         var isWithdrawal: Bool {
             if case .withdrawDecision = mode { return true }
@@ -2386,7 +2436,7 @@ private struct CrewdManagedDirectoryView: View {
         var isDecision: Bool {
             switch mode {
             case .recordDecision, .replaceDecision, .withdrawDecision: true
-            case .create, .add, .edit: false
+            case .create, .add, .edit, .riskLesson: false
             }
         }
     }
@@ -2399,7 +2449,9 @@ private struct CrewdManagedDirectoryView: View {
                 if presentsCurrentScope {
                     if let notice { Text(notice).foregroundStyle(.secondary).textSelection(.enabled) }
                     if !pending.isEmpty { pendingPanel }
-                    if route.section == .decisions {
+                    if route.section.riskLesson {
+                        if let riskLessonDetail { riskLessonObject(riskLessonDetail) } else { riskLessonCatalog }
+                    } else if route.section == .decisions {
                         if let decision { decisionDetail(decision) } else { decisionLog }
                     } else if let table { records(table) } else { catalog }
                 }
@@ -2408,18 +2460,36 @@ private struct CrewdManagedDirectoryView: View {
             .padding(16)
             .frame(maxWidth: .infinity)
         }
-        .task(id: route) { await reload(route, target: nil, reset: true) }
+        .task(id: route) {
+            let captured = route, link = linkedRiskLesson
+            linkedRiskLesson = nil
+            let matches = link.map {
+                $0.section == captured.section && $0.origin.observation == captured.observation &&
+                    $0.origin.connection == captured.connection && Wire.exact($0.origin.crew,captured.crew)
+            } ?? false
+            await reload(captured,target:matches ? link?.id:nil,reset:true)
+        }
         .onDisappear { ticket = UUID(); editor = nil }
         .sheet(item: $editor) { target in
-            Editor(target: target, current: { editor?.id == target.id && route == target.route && scope == target.scope && !currentCrewFrozen },
+            Editor(target: target, allowRiskReferences:riskLessonsAvailable, riskOwners:workspace.sessions,
+                   current: { editor?.id == target.id && route == target.route && scope == target.scope &&
+                      (!currentCrewFrozen || target.riskLessonMode?.confirmLesson == true) },
                    submit: { mutation, current in
                 try await store.submit(mutation, scope: target.scope, stillCurrent: current)
             }, complete: { result in
                 guard editor?.id == target.id && route == target.route else { return }
                 editor = nil
-                notice = "已保存 " + (result.receipt.object.id ?? "组织对象") + "。"
-                let selected = target.isDecision ? result.receipt.object.decision?.id : table?.id
-                Task { await reload(target.route, target: selected, reset: false) }
+                if let occurrence = result.receipt.occurrence {
+                    notice = "已登记 " + occurrence.riskId + " 发生，并记录教训 " + occurrence.lessonId + "。"
+                } else {
+                    notice = "已保存 " + (result.receipt.object.id ?? "组织对象") + "。"
+                }
+                if let item = result.receipt.object.riskLessonEntry {
+                    showRiskLesson(item.id)
+                } else {
+                    let selected = target.isDecision ? result.receipt.object.decision?.id : table?.id
+                    Task { await reload(target.route,target:selected,reset:false) }
+                }
             }, refreshPending: {
                 guard route == target.route && scope == target.scope else { return }
                 refreshPending(target.scope)
@@ -2437,15 +2507,26 @@ private struct CrewdManagedDirectoryView: View {
                     Task { await reload(captured, target: selected, reset: false) }
                 }.disabled(busy)
             }
-            if decisionsAvailable {
+            if decisionsAvailable || riskLessonsAvailable {
                 Picker("组织目录内容",selection:$section) {
                     Text("组织表").tag(SectionMode.tables)
-                    Text("决定日志").tag(SectionMode.decisions)
+                    if decisionsAvailable { Text("决定日志").tag(SectionMode.decisions) }
+                    if riskLessonsAvailable {
+                        Text("风险板").tag(SectionMode.risks)
+                        Text("教训库").tag(SectionMode.lessons)
+                    }
                 }.pickerStyle(.segmented).disabled(editor != nil)
             }
-            Text(route.section == .decisions ? "全组织可读。本机组可以记录、取代或撤回自己的决定。" :
-                    "其他机组的组织表可阅读。本机组维护自己的表和记录。")
+            Text(directoryDescription)
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private var directoryDescription: String {
+        switch route.section {
+        case .tables: "其他机组的组织表可阅读。本机组维护自己的表和记录。"
+        case .decisions: "全组织可读。本机组可以记录、取代或撤回自己的决定。"
+        case .risks: "全组织可读。本机组维护自己的风险。复核到期会在这里显示。"
+        case .lessons: "全组织可读。可以确认仍然适用的教训。"
         }
     }
     private var catalog: some View {
@@ -2593,16 +2674,179 @@ private struct CrewdManagedDirectoryView: View {
         Task { await reload(captured,target:id,reset:false) }
     }
 
+    private var riskLessonCatalog: some View {
+        TimelineView(.periodic(from:.now,by:60)) { timeline in
+            VStack(alignment:.leading,spacing:10) {
+                let lessons = route.section == .lessons
+                Button(lessons ? "记录教训":"登记风险",systemImage:"plus") {
+                    open(.riskLesson(lessons ? .recordLesson:.registerRisk))
+                }.disabled(busy || scope == nil || currentCrewFrozen || blocked(lessons ? "recordLesson":"recordRisk"))
+                if riskLessonItems.isEmpty && !busy {
+                    Text(lessons ? "还没有组织教训。":"还没有组织风险。").foregroundStyle(.secondary)
+                }
+                let due = riskLessonItems.filter { entry in
+                    if case .risk(let risk) = entry { return risk.due(at:timeline.date) }
+                    return false
+                }
+                if !due.isEmpty {
+                    Text("已到复核日期（已加载）").font(.subheadline).foregroundStyle(.orange)
+                    ForEach(due) { entry in riskLessonRow(entry,due:true,at:timeline.date) }
+                    Text("其他风险").font(.subheadline)
+                }
+                let dueIDs = Set(due.map(\.id))
+                ForEach(riskLessonItems.filter { !dueIDs.contains($0.id) }) { entry in
+                    riskLessonRow(entry,due:false,at:timeline.date)
+                }
+                if let nextRiskLesson {
+                    Button("更早的记录") { loadMore(after:nextRiskLesson,table:nil) }.disabled(busy)
+                }
+            }
+        }
+    }
+    private func riskLessonRow(_ entry: Wire.RiskLessonEntry, due: Bool, at now: Date) -> some View {
+        let title: String
+        let detail: String
+        let overdue: Bool
+        switch entry {
+        case .risk(let risk):
+            title = risk.draft.summary
+            overdue = due && (Wire.managedTime(risk.nextReviewAt).map { now.timeIntervalSince($0) > 7 * 86_400 } ?? false)
+            let review = overdue ? " · 复核逾期超过七天" : (due ? " · 待复核" : "")
+            detail = risk.status.label + " · 影响" + risk.draft.impact.label + review
+        case .lesson(let lesson):
+            title = lesson.draft.lesson
+            detail = lesson.status.label + (lesson.draft.learnedFrom.isEmpty ? " · 未附来源":"")
+            overdue = false
+        }
+        return Button {
+            showRiskLesson(entry.id)
+        } label: {
+            HStack {
+                VStack(alignment:.leading,spacing:3) {
+                    Text(title).foregroundStyle(.primary)
+                    Text(entry.id + " · " + detail + " · " + owner(entry.crewId))
+                        .font(.caption).foregroundStyle(overdue ? Color.red : Color.secondary)
+                }
+                Spacer()
+                Image(systemName:"chevron.right").font(.caption)
+            }.contentShape(Rectangle())
+        }.buttonStyle(.plain).disabled(busy)
+    }
+    @ViewBuilder private func riskLessonObject(_ entry: Wire.RiskLessonEntry) -> some View {
+        Button(route.section == .lessons ? "返回教训库":"返回风险板",systemImage:"chevron.backward") {
+            let captured = route
+            Task { await reload(captured,target:nil,reset:false) }
+        }.disabled(busy)
+        switch entry {
+        case .risk(let risk): riskDetail(risk)
+        case .lesson(let lesson): lessonDetail(lesson)
+        }
+    }
+    private func riskDetail(_ risk: Wire.Risk) -> some View {
+        VStack(alignment:.leading,spacing:10) {
+            Text(risk.draft.summary).font(.title3).textSelection(.enabled)
+            Text(risk.id + " · " + risk.status.label + " · " + owner(risk.crewId) +
+                 (risk.frozen ? " · 已归档，只读":"")).font(.caption).foregroundStyle(.secondary)
+            LabeledContent("负责人",value:author(risk.owner))
+            LabeledContent("记录者",value:author(risk.author))
+            LabeledContent("影响",value:risk.draft.impact.label)
+            if let likelihood = risk.draft.likelihood { LabeledContent("可能性",value:likelihood.label) }
+            if risk.openForReview {
+                if let date = Wire.managedTime(risk.nextReviewAt) {
+                    LabeledContent("下次复核") { Text(date,format:.dateTime) }
+                } else { LabeledContent("下次复核",value:risk.nextReviewAt) }
+            }
+            if let mitigation = risk.draft.mitigation { decisionText("缓解办法",mitigation) }
+            if let reason = risk.statusReason { decisionText("状态说明",reason) }
+            referenceList("关于",risk.draft.about)
+            referenceList("缓解它的计划或决定",risk.draft.mitigatedBy)
+            if let lesson = risk.becameLessonId {
+                Button("查看关联教训 " + lesson,systemImage:"arrow.right") { showRiskLesson(lesson) }
+                    .disabled(busy)
+            }
+            if !risk.frozen && !currentCrewFrozen && Wire.exact(risk.crewId,route.crew) && risk.status != .closed {
+                VStack(alignment:.leading,spacing:8) {
+                    if risk.openForReview {
+                        Button("编辑风险",systemImage:"pencil") { open(.riskLesson(.updateRisk(risk))) }
+                        Button("转交负责人",systemImage:"person.2") { open(.riskLesson(.assignRisk(risk))) }
+                        if risk.owner.kind == "human" {
+                            Button("记录本次复核",systemImage:"checkmark.circle") { open(.riskLesson(.reviewRisk(risk))) }
+                        }
+                        if risk.status == .open {
+                            Button("标为已缓解") { open(.riskLesson(.riskStatus(risk,.mitigated))) }
+                        } else {
+                            Button("重新打开风险") { open(.riskLesson(.riskStatus(risk,.open))) }
+                        }
+                        Button("登记已发生并记录教训") { open(.riskLesson(.occurrence(risk))) }
+                    }
+                    Button("关闭风险",role:.destructive) { open(.riskLesson(.riskStatus(risk,.closed))) }
+                }.disabled(busy || blocked(risk.id))
+            }
+        }
+    }
+    private func lessonDetail(_ lesson: Wire.Lesson) -> some View {
+        VStack(alignment:.leading,spacing:10) {
+            Text(lesson.draft.lesson).font(.title3).textSelection(.enabled)
+            Text(lesson.id + " · " + lesson.status.label + " · " + owner(lesson.crewId) +
+                 (lesson.frozen ? " · 已归档，只读":"")).font(.caption).foregroundStyle(.secondary)
+            LabeledContent("记录者",value:author(lesson.author))
+            if let date = Wire.managedTime(lesson.lastCheckedAt) {
+                LabeledContent("最后核对") { Text(date,format:.dateTime) }
+            } else { LabeledContent("最后核对",value:lesson.lastCheckedAt) }
+            decisionText("发生了什么",lesson.draft.happened)
+            if let detection = lesson.draft.detection { decisionText("如何识别",detection) }
+            if let reason = lesson.staleReason { decisionText("过时理由",reason) }
+            if lesson.draft.learnedFrom.isEmpty { Text("未附来源").foregroundStyle(.secondary) }
+            referenceList("来源",lesson.draft.learnedFrom)
+            referenceList("适用范围",lesson.draft.appliesTo)
+            if !lesson.draft.evidence.isEmpty {
+                Text("证据").font(.subheadline)
+                ForEach(lesson.draft.evidence.indices,id:\.self) { Text(lesson.draft.evidence[$0]).textSelection(.enabled) }
+            }
+            if let risk = lesson.riskId {
+                Button("查看来源风险 " + risk,systemImage:"arrow.left") { showRiskLesson(risk) }.disabled(busy)
+            }
+            if !lesson.frozen && lesson.status == .active {
+                VStack(alignment:.leading,spacing:8) {
+                    Button("确认仍然适用",systemImage:"checkmark.circle") { open(.riskLesson(.confirmLesson(lesson))) }
+                    if !currentCrewFrozen && Wire.exact(lesson.crewId,route.crew) {
+                        Button("标为过时",role:.destructive) { open(.riskLesson(.staleLesson(lesson))) }
+                    }
+                }.disabled(busy || blocked(lesson.id))
+            }
+        }
+    }
+    @ViewBuilder private func referenceList(_ title: String, _ links: [Wire.ObjectLink]) -> some View {
+        if !links.isEmpty {
+            Text(title).font(.subheadline)
+            ForEach(links.indices,id:\.self) { index in
+                LabeledContent(links[index].kind.label,value:links[index].id).textSelection(.enabled)
+            }
+        }
+    }
+    private func showRiskLesson(_ id: String) {
+        let target: SectionMode = id.hasPrefix("L") ? .lessons:.risks
+        if target == route.section {
+            let captured = route
+            Task { await reload(captured,target:id,reset:false) }
+        } else {
+            linkedRiskLesson = .init(id:id,origin:route,section:target)
+            section = target
+        }
+    }
     private var pendingPanel: some View {
         VStack(alignment:.leading,spacing:5) {
             Text("原请求待核对").font(.subheadline)
             ForEach(pending) { item in
                 HStack {
                     let label = item.witness.kind == "createTable" ? "新建组织表" :
-                        item.witness.kind == "recordDecision" ? "记录决定" : item.witness.target
+                        item.witness.kind == "recordDecision" ? "记录决定" :
+                        item.witness.kind == "recordRisk" ? "登记风险" :
+                        item.witness.kind == "recordLesson" ? "记录教训" : item.witness.target
                     Text(label + " · " + String(item.witness.requestId.prefix(8))).font(.caption)
                     Spacer()
-                    Button("查看原回执") { lookup(item) }.disabled(busy || (item.witness.isDecision && !decisionsAvailable))
+                    Button("查看原回执") { lookup(item) }.disabled(busy || (item.witness.isDecision && !decisionsAvailable) ||
+                        (item.witness.riskLesson != nil && !riskLessonsAvailable))
                 }
             }
         }.padding(10).background(.secondary.opacity(0.10),in:RoundedRectangle(cornerRadius:8))
@@ -2619,7 +2863,10 @@ private struct CrewdManagedDirectoryView: View {
     }
     private func blocked(_ target: String) -> Bool { pending.contains { $0.witness.target == target } }
     private func open(_ mode: EditorTarget.Mode) {
-        guard let scope, !busy, !currentCrewFrozen else { return }
+        guard let scope, !busy else { return }
+        if currentCrewFrozen {
+            guard case .riskLesson(let operation) = mode, operation.confirmLesson else { return }
+        }
         editor = .init(mode:mode,scope:scope,route:route)
     }
     private func refreshPending(_ scope: Store.BrowseScope) {
@@ -2632,7 +2879,10 @@ private struct CrewdManagedDirectoryView: View {
         ticket = token
         if reset {
             scope = nil; shownSection = nil; tables = []; table = nil; rows = []; nextTable = nil; nextRow = nil
-            decisions = []; decision = nil; nextDecision = nil; pending = []; editor = nil; notice = nil
+            decisions = []; decision = nil; nextDecision = nil
+            riskLessonItems = []; riskLessonDetail = nil; nextRiskLesson = nil
+            pending = []; editor = nil
+            if target == nil { notice = nil }
         }
         guard captured.journalReady else { busy = false; return }
         busy = true; problem = nil
@@ -2640,7 +2890,17 @@ private struct CrewdManagedDirectoryView: View {
         defer { if current() { busy = false } }
         do {
             let active = try await store.scope(stillCurrent:current)
-            if captured.section == .decisions {
+            if captured.section.riskLesson {
+                if let target {
+                    let item = try await store.riskLesson(active,id:target,stillCurrent:current)
+                    guard current() else { return }
+                    riskLessonDetail = item
+                } else {
+                    let page = try await store.riskLessons(active,lessons:captured.section == .lessons,after:nil,stillCurrent:current)
+                    guard current() else { return }
+                    riskLessonItems = page.items; nextRiskLesson = page.next; riskLessonDetail = nil
+                }
+            } else if captured.section == .decisions {
                 if let target {
                     let item = try await store.decision(active,id:target,stillCurrent:current)
                     guard current() else { return }
@@ -2672,7 +2932,11 @@ private struct CrewdManagedDirectoryView: View {
             @MainActor func current() -> Bool { ticket == token && route == captured && self.scope == scope && !Task.isCancelled }
             defer { if current() { busy = false } }
             do {
-                if captured.section == .decisions {
+                if captured.section.riskLesson {
+                    let page = try await store.riskLessons(scope,lessons:captured.section == .lessons,after:after,stillCurrent:current)
+                    guard current(), riskLessonDetail == nil else { return }
+                    riskLessonItems += page.items; nextRiskLesson = page.next
+                } else if captured.section == .decisions {
                     let page = try await store.decisions(scope,after:after,stillCurrent:current)
                     guard current(), decision == nil else { return }
                     decisions += page.items; nextDecision = page.nextAfter
@@ -2711,6 +2975,8 @@ private struct CrewdManagedDirectoryView: View {
 
     private struct Editor: View {
         let target: EditorTarget
+        let allowRiskReferences: Bool
+        let riskOwners: [CrewdValue]
         let current: @MainActor () -> Bool
         let submit: @MainActor (Store.Mutation, @MainActor () -> Bool) async throws -> Store.Observation
         let complete: @MainActor (Store.Observation) -> Void
@@ -2722,13 +2988,19 @@ private struct CrewdManagedDirectoryView: View {
         @State private var decisionDraft = Wire.DecisionDraft(question:"",choice:"",rationale:"",about:[])
         @State private var alternatives = ""
         @State private var withdrawalReason = ""
+        @State private var riskDraft = Wire.RiskDraft(summary:"",impact:.medium,about:[],mitigatedBy:[])
+        @State private var lessonDraft = Wire.LessonDraft(happened:"",lesson:"",learnedFrom:[],evidence:[],appliesTo:[])
+        @State private var mitigation = ""
+        @State private var detection = ""
+        @State private var selectedOwner = ""
+        @State private var actionReason = ""
         @State private var busy = false
         @State private var stopped = false
         @State private var problem: String?
         private struct Input { var text = ""; var null = false }
         private var model: (Wire.Table, Wire.Row?)? {
             switch target.mode {
-            case .create, .recordDecision, .replaceDecision, .withdrawDecision: nil
+            case .create, .recordDecision, .replaceDecision, .withdrawDecision, .riskLesson: nil
             case .add(let table): (table,nil)
             case .edit(let table,let row): (table,row)
             }
@@ -2736,7 +3008,9 @@ private struct CrewdManagedDirectoryView: View {
         var body: some View {
             NavigationStack {
                 Form {
-                    if target.isDecision {
+                    if let operation = target.riskLessonMode {
+                        riskLessonFields(operation)
+                    } else if target.isDecision {
                         decisionFields
                     } else if let (table,row) = model {
                         Section(row.map { "记录 " + $0.id + " · 版本 " + $0.revision } ?? "填写记录") {
@@ -2783,6 +3057,8 @@ private struct CrewdManagedDirectoryView: View {
             .interactiveDismissDisabled(busy)
             .task {
                 switch target.mode {
+                case .riskLesson(let operation):
+                    prepareRiskLesson(operation)
                 case .recordDecision:
                     decisionDraft.about = [.init(kind:.crew,id:target.scope.origin.crew)]
                 case .replaceDecision(let original):
@@ -2827,7 +3103,7 @@ private struct CrewdManagedDirectoryView: View {
                 Section("关于（至少一项）") {
                     ForEach(decisionDraft.about.indices,id:\.self) { index in
                         Picker("引用类型",selection:$decisionDraft.about[index].kind) {
-                            ForEach(Wire.DecisionAboutKind.allCases.filter { $0 != .risk }) { kind in Text(kind.label).tag(kind) }
+                            ForEach(Wire.DecisionAboutKind.allCases.filter { allowRiskReferences || $0 != .risk }) { kind in Text(kind.label).tag(kind) }
                         }
                         TextField("对象编号或机组 ID",text:$decisionDraft.about[index].id)
                         if decisionDraft.about.count > 1 {
@@ -2840,7 +3116,136 @@ private struct CrewdManagedDirectoryView: View {
                 }
             }
         }
+        @ViewBuilder private func riskLessonFields(_ operation: RiskLessonMode) -> some View {
+            switch operation {
+            case .registerRisk, .updateRisk:
+                TextField("风险是什么",text:$riskDraft.summary)
+                Picker("影响",selection:$riskDraft.impact) {
+                    ForEach(Wire.RiskLevel.allCases) { Text($0.label).tag($0) }
+                }
+                Picker("可能性",selection:$riskDraft.likelihood) {
+                    Text("未填写").tag(nil as Wire.RiskLevel?)
+                    ForEach(Wire.RiskLevel.allCases) { Text($0.label).tag(Optional($0)) }
+                }
+                TextField("缓解办法（可选）",text:$mitigation,axis:.vertical)
+                if case .registerRisk = operation { ownerPicker }
+                editLinks("关于（至少一项）",links:$riskDraft.about,kinds:[.crew,.work,.requirement],minimum:1)
+                editLinks("缓解它的计划或决定",links:$riskDraft.mitigatedBy,kinds:[.work,.decision])
+            case .assignRisk(let item):
+                Text(item.draft.summary)
+                ownerPicker
+            case .reviewRisk(let item):
+                Text(item.draft.summary)
+                Text("确认本次已复核。下次复核安排在七天后。")
+            case .riskStatus(let item,let status):
+                Text(item.draft.summary)
+                Text(status == .closed ? "关闭后仍可查阅历史。":"保存会记录状态变更。")
+                TextField("状态变更理由",text:$actionReason,axis:.vertical)
+            case .recordLesson, .occurrence:
+                if case .occurrence(let item) = operation {
+                    Text(item.id + " · " + item.draft.summary)
+                    Text("保存会将风险标为已发生，并同时记录一条关联教训。").foregroundStyle(.secondary)
+                }
+                TextField("发生了什么",text:$lessonDraft.happened,axis:.vertical)
+                TextField("学到的教训",text:$lessonDraft.lesson,axis:.vertical)
+                TextField("如何识别（可选）",text:$detection,axis:.vertical)
+                editLinks("来源",links:$lessonDraft.learnedFrom,kinds:[.work,.ask],maximum: {
+                    if case .occurrence = operation { return 7 }
+                    return 8
+                }())
+                editLinks("适用范围",links:$lessonDraft.appliesTo,kinds:[.crew,.work,.table])
+                Section("证据（可选）") {
+                    ForEach(lessonDraft.evidence.indices,id:\.self) { index in
+                        TextField("凭据或说明",text:$lessonDraft.evidence[index],axis:.vertical)
+                        Button("移除此证据",role:.destructive) { lessonDraft.evidence.remove(at:index) }
+                    }
+                    Button("添加证据",systemImage:"plus") { lessonDraft.evidence.append("") }
+                        .disabled(lessonDraft.evidence.count >= 8)
+                }
+            case .confirmLesson(let item):
+                Text(item.draft.lesson)
+                Text("确认这条教训仍然适用，并更新最后核对时间。")
+            case .staleLesson(let item):
+                Text(item.draft.lesson)
+                TextField("过时理由",text:$actionReason,axis:.vertical)
+            }
+        }
+        private var ownerPicker: some View {
+            Picker("负责人",selection:$selectedOwner) {
+                Text("人").tag("")
+                let sessions = riskOwners.compactMap { row -> (String,String)? in
+                    guard let id = row["id"].string, !id.isEmpty, row["role"].string != "admin" else { return nil }
+                    return (id,row["name"].string ?? row["title"].string ?? id)
+                }
+                if !selectedOwner.isEmpty && !sessions.contains(where:{ $0.0 == selectedOwner }) {
+                    Text(selectedOwner).tag(selectedOwner)
+                }
+                ForEach(sessions,id:\.0) { id,name in Text(name).tag(id) }
+            }
+        }
+        private func editLinks(_ title: String, links: Binding<[Wire.ObjectLink]>, kinds: [Wire.LinkKind],
+                               minimum: Int = 0, maximum: Int = 8) -> some View {
+            Section(title) {
+                ForEach(links.wrappedValue.indices,id:\.self) { index in
+                    Picker("引用类型",selection:links[index].kind) {
+                        ForEach(kinds) { Text($0.label).tag($0) }
+                    }
+                    TextField("对象编号或机组 ID",text:links[index].id)
+                    if links.wrappedValue.count > minimum {
+                        Button("移除此引用",role:.destructive) { links.wrappedValue.remove(at:index) }
+                    }
+                }
+                Button("添加引用",systemImage:"plus") {
+                    if let kind = kinds.first { links.wrappedValue.append(.init(kind:kind,id:"")) }
+                }.disabled(links.wrappedValue.count >= maximum)
+            }
+        }
+        private func prepareRiskLesson(_ operation: RiskLessonMode) {
+            switch operation {
+            case .registerRisk:
+                riskDraft.about = [.init(kind:.crew,id:target.scope.origin.crew)]
+            case .updateRisk(let item):
+                riskDraft = item.draft
+                mitigation = item.draft.mitigation ?? ""
+            case .assignRisk(let item):
+                selectedOwner = item.owner.sessionId ?? ""
+            default: break
+            }
+        }
+        private func riskLessonMutation(_ operation: RiskLessonMode) throws -> Store.RiskLessonMutation {
+            let owner = Wire.DecisionAuthor(kind:selectedOwner.isEmpty ? "human":"session",
+                                           sessionId:selectedOwner.isEmpty ? nil:selectedOwner)
+            switch operation {
+            case .registerRisk, .updateRisk:
+                var draft = riskDraft
+                draft.mitigation = nonblank(mitigation)
+                guard draft.valid else { throw Wire.Problem.invalid }
+                if case .updateRisk(let item) = operation { return .updateRisk(item,draft) }
+                return .recordRisk(draft,owner)
+            case .assignRisk(let item):
+                guard owner != item.owner else { throw Wire.Problem.invalid }
+                return .assignRisk(item,owner)
+            case .reviewRisk(let item): return .reviewRisk(item)
+            case .riskStatus(let item,let status):
+                guard Wire.decisionText(actionReason) else { throw Wire.Problem.invalid }
+                return .setRiskStatus(item,status,actionReason)
+            case .recordLesson, .occurrence:
+                var draft = lessonDraft
+                draft.detection = nonblank(detection)
+                guard draft.valid else { throw Wire.Problem.invalid }
+                if case .occurrence(let item) = operation { return .occurrence(item,draft) }
+                return .recordLesson(draft)
+            case .confirmLesson(let item): return .confirmLesson(item)
+            case .staleLesson(let item):
+                guard Wire.decisionText(actionReason) else { throw Wire.Problem.invalid }
+                return .staleLesson(item,actionReason)
+            }
+        }
+        private func nonblank(_ value: String) -> String? {
+            value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? nil:value
+        }
         private func mutation() throws -> Store.Mutation {
+            if let operation = target.riskLessonMode { return .riskLesson(try riskLessonMutation(operation)) }
             if target.isDecision {
                 var draft = decisionDraft
                 draft.alternatives = alternatives.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? nil : alternatives
@@ -2882,7 +3287,7 @@ private struct CrewdManagedDirectoryView: View {
                     guard current() else { return }
                     refreshPending()
                     problem = error.localizedDescription
-                    stopped = !target.isDecision || !Store.decisionInputRefused(error)
+                    stopped = !(target.isDecision || target.riskLessonMode != nil) || !Store.decisionInputRefused(error)
                 }
             }
         }

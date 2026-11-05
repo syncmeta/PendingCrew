@@ -493,6 +493,14 @@ This row has changed. Read its current values and version before editing again.
 
 The original decision has changed. Read it and its current successor before submitting again.
 
+## managed_object.risk_changed
+
+This risk changed or its current state does not allow that action. Review its current details first.
+
+## managed_object.lesson_changed
+
+This lesson changed or its current state does not allow that action. Review its current details first.
+
 ## document.revision_conflict
 Document {id} changed; review its current metadata before editing.
 

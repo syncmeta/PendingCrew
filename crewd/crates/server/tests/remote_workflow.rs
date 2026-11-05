@@ -1472,6 +1472,13 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
             .iter()
             .any(|cap| cap == "managedDecisions.v1")
     );
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == "managedRiskLessons.v1")
+    );
     let owner = local(
         &mut running.owner,
         "crew.create",
@@ -1553,6 +1560,54 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
             .await,
         json!({"status":"known","receipt":decision})
     );
+    let risk = remote
+        .call(
+            "managedObject.submit",
+            json!({
+                "scope":scope,"crewId":owner,"requestId":uuid::Uuid::new_v4().to_string(),
+                "change":{"kind":"recordRisk","draft":{"summary":"Possible delay","impact":"high",
+                    "about":[{"kind":"crew","id":owner}],"mitigatedBy":[]}}
+            }),
+        )
+        .await;
+    let risk = &risk["object"]["risk"];
+    let occurrence = json!({
+        "scope":scope,"crewId":owner,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"recordRiskOccurrence","riskId":risk["id"],"expectedRevision":risk["revision"],
+            "lessonDraft":{"happened":"The deadline passed","lesson":"Check the dependency",
+                "learnedFrom":[],"evidence":[],"appliesTo":[]}}
+    });
+    let linked = remote
+        .call("managedObject.submit", occurrence.clone())
+        .await;
+    let lesson = &linked["object"]["lesson"];
+    assert_eq!(linked["occurrence"]["riskId"], risk["id"]);
+    assert_eq!(linked["occurrence"]["lessonId"], lesson["id"]);
+    assert_eq!(
+        remote.call("managedObject.risks", json!({})).await["items"][0]["becameLessonId"],
+        lesson["id"]
+    );
+    assert_eq!(
+        remote.call("managedObject.lessons", json!({})).await["items"],
+        json!([lesson])
+    );
+    let occurrence_lookup =
+        json!({"scope":scope,"crewId":owner,"requestId":occurrence["requestId"]});
+    assert_eq!(
+        remote
+            .call("managedObject.request.get", occurrence_lookup.clone())
+            .await,
+        json!({"status":"known","receipt":linked})
+    );
+    assert_eq!(
+        local(
+            &mut running.owner,
+            "managedObject.request.get",
+            occurrence_lookup.clone()
+        )
+        .await,
+        json!({"status":"notFound"})
+    );
     local(&mut running.owner, "remote.revoke",
         json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"managed fixture complete"})).await;
     for (method, params) in [
@@ -1562,6 +1617,9 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
         ("managedObject.get", json!({"id":decision_id})),
         ("managedObject.decisions", json!({})),
         ("managedObject.request.get", decision_lookup),
+        ("managedObject.risks", json!({})),
+        ("managedObject.lessons", json!({})),
+        ("managedObject.request.get", occurrence_lookup),
     ] {
         let response = tokio::time::timeout(LIMIT, remote.frame(method, params))
             .await

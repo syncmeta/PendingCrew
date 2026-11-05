@@ -5,14 +5,27 @@ use serde::{Deserialize, Serialize};
 
 pub const CAPABILITY: &str = "managedObjects.v1";
 pub const DECISIONS_CAPABILITY: &str = "managedDecisions.v1";
+pub const RISK_LESSONS_CAPABILITY: &str = "managedRiskLessons.v1";
 pub const SCOPE: &str = "managedObject.scope";
 pub const GET: &str = "managedObject.get";
 pub const TABLES: &str = "managedObject.tables";
 pub const ROWS: &str = "managedObject.rows";
 pub const DECISIONS: &str = "managedObject.decisions";
+pub const RISKS: &str = "managedObject.risks";
+pub const LESSONS: &str = "managedObject.lessons";
 pub const SUBMIT: &str = "managedObject.submit";
 pub const REQUEST_GET: &str = "managedObject.request.get";
-pub const METHODS: &[&str] = &[SCOPE, GET, TABLES, ROWS, DECISIONS, SUBMIT, REQUEST_GET];
+pub const METHODS: &[&str] = &[
+    SCOPE,
+    GET,
+    TABLES,
+    ROWS,
+    DECISIONS,
+    RISKS,
+    LESSONS,
+    SUBMIT,
+    REQUEST_GET,
+];
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

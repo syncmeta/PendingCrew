@@ -8,6 +8,7 @@ use crewd_store::Db;
 use serde_json::{Value, json};
 
 pub const KEY: &str = "my_work_items";
+const RISK_REVIEW_KEY: &str = "my_risk_review";
 const MAX_BYTES: usize = 4096;
 const PAGE_SIZE: u16 = 20;
 
@@ -15,10 +16,10 @@ pub struct WorkContext(pub Db);
 impl ContextExtras for WorkContext {
     fn extras<'a>(&'a self, session: &'a str) -> BoxFut<'a, Context> {
         let owner = session.to_owned();
+        let risk_owner = owner.clone();
         Box::pin(async move {
-            let result = self
-                .0
-                .call_result(move |s| {
+            let (work, risks) = tokio::join!(
+                self.0.call_result(move |s| {
                     crewd_collab::work::list(
                         s.conn(),
                         WorkListParams {
@@ -29,14 +30,31 @@ impl ContextExtras for WorkContext {
                             ..Default::default()
                         },
                     )
+                }),
+                self.0.call_result(move |s| {
+                    crewd_store::managed_risks_lessons::due_owned_risks(
+                        s.conn(),
+                        &risk_owner,
+                        crewd_store::now_ms(),
+                    )
                 })
-                .await;
-            let value = match result {
+            );
+            let value = match work {
                 Ok(Ok(page)) => render(page),
                 // Explicitly distinguish unreadable state from an empty assignment list.
                 _ => json!({"version":1,"unavailable":true,"hint":"Use my_work_items to retry; do not infer no assigned work."}).to_string(),
             };
-            Context::from([(KEY.into(), value)])
+            let risk_review = match risks {
+                Ok(Ok(risks)) => {
+                    let due = risks.first().map(|risk| {
+                        json!({"id":risk.id,"revision":risk.revision,"summary":risk.draft.summary,
+                            "nextReviewAt":risk.next_review_at})
+                    });
+                    json!({"version":1,"due":due}).to_string()
+                }
+                _ => json!({"version":1,"unavailable":true}).to_string(),
+            };
+            Context::from([(KEY.into(), value), (RISK_REVIEW_KEY.into(), risk_review)])
         })
     }
 }
@@ -153,6 +171,10 @@ mod tests {
             serde_json::from_str::<Value>(&ready[KEY]).unwrap()["items"],
             json!([])
         );
+        assert_eq!(
+            serde_json::from_str::<Value>(&ready[RISK_REVIEW_KEY]).unwrap()["due"],
+            Value::Null
+        );
         tokio::task::spawn_blocking(move || db.shutdown())
             .await
             .unwrap();
@@ -160,9 +182,17 @@ mod tests {
         let v: Value = serde_json::from_str(&failed[KEY]).unwrap();
         assert_eq!(v["unavailable"], true);
         assert!(v.get("items").is_none());
+        assert_eq!(
+            serde_json::from_str::<Value>(&failed[RISK_REVIEW_KEY]).unwrap()["unavailable"],
+            true
+        );
     }
     #[tokio::test]
     async fn authoritative_assignments_filter_owner_done_and_frozen_crews() {
+        use crewd_collab::managed_objects::{self, Actor};
+        use crewd_proto::managed_objects::{
+            Change, Object, RiskAbout, RiskDraft, RiskLevel, Submit,
+        };
         use crewd_proto::{Crew, Session, WorkCreateParams, WorkUpdateParams, WorkUpdateStatus};
         let mut store = crewd_store::Store::open_in_memory().unwrap();
         for crew in ["a", "b"] {
@@ -189,6 +219,34 @@ mod tests {
             )
             .unwrap();
         }
+        let scope = managed_objects::scope(store.conn()).unwrap();
+        let (receipt, _) =
+            crewd_collab::run(&mut store, crewd_store::now_ms() - 8 * 86_400_000, |tx| {
+                managed_objects::submit(
+                    tx,
+                    Actor::Session("worker"),
+                    Submit {
+                        scope,
+                        crew_id: "a".into(),
+                        request_id: uuid::Uuid::new_v4().to_string(),
+                        change: Change::RecordRisk {
+                            draft: RiskDraft {
+                                summary: "RISK TO REVIEW".into(),
+                                impact: RiskLevel::High,
+                                likelihood: None,
+                                mitigation: None,
+                                about: vec![RiskAbout::Crew { id: "a".into() }],
+                                mitigated_by: vec![],
+                            },
+                            owner: None,
+                        },
+                    },
+                )
+            })
+            .unwrap();
+        let Object::Risk { risk } = receipt.object else {
+            panic!("expected risk receipt");
+        };
         let mut ids = Vec::new();
         for (crew, owner, title) in [
             ("a", "worker", "LIVE"),
@@ -241,6 +299,15 @@ mod tests {
         assert_eq!(v["items"][0]["id"], ids[0].0);
         assert_eq!(v["items"][0]["title"], "LIVE");
         assert!(!a[KEY].contains("long omitted goal"));
+        let risk_context: Value = serde_json::from_str(&a[RISK_REVIEW_KEY]).unwrap();
+        assert_eq!(risk_context["due"]["id"], risk.id);
+        assert_eq!(risk_context["due"]["revision"], risk.revision);
+        assert_eq!(risk_context["due"]["nextReviewAt"], risk.next_review_at);
+        let other = hook.extras("other").await;
+        assert_eq!(
+            serde_json::from_str::<Value>(&other[RISK_REVIEW_KEY]).unwrap()["due"],
+            Value::Null
+        );
         db.call(|s| {
             s.conn()
                 .execute("DELETE FROM organization_work_book", [])

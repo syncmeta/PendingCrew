@@ -2803,12 +2803,12 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "按组织内的准确 T、O 或 D 编号读取受管表、行或决策。归档机组的对象仍可读取，并标为冻结。",
+      "description": "按组织内的准确 T、O、D、R 或 L 编号读取受管表、行、决策、风险或教训。归档机组的对象仍可读取，并标为冻结。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "准确的 T 表编号、O 行编号或 D 决策编号。",
+            "description": "准确的 T 表编号、O 行编号、D 决策编号、R 风险编号或 L 教训编号。",
             "type": "string"
           }
         },
@@ -2888,17 +2888,57 @@
     },
     {
       "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按从新到旧的顺序分页读取组织内可见的受管风险。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页返回的 nextAfter R 编号。首页省略。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_risks_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按从新到旧的顺序分页读取组织内可见的受管教训。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页返回的 nextAfter L 编号。首页省略。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_lessons_list"
+    },
+    {
+      "annotations": {
         "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "在你当前有效的机组内建表、加行、编辑行或记录决策。决策作者或归属机组的现任机长可用最新 D 版本替换或撤回决策。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑行需要最新的行版本，并替换完整一行。回执不确定时，用原 UUID 与范围查询原请求。",
+      "description": "在你当前有效的机组内建表、加行、编辑行或记录决策、风险和教训。决策作者或归属机组的现任机长可用最新 D 版本替换或撤回决策。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑行需要最新的行版本，并替换完整一行。修改风险或教训需要该对象的最新版本。你可以确认任何当前可读且有效的教训，包括其他机组的教训。回执不确定时，用原 UUID 与范围查询原请求。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "change": {
-            "description": "提供类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。记录或替换决策时提供问题、选定方案、理由和准确的关联对象编号。撤回决策时提供撤回理由。",
+            "description": "提供类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。记录或替换决策时提供问题、选定方案、理由和准确的关联对象编号。撤回决策、变更风险状态或将教训标为失效时提供理由。风险实际发生时，使用 recordRiskOccurrence 提交教训草稿。系统会一并记录风险发生并建立关联教训，草稿中的风险关联由系统补入。",
             "oneOf": [
               {
                 "additionalProperties": false,
@@ -3151,7 +3191,8 @@
                                 "crew",
                                 "work",
                                 "requirement",
-                                "row"
+                                "row",
+                                "risk"
                               ],
                               "type": "string"
                             }
@@ -3245,7 +3286,8 @@
                                 "crew",
                                 "work",
                                 "requirement",
-                                "row"
+                                "row",
+                                "risk"
                               ],
                               "type": "string"
                             }
@@ -3348,11 +3390,683 @@
                   "reason"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "impact": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "likelihood": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "mitigatedBy": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "decision"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "mitigation": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "summary": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "impact",
+                      "about",
+                      "mitigatedBy"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordRisk"
+                  },
+                  "owner": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "human"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "session"
+                          },
+                          "sessionId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sessionId"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "impact": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "likelihood": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "mitigatedBy": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "decision"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "mitigation": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "summary": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "impact",
+                      "about",
+                      "mitigatedBy"
+                    ],
+                    "type": "object"
+                  },
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "updateRisk"
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "assignRisk"
+                  },
+                  "owner": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "human"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "session"
+                          },
+                          "sessionId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sessionId"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision",
+                  "owner"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "reviewRisk"
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "setRiskStatus"
+                  },
+                  "reason": {
+                    "maxLength": 1500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "open",
+                      "mitigated",
+                      "closed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision",
+                  "status",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "recordRiskOccurrence"
+                  },
+                  "lessonDraft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliesTo": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "table"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "detection": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "items": {
+                          "maxLength": 1500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "happened": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "learnedFrom": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "ask"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 7,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "lesson": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "happened",
+                      "lesson",
+                      "learnedFrom",
+                      "evidence",
+                      "appliesTo"
+                    ],
+                    "type": "object"
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision",
+                  "lessonDraft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliesTo": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "table"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "detection": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "items": {
+                          "maxLength": 1500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "happened": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "learnedFrom": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "ask"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "lesson": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "happened",
+                      "lesson",
+                      "learnedFrom",
+                      "evidence",
+                      "appliesTo"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordLesson"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "confirmLesson"
+                  },
+                  "lessonId": {
+                    "pattern": "^L[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "lessonId",
+                  "expectedRevision"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "staleLesson"
+                  },
+                  "lessonId": {
+                    "pattern": "^L[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "maxLength": 1500,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "lessonId",
+                  "expectedRevision",
+                  "reason"
+                ],
+                "type": "object"
               }
             ]
           },
           "crewId": {
-            "description": "记录决策或写入表和行时，使用 managed_object_scope_get 返回的当前机组编号。替换或撤回决策时，使用该决策的归属机组编号。",
+            "description": "创建对象时，使用 managed_object_scope_get 返回的当前机组编号。变更已有决策、风险或教训时，使用该对象的归属机组编号。",
             "type": "string"
           },
           "requestId": {
@@ -5653,12 +6367,12 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "按组织内的准确 T、O 或 D 编号读取受管表、行或决策。归档机组的对象仍可读取，并标为冻结。",
+      "description": "按组织内的准确 T、O、D、R 或 L 编号读取受管表、行、决策、风险或教训。归档机组的对象仍可读取，并标为冻结。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "准确的 T 表编号、O 行编号或 D 决策编号。",
+            "description": "准确的 T 表编号、O 行编号、D 决策编号、R 风险编号或 L 教训编号。",
             "type": "string"
           }
         },
@@ -5738,17 +6452,57 @@
     },
     {
       "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按从新到旧的顺序分页读取组织内可见的受管风险。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页返回的 nextAfter R 编号。首页省略。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_risks_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "按从新到旧的顺序分页读取组织内可见的受管教训。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页返回的 nextAfter L 编号。首页省略。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_lessons_list"
+    },
+    {
+      "annotations": {
         "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "在你当前有效的机组内建表、加行、编辑行或记录决策。决策作者或归属机组的现任机长可用最新 D 版本替换或撤回决策。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑行需要最新的行版本，并替换完整一行。回执不确定时，用原 UUID 与范围查询原请求。",
+      "description": "在你当前有效的机组内建表、加行、编辑行或记录决策、风险和教训。决策作者或归属机组的现任机长可用最新 D 版本替换或撤回决策。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑行需要最新的行版本，并替换完整一行。修改风险或教训需要该对象的最新版本。你可以确认任何当前可读且有效的教训，包括其他机组的教训。回执不确定时，用原 UUID 与范围查询原请求。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "change": {
-            "description": "提供类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。记录或替换决策时提供问题、选定方案、理由和准确的关联对象编号。撤回决策时提供撤回理由。",
+            "description": "提供类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。记录或替换决策时提供问题、选定方案、理由和准确的关联对象编号。撤回决策、变更风险状态或将教训标为失效时提供理由。风险实际发生时，使用 recordRiskOccurrence 提交教训草稿。系统会一并记录风险发生并建立关联教训，草稿中的风险关联由系统补入。",
             "oneOf": [
               {
                 "additionalProperties": false,
@@ -6001,7 +6755,8 @@
                                 "crew",
                                 "work",
                                 "requirement",
-                                "row"
+                                "row",
+                                "risk"
                               ],
                               "type": "string"
                             }
@@ -6095,7 +6850,8 @@
                                 "crew",
                                 "work",
                                 "requirement",
-                                "row"
+                                "row",
+                                "risk"
                               ],
                               "type": "string"
                             }
@@ -6198,11 +6954,683 @@
                   "reason"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "impact": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "likelihood": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "mitigatedBy": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "decision"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "mitigation": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "summary": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "impact",
+                      "about",
+                      "mitigatedBy"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordRisk"
+                  },
+                  "owner": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "human"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "session"
+                          },
+                          "sessionId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sessionId"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "impact": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "likelihood": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "mitigatedBy": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "decision"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "mitigation": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "summary": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "impact",
+                      "about",
+                      "mitigatedBy"
+                    ],
+                    "type": "object"
+                  },
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "updateRisk"
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "assignRisk"
+                  },
+                  "owner": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "human"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "session"
+                          },
+                          "sessionId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sessionId"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision",
+                  "owner"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "reviewRisk"
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "setRiskStatus"
+                  },
+                  "reason": {
+                    "maxLength": 1500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "open",
+                      "mitigated",
+                      "closed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision",
+                  "status",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "recordRiskOccurrence"
+                  },
+                  "lessonDraft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliesTo": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "table"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "detection": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "items": {
+                          "maxLength": 1500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "happened": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "learnedFrom": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "ask"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 7,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "lesson": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "happened",
+                      "lesson",
+                      "learnedFrom",
+                      "evidence",
+                      "appliesTo"
+                    ],
+                    "type": "object"
+                  },
+                  "riskId": {
+                    "pattern": "^R[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "riskId",
+                  "expectedRevision",
+                  "lessonDraft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliesTo": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "table"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "detection": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "items": {
+                          "maxLength": 1500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "happened": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "learnedFrom": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "ask"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "lesson": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "happened",
+                      "lesson",
+                      "learnedFrom",
+                      "evidence",
+                      "appliesTo"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordLesson"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "confirmLesson"
+                  },
+                  "lessonId": {
+                    "pattern": "^L[1-9][0-9]*$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "lessonId",
+                  "expectedRevision"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "staleLesson"
+                  },
+                  "lessonId": {
+                    "pattern": "^L[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "reason": {
+                    "maxLength": 1500,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "lessonId",
+                  "expectedRevision",
+                  "reason"
+                ],
+                "type": "object"
               }
             ]
           },
           "crewId": {
-            "description": "记录决策或写入表和行时，使用 managed_object_scope_get 返回的当前机组编号。替换或撤回决策时，使用该决策的归属机组编号。",
+            "description": "创建对象时，使用 managed_object_scope_get 返回的当前机组编号。变更已有决策、风险或教训时，使用该对象的归属机组编号。",
             "type": "string"
           },
           "requestId": {

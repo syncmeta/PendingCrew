@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crewd_proto::agent::{HookKind, HookResult, methods};
+use crewd_proto::agent::{HookKind, HookResult, is_managed_prompt_allow, methods};
 use serde_json::{Value, json};
 use std::io::Read;
 
@@ -180,12 +180,11 @@ async fn guarded_run(data_dir: &Path, args: HookArgs) -> anyhow::Result<()> {
     let stdout = result
         .stdout
         .ok_or_else(|| anyhow::anyhow!("managed hook approval missing"))?;
-    let value: Value = serde_json::from_str(&stdout)?;
     anyhow::ensure!(
-        value == json!({"continue":true}),
+        is_managed_prompt_allow(&stdout),
         "managed hook approval refused or malformed"
     );
-    println!("{}", serde_json::to_string(&value)?);
+    println!("{stdout}");
     Ok(())
 }
 

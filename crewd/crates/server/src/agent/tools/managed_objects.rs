@@ -20,7 +20,7 @@ struct CurrentScope {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DecisionsParams {
+struct ListParams {
     after: Option<String>,
 }
 
@@ -91,11 +91,31 @@ async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult,
             )
         }
         "managed_decisions_list" => {
-            let p: DecisionsParams = parse_args(cx, args)?;
+            let p: ListParams = parse_args(cx, args)?;
             result(
                 cx,
                 port::managed_read(cx.st, cx.me, move |c, by| {
                     objects::decisions(c, Actor::Session(&by.session_id), p.after.as_deref())
+                })
+                .await,
+            )
+        }
+        "managed_risks_list" => {
+            let p: ListParams = parse_args(cx, args)?;
+            result(
+                cx,
+                port::managed_read(cx.st, cx.me, move |c, by| {
+                    objects::risks(c, Actor::Session(&by.session_id), p.after.as_deref())
+                })
+                .await,
+            )
+        }
+        "managed_lessons_list" => {
+            let p: ListParams = parse_args(cx, args)?;
+            result(
+                cx,
+                port::managed_read(cx.st, cx.me, move |c, by| {
+                    objects::lessons(c, Actor::Session(&by.session_id), p.after.as_deref())
                 })
                 .await,
             )

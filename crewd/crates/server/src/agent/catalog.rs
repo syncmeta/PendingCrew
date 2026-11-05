@@ -681,6 +681,11 @@ pub const CATALOG: &[ToolSpec] = &[
         "managed_decisions_list",
         &[p("after", Str, false)],
     )),
+    ro(crew_member("managed_risks_list", &[p("after", Str, false)])),
+    ro(crew_member(
+        "managed_lessons_list",
+        &[p("after", Str, false)],
+    )),
     ToolSpec {
         destructive: true,
         idempotent: true,
@@ -850,23 +855,59 @@ fn managed_change_schema() -> Value {
         object(json!({"type":{"const":"real"},"value":{"type":"number"}}), &["type","value"]),
     ]}});
     let decision_id = json!({"type":"string","pattern":"^D[1-9][0-9]*$"});
-    let decision_revision = json!({"type":"string","pattern":"^[1-9][0-9]*$"});
-    let about = object(
-        json!({"kind":{"type":"string","enum":["crew","work","requirement","row"]},
-               "id":{"type":"string","minLength":1,"maxLength":128}}),
-        &["kind", "id"],
-    );
-    let draft = object(
+    let revision = json!({"type":"string","pattern":"^[1-9][0-9]*$"});
+    let risk_id = json!({"type":"string","pattern":"^R[1-9][0-9]*$"});
+    let lesson_id = json!({"type":"string","pattern":"^L[1-9][0-9]*$"});
+    let bounded_text = json!({"type":"string","minLength":1,"maxLength":1500});
+    let optional_text = json!({"type":["string","null"],"minLength":1,"maxLength":1500});
+    let references = |kinds: &[&str], minimum: u8, maximum: u8| {
+        let reference = object(
+            json!({"kind":{"type":"string","enum":kinds},
+                   "id":{"type":"string","minLength":1,"maxLength":128}}),
+            &["kind", "id"],
+        );
+        json!({"type":"array","minItems":minimum,"maxItems":maximum,"uniqueItems":true,"items":reference})
+    };
+    let decision = object(
         json!({
             "question":{"type":"string","minLength":1,"maxLength":60},
             "choice":{"type":"string","minLength":1,"maxLength":1500},
             "rationale":{"type":"string","minLength":1,"maxLength":1500},
             "alternatives":{"type":["string","null"],"minLength":1,"maxLength":1500},
             "reversibility":{"type":["string","null"],"enum":["reversible","hardToReverse","irreversible",null]},
-            "about":{"type":"array","minItems":1,"maxItems":8,"uniqueItems":true,"items":about},
+            "about":references(&["crew","work","requirement","row","risk"], 1, 8),
         }),
         &["question", "choice", "rationale", "about"],
     );
+    let owner = json!({"oneOf":[
+        object(json!({"kind":{"const":"human"}}), &["kind"]),
+        object(json!({"kind":{"const":"session"},"sessionId":{"type":"string","minLength":1,"maxLength":128}}),
+               &["kind","sessionId"]),
+    ]});
+    let risk = object(
+        json!({
+            "summary":{"type":"string","minLength":1,"maxLength":120},
+            "impact":{"type":"string","enum":["low","medium","high"]},
+            "likelihood":{"type":["string","null"],"enum":["low","medium","high",null]},
+            "mitigation":optional_text,
+            "about":references(&["crew","work","requirement"], 1, 8),
+            "mitigatedBy":references(&["work","decision"], 0, 8),
+        }),
+        &["summary", "impact", "about", "mitigatedBy"],
+    );
+    let lesson = |source_limit| {
+        object(
+            json!({
+                "happened":bounded_text,
+                "lesson":{"type":"string","minLength":1,"maxLength":120},
+                "detection":optional_text,
+                "learnedFrom":references(&["work","ask"], 0, source_limit),
+                "evidence":{"type":"array","maxItems":8,"uniqueItems":true,"items":bounded_text},
+                "appliesTo":references(&["crew","work","table"], 0, 8),
+            }),
+            &["happened", "lesson", "learnedFrom", "evidence", "appliesTo"],
+        )
+    };
     json!({"oneOf":[
         object(json!({"kind":{"const":"createTable"},"title":{"type":"string","minLength":1,"maxLength":256},
                       "fields":{"type":"array","minItems":1,"maxItems":32,"items":field}}),
@@ -875,12 +916,29 @@ fn managed_change_schema() -> Value {
                &["kind","tableId","values"]),
         object(json!({"kind":{"const":"editRow"},"rowId":text,"expectedRevision":text,"values":values}),
                &["kind","rowId","expectedRevision","values"]),
-        object(json!({"kind":{"const":"recordDecision"},"draft":draft}), &["kind","draft"]),
-        object(json!({"kind":{"const":"replaceDecision"},"decisionId":decision_id,"expectedRevision":decision_revision,"draft":draft}),
+        object(json!({"kind":{"const":"recordDecision"},"draft":decision}), &["kind","draft"]),
+        object(json!({"kind":{"const":"replaceDecision"},"decisionId":decision_id,"expectedRevision":revision,"draft":decision}),
                &["kind","decisionId","expectedRevision","draft"]),
-        object(json!({"kind":{"const":"withdrawDecision"},"decisionId":decision_id,"expectedRevision":decision_revision,
+        object(json!({"kind":{"const":"withdrawDecision"},"decisionId":decision_id,"expectedRevision":revision,
                       "reason":{"type":"string","minLength":1,"maxLength":1500}}),
                &["kind","decisionId","expectedRevision","reason"]),
+        object(json!({"kind":{"const":"recordRisk"},"draft":risk,"owner":owner}), &["kind","draft"]),
+        object(json!({"kind":{"const":"updateRisk"},"riskId":risk_id,"expectedRevision":revision,"draft":risk}),
+               &["kind","riskId","expectedRevision","draft"]),
+        object(json!({"kind":{"const":"assignRisk"},"riskId":risk_id,"expectedRevision":revision,"owner":owner}),
+               &["kind","riskId","expectedRevision","owner"]),
+        object(json!({"kind":{"const":"reviewRisk"},"riskId":risk_id,"expectedRevision":revision}),
+               &["kind","riskId","expectedRevision"]),
+        object(json!({"kind":{"const":"setRiskStatus"},"riskId":risk_id,"expectedRevision":revision,
+                      "status":{"type":"string","enum":["open","mitigated","closed"]},"reason":bounded_text}),
+               &["kind","riskId","expectedRevision","status","reason"]),
+        object(json!({"kind":{"const":"recordRiskOccurrence"},"riskId":risk_id,"expectedRevision":revision,
+                      "lessonDraft":lesson(7)}), &["kind","riskId","expectedRevision","lessonDraft"]),
+        object(json!({"kind":{"const":"recordLesson"},"draft":lesson(8)}), &["kind","draft"]),
+        object(json!({"kind":{"const":"confirmLesson"},"lessonId":lesson_id,"expectedRevision":revision}),
+               &["kind","lessonId","expectedRevision"]),
+        object(json!({"kind":{"const":"staleLesson"},"lessonId":lesson_id,"expectedRevision":revision,
+                      "reason":bounded_text}), &["kind","lessonId","expectedRevision","reason"]),
     ]})
 }
 
@@ -1120,6 +1178,8 @@ mod tests {
                 "managed_tables_list",
                 "managed_rows_list",
                 "managed_decisions_list",
+                "managed_risks_list",
+                "managed_lessons_list",
                 "managed_object_request_get",
             ]
         );
@@ -1206,6 +1266,8 @@ mod tests {
                 "managed_tables_list",
                 "managed_rows_list",
                 "managed_decisions_list",
+                "managed_risks_list",
+                "managed_lessons_list",
                 "managed_object_request_get",
             ]
         );

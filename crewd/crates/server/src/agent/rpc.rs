@@ -289,13 +289,36 @@ async fn route(
                 }
                 if let Some(factory) = state.native_helpers.get() {
                     let _ = crate::orchestra::exec_claude_managed::route(
-                        factory, &session, p.event, p.payload,
+                        factory, &session, p.event, p.payload, None,
                     )
                     .await;
                 }
                 return to_value(HookResult { stdout: None });
             }
-            let result = hook(state, &me, p.event, p.payload.clone()).await;
+            let review = conn
+                .data_token
+                .clone()
+                .filter(|_| {
+                    matches!(
+                        me.role,
+                        crewd_proto::Role::Worker | crewd_proto::Role::Captain
+                    )
+                })
+                .map(|token| {
+                    let scope = scope.clone();
+                    let state = state.clone();
+                    let session = session.clone();
+                    let allowed: crate::orchestra::exec_claude_managed::RiskReviewAuthority =
+                        Arc::new(move || {
+                            scope.is_live()
+                                && state.tokens.verify(&session, &token)
+                                && !state.tokens.is_admin_case(&session)
+                                && (state.management.get().is_none()
+                                    || state.admission.contains(&session))
+                        });
+                    allowed
+                });
+            let result = hook(state, &me, p.event, p.payload.clone(), review).await;
             #[cfg(any(test, feature = "testkit"))]
             crate::agent::testkit::record_hook(state, &me.session_id, p.event, &p.payload, &result);
             to_value(result)
@@ -307,19 +330,26 @@ async fn route(
     }
 }
 
-async fn hook(state: &Arc<AppState>, me: &Identity, event: HookKind, payload: Value) -> HookResult {
+async fn hook(
+    state: &Arc<AppState>,
+    me: &Identity,
+    event: HookKind,
+    payload: Value,
+    review: Option<crate::orchestra::exec_claude_managed::RiskReviewAuthority>,
+) -> HookResult {
     let managed = if let Some(factory) = state.native_helpers.get() {
         crate::orchestra::exec_claude_managed::route(
             factory,
             &me.session_id,
             event,
             payload.clone(),
+            review.clone(),
         )
         .await
     } else {
         None
     };
-    match event {
+    let output = match event {
         HookKind::UserPromptSubmit => managed.unwrap_or(HookResult {stdout:None}),
         HookKind::StopFailure | HookKind::SessionEnd | HookKind::Notification | HookKind::ManagedActivity => HookResult {stdout:None},
         HookKind::PostToolUse => crate::agent::inject::post_tool_use(state, me, &payload).await,
@@ -333,7 +363,74 @@ async fn hook(state: &Arc<AppState>, me: &Identity, event: HookKind, payload: Va
                 HookResult { stdout: None }
             }
         },
+    };
+    // A missing managed handle is never proof of a legacy runner.
+    if state.native_helpers.get().is_some() {
+        return output;
     }
+    let Some(review) = review.filter(|allowed| allowed()) else {
+        return output;
+    };
+    legacy_risk_context(state, me, event, &payload, output, &review).await
+}
+
+async fn legacy_risk_context(
+    state: &AppState,
+    me: &Identity,
+    event: HookKind,
+    payload: &Value,
+    mut output: HookResult,
+    review: &crate::orchestra::exec_claude_managed::RiskReviewAuthority,
+) -> HookResult {
+    let label = payload["hook_event_name"].as_str().unwrap_or("");
+    if !matches!(
+        (event, label),
+        (HookKind::SessionStart, "SessionStart")
+            | (HookKind::PostToolUse, "PostToolUse" | "PostToolUseFailure")
+    ) || payload.get("agent_id").is_some()
+    {
+        return output;
+    }
+    let Some((native, stdout)) = payload["session_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .zip(output.stdout.as_ref())
+    else {
+        return output;
+    };
+    let Ok(mut content) = serde_json::from_str::<Value>(stdout) else {
+        return output;
+    };
+    let Some(existing) = content["hookSpecificOutput"]["additionalContext"].as_str() else {
+        return output;
+    };
+    if existing.is_empty() || content["hookSpecificOutput"]["hookEventName"] != label {
+        return output;
+    }
+    let live = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        port::live(state, &me.session_id),
+    )
+    .await;
+    if !matches!(live, Ok(Ok(live)) if live.running) {
+        return output;
+    }
+    if let Some(risk) = crate::orchestra::exec_claude_managed::due_risk_review(
+        &state.db,
+        &me.session_id,
+        Some(native.into()),
+    )
+    .await
+    .filter(|_| review())
+    {
+        let line = crewd_proto::agent::managed_risk_line(risk);
+        if existing.encode_utf16().count() + line.len() + 1 <= state.agent.config.inject_cap_chars {
+            content["hookSpecificOutput"]["additionalContext"] =
+                Value::String(format!("{existing}\n{line}"));
+            output.stdout = Some(content.to_string());
+        }
+    }
+    output
 }
 
 /// A role only changes when my own session row or my crew's row changes (a captain change is
@@ -694,6 +791,285 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn managed_risk_lesson_tools_keep_attached_authority_and_atomic_receipts() {
+        use serde_json::Value;
+
+        async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
+            peer.call(methods::CALL, json!({"tool":name,"args":args}))
+                .await
+                .unwrap()
+        }
+
+        fn decoded(result: Value) -> Value {
+            assert_eq!(result["isError"], false, "{result}");
+            serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
+        }
+
+        let f = Fixture::new().await;
+        let foreign = f.add_crew("Foreign risk fixture", None).await;
+        let other = "foreign-risk-worker";
+        f.add_session(&foreign, other, Role::Worker, "Foreign worker")
+            .await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let task = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut writer = RpcClient::connect(&socket).await;
+        let mut reader = RpcClient::connect(&socket).await;
+        for (peer, id) in [(&mut writer, f.worker.as_str()), (&mut reader, other)] {
+            peer.call(methods::ATTACH, json!({"sessionId":id,"token":f.token(id)}))
+                .await
+                .unwrap();
+            let catalog = peer.call(methods::TOOLS, json!({})).await.unwrap();
+            for name in ["managed_risks_list", "managed_lessons_list"] {
+                assert!(
+                    catalog
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["name"] == name),
+                    "missing {name}"
+                );
+            }
+        }
+        let captured = decoded(tool(&mut writer, "managed_object_scope_get", json!({})).await);
+        let scope = captured["scope"].clone();
+        let submit = |change: Value| {
+            json!({
+                "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"change":change,
+            })
+        };
+        let lookup = |request: &Value| json!({"scope":scope,"crewId":f.crew,"requestId":request["requestId"]});
+        let risk_draft = json!({
+            "summary":"Synthetic checklist step may fail",
+            "impact":"high",
+            "likelihood":null,
+            "mitigation":"Keep a trace of each checklist run.",
+            "about":[{"kind":"crew","id":f.crew}],
+            "mitigatedBy":[],
+        });
+        let record = submit(json!({
+            "kind":"recordRisk","draft":risk_draft,"owner":{"kind":"session","sessionId":f.worker},
+        }));
+        let original = decoded(tool(&mut writer, "managed_object_submit", record.clone()).await);
+        let risk = &original["object"]["risk"];
+        let risk_id = risk["id"].as_str().unwrap();
+        assert!(risk_id.starts_with('R'));
+        assert_eq!(risk["status"], "open");
+        assert_eq!(
+            risk["author"],
+            json!({"kind":"session","sessionId":f.worker})
+        );
+        let listed = decoded(tool(&mut reader, "managed_risks_list", json!({})).await);
+        assert_eq!(listed["items"], json!([risk]));
+        let lesson_draft = json!({
+            "happened":"A synthetic checklist run missed a required step.",
+            "lesson":"Check the checklist against the audit trace.",
+            "learnedFrom":[],
+            "evidence":["Synthetic fixture audit trace"],
+            "appliesTo":[{"kind":"crew","id":f.crew}],
+        });
+        let occurrence = submit(json!({
+            "kind":"recordRiskOccurrence","riskId":risk_id,"expectedRevision":risk["revision"],
+            "lessonDraft":lesson_draft,
+        }));
+        assert_eq!(
+            tool(&mut reader, "managed_object_submit", occurrence.clone()).await["isError"],
+            true
+        );
+        let mut stale = occurrence.clone();
+        stale["change"]["expectedRevision"] = json!("99");
+        assert_eq!(
+            tool(&mut writer, "managed_object_submit", stale).await["isError"],
+            true
+        );
+        let mut forged = occurrence.clone();
+        forged["change"]["lessonDraft"]["learnedFrom"] = json!([{"kind":"risk","id":risk_id}]);
+        assert_eq!(
+            tool(&mut writer, "managed_object_submit", forged).await["isError"],
+            true
+        );
+        let empty = decoded(tool(&mut reader, "managed_lessons_list", json!({})).await);
+        assert_eq!(empty["items"], json!([]));
+        let committed =
+            decoded(tool(&mut writer, "managed_object_submit", occurrence.clone()).await);
+        assert_eq!(committed["object"]["kind"], "lesson");
+        assert_eq!(
+            decoded(tool(&mut writer, "managed_object_submit", occurrence.clone()).await),
+            committed
+        );
+        let occurred =
+            decoded(tool(&mut reader, "managed_object_get", json!({"id":risk_id})).await);
+        assert_eq!(occurred["risk"]["status"], "occurred");
+        let lesson_id = occurred["risk"]["becameLessonId"].as_str().unwrap();
+        assert!(lesson_id.starts_with('L'));
+        let lesson =
+            decoded(tool(&mut reader, "managed_object_get", json!({"id":lesson_id})).await);
+        assert_eq!(lesson["lesson"]["riskId"], risk_id);
+        assert_eq!(
+            lesson["lesson"]["draft"]["learnedFrom"],
+            json!([{"kind":"risk","id":risk_id}])
+        );
+        assert_eq!(lesson, committed["object"]);
+        assert_eq!(
+            committed["occurrence"],
+            json!({
+                "riskId":risk_id,"originalRiskRevision":risk["revision"],
+                "resultRiskRevision":occurred["risk"]["revision"],
+                "lessonId":lesson_id,"lessonRevision":lesson["lesson"]["revision"],
+            })
+        );
+
+        let new_lesson_request = submit(json!({"kind":"recordLesson","draft":lesson_draft}));
+        let separate =
+            decoded(tool(&mut writer, "managed_object_submit", new_lesson_request).await);
+        let separate_id = separate["object"]["lesson"]["id"].as_str().unwrap();
+        assert_ne!(separate_id, lesson_id);
+        let listed = decoded(tool(&mut reader, "managed_lessons_list", json!({})).await);
+        assert_eq!(
+            listed["items"],
+            json!([separate["object"]["lesson"], lesson["lesson"]])
+        );
+        let page = decoded(
+            tool(
+                &mut reader,
+                "managed_lessons_list",
+                json!({"after":separate_id}),
+            )
+            .await,
+        );
+        assert_eq!(page["items"], json!([lesson["lesson"]]));
+        let end = decoded(
+            tool(
+                &mut reader,
+                "managed_lessons_list",
+                json!({"after":lesson_id}),
+            )
+            .await,
+        );
+        assert_eq!(end["items"], json!([]));
+        assert_eq!(
+            tool(
+                &mut reader,
+                "managed_lessons_list",
+                json!({"after":risk_id})
+            )
+            .await["isError"],
+            true
+        );
+
+        let confirm = submit(json!({
+            "kind":"confirmLesson","lessonId":lesson_id,"expectedRevision":lesson["lesson"]["revision"],
+        }));
+        let confirmed = decoded(tool(&mut reader, "managed_object_submit", confirm.clone()).await);
+        assert_eq!(confirmed["object"]["lesson"]["id"], lesson_id);
+        assert_ne!(
+            confirmed["object"]["lesson"]["revision"],
+            lesson["lesson"]["revision"]
+        );
+        assert_eq!(
+            decoded(tool(&mut reader, "managed_object_request_get", lookup(&confirm)).await),
+            json!({"status":"known","receipt":confirmed})
+        );
+        assert_eq!(
+            decoded(
+                tool(
+                    &mut writer,
+                    "managed_object_request_get",
+                    lookup(&occurrence)
+                )
+                .await
+            ),
+            json!({"status":"known","receipt":committed})
+        );
+        f.state.tokens.revoke(&f.worker);
+        assert_eq!(
+            tool(&mut writer, "managed_risks_list", json!({})).await["isError"],
+            true
+        );
+        assert_eq!(
+            tool(
+                &mut writer,
+                "managed_object_request_get",
+                lookup(&occurrence)
+            )
+            .await["isError"],
+            true
+        );
+        drop((writer, reader));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_due_risk_requires_existing_injection_and_current_native_session() {
+        let f = Fixture::new().await;
+        let risk = crate::orchestra::exec_claude_managed::seed_due_risk(&f).await;
+        let session = f.worker.clone();
+        f.state
+            .collab(move |tx| {
+                tx.conn()
+                    .execute(
+                        "UPDATE sessions SET agent_session_id=?2 WHERE id=?1",
+                        [session.as_str(), "legacy-native"],
+                    )
+                    .map_err(crewd_store::StoreError::from)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        f.set_live(crewd_proto::SessionLive {
+            session_id: f.worker.clone(),
+            running: true,
+            ..Default::default()
+        });
+        let lobby = super::port::lobby_of(&f.state, &f.crew).await.unwrap();
+        let mut worker = attached(&f, &f.worker).await;
+        let send = |native: &str| {
+            json!({"event":"post-tool-use","payload":{
+                "session_id":native,"hook_event_name":"PostToolUse","tool_name":"Read",
+            }})
+        };
+        let idle = worker
+            .call(methods::HOOK, send("legacy-native"))
+            .await
+            .unwrap();
+        assert!(idle.get("stdout").is_none());
+        f.human_post(&lobby.id, "Actual first injection", vec![])
+            .await;
+        let forged = worker
+            .call(methods::HOOK, send("another-native"))
+            .await
+            .unwrap();
+        assert!(!forged.to_string().contains(&risk));
+        f.human_post(&lobby.id, "Actual second injection", vec![])
+            .await;
+        let exact = worker
+            .call(methods::HOOK, send("legacy-native"))
+            .await
+            .unwrap();
+        let stdout: serde_json::Value =
+            serde_json::from_str(exact["stdout"].as_str().unwrap()).unwrap();
+        let body = stdout["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(
+            body.contains("Actual second injection")
+                && body.ends_with(&format!("{risk} is due for review."))
+        );
+        f.human_post(&lobby.id, "Actual third injection", vec![])
+            .await;
+        f.state.tokens.revoke(&f.worker);
+        let revoked = worker
+            .call(methods::HOOK, send("legacy-native"))
+            .await
+            .unwrap();
+        assert!(!revoked.to_string().contains(&risk));
     }
 
     fn assert_role_tools(value: &serde_json::Value, role: Role) {

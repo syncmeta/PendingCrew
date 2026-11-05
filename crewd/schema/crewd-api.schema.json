@@ -3027,6 +3027,221 @@
             "reason"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/RiskDraft"
+            },
+            "kind": {
+              "const": "recordRisk",
+              "type": "string"
+            },
+            "owner": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RiskOwner"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/RiskDraft"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "updateRisk",
+              "type": "string"
+            },
+            "riskId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "riskId",
+            "expectedRevision",
+            "draft"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "assignRisk",
+              "type": "string"
+            },
+            "owner": {
+              "$ref": "#/$defs/RiskOwner"
+            },
+            "riskId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "riskId",
+            "expectedRevision",
+            "owner"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "reviewRisk",
+              "type": "string"
+            },
+            "riskId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "riskId",
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "setRiskStatus",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "riskId": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/RiskStatus"
+            }
+          },
+          "required": [
+            "kind",
+            "riskId",
+            "expectedRevision",
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "recordRiskOccurrence",
+              "type": "string"
+            },
+            "lessonDraft": {
+              "$ref": "#/$defs/LessonDraft"
+            },
+            "riskId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "riskId",
+            "expectedRevision",
+            "lessonDraft"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/LessonDraft"
+            },
+            "kind": {
+              "const": "recordLesson",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "confirmLesson",
+              "type": "string"
+            },
+            "lessonId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "lessonId",
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "staleLesson",
+              "type": "string"
+            },
+            "lessonId": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "lessonId",
+            "expectedRevision",
+            "reason"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -11687,6 +11902,243 @@
       ],
       "type": "string"
     },
+    "Lesson": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/ResourceActor"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "draft": {
+          "$ref": "#/$defs/LessonDraft"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastCheckedAt": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "riskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "staleReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/LessonStatus"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "revision",
+        "draft",
+        "author",
+        "createdAt",
+        "lastCheckedAt",
+        "status",
+        "frozen"
+      ],
+      "type": "object"
+    },
+    "LessonApplicability": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "crew",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LessonDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "appliesTo": {
+          "items": {
+            "$ref": "#/$defs/LessonApplicability"
+          },
+          "type": "array"
+        },
+        "detection": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "happened": {
+          "type": "string"
+        },
+        "learnedFrom": {
+          "items": {
+            "$ref": "#/$defs/LessonSource"
+          },
+          "type": "array"
+        },
+        "lesson": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "happened",
+        "lesson",
+        "learnedFrom",
+        "evidence",
+        "appliesTo"
+      ],
+      "type": "object"
+    },
+    "LessonPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Lesson"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "LessonSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "risk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "ask",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LessonStatus": {
+      "enum": [
+        "active",
+        "stale"
+      ],
+      "type": "string"
+    },
     "LifecycleEmpty": {
       "additionalProperties": false,
       "type": "object"
@@ -13381,6 +13833,40 @@
           "required": [
             "kind",
             "decision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "risk",
+              "type": "string"
+            },
+            "risk": {
+              "$ref": "#/$defs/Risk"
+            }
+          },
+          "required": [
+            "kind",
+            "risk"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "lesson",
+              "type": "string"
+            },
+            "lesson": {
+              "$ref": "#/$defs/Lesson"
+            }
+          },
+          "required": [
+            "kind",
+            "lesson"
           ],
           "type": "object"
         }
@@ -15322,6 +15808,16 @@
         "object": {
           "$ref": "#/$defs/Object"
         },
+        "occurrence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RiskOccurrence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "recordedAt": {
           "type": "string"
         },
@@ -16518,6 +17014,309 @@
         "generation"
       ],
       "type": "object"
+    },
+    "Risk": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/ResourceActor"
+        },
+        "becameLessonId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "draft": {
+          "$ref": "#/$defs/RiskDraft"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "nextReviewAt": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/RiskOwner"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RiskStatus"
+        },
+        "statusReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "revision",
+        "draft",
+        "owner",
+        "author",
+        "createdAt",
+        "updatedAt",
+        "nextReviewAt",
+        "status",
+        "frozen"
+      ],
+      "type": "object"
+    },
+    "RiskAbout": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "crew",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "requirement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RiskDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "about": {
+          "items": {
+            "$ref": "#/$defs/RiskAbout"
+          },
+          "type": "array"
+        },
+        "impact": {
+          "$ref": "#/$defs/RiskLevel"
+        },
+        "likelihood": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mitigatedBy": {
+          "items": {
+            "$ref": "#/$defs/RiskMitigation"
+          },
+          "type": "array"
+        },
+        "mitigation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "impact",
+        "about",
+        "mitigatedBy"
+      ],
+      "type": "object"
+    },
+    "RiskLevel": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "RiskMitigation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RiskOccurrence": {
+      "additionalProperties": false,
+      "properties": {
+        "lessonId": {
+          "type": "string"
+        },
+        "lessonRevision": {
+          "type": "string"
+        },
+        "originalRiskRevision": {
+          "type": "string"
+        },
+        "resultRiskRevision": {
+          "type": "string"
+        },
+        "riskId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "riskId",
+        "originalRiskRevision",
+        "resultRiskRevision",
+        "lessonId",
+        "lessonRevision"
+      ],
+      "type": "object"
+    },
+    "RiskOwner": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "session",
+              "type": "string"
+            },
+            "sessionId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "sessionId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RiskPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Risk"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "RiskStatus": {
+      "enum": [
+        "open",
+        "mitigated",
+        "occurred",
+        "closed"
+      ],
+      "type": "string"
     },
     "Role": {
       "enum": [
@@ -21419,12 +22218,42 @@
         "$ref": "#/$defs/Object"
       }
     },
+    "managedObject.lessons": {
+      "params": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TablesParams"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/LessonPage"
+      }
+    },
     "managedObject.request.get": {
       "params": {
         "$ref": "#/$defs/RequestParams"
       },
       "result": {
         "$ref": "#/$defs/Lookup"
+      }
+    },
+    "managedObject.risks": {
+      "params": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TablesParams"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/RiskPage"
       }
     },
     "managedObject.rows": {

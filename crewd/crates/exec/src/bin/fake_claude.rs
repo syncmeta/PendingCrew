@@ -316,7 +316,11 @@ impl Fake {
                 let value = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
                 allowed &= output.status.success()
                     && (event != "UserPromptSubmit"
-                        || value == Some(serde_json::json!({"continue":true})));
+                        || std::str::from_utf8(&output.stdout).is_ok_and(|text| {
+                            crewd_proto::agent::is_managed_prompt_allow(
+                                text.strip_suffix('\n').unwrap_or(text),
+                            )
+                        }));
                 if let Some(path) = &self.log {
                     let path = std::path::Path::new(path).with_extension("hooks.jsonl");
                     let mut out = std::fs::OpenOptions::new()

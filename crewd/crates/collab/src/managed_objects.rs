@@ -1,4 +1,4 @@
-//! Organization-readable T/O, with current owner crew authorization for writes.
+//! Organization-readable managed objects, with scoped write authorization.
 //! The caller must first authenticate the Human principal or exact attached
 //! session, and revalidate the connection and grants in this transaction.
 use crate::{
@@ -13,6 +13,10 @@ use crewd_proto::managed_objects::{
 };
 use crewd_store::{StoreError, managed_decisions as decisions_db, managed_objects as db};
 use rusqlite::Connection;
+
+#[path = "managed_risks_lessons.rs"]
+mod risks_lessons;
+pub use risks_lessons::{lessons, risks};
 
 const PAGE_LIMIT: u16 = 16;
 
@@ -95,6 +99,8 @@ pub fn get(c: &Connection, actor: Actor<'_>, id: &str) -> Result<Object> {
             decision: decisions_db::get(c, object_number(id, 'D', "id")?)?
                 .ok_or_else(|| missing(id))?,
         })
+    } else if id.starts_with('R') || id.starts_with('L') {
+        risks_lessons::get(c, id)
     } else {
         let number = object_number(id, 'O', "id")?;
         Ok(Object::Row {
@@ -244,8 +250,9 @@ fn check_decision_draft(c: &Connection, draft: &DecisionDraft) -> Result<()> {
             DecisionAbout::Row { id } => {
                 db::row(c, object_number(id, 'O', "about")?)?.ok_or_else(|| missing(id))?;
             }
-            // A reserved R prefix is not proof of a real risk record.
-            DecisionAbout::Risk { .. } => return Err(invalid("about")),
+            DecisionAbout::Risk { id } => {
+                risks_lessons::risk(c, id, "about")?;
+            }
         }
     }
     Ok(())
@@ -273,17 +280,14 @@ pub fn lookup(
     {
         return Err(invalid("requestId/restoreEpoch"));
     }
-    let captain_decisions_only = match actor {
+    let (foreign, captain) = match actor {
         Actor::Session(id) if sessions::get(c, id)?.crew_id != crew => {
-            if !crews::acts_as_captain_of(c, id, crew)? {
-                return Err(forbidden());
-            }
-            resource_acl::actor(c, &Sender::Session(id.into()), crew, false)?;
-            true
+            (true, crews::acts_as_captain_of(c, id, crew)?)
         }
-        _ => false,
+        _ => (false, false),
     };
-    let principal = if captain_decisions_only {
+    let principal = if foreign {
+        crews::get(c, crew)?;
         actor.principal(c)?
     } else {
         actor.owner(c, crew, false)?
@@ -293,8 +297,15 @@ pub fn lookup(
         return Err(forbidden());
     }
     let recorded = db::receipt(c, crew, &principal, request)?
-        .map(|(_, r)| r)
-        .filter(|r| !captain_decisions_only || matches!(&r.object, Object::Decision { .. }));
+        .filter(|(_, receipt, confirmation)| {
+            !foreign || *confirmation || (captain && matches!(
+                &receipt.object, Object::Decision { .. } | Object::Risk { .. } | Object::Lesson { .. }
+            ))
+        })
+        .map(|(_, receipt, _)| receipt);
+    if foreign && !captain && recorded.is_none() {
+        return Err(forbidden());
+    }
     if origin.restore_epoch != current.restore_epoch {
         let receipt = recorded.filter(|r| r.scope == *origin);
         return Ok(Lookup::Historical { receipt });
@@ -311,6 +322,8 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         return Err(invalid("requestId"));
     }
     let c = tx.conn();
+    let risk_or_lesson = risks_lessons::authorize(c, actor, &request.crew_id, &request.change)?;
+    let member_confirmation = matches!(&request.change, Change::ConfirmLesson { .. });
     let target = match &request.change {
         Change::ReplaceDecision { decision_id, .. }
         | Change::WithdrawDecision { decision_id, .. } => {
@@ -318,7 +331,9 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         }
         _ => None,
     };
-    let principal = if target.is_some() {
+    let principal = if let Some((principal, _)) = &risk_or_lesson {
+        principal.clone()
+    } else if target.is_some() {
         actor.principal(c)?
     } else if matches!(&request.change, Change::RecordDecision { .. }) {
         actor
@@ -333,7 +348,7 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
     let digest: [u8; 32] = resource_acl::digest(&request)?
         .try_into()
         .map_err(|_| StoreError::Invalid("managed object digest length invalid".into()))?;
-    if let Some((saved, receipt)) =
+    if let Some((saved, receipt, _)) =
         db::receipt(c, &request.crew_id, &principal, &request.request_id)?
     {
         return if saved == digest && receipt.scope == request.scope {
@@ -343,6 +358,7 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         };
     }
     let now = tx.now_ts();
+    let mut occurrence = None;
     let object = match request.change {
         Change::CreateTable { title, fields } => {
             if !db::definition_valid(&title, &fields) {
@@ -440,6 +456,12 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
                 decision: decisions_db::withdraw(c, number, revision, &withdrawal)?,
             }
         }
+        change => {
+            let (_, target) = risk_or_lesson.ok_or_else(|| invalid("change"))?;
+            let (object, effect) = risks_lessons::apply(c, actor, &request.crew_id, target, change, tx.now_ms(), &now)?;
+            occurrence = effect;
+            object
+        }
     };
     let receipt = Receipt {
         scope: request.scope,
@@ -447,8 +469,9 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         request_id: request.request_id,
         recorded_at: now,
         object,
+        occurrence,
     };
-    db::record(c, &principal, &digest, &receipt)?;
+    db::record(c, &principal, &digest, &receipt, member_confirmation)?;
     Ok(receipt)
 }
 
@@ -722,7 +745,9 @@ mod tests {
         let s = Store::open_data_dir(dir.path()).unwrap();
         s.conn()
             .execute_batch(
-                "DROP TABLE managed_decisions;
+                "DROP TABLE managed_lessons;
+             DROP TABLE managed_risks;
+             DROP TABLE managed_decisions;
              DROP TABLE managed_object_receipts;
              DROP TABLE managed_rows;
              DROP TABLE managed_tables;
@@ -744,7 +769,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
         assert_eq!(
             object_refs::get(s.conn(), ObjectKind::Plan, prior.number).unwrap(),
             Some(prior.clone())

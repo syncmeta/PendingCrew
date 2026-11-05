@@ -1539,10 +1539,10 @@ Why the existing edge is factually incorrect.
 Read the current managed-object database and restore scope and your own crew ID. Use the complete returned scope for new requests and keep the original scope with every request ID.
 
 ## managed_object_get
-Read a managed table, row, or decision by its exact organization T, O, or D ID. Archived-crew objects are still readable and marked frozen.
+Read a managed table, row, decision, risk, or lesson by its exact organization T, O, D, R, or L ID. Archived-crew objects are still readable and marked frozen.
 
 ## managed_object_get.id
-The exact T table, O row, or D decision ID.
+The exact T table, O row, D decision, R risk, or L lesson ID.
 
 ## managed_tables_list
 Read one page of managed tables visible across the organization.
@@ -1565,20 +1565,32 @@ Read one page of managed decisions visible across the organization, including su
 ## managed_decisions_list.after
 The previous page's nextAfter D ID. Omit for the first page.
 
+## managed_risks_list
+Read one page of managed risks visible across the organization, newest first.
+
+## managed_risks_list.after
+The previous page's nextAfter R ID. Omit for the first page.
+
+## managed_lessons_list
+Read one page of managed lessons visible across the organization, newest first.
+
+## managed_lessons_list.after
+The previous page's nextAfter L ID. Omit for the first page.
+
 ## managed_object_submit
-Create a managed table, add or edit a row, or record a decision for your own active crew. A decision's author or the owning crew's current captain can replace or withdraw it using the latest D revision. Use the current scope, one original UUID, and the full typed intent. Row edits require the latest row revision and replace the full row. After an uncertain response, look up the original request using its UUID and scope.
+Create a managed table, add or edit a row, or record a decision, risk, or lesson for your own active crew. A decision's author or the owning crew's current captain can replace or withdraw it using the latest D revision. Use the current scope, one original UUID, and the full typed intent. Row edits require the latest row revision and replace the full row. Risk and lesson changes require the latest object revision. You may confirm an active lesson you can read, including one from another crew. After an uncertain response, look up the original request using its UUID and scope.
 
 ## managed_object_submit.scope
 Copy dbId and restoreEpoch exactly from managed_object_scope_get.
 
 ## managed_object_submit.crewId
-Use your current crew ID returned by managed_object_scope_get when recording a decision or writing a table or row. When replacing or withdrawing a decision, supply that decision's owning crew ID.
+Use your current crew ID returned by managed_object_scope_get when creating an object. When changing an existing risk, decision, or lesson, supply that object's owning crew ID.
 
 ## managed_object_submit.requestId
 One original canonical UUID for this exact intent. Keep it for receipt lookup.
 
 ## managed_object_submit.change
-Provide a typed table definition or the full row values in field order. Integers use decimal strings and null is valid only for a nullable field. To record or replace a decision, supply the question, chosen option, rationale, and exact related object IDs. Supply the reason when withdrawing a decision.
+Provide a typed table definition or the full row values in field order. Integers use decimal strings and null is valid only for a nullable field. To record or replace a decision, supply the question, chosen option, rationale, and exact related object IDs. Supply the reason when withdrawing a decision, changing a risk status, or marking a lesson stale. When a risk actually occurs, use recordRiskOccurrence with the lesson draft. Core creates the linked lesson and records the occurrence together. In lesson input, leave the related risk reference to Core.
 
 ## managed_object_request_get
 Read the original receipt for a request submitted by this session. Lookup is read-only. A missing or historical receipt does not authorize another execution.

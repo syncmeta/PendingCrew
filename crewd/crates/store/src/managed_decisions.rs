@@ -65,7 +65,7 @@ pub fn draft_valid(draft: &DecisionDraft) -> bool {
             == draft.about.len()
 }
 
-fn actor_valid(actor: &ResourceActor) -> bool {
+pub(crate) fn actor_valid(actor: &ResourceActor) -> bool {
     match (actor.kind.as_str(), actor.session_id.as_deref()) {
         ("human", None) => true,
         ("session", Some(id)) => {

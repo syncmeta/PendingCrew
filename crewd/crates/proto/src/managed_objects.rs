@@ -4,6 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::ResourceActor;
+pub use crate::managed_risks_lessons::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -112,6 +113,8 @@ pub enum Object {
     Table { table: Table },
     Row { row: Row },
     Decision { decision: Decision },
+    Risk { risk: Risk },
+    Lesson { lesson: Lesson },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(
@@ -147,6 +150,47 @@ pub enum Change {
         expected_revision: String,
         reason: String,
     },
+    RecordRisk {
+        draft: RiskDraft,
+        owner: Option<RiskOwner>,
+    },
+    UpdateRisk {
+        risk_id: String,
+        expected_revision: String,
+        draft: RiskDraft,
+    },
+    AssignRisk {
+        risk_id: String,
+        expected_revision: String,
+        owner: RiskOwner,
+    },
+    ReviewRisk {
+        risk_id: String,
+        expected_revision: String,
+    },
+    SetRiskStatus {
+        risk_id: String,
+        expected_revision: String,
+        status: RiskStatus,
+        reason: String,
+    },
+    RecordRiskOccurrence {
+        risk_id: String,
+        expected_revision: String,
+        lesson_draft: LessonDraft,
+    },
+    RecordLesson {
+        draft: LessonDraft,
+    },
+    ConfirmLesson {
+        lesson_id: String,
+        expected_revision: String,
+    },
+    StaleLesson {
+        lesson_id: String,
+        expected_revision: String,
+        reason: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -177,6 +221,8 @@ pub struct Receipt {
     pub request_id: String,
     pub recorded_at: String,
     pub object: Object,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<RiskOccurrence>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

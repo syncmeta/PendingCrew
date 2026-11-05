@@ -493,6 +493,14 @@ expectedStatus 必须是原始需求状态。
 
 原决策的状态或版本已变化。请重新读取它与当前替代决策。
 
+## managed_object.risk_changed
+
+风险已变化，或当前状态不允许这项操作。请先核对当前记录。
+
+## managed_object.lesson_changed
+
+教训已变化，或当前状态不允许这项操作。请先核对当前记录。
+
 ## document.revision_conflict
 文档{id}已经变化，请核对当前元数据后编辑。
 

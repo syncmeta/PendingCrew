@@ -11,7 +11,7 @@ use crewd_exec::{
     registry,
     session::{AnswerOutcome, DeliveryOutcome, SessionEvent},
 };
-use crewd_proto::agent::{HookKind, HookResult};
+use crewd_proto::agent::{HookKind, HookResult, managed_prompt_allow, managed_risk_number};
 use crewd_store::{Db, native_execution as n};
 use serde_json::{Value, json};
 use std::sync::{
@@ -102,9 +102,90 @@ struct Submission {
     delivered: bool,
     unobserved_delivery: Option<std::time::Instant>,
 }
+pub(crate) type RiskReviewAuthority = Arc<dyn Fn() -> bool + Send + Sync>;
+
+pub(crate) async fn due_risk_review(
+    db: &Db,
+    session: &str,
+    legacy_native: Option<String>,
+) -> Option<i64> {
+    let session = session.to_owned();
+    tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        db.call_result(move |store| {
+            let conn = store.conn();
+            if let Some(native) = legacy_native
+                && !crewd_store::sessions::get(conn, &session)?.is_some_and(|row| {
+                    row.executor == "claude"
+                        && row.agent_session_id.as_deref() == Some(native.as_str())
+                })
+            {
+                return Ok(None);
+            }
+            crewd_store::managed_risks_lessons::due_owned_risks(
+                conn,
+                &session,
+                crewd_store::now_ms(),
+            )
+            .map(|risks| risks.first().and_then(|risk| managed_risk_number(&risk.id)))
+        }),
+    )
+    .await
+    .ok()?
+    .ok()?
+    .ok()?
+}
+
+#[cfg(test)]
+pub(crate) async fn seed_due_risk(fixture: &crate::agent::testkit::Fixture) -> String {
+    use crewd_proto::{
+        ResourceActor,
+        managed_objects::{RiskAbout, RiskDraft, RiskLevel, RiskOwner},
+    };
+
+    let (crew, session) = (fixture.crew.clone(), fixture.worker.clone());
+    fixture
+        .state
+        .db
+        .call_result(move |store| {
+            store.with_tx(|tx| {
+                crewd_store::managed_risks_lessons::record_risk(
+                    tx,
+                    &crew,
+                    RiskDraft {
+                        summary: "Synthetic risk reminder".into(),
+                        impact: RiskLevel::High,
+                        likelihood: None,
+                        mitigation: None,
+                        about: vec![RiskAbout::Crew { id: crew.clone() }],
+                        mitigated_by: vec![],
+                    },
+                    RiskOwner::Session {
+                        session_id: session.clone(),
+                    },
+                    ResourceActor {
+                        kind: "session".into(),
+                        session_id: Some(session),
+                    },
+                    "2000-01-01T00:00:00.000Z",
+                    "2000-01-08T00:00:00.000Z".into(),
+                )
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .id
+}
+
 enum Command {
     Submit(Submission),
-    Hook(HookKind, Value, oneshot::Sender<HookResult>),
+    Hook(
+        HookKind,
+        Value,
+        Option<RiskReviewAuthority>,
+        oneshot::Sender<HookResult>,
+    ),
     Driver(SessionEvent),
     Interrupt,
     Stop,
@@ -341,9 +422,18 @@ impl ManagedHandle {
         }
         Ok(id)
     }
-    pub(crate) async fn hook(&self, kind: HookKind, payload: Value) -> HookResult {
+    async fn hook(
+        &self,
+        kind: HookKind,
+        payload: Value,
+        review: Option<RiskReviewAuthority>,
+    ) -> HookResult {
         let (tx, rx) = oneshot::channel();
-        if self.queue.send(Command::Hook(kind, payload, tx)).is_err() {
+        if self
+            .queue
+            .send(Command::Hook(kind, payload, review, tx))
+            .is_err()
+        {
             return denied_hook();
         }
         rx.await.unwrap_or_else(|_| denied_hook())
@@ -523,7 +613,16 @@ impl Actor {
             Err(_) => self.invalidate().await,
         }
     }
+    #[cfg(test)]
     async fn hook(&mut self, kind: HookKind, payload: Value) -> HookResult {
+        self.hook_with_review(kind, payload, None).await
+    }
+    async fn hook_with_review(
+        &mut self,
+        kind: HookKind,
+        payload: Value,
+        review: Option<RiskReviewAuthority>,
+    ) -> HookResult {
         let startup = kind == HookKind::SessionStart && self.ready.is_some();
         if startup {
             self.startup_observation.store(1, Ordering::Release);
@@ -661,6 +760,11 @@ impl Actor {
             if let Some(pause) = &self.accepted_pause {
                 pause.pause().await;
             }
+            let risk = if review.as_ref().is_some_and(|permitted| permitted()) {
+                due_risk_review(&self.db, &self.seal.runtime().session, None).await
+            } else {
+                None
+            };
             if !self.current().await {
                 self.invalidate().await;
                 return denied_hook();
@@ -678,8 +782,9 @@ impl Actor {
             input.receipt = Some(receipt);
             input.prompt = prompt;
             let _ = self.events.send(SessionEvent::Working(true));
+            let risk = risk.filter(|_| review.as_ref().is_some_and(|permitted| permitted()));
             return HookResult {
-                stdout: Some(json!({"continue":true}).to_string()),
+                stdout: Some(managed_prompt_allow(risk)),
             };
         }
         // The hook transport and session checks above are insufficient alone:
@@ -878,8 +983,8 @@ impl Actor {
             };
             match command {
                 Command::Submit(input) => self.submit(input).await,
-                Command::Hook(kind, payload, reply) => {
-                    let result = self.hook(kind, payload).await;
+                Command::Hook(kind, payload, review, reply) => {
+                    let result = self.hook_with_review(kind, payload, review).await;
                     let _ = reply.send(result);
                 }
                 Command::Stop => {
@@ -1099,12 +1204,13 @@ pub(crate) async fn route(
     session: &str,
     kind: HookKind,
     payload: Value,
+    review: Option<RiskReviewAuthority>,
 ) -> Option<HookResult> {
     for _ in 0..150 {
         let target: Option<Weak<ManagedHandle>> =
             factory.managed.lock().ok()?.get(session).cloned();
         if let Some(target) = target.and_then(|w| w.upgrade()) {
-            return Some(target.hook(kind, payload).await);
+            return Some(target.hook(kind, payload, review).await);
         }
         let expected = factory.managed_expected.lock().ok()?.contains(session);
         if kind != HookKind::SessionStart || !expected {
@@ -1617,6 +1723,84 @@ mod tests {
             "Stop linearized during current() await must deny the old guard"
         );
     }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn managed_due_risk_only_joins_the_authorized_original_prompt() {
+        for mode in ["accepted", "forged", "wrong-session", "no-scope"] {
+            let mut run = race_run().await;
+            let risk = seed_due_risk(&run.fixture).await;
+            let request = uuid::Uuid::new_v4().to_string();
+            let body = envelope(&request, "SYNTHETIC_RISK_PROMPT").unwrap();
+            let runtime = run.actor.seal.runtime().id.clone();
+            let rid = request.clone();
+            let original = body.as_bytes().to_vec();
+            let receipt = run
+                .actor
+                .db
+                .call_result(move |store| {
+                    store.with_tx(|tx| n::prepare(tx, &runtime, &rid, &original, "now"))
+                })
+                .await
+                .unwrap()
+                .unwrap()
+                .0;
+            run.actor.pending = Some(Submission {
+                request,
+                external: 1,
+                subject: Subject::Brief,
+                body: body.clone(),
+                local: None,
+                receipt: Some(receipt),
+                prompt: None,
+                stopped: false,
+                original_task: None,
+                delivered: false,
+                unobserved_delivery: None,
+            });
+            let mut payload = json!({
+                "session_id":run.actor.agent_session,
+                "hook_event_name":"UserPromptSubmit",
+                "prompt_id":uuid::Uuid::new_v4().to_string(),
+                "prompt":body,
+            });
+            if mode == "forged" {
+                payload["prompt"] = json!("unrelated prompt");
+            }
+            if mode == "wrong-session" {
+                payload["session_id"] = json!("foreign native ID");
+            }
+            let review: RiskReviewAuthority = Arc::new(move || mode != "no-scope");
+            let output = run
+                .actor
+                .hook_with_review(
+                    HookKind::UserPromptSubmit,
+                    payload.clone(),
+                    Some(review.clone()),
+                )
+                .await;
+            let stdout = output.stdout.unwrap();
+            match mode {
+                "accepted" => assert_eq!(stdout, managed_prompt_allow(managed_risk_number(&risk))),
+                "no-scope" => assert_eq!(stdout, managed_prompt_allow(None)),
+                _ => assert!(
+                    !crewd_proto::agent::is_managed_prompt_allow(&stdout)
+                        && !stdout.contains(&risk),
+                    "{mode}: {stdout}"
+                ),
+            }
+            if mode == "accepted" {
+                let duplicate = run
+                    .actor
+                    .hook_with_review(HookKind::UserPromptSubmit, payload, Some(review))
+                    .await;
+                let stdout = duplicate.stdout.unwrap();
+                assert!(
+                    !crewd_proto::agent::is_managed_prompt_allow(&stdout)
+                        && !stdout.contains(&risk)
+                );
+            }
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn managed_guard_race_raw_claim_after_durable_accept_denies_old_auto_allow() {
         let mut run = race_run().await;

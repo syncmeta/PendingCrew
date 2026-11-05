@@ -1977,9 +1977,15 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         let tableId: String?
         let expectedRevision: String?
         let digest: String
+        var presentationCrew: String? = nil
+        var riskLesson: RiskLessonWitness? = nil
         var isDecision: Bool {
             ["recordDecision","replaceDecision","withdrawDecision"].contains(kind)
         }
+    }
+    struct RiskLessonWitness: Codable, Equatable {
+        let reviewAt: String?
+        let checkedAt: String?
     }
     struct Pending: Identifiable {
         let record: CrewdPresentationJournal.Prepared
@@ -1997,15 +2003,16 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         case recordDecision(Wire.DecisionDraft)
         case replaceDecision(Wire.Decision, Wire.DecisionDraft)
         case withdrawDecision(Wire.Decision, String)
+        case riskLesson(RiskLessonMutation)
 
         var isDecision: Bool {
             switch self {
             case .recordDecision, .replaceDecision, .withdrawDecision: true
-            case .create, .add, .edit: false
+            case .create, .add, .edit, .riskLesson: false
             }
         }
 
-        func encode(crew: String) throws -> (Wire.Change, String, String?, String?, String) {
+        func encode(crew: String, risksAvailable: Bool = false) throws -> (Wire.Change, String, String?, String?, String) {
             switch self {
             case .create(let title, let fields):
                 guard Wire.validDefinition(title: title, fields: fields) else { throw Wire.Problem.invalid }
@@ -2022,20 +2029,21 @@ struct CrewdPendingKnowledgeLink: Identifiable {
                 return (.init(kind: "editRow", rowId: row.id, expectedRevision: row.revision, values: values),
                         row.id, table.id, row.revision, try Self.digest(values))
             case .recordDecision(let draft):
-                guard Self.allowed(draft) else { throw Wire.Problem.invalid }
+                guard Self.allowed(draft, risksAvailable:risksAvailable) else { throw Wire.Problem.invalid }
                 return (.init(kind:"recordDecision",draft:draft),"recordDecision",nil,nil,try Self.digest(draft))
             case .replaceDecision(let current,let draft):
-                guard current.canChange(crew:crew), Self.allowed(draft) else { throw Wire.Problem.invalid }
+                guard current.canChange(crew:crew), Self.allowed(draft, risksAvailable:risksAvailable) else { throw Wire.Problem.invalid }
                 return (.init(kind:"replaceDecision",expectedRevision:current.revision,decisionId:current.id,draft:draft),
                         current.id,nil,current.revision,try Self.digest(draft))
             case .withdrawDecision(let current,let reason):
                 guard current.canChange(crew:crew), Wire.decisionText(reason) else { throw Wire.Problem.invalid }
                 return (.init(kind:"withdrawDecision",expectedRevision:current.revision,decisionId:current.id,reason:reason),
                         current.id,nil,current.revision,try Self.withdrawalDigest(current,reason:reason))
+            case .riskLesson: throw Wire.Problem.invalid
             }
         }
-        private static func allowed(_ draft: Wire.DecisionDraft) -> Bool {
-            draft.valid && !draft.about.contains { $0.kind == .risk }
+        private static func allowed(_ draft: Wire.DecisionDraft, risksAvailable: Bool) -> Bool {
+            draft.valid && (risksAvailable || !draft.about.contains { $0.kind == .risk })
         }
         private struct WithdrawalContent: Encodable {
             let draft: Wire.DecisionDraft
@@ -2060,13 +2068,16 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     private let rpc: RPC
     private let journal: () throws -> CrewdPresentationJournal
     private let decisionsAvailable: () -> Bool
+    private let riskLessonsAvailable: () -> Bool
 
     init(origin: @escaping () -> Origin?, rpc: @escaping RPC, journal: @escaping () throws -> CrewdPresentationJournal,
-         decisionsAvailable: @escaping () -> Bool = { false }) {
+         decisionsAvailable: @escaping () -> Bool = { false },
+         riskLessonsAvailable: @escaping () -> Bool = { false }) {
         self.origin = origin
         self.rpc = rpc
         self.journal = journal
         self.decisionsAvailable = decisionsAvailable
+        self.riskLessonsAvailable = riskLessonsAvailable
     }
 
     func scope(stillCurrent: @MainActor () -> Bool) async throws -> BrowseScope {
@@ -2114,15 +2125,49 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         return decision
     }
 
+    func riskLessons(_ scope: BrowseScope, lessons: Bool, after: String?,
+                     stillCurrent: @MainActor () -> Bool) async throws -> (items:[Wire.RiskLessonEntry],next:String?) {
+        guard riskLessonsAvailable() else { throw Wire.Problem.unavailable }
+        let params = CrewdValue.object(["after":after.map(CrewdValue.string) ?? .null])
+        let items: [Wire.RiskLessonEntry]
+        let next: String?
+        if lessons {
+            let page: Wire.RiskLessonPage<Wire.Lesson> = try await call("managedObject.lessons",params,scope.origin,stillCurrent)
+            guard page.items.allSatisfy(\.valid) else { throw Wire.Problem.invalid }
+            items = page.items.map(Wire.RiskLessonEntry.lesson)
+            next = page.nextAfter
+        } else {
+            let page: Wire.RiskLessonPage<Wire.Risk> = try await call("managedObject.risks",params,scope.origin,stillCurrent)
+            guard page.items.allSatisfy(\.valid) else { throw Wire.Problem.invalid }
+            items = page.items.map(Wire.RiskLessonEntry.risk)
+            next = page.nextAfter
+        }
+        guard Wire.validPage(items.map(\.id),after:after,next:next,prefix:lessons ? "L":"R",newestFirst:true)
+        else { throw Wire.Problem.invalid }
+        try await check(scope,stillCurrent)
+        return (items,next)
+    }
+
+    func riskLesson(_ scope: BrowseScope, id: String, stillCurrent: @MainActor () -> Bool) async throws -> Wire.RiskLessonEntry {
+        guard riskLessonsAvailable() else { throw Wire.Problem.unavailable }
+        guard Wire.objectNumber(id,prefix:"R") != nil || Wire.objectNumber(id,prefix:"L") != nil else { throw Wire.Problem.invalid }
+        let object: Wire.Object = try await call("managedObject.get",.object(["id":.string(id)]),scope.origin,stillCurrent)
+        guard object.valid, let item = object.riskLessonEntry, item.id == id else { throw Wire.Problem.invalid }
+        try await check(scope,stillCurrent)
+        return item
+    }
+
     func pending(_ scope: BrowseScope) throws -> [Pending] {
         guard valid(scope.origin, { true }) else { throw Wire.Problem.stale }
         let ledger = try journal()
         guard ledger.scope == scope.origin.scope else { throw Wire.Problem.stale }
         return try ledger.unknownRecords().filter {
-            $0.method == Wire.observation && $0.scope == ledger.scope && Wire.exact($0.crew, scope.origin.crew)
+            $0.method == Wire.observation && $0.scope == ledger.scope &&
+                Wire.exact($0.params["presentationCrew"].string ?? $0.crew,scope.origin.crew)
         }.map {
             let witness = try CrewdKnowledgeStore.decode($0.params, Witness.self)
             guard Wire.exact(witness.crewId, $0.crew), witness.scope.dbId == scope.authority.dbId,
+                  witness.presentationCrew == nil || witness.kind == "confirmLesson",
                   UUID(uuidString: witness.requestId)?.uuidString.lowercased() == witness.requestId
             else { throw Wire.Problem.invalid }
             return .init(record: $0, witness: witness)
@@ -2132,18 +2177,25 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     func submit(_ mutation: Mutation, scope: BrowseScope, stillCurrent: @MainActor () -> Bool) async throws -> Observation {
         guard !mutation.isDecision || decisionsAvailable() else { throw Wire.Problem.unavailable }
         try await check(scope, stillCurrent)
-        let crew = scope.origin.crew
-        let (change, target, tableID, revision, digest) = try mutation.encode(crew: crew)
         let request = UUID().uuidString.lowercased()
-        let witness = Witness(scope: scope.authority, crewId: crew, requestId: request,
-                              kind: change.kind, target: target, tableId: tableID,
-                              expectedRevision: revision, digest: digest)
-        let params = try CrewdKnowledgeStore.encode(Wire.Submit(scope: scope.authority, crewId: crew,
-                                                               requestId: request, change: change))
+        let witness: Witness
+        let change: Wire.Change
+        if case .riskLesson(let operation) = mutation {
+            guard riskLessonsAvailable() else { throw Wire.Problem.unavailable }
+            (change,witness) = try operation.prepare(scope:scope,request:request)
+        } else {
+            let crew = scope.origin.crew
+            let (wire,target,tableID,revision,digest) = try mutation.encode(crew:crew,risksAvailable:riskLessonsAvailable())
+            change = wire
+            witness = Witness(scope:scope.authority,crewId:crew,requestId:request,kind:wire.kind,
+                              target:target,tableId:tableID,expectedRevision:revision,digest:digest)
+        }
+        let params = try CrewdKnowledgeStore.encode(Wire.Submit(scope:scope.authority,crewId:witness.crewId,
+                                                               requestId:request,change:change))
         let ledger = try journal()
         guard ledger.scope == scope.origin.scope, valid(scope.origin, stillCurrent) else { throw Wire.Problem.stale }
         // The durable observation keeps identity and a payload digest only.
-        let prepared = try ledger.prepareManagedDirectory(CrewdKnowledgeStore.encode(witness), crew: crew)
+        let prepared = try ledger.prepareManagedDirectory(CrewdKnowledgeStore.encode(witness), crew: witness.crewId)
         do {
             let receipt: Wire.Receipt = try await call("managedObject.submit", params, scope.origin, stillCurrent)
             try verify(receipt, witness)
@@ -2153,8 +2205,8 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         } catch {
             let client = error as? CrewdClientError
             let definitelyRefused = client?.kind == .notSubmitted ||
-                (client?.code == -32009 && ["managed_object.row_changed","managed_object.decision_changed"]
-                    .contains(client?.refusal ?? "")) || (mutation.isDecision &&
+                (client?.code == -32009 && ["managed_object.row_changed","managed_object.decision_changed","managed_object.risk_changed","managed_object.lesson_changed"]
+                    .contains(client?.refusal ?? "")) || ((mutation.isDecision || witness.riskLesson != nil) &&
                     (Self.decisionInputRefused(error) || (client?.code == -32009 && client?.refusal == "resource.frozen")))
             try? ledger.finish(prepared, state: definitelyRefused ? "refused" : "unknown")
             throw error
@@ -2172,9 +2224,11 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     func lookup(_ pending: Pending, scope: BrowseScope, stillCurrent: @MainActor () -> Bool) async throws -> Observation? {
         let ledger = try journal()
         let witness = pending.witness
-        guard !witness.isDecision || decisionsAvailable() else { throw Wire.Problem.unavailable }
+        guard (!witness.isDecision || decisionsAvailable()) &&
+                (witness.riskLesson == nil || riskLessonsAvailable()) else { throw Wire.Problem.unavailable }
         guard ledger.scope == scope.origin.scope, pending.record.scope == ledger.scope,
-              Wire.exact(witness.crewId, scope.origin.crew), witness.scope.dbId == scope.authority.dbId,
+              Wire.exact(witness.presentationCrew ?? witness.crewId,scope.origin.crew),
+              witness.scope.dbId == scope.authority.dbId,
               try self.pending(scope).contains(where: { $0.id == pending.id && $0.witness == witness })
         else { throw Wire.Problem.stale }
         let params = try CrewdKnowledgeStore.encode(LookupParams(scope: witness.scope, crewId: witness.crewId,
@@ -2206,6 +2260,11 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         guard receipt.scope == original.scope, Wire.exact(receipt.crewId, original.crewId),
               receipt.requestId == original.requestId, !receipt.recordedAt.isEmpty, receipt.object.valid
         else { throw Wire.Problem.invalid }
+        if original.riskLesson != nil {
+            try RiskLessonMutation.verify(receipt,original:original)
+            return
+        }
+        guard receipt.occurrence == nil else { throw Wire.Problem.invalid }
         switch original.kind {
         case "createTable":
             guard let table = receipt.object.table, !table.frozen, Wire.exact(table.crewId, original.crewId),
@@ -2251,5 +2310,170 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     private func check(_ expected: BrowseScope, _ stillCurrent: @MainActor () -> Bool) async throws {
         guard valid(expected.origin, stillCurrent),
               try await scope(stillCurrent: stillCurrent) == expected else { throw Wire.Problem.stale }
+    }
+}
+
+extension CrewdManagedDirectoryStore {
+    enum RiskLessonMutation {
+        case recordRisk(Wire.RiskDraft, Wire.DecisionAuthor)
+        case updateRisk(Wire.Risk, Wire.RiskDraft)
+        case assignRisk(Wire.Risk, Wire.DecisionAuthor)
+        case reviewRisk(Wire.Risk)
+        case setRiskStatus(Wire.Risk, Wire.RiskStatus, String)
+        case occurrence(Wire.Risk, Wire.LessonDraft)
+        case recordLesson(Wire.LessonDraft)
+        case confirmLesson(Wire.Lesson)
+        case staleLesson(Wire.Lesson, String)
+
+        func prepare(scope: BrowseScope, request: String) throws -> (Wire.Change,Witness) {
+            let selected = scope.origin.crew
+            func prepared(_ change: Wire.Change, target: String, crew: String,
+                          digest: String, reviewAt: String? = nil, checkedAt: String? = nil) -> (Wire.Change,Witness) {
+                (change,Witness(scope:scope.authority,crewId:crew,requestId:request,kind:change.kind,target:target,
+                    tableId:nil,expectedRevision:change.expectedRevision,digest:digest,
+                    presentationCrew:Wire.exact(crew,selected) ? nil:selected,
+                    riskLesson:.init(reviewAt:reviewAt,checkedAt:checkedAt)))
+            }
+            func risk(_ original: Wire.Risk, change: Wire.Change, expected: RiskFacts, reviewAt: String? = nil) throws -> (Wire.Change,Witness) {
+                guard original.valid, !original.frozen, Wire.exact(original.crewId,selected) else { throw Wire.Problem.invalid }
+                return prepared(change,target:original.id,crew:original.crewId,digest:try Mutation.digest(expected),reviewAt:reviewAt)
+            }
+            func manualLesson(_ draft: Wire.LessonDraft) -> Bool {
+                draft.valid && !draft.learnedFrom.contains { $0.kind == .risk }
+            }
+            let human = Wire.DecisionAuthor(kind:"human",sessionId:nil)
+            switch self {
+            case .recordRisk(let draft,let owner):
+                guard draft.valid, owner.valid else { throw Wire.Problem.invalid }
+                let expected = RiskFacts(draft:draft,owner:owner,author:human,status:.open)
+                return prepared(.init(kind:"recordRisk",owner:owner,riskDraft:draft),target:"recordRisk",
+                                crew:selected,digest:try Mutation.digest(expected))
+            case .updateRisk(let original,let draft):
+                guard original.openForReview, draft.valid else { throw Wire.Problem.invalid }
+                var expected = RiskFacts(original)
+                expected.draft = draft
+                return try risk(original,change:.init(kind:"updateRisk",expectedRevision:original.revision,
+                    riskId:original.id,riskDraft:draft),expected:expected,
+                    reviewAt:original.owner.kind == "human" ? nil:original.nextReviewAt)
+            case .assignRisk(let original,let owner):
+                guard original.openForReview, owner.valid, owner != original.owner else { throw Wire.Problem.invalid }
+                var expected = RiskFacts(original)
+                expected.owner = owner
+                return try risk(original,change:.init(kind:"assignRisk",expectedRevision:original.revision,
+                    riskId:original.id,owner:owner),expected:expected,reviewAt:original.nextReviewAt)
+            case .reviewRisk(let original):
+                guard original.openForReview, original.owner.kind == "human" else { throw Wire.Problem.invalid }
+                return try risk(original,change:.init(kind:"reviewRisk",expectedRevision:original.revision,
+                    riskId:original.id),expected:RiskFacts(original))
+            case .setRiskStatus(let original,let status,let reason):
+                guard original.canTransition(to:status), Wire.decisionText(reason) else { throw Wire.Problem.invalid }
+                var expected = RiskFacts(original)
+                expected.status = status
+                expected.statusReason = reason
+                return try risk(original,change:.init(kind:"setRiskStatus",expectedRevision:original.revision,
+                    reason:reason,riskId:original.id,status:status),expected:expected,
+                    reviewAt:status == .closed || original.owner.kind != "human" ? original.nextReviewAt:nil)
+            case .occurrence(let original,var draft):
+                guard original.valid, !original.frozen, original.openForReview,
+                      Wire.exact(original.crewId,selected), manualLesson(draft), draft.learnedFrom.count < 8
+                else { throw Wire.Problem.invalid }
+                let change = Wire.Change(kind:"recordRiskOccurrence",expectedRevision:original.revision,
+                                         riskId:original.id,lessonDraft:draft)
+                draft.learnedFrom.append(.init(kind:.risk,id:original.id))
+                let expected = LessonFacts(draft:draft,author:human,status:.active,riskId:original.id)
+                return prepared(change,target:original.id,crew:selected,digest:try Mutation.digest(expected))
+            case .recordLesson(let draft):
+                guard manualLesson(draft) else { throw Wire.Problem.invalid }
+                return prepared(.init(kind:"recordLesson",lessonDraft:draft),target:"recordLesson",crew:selected,
+                                digest:try Mutation.digest(LessonFacts(draft:draft,author:human,status:.active)))
+            case .confirmLesson(let original):
+                guard original.valid, !original.frozen, original.status == .active else { throw Wire.Problem.invalid }
+                return prepared(.init(kind:"confirmLesson",expectedRevision:original.revision,lessonId:original.id),
+                                target:original.id,crew:original.crewId,digest:try Mutation.digest(LessonFacts(original)))
+            case .staleLesson(let original,let reason):
+                guard original.valid, !original.frozen, original.status == .active, Wire.exact(original.crewId,selected),
+                      Wire.decisionText(reason) else { throw Wire.Problem.invalid }
+                var expected = LessonFacts(original)
+                expected.status = .stale
+                expected.staleReason = reason
+                return prepared(.init(kind:"staleLesson",expectedRevision:original.revision,reason:reason,lessonId:original.id),
+                    target:original.id,crew:original.crewId,digest:try Mutation.digest(expected),checkedAt:original.lastCheckedAt)
+            }
+        }
+
+        private struct RiskFacts: Encodable {
+            var draft: Wire.RiskDraft
+            var owner: Wire.DecisionAuthor
+            var author: Wire.DecisionAuthor
+            var status: Wire.RiskStatus
+            var createdAt: String? = nil
+            var statusReason: String? = nil
+            var becameLessonId: String? = nil
+
+            init(draft: Wire.RiskDraft, owner: Wire.DecisionAuthor, author: Wire.DecisionAuthor, status: Wire.RiskStatus) {
+                self.draft = draft; self.owner = owner; self.author = author; self.status = status
+            }
+            init(_ item: Wire.Risk, created: Bool = false) {
+                self.init(draft:item.draft,owner:item.owner,author:item.author,status:item.status)
+                createdAt = created ? nil:item.createdAt
+                statusReason = item.statusReason
+                becameLessonId = item.becameLessonId
+            }
+        }
+        private struct LessonFacts: Encodable {
+            var draft: Wire.LessonDraft
+            var author: Wire.DecisionAuthor
+            var status: Wire.LessonStatus
+            var createdAt: String? = nil
+            var staleReason: String? = nil
+            var riskId: String?
+
+            init(draft: Wire.LessonDraft, author: Wire.DecisionAuthor, status: Wire.LessonStatus, riskId: String? = nil) {
+                self.draft = draft; self.author = author; self.status = status; self.riskId = riskId
+            }
+            init(_ item: Wire.Lesson, created: Bool = false) {
+                self.init(draft:item.draft,author:item.author,status:item.status,riskId:item.riskId)
+                createdAt = created ? nil:item.createdAt
+                staleReason = item.staleReason
+            }
+        }
+
+        static func verify(_ receipt: Wire.Receipt, original: Witness) throws {
+            guard let witness = original.riskLesson else { throw Wire.Problem.invalid }
+            let revision = original.expectedRevision.flatMap(Wire.positive).flatMap { $0 < Int64.max ? String($0 + 1):nil }
+            switch original.kind {
+            case "recordRisk", "updateRisk", "assignRisk", "reviewRisk", "setRiskStatus":
+                let created = original.kind == "recordRisk"
+                guard receipt.occurrence == nil, let risk = receipt.object.risk, !risk.frozen,
+                      Wire.exact(risk.crewId,original.crewId), risk.updatedAt == receipt.recordedAt,
+                      created ? (risk.revision == "1" && risk.createdAt == receipt.recordedAt) :
+                        (risk.id == original.target && risk.revision == revision),
+                      try Mutation.digest(RiskFacts(risk,created:created)) == original.digest
+                else { throw Wire.Problem.invalid }
+                if let reviewAt = witness.reviewAt {
+                    guard risk.nextReviewAt == reviewAt else { throw Wire.Problem.invalid }
+                } else {
+                    guard let recorded = Wire.managedTime(receipt.recordedAt), let review = Wire.managedTime(risk.nextReviewAt),
+                          abs(review.timeIntervalSince(recorded) - 7 * 24 * 60 * 60) < 0.01
+                    else { throw Wire.Problem.invalid }
+                }
+            case "recordLesson", "confirmLesson", "staleLesson", "recordRiskOccurrence":
+                let occurrence = original.kind == "recordRiskOccurrence"
+                let created = occurrence || original.kind == "recordLesson"
+                guard let lesson = receipt.object.lesson, !lesson.frozen, Wire.exact(lesson.crewId,original.crewId),
+                      created ? (lesson.revision == "1" && lesson.createdAt == receipt.recordedAt) :
+                        (lesson.id == original.target && lesson.revision == revision),
+                      lesson.lastCheckedAt == (witness.checkedAt ?? receipt.recordedAt),
+                      try Mutation.digest(LessonFacts(lesson,created:created)) == original.digest
+                else { throw Wire.Problem.invalid }
+                if occurrence {
+                    guard let effect = receipt.occurrence, effect.riskId == original.target,
+                          effect.originalRiskRevision == original.expectedRevision, effect.resultRiskRevision == revision,
+                          effect.lessonId == lesson.id, effect.lessonRevision == lesson.revision, lesson.riskId == original.target
+                    else { throw Wire.Problem.invalid }
+                } else if receipt.occurrence != nil { throw Wire.Problem.invalid }
+            default: throw Wire.Problem.invalid
+            }
+        }
     }
 }

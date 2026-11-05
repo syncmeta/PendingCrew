@@ -959,6 +959,7 @@ enum CrewdNativeTable {
 enum CrewdManagedDirectoryWire {
     static let capability = "managedObjects.v1"
     static let decisionsCapability = "managedDecisions.v1"
+    static let riskLessonsCapability = "managedRiskLessons.v1"
     static let observation = "managedObject.submit.observation"
     static let pageLimit = 16
     static let fieldLimit = 32
@@ -1160,20 +1161,168 @@ enum CrewdManagedDirectoryWire {
         let items: [Decision]
         let nextAfter: String?
     }
+    enum RiskLevel: String, Codable, CaseIterable, Identifiable {
+        case low, medium, high
+        var id: Self { self }
+        var label: String {
+            switch self { case .low: "低"; case .medium: "中"; case .high: "高" }
+        }
+    }
+    enum RiskStatus: String, Codable {
+        case open, mitigated, occurred, closed
+        var label: String {
+            switch self { case .open: "待处理"; case .mitigated: "已缓解"; case .occurred: "已发生"; case .closed: "已关闭" }
+        }
+    }
+    enum LessonStatus: String, Codable {
+        case active, stale
+        var label: String { self == .active ? "有效" : "已过时" }
+    }
+    enum LinkKind: String, Codable, CaseIterable, Identifiable {
+        case crew, work, requirement, decision, risk, ask, table
+        var id: Self { self }
+        var label: String {
+            switch self {
+            case .crew: "机组"; case .work: "计划 W"; case .requirement: "需求 #"
+            case .decision: "决定 D"; case .risk: "风险 R"; case .ask: "待人处理 H"; case .table: "表 T"
+            }
+        }
+        var prefix: Character? {
+            switch self {
+            case .crew: nil; case .work: "W"; case .requirement: "#"
+            case .decision: "D"; case .risk: "R"; case .ask: "H"; case .table: "T"
+            }
+        }
+    }
+    struct ObjectLink: Codable, Equatable {
+        var kind: LinkKind
+        var id: String
+        var valid: Bool {
+            if let prefix = kind.prefix { return objectNumber(id,prefix:prefix) != nil }
+            return DecisionAbout(kind:.crew,id:id).valid
+        }
+        static func valid(_ links: [Self], kinds: Set<LinkKind>, required: Bool = false) -> Bool {
+            links.count <= 8 && (!required || !links.isEmpty) && links.allSatisfy { kinds.contains($0.kind) && $0.valid } &&
+                Set(links.map { Data(($0.kind.rawValue + ":" + $0.id).utf8) }).count == links.count
+        }
+    }
+    struct RiskDraft: Codable, Equatable {
+        var summary: String
+        var impact: RiskLevel
+        var likelihood: RiskLevel?
+        var mitigation: String?
+        var about: [ObjectLink]
+        var mitigatedBy: [ObjectLink]
+        var valid: Bool {
+            decisionText(summary,limit:120) && (mitigation.map { decisionText($0) } ?? true) &&
+                ObjectLink.valid(about,kinds:[.crew,.work,.requirement],required:true) &&
+                ObjectLink.valid(mitigatedBy,kinds:[.work,.decision])
+        }
+    }
+    struct Risk: Codable, Equatable, Identifiable {
+        let id: String
+        let crewId: String
+        let revision: String
+        var draft: RiskDraft
+        var owner: DecisionAuthor
+        let author: DecisionAuthor
+        let createdAt: String
+        var updatedAt: String
+        var nextReviewAt: String
+        var status: RiskStatus
+        var statusReason: String?
+        var becameLessonId: String?
+        let frozen: Bool
+        var valid: Bool {
+            guard objectNumber(id,prefix:"R") != nil, positive(revision) != nil, !crewId.isEmpty,
+                  draft.valid, owner.valid, author.valid, !createdAt.isEmpty, !updatedAt.isEmpty, !nextReviewAt.isEmpty
+            else { return false }
+            let linkedLesson = becameLessonId.flatMap { objectNumber($0,prefix:"L") }
+            guard (status == .occurred ? linkedLesson != nil : (becameLessonId == nil || (status == .closed && linkedLesson != nil))) else { return false }
+            if (status == .mitigated || status == .closed) && statusReason == nil { return false }
+            return statusReason.map { decisionText($0) } ?? true
+        }
+    }
+    struct LessonDraft: Codable, Equatable {
+        var happened: String
+        var lesson: String
+        var detection: String?
+        var learnedFrom: [ObjectLink]
+        var evidence: [String]
+        var appliesTo: [ObjectLink]
+        var valid: Bool {
+            decisionText(happened) && decisionText(lesson,limit:120) && (detection.map { decisionText($0) } ?? true) &&
+                ObjectLink.valid(learnedFrom,kinds:[.work,.risk,.ask]) && evidence.count <= 8 &&
+                evidence.allSatisfy { decisionText($0) } && Set(evidence.map { Data($0.utf8) }).count == evidence.count &&
+                ObjectLink.valid(appliesTo,kinds:[.crew,.work,.table])
+        }
+    }
+    struct Lesson: Codable, Equatable, Identifiable {
+        let id: String
+        let crewId: String
+        let revision: String
+        let draft: LessonDraft
+        let author: DecisionAuthor
+        let createdAt: String
+        let lastCheckedAt: String
+        let status: LessonStatus
+        let staleReason: String?
+        let riskId: String?
+        let frozen: Bool
+        var valid: Bool {
+            guard objectNumber(id,prefix:"L") != nil, positive(revision) != nil, !crewId.isEmpty,
+                  draft.valid, author.valid, !createdAt.isEmpty, !lastCheckedAt.isEmpty,
+                  (status == .stale ? staleReason.map { decisionText($0) } == true : staleReason == nil)
+            else { return false }
+            let source = draft.learnedFrom.filter { $0.kind == .risk }
+            if let riskId { return objectNumber(riskId,prefix:"R") != nil && source.map(\.id) == [riskId] }
+            return source.isEmpty
+        }
+    }
+    enum RiskLessonEntry: Identifiable, Equatable {
+        case risk(Risk), lesson(Lesson)
+        var id: String {
+            switch self { case .risk(let item): item.id; case .lesson(let item): item.id }
+        }
+        var crewId: String {
+            switch self { case .risk(let item): item.crewId; case .lesson(let item): item.crewId }
+        }
+    }
+    struct RiskLessonPage<Entry: Decodable>: Decodable {
+        let items: [Entry]
+        let nextAfter: String?
+    }
+    struct Occurrence: Decodable {
+        let riskId: String
+        let originalRiskRevision: String
+        let resultRiskRevision: String
+        let lessonId: String
+        let lessonRevision: String
+    }
     struct Object: Decodable {
         let kind: String
         let table: Table?
         let row: Row?
         let decision: Decision?
+        let risk: Risk?
+        let lesson: Lesson?
         var valid: Bool {
+            guard [table != nil,row != nil,decision != nil,risk != nil,lesson != nil].filter({ $0 }).count == 1 else { return false }
             switch kind {
-            case "table": table?.valid == true && row == nil && decision == nil
-            case "row": row?.valid == true && table == nil && decision == nil
-            case "decision": decision?.valid == true && table == nil && row == nil
-            default: false
+            case "table": return table?.valid == true
+            case "row": return row?.valid == true
+            case "decision": return decision?.valid == true
+            case "risk": return risk?.valid == true
+            case "lesson": return lesson?.valid == true
+            default: return false
             }
         }
-        var id: String? { table?.id ?? row?.id ?? decision?.id }
+        var id: String? { table?.id ?? row?.id ?? decision?.id ?? risk?.id ?? lesson?.id }
+        var riskLessonEntry: RiskLessonEntry? {
+            if let risk { return .risk(risk) }
+            if let lesson { return .lesson(lesson) }
+            return nil
+        }
     }
     struct Change: Encodable {
         let kind: String
@@ -1186,6 +1335,39 @@ enum CrewdManagedDirectoryWire {
         var decisionId: String? = nil
         var draft: DecisionDraft? = nil
         var reason: String? = nil
+        var riskId: String? = nil
+        var lessonId: String? = nil
+        var owner: DecisionAuthor? = nil
+        var status: RiskStatus? = nil
+        var riskDraft: RiskDraft? = nil
+        var lessonDraft: LessonDraft? = nil
+
+        private enum CodingKeys: String, CodingKey {
+            case kind, title, fields, tableId, rowId, expectedRevision, values, decisionId, draft, reason,
+                 riskId, lessonId, owner, status, lessonDraft
+        }
+        func encode(to encoder: Encoder) throws {
+            var wire = encoder.container(keyedBy:CodingKeys.self)
+            try wire.encode(kind,forKey:.kind)
+            try wire.encodeIfPresent(title,forKey:.title)
+            try wire.encodeIfPresent(fields,forKey:.fields)
+            try wire.encodeIfPresent(tableId,forKey:.tableId)
+            try wire.encodeIfPresent(rowId,forKey:.rowId)
+            try wire.encodeIfPresent(expectedRevision,forKey:.expectedRevision)
+            try wire.encodeIfPresent(values,forKey:.values)
+            try wire.encodeIfPresent(decisionId,forKey:.decisionId)
+            try wire.encodeIfPresent(reason,forKey:.reason)
+            try wire.encodeIfPresent(riskId,forKey:.riskId)
+            try wire.encodeIfPresent(lessonId,forKey:.lessonId)
+            try wire.encodeIfPresent(owner,forKey:.owner)
+            try wire.encodeIfPresent(status,forKey:.status)
+            if let riskDraft { try wire.encode(riskDraft,forKey:.draft) }
+            else if let lessonDraft, kind != "recordRiskOccurrence" { try wire.encode(lessonDraft,forKey:.draft) }
+            else {
+                try wire.encodeIfPresent(draft,forKey:.draft)
+                try wire.encodeIfPresent(lessonDraft,forKey:.lessonDraft)
+            }
+        }
     }
     struct Submit: Encodable {
         let scope: Scope
@@ -1199,6 +1381,7 @@ enum CrewdManagedDirectoryWire {
         let requestId: String
         let recordedAt: String
         let object: Object
+        let occurrence: Occurrence?
     }
     struct Lookup: Decodable {
         let status: String
@@ -1271,5 +1454,26 @@ enum CrewdManagedDirectoryWire {
             previous = number
         }
         return next == nil || (!ids.isEmpty && next == ids.last)
+    }
+}
+
+extension CrewdManagedDirectoryWire {
+    static func managedTime(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
+        if let date = formatter.date(from:value) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from:value)
+    }
+}
+
+extension CrewdManagedDirectoryWire.Risk {
+    var openForReview: Bool { status == .open || status == .mitigated }
+    func canTransition(to next: CrewdManagedDirectoryWire.RiskStatus) -> Bool {
+        if next == .closed { return status != .closed }
+        return (status == .open && next == .mitigated) || (status == .mitigated && next == .open)
+    }
+    func due(at now: Date) -> Bool {
+        openForReview && !frozen && (CrewdManagedDirectoryWire.managedTime(nextReviewAt).map { $0 <= now } ?? false)
     }
 }

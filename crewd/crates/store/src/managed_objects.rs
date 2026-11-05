@@ -81,6 +81,8 @@ pub(crate) fn source(kind: ObjectKind, id: &str) -> bool {
     id.strip_prefix(match kind {
         ObjectKind::Table => "managed-table:",
         ObjectKind::Decision => "managed-decision:",
+        ObjectKind::Lesson => "managed-lesson:",
+        ObjectKind::Risk => "managed-risk:",
         ObjectKind::CustomRow => "managed-row:",
         _ => return false,
     })
@@ -181,6 +183,8 @@ pub(crate) fn allocate(
     let tag = match kind {
         ObjectKind::Table => "managed-table",
         ObjectKind::Decision => "managed-decision",
+        ObjectKind::Lesson => "managed-lesson",
+        ObjectKind::Risk => "managed-risk",
         ObjectKind::CustomRow => "managed-row",
         _ => return Err(invalid("invalid managed object allocation kind")),
     };
@@ -242,14 +246,14 @@ pub fn receipt(
     crew: &str,
     principal: &str,
     request: &str,
-) -> Result<Option<([u8; 32], Receipt)>> {
+) -> Result<Option<([u8; 32], Receipt, bool)>> {
     let record = c.query_row(
-        "SELECT digest,result_json FROM managed_object_receipts WHERE crew_id=?1 AND principal=?2 AND request_id=?3",
+        "SELECT digest,result_json,member_confirmation FROM managed_object_receipts WHERE crew_id=?1 AND principal=?2 AND request_id=?3",
         params![crew,principal,request],
-        |r| Ok((r.get::<_,Vec<u8>>(0)?,r.get::<_,String>(1)?)),
+        |r| Ok((r.get::<_,Vec<u8>>(0)?,r.get::<_,String>(1)?,r.get::<_,bool>(2)?)),
     ).optional()?;
     record
-        .map(|(digest, raw)| {
+        .map(|(digest, raw, member_confirmation)| {
             let digest = digest
                 .try_into()
                 .map_err(|_| invalid("managed object receipt digest is invalid"))?;
@@ -258,20 +262,44 @@ pub fn receipt(
                 Object::Table { table } => &table.crew_id,
                 Object::Row { row } => &row.crew_id,
                 Object::Decision { decision } => &decision.crew_id,
+                Object::Risk { risk } => &risk.crew_id,
+                Object::Lesson { lesson } => &lesson.crew_id,
             };
             if receipt.crew_id != crew || receipt.request_id != request || actual_crew != crew {
                 return Err(invalid("managed object receipt scope mismatch"));
             }
-            Ok((digest, receipt))
+            match (&receipt.object, &receipt.occurrence) {
+                (Object::Lesson { lesson }, Some(effect)) if !member_confirmation
+                    && lesson.id == effect.lesson_id
+                    && lesson.revision == effect.lesson_revision
+                    && lesson.risk_id.as_ref() == Some(&effect.risk_id)
+                    && next_revision(&effect.original_risk_revision, &effect.result_risk_revision) => {}
+                (_, None) if !member_confirmation || matches!(&receipt.object, Object::Lesson { .. }) => {}
+                _ => return Err(invalid("managed object receipt effect mismatch")),
+            }
+            Ok((digest, receipt, member_confirmation))
         })
         .transpose()
 }
-pub fn record(c: &Connection, principal: &str, digest: &[u8; 32], receipt: &Receipt) -> Result<()> {
+fn next_revision(original: &str, result: &str) -> bool {
+    original.parse::<i64>().ok()
+        .filter(|n| *n > 0 && n.to_string() == original)
+        .and_then(|n| n.checked_add(1))
+        .is_some_and(|n| n.to_string() == result)
+}
+
+pub fn record(
+    c: &Connection,
+    principal: &str,
+    digest: &[u8; 32],
+    receipt: &Receipt,
+    member_confirmation: bool,
+) -> Result<()> {
     transaction(c)?;
     let result = serde_json::to_string(receipt)?;
     c.execute(
-        "INSERT INTO managed_object_receipts(crew_id,principal,request_id,digest,result_json) VALUES(?1,?2,?3,?4,?5)",
-        params![receipt.crew_id,principal,receipt.request_id,digest.as_slice(),result],
+        "INSERT INTO managed_object_receipts(crew_id,principal,request_id,digest,result_json,member_confirmation) VALUES(?1,?2,?3,?4,?5,?6)",
+        params![receipt.crew_id,principal,receipt.request_id,digest.as_slice(),result,member_confirmation],
     )?;
     Ok(())
 }

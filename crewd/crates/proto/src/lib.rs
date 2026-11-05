@@ -24,6 +24,7 @@ pub mod host;
 pub mod judgments;
 pub mod managed_objects;
 pub mod managed_objects_api;
+mod managed_risks_lessons;
 pub mod message_attribution;
 pub mod message_delivery;
 mod model;
@@ -203,6 +204,8 @@ pub mod methods {
         crate::managed_objects_api::TABLES,
         crate::managed_objects_api::ROWS,
         crate::managed_objects_api::DECISIONS,
+        crate::managed_objects_api::RISKS,
+        crate::managed_objects_api::LESSONS,
         crate::managed_objects_api::SUBMIT,
         crate::managed_objects_api::REQUEST_GET,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
@@ -738,6 +741,20 @@ pub fn api_schema() -> Value {
             m(
                 nullable(sub::<managed::DecisionsParams>(g)),
                 sub::<managed_objects::DecisionPage>(g),
+            ),
+        ),
+        (
+            managed::RISKS,
+            m(
+                nullable(sub::<managed::TablesParams>(g)),
+                sub::<managed_objects::RiskPage>(g),
+            ),
+        ),
+        (
+            managed::LESSONS,
+            m(
+                nullable(sub::<managed::TablesParams>(g)),
+                sub::<managed_objects::LessonPage>(g),
             ),
         ),
         (

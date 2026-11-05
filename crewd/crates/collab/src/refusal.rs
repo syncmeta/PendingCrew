@@ -30,6 +30,8 @@ refusal_codes! {
     ResourceRequestConflict = "resource.request_conflict" ["request"],
     ManagedRowChanged = "managed_object.row_changed" [],
     ManagedDecisionChanged = "managed_object.decision_changed" [],
+    ManagedRiskChanged = "managed_object.risk_changed" [],
+    ManagedLessonChanged = "managed_object.lesson_changed" [],
     CommandReceiptCapacity = "command.receipt_capacity" [],
     DocumentRevisionConflict = "document.revision_conflict" ["id"],
     DocumentDeleted = "document.deleted" ["id"],
