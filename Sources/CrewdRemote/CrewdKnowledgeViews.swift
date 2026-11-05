@@ -2354,6 +2354,7 @@ struct CrewdManagedDirectoryView: View {
         case tables, decisions, risks, lessons
         var riskLesson: Bool { self == .risks || self == .lessons }
     }
+    @State private var showArtifacts=false
     @State private var section: SectionMode = .tables
     @State private var shownSection: SectionMode?
     @State private var scope: Store.BrowseScope?
@@ -2540,6 +2541,9 @@ struct CrewdManagedDirectoryView: View {
         .onChange(of:editor?.id) { _,_ in scheduleInvalidation() }
         .onChange(of:busy) { _,_ in scheduleInvalidation() }
         .onDisappear { ticket = UUID(); editor = nil; refreshWake = nil; queuedInvalidation = nil }
+        .sheet(isPresented:$showArtifacts) {
+            CrewdArtifactPanel(workspace:workspace,current:{showArtifacts && presentsCurrentScope})
+        }
         .sheet(item: $editor) { target in
             Editor(mode:target.mode,scope:target.scope,heading:target.title, allowRiskReferences:riskLessonsAvailable, riskOwners:workspace.sessions,
                    current: { editor?.id == target.id && route == target.route && scope == target.scope &&
@@ -2570,6 +2574,9 @@ struct CrewdManagedDirectoryView: View {
         VStack(alignment:.leading,spacing:6) {
             HStack {
                 Text("组织目录").font(.headline)
+                if client.capabilities.contains(CrewdArtifactWire.capability) {
+                    Button("产物目录",systemImage:"link") {showArtifacts=true}.disabled(!presentsCurrentScope)
+                }
                 if busy { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("刷新",systemImage:"arrow.clockwise") {
@@ -2631,6 +2638,7 @@ struct CrewdManagedDirectoryView: View {
     }
     private func records(_ selected: Wire.Table) -> some View {
         VStack(alignment:.leading,spacing:10) {
+            artifactSubject(.table,selected.id,selected.crewId,selected.frozen)
             Button("返回组织目录",systemImage:"chevron.backward") {
                 let captured = route
                 Task { await reload(captured, target: nil, reset: false) }
@@ -2654,6 +2662,7 @@ struct CrewdManagedDirectoryView: View {
                         }
                     }
                     messageSource(row.id)
+                    artifactSubject(.row,row.id,row.crewId,row.frozen)
                     ForEach(selected.fields.indices,id:\.self) { index in
                         LabeledContent(selected.fields[index].name) {
                             Text(row.values[index].display).textSelection(.enabled)
@@ -2701,6 +2710,7 @@ struct CrewdManagedDirectoryView: View {
             Text(item.id + " · " + item.status.label + " · " + owner(item.crewId) + (item.frozen ? " · 已归档，只读" : ""))
                 .font(.caption).foregroundStyle(.secondary)
             messageSource(item.id)
+            artifactSubject(.decision,item.id,item.crewId,item.frozen)
             LabeledContent("决定者",value:author(item.author))
             LabeledContent("记录时间",value:item.createdAt)
             if let decisionSource, let capture=decisionSource.capture {
@@ -2736,6 +2746,9 @@ struct CrewdManagedDirectoryView: View {
                 }.disabled(busy || blocked(item.id))
             }
         }
+    }
+    @ViewBuilder private func artifactSubject(_ kind:CrewdArtifactWire.SubjectKind,_ id:String,_ crew:String,_ frozen:Bool)->some View {
+        CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:kind,id:id),crew:crew,frozen:frozen,current:{presentsCurrentScope})
     }
     @ViewBuilder private func messageSource(_ id: String) -> some View {
         if let scope, store.supportsMessageSources {
@@ -2832,6 +2845,7 @@ struct CrewdManagedDirectoryView: View {
     }
     private func riskDetail(_ risk: Wire.Risk) -> some View {
         VStack(alignment:.leading,spacing:10) {
+            artifactSubject(.risk,risk.id,risk.crewId,risk.frozen)
             Text(risk.draft.summary).font(.title3).textSelection(.enabled)
             Text(risk.id + " · " + risk.status.label + " · " + owner(risk.crewId) +
                  (risk.frozen ? " · 已归档，只读":"")).font(.caption).foregroundStyle(.secondary)
@@ -2874,6 +2888,7 @@ struct CrewdManagedDirectoryView: View {
     }
     private func lessonDetail(_ lesson: Wire.Lesson) -> some View {
         VStack(alignment:.leading,spacing:10) {
+            artifactSubject(.lesson,lesson.id,lesson.crewId,lesson.frozen)
             Text(lesson.draft.lesson).font(.title3).textSelection(.enabled)
             Text(lesson.id + " · " + lesson.status.label + " · " + owner(lesson.crewId) +
                  (lesson.frozen ? " · 已归档，只读":"")).font(.caption).foregroundStyle(.secondary)
@@ -3803,4 +3818,382 @@ private struct CrewdManagedMessageHistoryView:View {
             } catch {if current(){problem=error.localizedDescription}}
         }
     }
+}
+
+/// One normal route for both work evidence and managed-object associations.
+struct CrewdArtifactSubjectEntry:View {
+    @ObservedObject var workspace:CrewdWorkspace
+    let subject:CrewdArtifactWire.Subject
+    let crew:String
+    var frozen=false
+    var current:@MainActor ()->Bool = {true}
+    @State private var showing=false
+    var body:some View {
+        if workspace.client.capabilities.contains(CrewdArtifactWire.capability) {
+            Button("关联产物",systemImage:"link") {showing=true}.disabled(!current())
+                .sheet(isPresented:$showing) {
+                    CrewdArtifactPanel(workspace:workspace,subject:subject,subjectCrew:crew,frozen:frozen,
+                        current:{showing && current()})
+                }
+        }
+    }
+}
+
+private struct CrewdArtifactPanel:View {
+    typealias Wire=CrewdArtifactWire
+    typealias Store=CrewdArtifactStore
+    @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject private var client:CrewdClient
+    @ObservedObject private var store:Store
+    var subject:Wire.Subject?=nil
+    var subjectCrew:String?=nil
+    var frozen=false
+    let current:@MainActor ()->Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var visible=true
+    @State private var scope:Store.Scope?
+    @State private var artifacts:[Wire.Artifact]=[]
+    @State private var nextArtifact:Wire.Reference?
+    @State private var edges:[Wire.Edge]=[]
+    @State private var nextEdge:String?
+    @State private var selected:Wire.Reference?
+    @State private var detail:Wire.Artifact?
+    @State private var pending:[Store.Pending]=[]
+    @State private var busy=false
+    @State private var loaded=false
+    @State private var problem:String?
+    @State private var notice:String?
+    @State private var ticket=UUID()
+    @State private var refreshQueued=false
+    @State private var form:FormTarget?
+    @State private var unlink:Wire.Edge?
+    @State private var inspected:Wire.Edge?
+    private struct FormTarget:Identifiable {let id=UUID();var reference:Wire.Reference?=nil}
+    private struct Route:Hashable {let connection:UUID;let observation:UUID;let crew:String;let authority:UUID;let supported:Bool;let ready:Bool}
+    init(workspace:CrewdWorkspace,subject:Wire.Subject?=nil,subjectCrew:String?=nil,frozen:Bool=false,current:@escaping @MainActor ()->Bool) {
+        self.workspace=workspace;self.client=workspace.client;self.store=workspace.artifacts
+        self.subject=subject;self.subjectCrew=subjectCrew;self.frozen=frozen;self.current=current
+    }
+    private var route:Route {.init(connection:client.connectionEpoch,observation:workspace.observationGeneration,crew:workspace.crewID,authority:workspace.authorityRecordID,supported:store.supported,ready:client.readyForWork && workspace.originalJournalReady)}
+    private var allowed:Bool {visible && current() && client.readyForWork && store.supported}
+    private var crewFrozen:Bool {workspace.crews.first(where:{$0["id"] == .string(workspace.crewID)})?["removedAt"].string != nil}
+    private var writable:Bool {
+        let ledger=subject?.kind == .work || subject?.kind == .requirement
+        return allowed && !crewFrozen && (ledger || !frozen)
+    }
+    var body:some View {
+        NavigationStack {
+            ScrollView {content.padding()}
+                .navigationTitle(selected==nil ? (subject.map{$0.id+" 的产物"} ?? "组织产物目录"):"产物详情")
+                .toolbar {
+                    ToolbarItem(placement:.cancellationAction) {Button("关闭") {visible=false;dismiss()}}
+                    ToolbarItem(placement:.primaryAction) {Button("刷新") {Task {await load(reset:true)}}.disabled(busy || !allowed)}
+                }
+        }
+        #if os(macOS)
+        .frame(minWidth:540,minHeight:480)
+        #endif
+        .task(id:route) {clear();await load(reset:true)}
+        .onChange(of:client.authorityBinding) {_,_ in clear();Task {await load(reset:true)}}
+        .onChange(of:store.invalidation) {_,_ in refreshQueued=true;refreshIfReady()}
+        .onChange(of:busy) {_,_ in refreshIfReady()}
+        .onChange(of:form?.id) {_,_ in refreshIfReady()}
+        .onDisappear {visible=false;ticket=UUID();artifacts=[];edges=[];detail=nil}
+        .sheet(item:$form) {target in
+            if let scope {
+                CrewdArtifactEditor(store:store,scope:scope,subject:subject,existing:target.reference,current:{allowed && store.owns(scope) && writable && form?.id==target.id},
+                    onSaved:{result in
+                        guard allowed,form?.id==target.id else {return}
+                        notice=receiptText(result);form=nil;Task {await load(reset:true)}
+                    },onAttempt:{refreshPending(scope)})
+            }
+        }
+        .sheet(item:$inspected) {edge in
+            if let scope {CrewdArtifactSubjectInspector(workspace:workspace,store:store,scope:scope,edge:edge,current:{allowed && store.owns(scope) && inspected?.id==edge.id})}
+        }
+        .confirmationDialog("移除此手工产物关联？",isPresented:Binding(get:{unlink != nil},set:{if !$0 {unlink=nil}})) {
+            if let edge=unlink {Button("确认移除关联",role:.destructive) {unlink=nil;remove(edge)}}
+        } message: {Text("只移除这条手工关联，原工作、凭据文字和其他机组关联保留。")}
+    }
+    @ViewBuilder private var content:some View {
+        VStack(alignment:.leading,spacing:12) {
+            Text("未核验：产物只是指针，系统未检查提交、文件、测试或链接。登记内容由组织成员可读。")
+                .font(.caption).foregroundStyle(.secondary)
+            if let notice {Text(notice).textSelection(.enabled)}
+            if let problem {Text(problem).foregroundStyle(.orange).textSelection(.enabled)}
+            if allowed,let scope,store.owns(scope) {
+                recovery(scope)
+                if selected != nil {
+                    Button("返回关联列表",systemImage:"chevron.backward") {self.selected=nil;Task {await load(reset:true)}}.disabled(busy)
+                    if let detail {pointer(detail.reference,openExternal:true);Text("首次记录："+detail.createdAt).font(.caption)}
+                    if let selected {
+                        Button(subject==nil ? "将此产物关联到对象":"关联到当前对象",systemImage:"link.badge.plus") {form = .init(reference:selected)}
+                            .disabled(!writable || busy)
+                    }
+                    Text("反向关联").font(.headline)
+                    edgeRows(scope,backlinks:true)
+                } else {
+                    Button(subject==nil ? "登记产物":"关联新的产物",systemImage:"plus") {form = .init()}.disabled(!writable || busy)
+                    if subject?.kind == .lesson {Text("可以关联证据，或将文件产物记为适用范围；原教训文字保持原样。").font(.caption)}
+                    if !writable {Text("当前范围只读。手工关联需具备当前机组及原对象的对应权限。").font(.caption).foregroundStyle(.secondary)}
+                    if subject != nil {edgeRows(scope,backlinks:false)}
+                    else {
+                        ForEach(artifacts) {item in
+                            Button {selected=item.reference;Task {await load(reset:true)}} label:{pointer(item.reference)}.buttonStyle(.plain)
+                        }
+                        if let nextArtifact {Button("更多产物") {Task {await load(reset:false,afterArtifact:nextArtifact)}}.disabled(busy)}
+                        if loaded && artifacts.isEmpty {Text("本次读取未发现已登记产物。")}
+                    }
+                }
+                if busy {ProgressView().controlSize(.small)}
+            } else {Text("原连接或资料范围已改变，请重新打开产物。")}
+        }
+    }
+    private func pointer(_ reference:Wire.Reference,openExternal:Bool=false)->some View {
+        VStack(alignment:.leading,spacing:4) {
+            Text(reference.key).textSelection(.enabled)
+            Text(reference.location+" · 未核验").font(.caption).foregroundStyle(.secondary)
+            if openExternal,reference.key.hasPrefix("url:"),let url=URL(string:String(reference.key.dropFirst(4))),["https","http"].contains(url.scheme ?? "") {
+                Link("打开外部链接",destination:url).font(.caption)
+            }
+        }.frame(maxWidth:.infinity,alignment:.leading).padding(8).background(.quaternary,in:RoundedRectangle(cornerRadius:8))
+    }
+    private func edgeRows(_ scope:Store.Scope,backlinks:Bool)->some View {
+        VStack(alignment:.leading,spacing:10) {
+            ForEach(edges) {edge in
+                VStack(alignment:.leading,spacing:6) {
+                    if backlinks {Button(edge.subject.kind.title+" "+edge.subject.id) {inspected=edge}.disabled(busy)}
+                    else {Button {selected=edge.reference;Task {await load(reset:true)}} label:{pointer(edge.reference)}.buttonStyle(.plain)}
+                    Text(edge.relation.title+" · "+edge.origin.title+" · 归属机组 "+edge.crewId).font(.caption).foregroundStyle(.secondary)
+                    if !backlinks && edge.origin.manual && writable && edge.crewId.utf8.elementsEqual(scope.origin.crew.utf8) {
+                        Button("移除此手工关联",role:.destructive) {unlink=edge}.disabled(busy)
+                    }
+                }
+            }
+            if let nextEdge {Button("更多关联") {Task {await load(reset:false,afterEdge:nextEdge)}}.disabled(busy)}
+            if loaded && edges.isEmpty {Text("本次读取未发现关联。")}
+        }
+    }
+    private func recovery(_ scope:Store.Scope)->some View {
+        VStack(alignment:.leading,spacing:6) {
+            ForEach(pending) {item in
+                Text("原请求待核对 · "+item.witness.reference.key).font(.caption)
+                Text(item.witness.requestId).font(.caption).textSelection(.enabled)
+                DisclosureGroup("原始填写内容") {
+                    let change=item.witness.change
+                    if let input=change.input {
+                        Text(input.kind.title+"："+input.value).textSelection(.enabled)
+                        Text("填写的仓库标识："+(input.repository ?? "未填写")).textSelection(.enabled)
+                    }
+                    if let subject=change.subject {Text(subject.kind.title+" "+subject.id).textSelection(.enabled)}
+                    if let relation=change.relation {Text(relation.title)}
+                    if let edge=change.expectedEdgeId {Text("原手工关联 "+edge).textSelection(.enabled)}
+                    Text("规范引用："+item.witness.reference.key).textSelection(.enabled)
+                    Text(item.witness.reference.location).font(.caption)
+                }
+                Button("查询原回执") {recover(item,scope:scope)}.disabled(busy)
+            }
+        }
+    }
+    private func clear() {ticket=UUID();scope=nil;detail=nil;artifacts=[];edges=[];nextArtifact=nil;nextEdge=nil;pending=[];loaded=false;busy=false;notice=nil;problem=nil}
+    private func refreshIfReady() {guard refreshQueued,!busy,form==nil,allowed else {return};refreshQueued=false;Task {await load(reset:true)}}
+    private func refreshPending(_ scope:Store.Scope) {do {pending=try store.pending(scope)} catch {if allowed {problem=error.localizedDescription}}}
+    private func load(reset:Bool,afterArtifact:Wire.Reference?=nil,afterEdge:String?=nil) async {
+        guard allowed,!busy else {return};busy=true;let request=UUID();ticket=request
+        let captured=route,reference=selected
+        func valid()->Bool {allowed && route==captured && ticket==request && selected==reference}
+        defer {if ticket==request {busy=false}}
+        do {
+            let active=try await store.scope(stillCurrent:valid)
+            if reset {artifacts=[];edges=[];detail=nil;loaded=false;nextArtifact=nil;nextEdge=nil}
+            if let reference {
+                let item=try await store.get(reference,scope:active,stillCurrent:valid)
+                let page=try await store.edges(active,reference:reference,after:afterEdge,stillCurrent:valid)
+                guard valid(),Set(edges.map(\.id)).isDisjoint(with:page.items.map(\.id)) else {throw Store.Problem.invalid}
+                detail=item;edges+=page.items;nextEdge=page.nextAfter
+            } else if let subject {
+                let page=try await store.edges(active,subject:subject,after:afterEdge,stillCurrent:valid)
+                guard valid(),Set(edges.map(\.id)).isDisjoint(with:page.items.map(\.id)) else {throw Store.Problem.invalid}
+                edges+=page.items;nextEdge=page.nextAfter
+            } else {
+                let page=try await store.list(active,after:afterArtifact,stillCurrent:valid)
+                guard valid(),Set(artifacts.map(\.id)).isDisjoint(with:page.items.map(\.id)) else {throw Store.Problem.invalid}
+                artifacts+=page.items;nextArtifact=page.nextAfter
+            }
+            guard valid() else {return};scope=active;loaded=true;problem=nil;refreshPending(active)
+        } catch {if valid() {artifacts=[];edges=[];detail=nil;nextArtifact=nil;nextEdge=nil;loaded=false;problem=error.localizedDescription}}
+    }
+    private func receiptText(_ observed:Store.Observation)->String {
+        let r=observed.receipt,e=r.effect
+        let action:String
+        switch e.kind {case "registered":action=e.claimAdded==true ? "已登记产物":"本机组已登记此产物";case "linked":action=e.added==true ? "已建立关联":"该关联已存在";default:action="原手工关联已移除"}
+        return (observed.historical ? "原请求历史回执（不代表当前状态）：":"原请求已确认：")+action+" · "+r.artifact.reference.key+" · 原请求 "+r.requestId
+    }
+    private func recover(_ pending:Store.Pending,scope:Store.Scope) {
+        guard allowed,!busy else {return};busy=true
+        Task {defer {busy=false}
+            do {
+                let result=try await store.lookup(pending,scope:scope,stillCurrent:{allowed})
+                guard allowed else {return};notice=result.map(receiptText) ?? "尚无可确认的原结果。原请求保留，不会重新提交。";refreshPending(scope)
+            } catch {if allowed {problem=error.localizedDescription}}
+        }
+    }
+    private func remove(_ edge:Wire.Edge) {
+        guard writable,!busy,edge.origin.manual,let scope else {return};busy=true
+        Task {defer {busy=false}
+            do {
+                let result=try await store.submit(.init(kind:"unlink",subject:edge.subject,relation:edge.relation,reference:edge.reference,expectedEdgeId:edge.id),scope:scope,stillCurrent:{allowed && writable})
+                guard allowed else {return};notice=receiptText(result);refreshPending(scope);refreshQueued=true
+            } catch {if allowed {problem=error.localizedDescription;refreshPending(scope)}}
+        }
+    }
+}
+
+private struct CrewdArtifactEditor:View {
+    typealias Wire=CrewdArtifactWire
+    @ObservedObject var store:CrewdArtifactStore
+    let scope:CrewdArtifactStore.Scope
+    let subject:Wire.Subject?
+    var existing:Wire.Reference?=nil
+    let current:@MainActor ()->Bool
+    let onSaved:@MainActor (CrewdArtifactStore.Observation)->Void
+    let onAttempt:@MainActor ()->Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var kind=Wire.InputKind.commit
+    @State private var value=""
+    @State private var repository=""
+    @State private var targetKind=Wire.SubjectKind.work
+    @State private var targetID=""
+    @State private var relation=Wire.Relation.evidence
+    @State private var canonical:Wire.Reference?
+    @State private var previewed:String?
+    @State private var busy=false
+    @State private var stopped=false
+    @State private var problem:String?
+    private var input:Wire.Input {.init(kind:kind,value:value,repository:repository.isEmpty ? nil:repository)}
+    private var effectiveSubject:Wire.Subject? {subject ?? (existing==nil ? nil:.init(kind:targetKind,id:targetID))}
+    private var relations:[Wire.Relation] {
+        let allowed=effectiveSubject?.relations ?? []
+        if let existing,!existing.key.hasPrefix("file:") {return allowed.filter{$0 != .appliesTo}}
+        return allowed
+    }
+    private var draft:String {
+        if let existing {return existing.id+":"+(effectiveSubject?.kind.rawValue ?? "")+":"+(effectiveSubject?.id ?? "")+":"+relation.rawValue}
+        return (try? Wire.bytes(input).base64EncodedString()) ?? ""
+    }
+    var body:some View {
+        NavigationStack {
+            Form {
+                Text("登记组织可读的未核验指针。不会扫描仓库、读取文件、运行测试或访问外链。")
+                if let existing {
+                    Text(existing.key).textSelection(.enabled)
+                    Text(existing.location+" · 已有指针，不另建产物").foregroundStyle(.secondary)
+                    if subject==nil {
+                        Picker("关联对象类型",selection:$targetKind) {ForEach(Wire.SubjectKind.allCases) {Text($0.title).tag($0)}}
+                        TextField("对象的全局编号",text:$targetID)
+                        Text("关联归属当前机组；后台会核对对象的当前编辑权限。").font(.caption)
+                    }
+                }
+                if let effectiveSubject {Text(effectiveSubject.kind.title+" "+effectiveSubject.id);Picker("关联方式",selection:$relation) {ForEach(relations) {Text($0.title).tag($0)}}}
+                if existing==nil {
+                Picker("产物类型",selection:$kind) {ForEach(Wire.InputKind.allCases) {Text($0.title).tag($0)}}.disabled(relation == .appliesTo && subject != nil)
+                TextField("SHA、绝对链接、仓库相对路径或测试名",text:$value,axis:.vertical)
+                TextField("明确的仓库标识（可选）",text:$repository)
+                Text("仓库标识是你明确填写的身份，不是本机路径，也不表示已核验。缺少归属的短提交号、文件和测试只记在本机组未归属范围。").font(.caption).foregroundStyle(.secondary)
+                }
+                Button(existing==nil ? "核对规范引用":"核对已有产物") {preview()}.disabled(busy || !current() || stopped)
+                if let canonical {Text(canonical.key).textSelection(.enabled);Text(canonical.location+" · 未核验").foregroundStyle(.secondary)}
+                if let problem {Text(problem).foregroundStyle(.orange).textSelection(.enabled)}
+                if !current() {Text("原连接或范围已改变。输入保留，请重新打开后核对。").foregroundStyle(.secondary)}
+            }.disabled(busy || stopped)
+                .navigationTitle(subject==nil ? "登记产物":"关联产物")
+                .toolbar {
+                    ToolbarItem(placement:.cancellationAction) {Button(stopped ? "关闭":"取消") {dismiss()}.disabled(busy && current())}
+                    ToolbarItem(placement:.confirmationAction) {Button(subject==nil ? "确认登记":"确认关联") {save()}.disabled(busy || stopped || !current() || canonical==nil || previewed != draft || (existing != nil && effectiveSubject?.valid != true))}
+                }
+        }
+        #if os(macOS)
+        .frame(minWidth:460,minHeight:390)
+        #endif
+        .task {if let first=effectiveSubject?.relations.first {relation=first}}
+        .onChange(of:targetKind) {_,new in relation=Wire.Subject(kind:new,id:targetID).relations.first ?? .relates}
+        .onChange(of:draft) {_,_ in canonical=nil;previewed=nil}
+        .onChange(of:relation) {_,new in canonical=nil;previewed=nil;if new == .appliesTo {kind = .file}}
+        .interactiveDismissDisabled(busy && current())
+    }
+    private func preview() {
+        guard current(),!busy else {return};busy=true;problem=nil;let submitted=input,key=draft
+        Task {defer {busy=false}
+            do {
+                let ref:Wire.Reference
+                if let existing {
+                    guard effectiveSubject?.valid==true else {throw CrewdArtifactStore.Problem.invalid}
+                    ref=try await store.get(existing,scope:scope,stillCurrent:{current() && draft==key}).reference
+                } else {ref=try await store.preview(submitted,scope:scope,stillCurrent:{current() && draft==key})}
+                guard current(),draft==key else {return}
+                guard relation != .appliesTo || ref.key.hasPrefix("file:") else {throw CrewdArtifactStore.Problem.invalid}
+                canonical=ref;previewed=key
+            } catch {if current() {problem=error.localizedDescription}}
+        }
+    }
+    private func save() {
+        guard current(),!busy,!stopped,canonical != nil,previewed==draft else {return};busy=true;problem=nil
+        let change:Wire.Change
+        if let existing,let effectiveSubject {change = .init(kind:"linkExisting",subject:effectiveSubject,relation:relation,reference:existing)}
+        else {change=subject.map{Wire.Change(kind:"link",input:input,subject:$0,relation:relation)} ?? .init(kind:"register",input:input)}
+        Task {defer {busy=false;onAttempt()}
+            do {let result=try await store.submit(change,scope:scope,stillCurrent:current);guard current() else {return};stopped=true;onSaved(result)}
+            catch {if current() {problem=error.localizedDescription;stopped=true}}
+        }
+    }
+}
+
+private struct CrewdArtifactSubjectInspector:View {
+    @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject var store:CrewdArtifactStore
+    let scope:CrewdArtifactStore.Scope
+    let edge:CrewdArtifactWire.Edge
+    let current:@MainActor ()->Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var value:CrewdValue?
+    @State private var problem:String?
+    var body:some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment:.leading,spacing:12) {
+                    if current() {
+                        Text(edge.subject.kind.title+" "+edge.subject.id).font(.headline)
+                        Text("关联归属机组："+edge.crewId).font(.caption)
+                        if let value {facts(value)}
+                        else if let problem {Text(problem).foregroundStyle(.orange)}
+                        else {Text("正在核对当前对象…")}
+                    } else {Text("原连接或范围已改变，请重新打开关联对象。")}
+                }.padding()
+            }.navigationTitle("关联对象").toolbar {ToolbarItem(placement:.cancellationAction) {Button("关闭") {dismiss()}}}
+        }
+        #if os(macOS)
+        .frame(minWidth:460,minHeight:350)
+        #endif
+        .task(id:edge.id) {
+            do {let result=try await store.readSubject(edge,scope:scope,stillCurrent:current);if current() {value=result}}
+            catch {if current() {value=nil;problem=error.localizedDescription}}
+        }
+        .onChange(of:store.invalidation) {_,_ in value=nil;problem="对象已变化，请重新打开核对。"}
+    }
+    @ViewBuilder private func facts(_ raw:CrewdValue)->some View {
+        let kind=edge.subject.kind
+        let item=(kind == .work || kind == .requirement) ? raw:raw[kind.rawValue]
+        text("对象当前归属",item["crewId"])
+        if kind == .work {text("计划",item["title"]);text("状态",item["status"]);text("目标",item["goal"]);text("验收",item["acceptance"]);text("关闭凭据",item["closure"]["evidence"]["value"])}
+        else if kind == .requirement {text("需求",item["text"]);text("状态",item["status"])}
+        else if kind == .decision {text("问题",item["draft"]["question"]);text("选择",item["draft"]["choice"]);text("理由",item["draft"]["rationale"]);text("状态",item["status"])}
+        else if kind == .risk {text("风险",item["draft"]["summary"]);text("缓解办法",item["draft"]["mitigation"]);text("状态",item["status"])}
+        else if kind == .lesson {text("教训",item["draft"]["lesson"]);text("发生了什么",item["draft"]["happened"]);text("状态",item["status"])}
+        else if kind == .table {text("组织表",item["title"]);ForEach(item["fields"].array.indices,id:\.self) {i in text("字段",item["fields"].array[i]["name"])}}
+        else if let row=try? CrewdKnowledgeStore.decode(item,CrewdManagedDirectoryWire.Row.self) {Text("组织表 "+row.tableId);ForEach(row.values.indices,id:\.self) {i in Text("字段 \(i+1)："+row.values[i].display).textSelection(.enabled)}}
+        if kind != .work && kind != .requirement,workspace.managedDirectory.supportsMessageSources {
+            CrewdManagedMessageSourceView(workspace:workspace,store:workspace.managedDirectory,scope:scope,objectID:edge.subject.id,current:current)
+        }
+    }
+    @ViewBuilder private func text(_ label:String,_ value:CrewdValue)->some View {if let text=value.string,!text.isEmpty {LabeledContent(label) {Text(text).textSelection(.enabled)}}}
 }

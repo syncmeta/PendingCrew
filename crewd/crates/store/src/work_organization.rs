@@ -452,6 +452,7 @@ pub fn save(conn: &Connection, state: &BookState, events: &[Event], now: &str) -
             params![seq, crew, serde_json::to_string(event)?],
         )?;
         crate::notifications::enqueue_work(conn, &crew, event)?;
+        crate::managed_artifacts::capture_done(conn, &crew, event, now)?;
     }
     if conn.execute(
         "UPDATE organization_work_book SET state=?1,updated_at=?2 WHERE singleton=1",

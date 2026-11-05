@@ -987,6 +987,9 @@ impl Principal {
     }
 }
 fn allowed_method(method: &str) -> bool {
+    if crewd_proto::managed_artifacts::METHODS.contains(&method) {
+        return true;
+    }
     if crewd_proto::managed_objects_api::METHODS.contains(&method) {
         return true;
     }

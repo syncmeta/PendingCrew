@@ -1568,6 +1568,186 @@ async fn paired_human_manual_patrol_has_original_receipt_and_scoped_progress_aft
 }
 
 #[tokio::test]
+async fn paired_artifact_natural_keys_keep_original_receipts_and_require_live_grants() {
+    use crewd_proto::managed_artifacts::*;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert!(hello["capabilities"].as_array().unwrap().iter().any(|cap| cap == CAPABILITY));
+    let crew = remote.call("crew.create", json!({
+        "title":"Artifact owner","workingDirectory":dir.path()
+    })).await["id"].clone();
+    let other = remote.call("crew.create", json!({
+        "title":"Independent claimant","workingDirectory":dir.path()
+    })).await["id"].clone();
+    let scope = remote.call("managedObject.scope", json!({})).await;
+    let full = json!({"kind":"commit","value":"A".repeat(40),"repository":null});
+    let reference = remote.call(PREVIEW, json!({"crewId":crew,"input":full})).await;
+    assert_eq!(reference, json!({"namespace":{"kind":"global"},"key":format!("commit:{}", "a".repeat(40))}));
+    let unassigned = remote.call(PREVIEW, json!({
+        "crewId":crew,"input":{"kind":"file","value":"Sources/Result.swift","repository":null}
+    })).await;
+    assert_eq!(unassigned, json!({"namespace":{"kind":"unassigned","crewId":crew},"key":"file:Sources/Result.swift"}));
+    let mut repository_refs = Vec::new();
+    for repository in ["repo-a", "repo-b"] {
+        let item = remote.call(PREVIEW, json!({
+            "crewId":crew,"input":{"kind":"file","value":"Sources/Result.swift","repository":repository}
+        })).await;
+        assert_eq!(item["namespace"], json!({"kind":"repository","id":repository}));
+        repository_refs.push(item);
+    }
+    assert_ne!(repository_refs[0], repository_refs[1]);
+
+    let register = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+                          "change":{"kind":"register","input":full}});
+    let registered = remote.call(SUBMIT, register.clone()).await;
+    assert_eq!(registered["change"], register["change"]);
+    assert_eq!(registered["artifact"]["reference"], reference);
+    assert_eq!(registered["artifact"]["verification"], "unverified");
+    assert_eq!(registered["effect"], json!({"kind":"registered","created":true,"claimAdded":true}));
+    assert_eq!(remote.call(SUBMIT, register.clone()).await, registered);
+    let register_lookup = json!({"scope":scope,"crewId":crew,"requestId":register["requestId"]});
+    assert_eq!(remote.call(REQUEST_GET, register_lookup.clone()).await, json!({"status":"known","receipt":registered}));
+    assert_eq!(local(&mut running.owner, REQUEST_GET, register_lookup.clone()).await, json!({"status":"notFound"}));
+    let mut second_claim = register.clone();
+    second_claim["crewId"] = other.clone();
+    second_claim["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    let claimed = remote.call(SUBMIT, second_claim).await;
+    assert_eq!(claimed["artifact"], registered["artifact"]);
+    assert_eq!(claimed["effect"], json!({"kind":"registered","created":false,"claimAdded":true}));
+    for (index, kind) in ["pullRequest", "link"].into_iter().enumerate() {
+        let pr = remote.call(SUBMIT, json!({
+            "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"register","input":{"kind":kind,"value":"https://Example.test/pull/7","repository":null}}
+        })).await;
+        assert_eq!(pr["artifact"]["reference"], json!({"namespace":{"kind":"global"},"key":"url:https://example.test/pull/7"}));
+        assert_eq!(pr["effect"]["created"], index == 0);
+    }
+    let decision = remote.call("managedObject.submit", json!({
+        "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"recordDecision","draft":{"question":"How to preserve the artifact?",
+            "choice":"Link the original","rationale":"Explicit fixture","about":[{"kind":"crew","id":crew}]}}
+    })).await["object"].clone();
+    let subject = json!({"kind":"decision","id":decision["decision"]["id"]});
+    let link = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+                      "change":{"kind":"link","input":full,"subject":subject,"relation":"relates"}});
+    let linked = remote.call(SUBMIT, link.clone()).await;
+    assert_eq!(linked["change"], link["change"]);
+    assert_eq!(linked["effect"]["added"], true);
+    let edge = linked["effect"]["edge"].clone();
+    assert_eq!(edge["crewId"], crew);
+    assert_eq!(edge["subject"], subject);
+    assert_eq!(edge["origin"], json!({"kind":"manual","actor":{"kind":"human"}}));
+    assert_eq!(remote.call(GET, json!({"reference":reference})).await, registered["artifact"]);
+    assert_eq!(remote.call(BACKLINKS, json!({"reference":reference})).await,
+               json!({"items":[edge],"nextAfter":null}));
+    assert_eq!(remote.call(SUBJECT, json!({"subject":subject})).await,
+               json!({"items":[edge],"nextAfter":null}));
+    assert_eq!(remote.call("managedObject.get", json!({"id":decision["decision"]["id"]})).await, decision);
+    let link_lookup = json!({"scope":scope,"crewId":crew,"requestId":link["requestId"]});
+    let unlink = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"unlink","reference":reference,"subject":subject,"relation":"relates","expectedEdgeId":edge["id"]}});
+    let mut stale_edge = unlink.clone();
+    stale_edge["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    stale_edge["change"]["expectedEdgeId"] = json!(i64::MAX.to_string());
+    let stale_result = remote.frame(SUBMIT, stale_edge.clone()).await.unwrap();
+    assert_eq!(stale_result["error"]["code"], crewd_proto::RpcError::CONFLICT);
+    assert_eq!(stale_result["error"]["data"]["refusal"], "artifact.edge_changed");
+    assert_eq!(remote.call(REQUEST_GET, json!({"scope":scope,"crewId":crew,"requestId":stale_edge["requestId"]})).await,
+               json!({"status":"notFound"}));
+    let unlinked = remote.call(SUBMIT, unlink.clone()).await;
+    assert_eq!(unlinked["effect"], json!({"kind":"unlinked","edgeId":edge["id"]}));
+    assert_eq!(remote.call(SUBMIT, unlink.clone()).await, unlinked);
+    assert_eq!(remote.call(BACKLINKS, json!({"reference":reference})).await,
+               json!({"items":[],"nextAfter":null}));
+    assert_eq!(remote.call(REQUEST_GET, link_lookup.clone()).await,
+               json!({"status":"known","receipt":linked}), "later unlink cannot rewrite original link receipt");
+    let unpinned = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"link","input":{"kind":"link","value":"https://example.test/unpinned","repository":null},
+                  "subject":subject,"relation":"relates"}});
+    let transient = remote.call(SUBMIT, unpinned.clone()).await;
+    let transient_ref = transient["artifact"]["reference"].clone();
+    let transient_edge = &transient["effect"]["edge"];
+    let remove_transient = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"unlink","reference":transient_ref,"subject":subject,
+                  "relation":"relates","expectedEdgeId":transient_edge["id"]}});
+    let removed_transient = remote.call(SUBMIT, remove_transient).await;
+    assert_eq!(removed_transient["artifact"], transient["artifact"]);
+    let gone = remote.frame(GET, json!({"reference":transient_ref})).await.unwrap();
+    assert_eq!(gone["error"]["code"], crewd_proto::RpcError::NOT_FOUND);
+    assert_eq!(remote.call(REQUEST_GET, json!({"scope":scope,"crewId":crew,"requestId":unpinned["requestId"]})).await,
+               json!({"status":"known","receipt":transient}), "anchor cleanup must preserve the exact original receipt");
+    let listed = remote.call(LIST, json!({})).await;
+    assert_eq!(listed["items"].as_array().unwrap().len(), 2);
+    drop(remote);
+    stopped(running).await;
+
+    let mut running = service(dir.path()).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let current = remote.call("system.hello", json!({})).await;
+    assert_ne!(current["runtimeIdentity"]["runtimeBindingId"], hello["runtimeIdentity"]["runtimeBindingId"]);
+    assert_eq!(remote.call(REQUEST_GET, register_lookup.clone()).await, json!({"status":"known","receipt":registered}));
+    assert_eq!(remote.call(REQUEST_GET, link_lookup.clone()).await, json!({"status":"known","receipt":linked}));
+    assert_eq!(remote.call(GET, json!({"reference":reference})).await, registered["artifact"]);
+    let mut stale = register.clone();
+    stale["scope"]["restoreEpoch"] = json!(uuid::Uuid::new_v4().to_string());
+    stale["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    let rejected_scope = remote.frame(SUBMIT, stale.clone()).await.unwrap();
+    assert!(rejected_scope["error"].is_object());
+    let old_lookup = json!({"scope":stale["scope"],"crewId":crew,"requestId":register["requestId"]});
+    assert_eq!(remote.call(REQUEST_GET, old_lookup).await, json!({"status":"historical","receipt":null}),
+               "synthetic mismatched epoch is read-only history, never permission to replay");
+    let mut revoked = register.clone();
+    revoked["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    let mut connections = Vec::new();
+    for (method, params) in [
+        (PREVIEW, json!({"crewId":crew,"input":full})), (LIST, json!({})),
+        (GET, json!({"reference":reference})), (BACKLINKS, json!({"reference":reference})),
+        (SUBJECT, json!({"subject":subject})), (SUBMIT, revoked), (REQUEST_GET, link_lookup),
+    ] {
+        let mut peer = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+        peer.call("system.hello", json!({})).await;
+        connections.push((method, params, peer));
+    }
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"End artifact fixture"
+    })).await;
+    for (method, params, mut peer) in connections {
+        if let Ok(reply) = tokio::time::timeout(LIMIT, peer.frame(method, params)).await.unwrap() {
+            assert_eq!(reply["error"]["code"], crewd_proto::RpcError::FORBIDDEN, "{method}: {reply}");
+            assert!(reply.get("result").is_none());
+        }
+    }
+    drop(remote);
+    stopped(running).await;
+}
+
+#[tokio::test]
+async fn attached_agent_cannot_use_human_artifact_methods() {
+    use crewd_proto::managed_artifacts::METHODS;
+
+    let fixture = crewd_server::agent::testkit::Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let server = fixture.spawn_owned_socket(stopping).await;
+    let mut agent = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    local(&mut agent, "agent.attach", json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)})).await;
+    let before = durable_state(&fixture).await;
+    for method in METHODS {
+        let refusal = tokio::time::timeout(LIMIT, agent.call(method, json!({"deliberatelyInvalid":"no Human artifact oracle"})))
+            .await.unwrap().unwrap_err();
+        assert_eq!(refusal.0, crewd_proto::RpcError::FORBIDDEN, "{method}");
+    }
+    assert_eq!(durable_state(&fixture).await, before);
+    drop(agent);
+    stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT, server).await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn paired_message_sources_keep_original_receipts_and_recheck_each_live_grant() {
     use crewd_proto::managed_message_sources::{CAPABILITY, GET, MESSAGE_OBJECTS, RECORD, REQUEST_GET};
 

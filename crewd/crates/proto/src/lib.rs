@@ -23,6 +23,7 @@ pub mod commands;
 pub mod host;
 pub mod judgments;
 pub mod managed_objects;
+pub mod managed_artifacts;
 pub mod managed_message_sources;
 pub mod decision_asks;
 pub mod managed_objects_api;
@@ -185,6 +186,11 @@ pub mod methods {
         crate::judgments::INSPECT,
         crate::admin_cases::LIST,
         crate::admin_cases::GET,
+        crate::admin_cases::EFFECTS,
+        crate::admin_cases::HUMAN_BRIEF,
+        crate::admin_cases::REQUIREMENT_REVIEWS,
+        crate::admin_cases::WORK_DUPLICATES,
+        crate::admin_cases::WORK_DUPLICATE_HISTORY,
         ADMIN_CASE_CUSTODY_GET,
         ADMIN_CASE_CUSTODY_PROPOSE,
         ADMIN_CASE_CUSTODY_TRANSFER_GET,
@@ -357,6 +363,7 @@ pub mod methods {
             .iter()
             .copied()
             .chain(crate::team_data_api::METHODS.iter().copied())
+            .chain(crate::managed_artifacts::METHODS.iter().copied())
             .chain(crate::lifecycle::METHODS.iter().copied())
             .chain(std::iter::once(crate::executors::EXECUTOR_LIST))
             .collect()
@@ -387,6 +394,7 @@ pub mod events {
         "personalDraft",
         "data",
         ONTO_TOPIC,
+        "artifact",
     ];
     pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
     pub const MESSAGE_APPENDED: &str = "message.appended";
@@ -609,6 +617,7 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         (events::ASK_CHANGED, sub::<Ask>(g)),
         (events::ASK_INBOX_CHANGED, sub::<CrewRef>(g)),
         (events::ONTO_CHANGED, sub::<managed_objects_api::OntologyChanged>(g)),
+        (managed_artifacts::CHANGED, sub::<managed_artifacts::Changed>(g)),
         (events::WORK_CHANGED, sub::<WorkChanged>(g)),
         (events::CHANNEL_WORK_CHANGED, sub::<ChannelWorkChanged>(g)),
         (events::DATA_CHANGED, sub::<CrewRef>(g)),
@@ -803,6 +812,13 @@ pub fn api_schema() -> Value {
             managed_message_sources::REQUEST_GET,
             m(sub::<managed::RequestParams>(g),sub::<managed_message_sources::Lookup>(g)),
         ),
+        (managed_artifacts::PREVIEW,m(sub::<managed_artifacts::PreviewParams>(g),sub::<managed_artifacts::Reference>(g))),
+        (managed_artifacts::LIST,m(nullable(sub::<managed_artifacts::ListParams>(g)),sub::<managed_artifacts::Page>(g))),
+        (managed_artifacts::GET,m(sub::<managed_artifacts::GetParams>(g),sub::<managed_artifacts::Artifact>(g))),
+        (managed_artifacts::BACKLINKS,m(sub::<managed_artifacts::BacklinksParams>(g),sub::<managed_artifacts::EdgePage>(g))),
+        (managed_artifacts::SUBJECT,m(sub::<managed_artifacts::SubjectParams>(g),sub::<managed_artifacts::EdgePage>(g))),
+        (managed_artifacts::SUBMIT,m(sub::<managed_artifacts::Submit>(g),sub::<managed_artifacts::Receipt>(g))),
+        (managed_artifacts::REQUEST_GET,m(sub::<managed_objects_api::RequestParams>(g),sub::<managed_artifacts::Lookup>(g))),
         (
             "notification.status",
             m(sub::<Empty>(g), sub::<notifications::NotificationStatus>(g)),
@@ -2296,6 +2312,12 @@ mod tests {
     fn methods_whose_parser_accepts_null_say_so_in_the_contract() {
         let s = api_schema();
         let null_ok = [
+            managed_objects_api::SCOPE,
+            managed_objects_api::TABLES,
+            managed_objects_api::DECISIONS,
+            managed_objects_api::RISKS,
+            managed_objects_api::LESSONS,
+            managed_artifacts::LIST,
             judgments::SETTINGS_GET,
             methods::HOST_QUOTA,
             methods::REMOTE_STATUS,

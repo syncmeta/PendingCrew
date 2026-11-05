@@ -2992,6 +2992,825 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read the canonical artifact reference without registering, verifying, accessing repositories or networking. Use your current crew. Full SHAs and absolute URLs are global; short SHAs, files and tests without an explicit opaque repository ID remain unassigned in your crew. PRs and ordinary links normalize to the same url: pointer.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current or owning crew ID, never inferred from a working directory.",
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": false,
+            "description": "Explicit kind and value; optional repository is an explicitly declared opaque repository ID, never guessed from cwd.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "pullRequest",
+                  "file",
+                  "test",
+                  "link"
+                ],
+                "type": "string"
+              },
+              "repository": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "crewId",
+          "input"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_preview"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the organization artifact directory in pages of at most 16. All artifacts remain unverified.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "additionalProperties": false,
+            "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
+            "properties": {
+              "key": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "global"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "repository"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "crewId": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "unassigned"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "crewId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "namespace",
+              "key"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "name": "artifacts_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read an unverified artifact by its exact canonical reference. Does not check whether a file or external link exists.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reference": {
+            "additionalProperties": false,
+            "description": "Copy namespace and key exactly from preview or a previously read artifact.",
+            "properties": {
+              "key": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "global"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "repository"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "crewId": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "unassigned"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "crewId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "namespace",
+              "key"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "reference"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read bounded backlinks to an artifact, preserving owning crew and manual/automatic provenance. A link is not system verification.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
+            "type": "string"
+          },
+          "reference": {
+            "additionalProperties": false,
+            "description": "Copy namespace and key exactly from preview or a previously read artifact.",
+            "properties": {
+              "key": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "global"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "repository"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "crewId": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "unassigned"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "crewId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "namespace",
+              "key"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "reference"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_backlinks"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read bounded artifact links of the exact W/#/D/L/R/O/T without changing that work or object.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
+            "type": "string"
+          },
+          "subject": {
+            "additionalProperties": false,
+            "description": "The exact kind and global ID of the existing subject.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "work",
+                  "requirement",
+                  "decision",
+                  "lesson",
+                  "risk",
+                  "row",
+                  "table"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "subject"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_subject"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly register, link or remove a manual artifact link. First use artifact_preview and retain the exact scope, original UUID and full intent. Existing ownership/frozen authority applies. Automatic Work completion and lesson evidence links cannot be removed. Registration records a pointer without verification, git scanning, chat or wakes. Recover uncertainty only through artifact_request_get, never resubmit.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "register explicitly pins a pointer; link lazily creates and links atomically; unlink removes only the exact manual expectedEdgeId. L appliesTo accepts only files, W/# allow evidence or relates, and other objects allow relates. linkExisting links an already-read canonical reference without creating or reassigning it, including another crew's unassigned pointer.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "commit",
+                          "pullRequest",
+                          "file",
+                          "test",
+                          "link"
+                        ],
+                        "type": "string"
+                      },
+                      "repository": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "value": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "register"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "input"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "commit",
+                          "pullRequest",
+                          "file",
+                          "test",
+                          "link"
+                        ],
+                        "type": "string"
+                      },
+                      "repository": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "value": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "link"
+                  },
+                  "relation": {
+                    "enum": [
+                      "evidence",
+                      "appliesTo",
+                      "relates"
+                    ],
+                    "type": "string"
+                  },
+                  "subject": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "work",
+                          "requirement",
+                          "decision",
+                          "lesson",
+                          "risk",
+                          "row",
+                          "table"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "input",
+                  "subject",
+                  "relation"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "linkExisting"
+                  },
+                  "reference": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "key": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "namespace": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "global"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "repository"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "crewId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "unassigned"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "crewId"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "namespace",
+                      "key"
+                    ],
+                    "type": "object"
+                  },
+                  "relation": {
+                    "enum": [
+                      "evidence",
+                      "appliesTo",
+                      "relates"
+                    ],
+                    "type": "string"
+                  },
+                  "subject": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "work",
+                          "requirement",
+                          "decision",
+                          "lesson",
+                          "risk",
+                          "row",
+                          "table"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reference",
+                  "subject",
+                  "relation"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedEdgeId": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "unlink"
+                  },
+                  "reference": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "key": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "namespace": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "global"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "repository"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "crewId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "unassigned"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "crewId"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "namespace",
+                      "key"
+                    ],
+                    "type": "object"
+                  },
+                  "relation": {
+                    "enum": [
+                      "evidence",
+                      "appliesTo",
+                      "relates"
+                    ],
+                    "type": "string"
+                  },
+                  "subject": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "work",
+                          "requirement",
+                          "decision",
+                          "lesson",
+                          "risk",
+                          "row",
+                          "table"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reference",
+                  "subject",
+                  "relation",
+                  "expectedEdgeId"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "crewId": {
+            "description": "The exact current or owning crew ID, never inferred from a working directory.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for the exact intent; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "change"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_submit"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the immutable receipt of the original artifact request, separate from ordinary objects and message recording. Historical or absent results never authorize replay.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current or owning crew ID, never inferred from a working directory.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for the exact intent; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read the current managed-object database and restore scope and your own crew ID. Use the complete returned scope for new requests and keep the original scope with every request ID.",
       "inputSchema": {
         "additionalProperties": false,
@@ -7352,6 +8171,825 @@
         "type": "object"
       },
       "name": "set_session_profile"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the canonical artifact reference without registering, verifying, accessing repositories or networking. Use your current crew. Full SHAs and absolute URLs are global; short SHAs, files and tests without an explicit opaque repository ID remain unassigned in your crew. PRs and ordinary links normalize to the same url: pointer.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current or owning crew ID, never inferred from a working directory.",
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": false,
+            "description": "Explicit kind and value; optional repository is an explicitly declared opaque repository ID, never guessed from cwd.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "commit",
+                  "pullRequest",
+                  "file",
+                  "test",
+                  "link"
+                ],
+                "type": "string"
+              },
+              "repository": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "crewId",
+          "input"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_preview"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the organization artifact directory in pages of at most 16. All artifacts remain unverified.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "additionalProperties": false,
+            "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
+            "properties": {
+              "key": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "global"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "repository"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "crewId": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "unassigned"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "crewId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "namespace",
+              "key"
+            ],
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "name": "artifacts_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read an unverified artifact by its exact canonical reference. Does not check whether a file or external link exists.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reference": {
+            "additionalProperties": false,
+            "description": "Copy namespace and key exactly from preview or a previously read artifact.",
+            "properties": {
+              "key": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "global"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "repository"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "crewId": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "unassigned"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "crewId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "namespace",
+              "key"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "reference"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read bounded backlinks to an artifact, preserving owning crew and manual/automatic provenance. A link is not system verification.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
+            "type": "string"
+          },
+          "reference": {
+            "additionalProperties": false,
+            "description": "Copy namespace and key exactly from preview or a previously read artifact.",
+            "properties": {
+              "key": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              "namespace": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "global"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "repository"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "crewId": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "const": "unassigned"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "crewId"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "namespace",
+              "key"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "reference"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_backlinks"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read bounded artifact links of the exact W/#/D/L/R/O/T without changing that work or object.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
+            "type": "string"
+          },
+          "subject": {
+            "additionalProperties": false,
+            "description": "The exact kind and global ID of the existing subject.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "work",
+                  "requirement",
+                  "decision",
+                  "lesson",
+                  "risk",
+                  "row",
+                  "table"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "subject"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_subject"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly register, link or remove a manual artifact link. First use artifact_preview and retain the exact scope, original UUID and full intent. Existing ownership/frozen authority applies. Automatic Work completion and lesson evidence links cannot be removed. Registration records a pointer without verification, git scanning, chat or wakes. Recover uncertainty only through artifact_request_get, never resubmit.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "register explicitly pins a pointer; link lazily creates and links atomically; unlink removes only the exact manual expectedEdgeId. L appliesTo accepts only files, W/# allow evidence or relates, and other objects allow relates. linkExisting links an already-read canonical reference without creating or reassigning it, including another crew's unassigned pointer.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "commit",
+                          "pullRequest",
+                          "file",
+                          "test",
+                          "link"
+                        ],
+                        "type": "string"
+                      },
+                      "repository": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "value": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "register"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "input"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "input": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "commit",
+                          "pullRequest",
+                          "file",
+                          "test",
+                          "link"
+                        ],
+                        "type": "string"
+                      },
+                      "repository": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "value": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "value"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "link"
+                  },
+                  "relation": {
+                    "enum": [
+                      "evidence",
+                      "appliesTo",
+                      "relates"
+                    ],
+                    "type": "string"
+                  },
+                  "subject": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "work",
+                          "requirement",
+                          "decision",
+                          "lesson",
+                          "risk",
+                          "row",
+                          "table"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "input",
+                  "subject",
+                  "relation"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "linkExisting"
+                  },
+                  "reference": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "key": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "namespace": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "global"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "repository"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "crewId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "unassigned"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "crewId"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "namespace",
+                      "key"
+                    ],
+                    "type": "object"
+                  },
+                  "relation": {
+                    "enum": [
+                      "evidence",
+                      "appliesTo",
+                      "relates"
+                    ],
+                    "type": "string"
+                  },
+                  "subject": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "work",
+                          "requirement",
+                          "decision",
+                          "lesson",
+                          "risk",
+                          "row",
+                          "table"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reference",
+                  "subject",
+                  "relation"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "expectedEdgeId": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "unlink"
+                  },
+                  "reference": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "key": {
+                        "maxLength": 4096,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "namespace": {
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "kind": {
+                                "const": "global"
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "repository"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "id"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "crewId": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "const": "unassigned"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "crewId"
+                            ],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "namespace",
+                      "key"
+                    ],
+                    "type": "object"
+                  },
+                  "relation": {
+                    "enum": [
+                      "evidence",
+                      "appliesTo",
+                      "relates"
+                    ],
+                    "type": "string"
+                  },
+                  "subject": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "work",
+                          "requirement",
+                          "decision",
+                          "lesson",
+                          "risk",
+                          "row",
+                          "table"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "reference",
+                  "subject",
+                  "relation",
+                  "expectedEdgeId"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "crewId": {
+            "description": "The exact current or owning crew ID, never inferred from a working directory.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for the exact intent; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "change"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_submit"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the immutable receipt of the original artifact request, separate from ordinary objects and message recording. Historical or absent results never authorize replay.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current or owning crew ID, never inferred from a working directory.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for the exact intent; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_request_get"
     },
     {
       "annotations": {

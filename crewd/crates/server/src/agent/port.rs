@@ -982,6 +982,24 @@ pub(crate) async fn managed_record_from_message(
     }).await
 }
 
+pub(crate) use managed_read as artifact_read;
+
+pub(crate) async fn artifact_submit(
+    st: &AppState,
+    by: &Identity,
+    request: crewd_proto::managed_artifacts::Submit,
+) -> PortResult<crewd_proto::managed_artifacts::Receipt> {
+    let scoped=scoped_actor(st,by)?;
+    let by=by.clone();
+    write(st,move |tx| {
+        validate_scoped_actor(tx.conn(),&scoped,&by)?;
+        let receipt=crewd_collab::managed_artifacts::submit(tx,
+            crewd_collab::managed_objects::Actor::Session(&by.session_id),request)?;
+        validate_scoped_actor(tx.conn(),&scoped,&by)?;
+        Ok(receipt)
+    }).await
+}
+
 pub(crate) async fn managed_message_request_get(
     st: &AppState,
     by: &Identity,

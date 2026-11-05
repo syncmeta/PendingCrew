@@ -120,6 +120,36 @@ fn check_owner(c: &Connection, crew: &str, owner: &RiskOwner) -> Result<()> {
     Ok(())
 }
 
+fn may_edit(
+    c: &Connection,
+    actor: Actor<'_>,
+    crew: &str,
+    author: &ResourceActor,
+    owner: Option<&RiskOwner>,
+) -> Result<bool> {
+    match actor {
+        Actor::Human(_) => Ok(true),
+        Actor::Session(session) => {
+            let owns = owner.is_some_and(|owner| is_owner(actor, owner));
+            Ok(((owns || is_author(actor, author)) && sessions::get(c, session)?.crew_id == crew)
+                || crews::acts_as_captain_of(c, session, crew)?)
+        }
+    }
+}
+
+pub(super) fn artifact_link_authority(c: &Connection, actor: Actor<'_>, object: &Object) -> Result<()> {
+    let (crew, author, owner) = match object {
+        Object::Risk { risk } => (&risk.crew_id, &risk.author, Some(&risk.owner)),
+        Object::Lesson { lesson } => (&lesson.crew_id, &lesson.author, None),
+        _ => return Err(invalid("subject")),
+    };
+    if !may_edit(c, actor, crew, author, owner)? {
+        return Err(forbidden());
+    }
+    resource_acl::actor(c, &sender(actor), crew, true).map_err(decision_write_refusal)?;
+    Ok(())
+}
+
 fn check_ref_id(id: &str, field: &str) -> Result<()> {
     if id.is_empty() || id.len() > 128 || id.trim() != id || id.chars().any(char::is_control) {
         return Err(invalid(field));
@@ -273,14 +303,7 @@ pub(super) fn authorize(
             let allowed = if matches!(change, Change::ReviewRisk { .. }) {
                 owner
             } else {
-                match actor {
-                    Actor::Human(_) => true,
-                    Actor::Session(session) => {
-                        ((owner || is_author(actor, &risk.author))
-                            && sessions::get(c, session)?.crew_id == crew)
-                            || crews::acts_as_captain_of(c, session, crew)?
-                    }
-                }
+                may_edit(c, actor, crew, &risk.author, Some(&risk.owner))?
             };
             if !allowed {
                 return Err(forbidden());
@@ -300,12 +323,8 @@ pub(super) fn authorize(
                     crews::refuse_archived(c, &member.crew_id).map_err(decision_write_refusal)?;
                 }
             } else {
-                if let Actor::Session(session) = actor {
-                    let own_author = is_author(actor, &lesson.author)
-                        && sessions::get(c, session)?.crew_id == crew;
-                    if !own_author && !crews::acts_as_captain_of(c, session, crew)? {
-                        return Err(forbidden());
-                    }
+                if !may_edit(c, actor, crew, &lesson.author, None)? {
+                    return Err(forbidden());
                 }
                 resource_acl::actor(c, &sender(actor), crew, true)
                     .map_err(decision_write_refusal)?;

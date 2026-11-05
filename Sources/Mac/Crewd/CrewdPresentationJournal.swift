@@ -89,6 +89,19 @@ final class CrewdPresentationJournal {
         }
     }
 
+    func prepareArtifact(_ params:CrewdValue,crew:String)throws->Prepared {
+        let method="artifact.submit.observation"
+        guard params["crewId"].string?.utf8.elementsEqual(crew.utf8)==true,
+              let target=params["target"].string,!target.isEmpty else {throw CrewdPublicWire.invalid()}
+        return try withPrivateLock("artifact-submit.lock",message:"产物原请求正在核对或锁不可用。") {
+            guard try !unknownRecords().contains(where:{$0.method==method && $0.scope==scope &&
+                $0.params["target"].string?.utf8.elementsEqual(target.utf8)==true}) else {
+                throw CrewdClientError(message:"这个产物关联已有原请求待核对。",kind:.notSubmitted)
+            }
+            return try prepare(method:method,params:params,crew:crew)
+        }
+    }
+
     func prepareMessageSource(_ params: CrewdValue, crew: String) throws -> Prepared {
         let method = "managedObject.message.observation"
         guard params["original"]["crewId"].string?.utf8.elementsEqual(crew.utf8) == true,

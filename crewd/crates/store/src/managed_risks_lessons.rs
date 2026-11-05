@@ -283,7 +283,9 @@ pub fn record_lesson(
         "INSERT INTO managed_lessons(number,crew_id,revision,body_json,occurrence_risk) VALUES(?1,?2,1,?3,?4)",
         params![reference.number, crew, serde_json::to_string(&data)?, occurrence_risk],
     )?;
-    lesson(c, reference.number)?.ok_or_else(|| invalid("recorded managed lesson missing"))
+    let lesson = lesson(c, reference.number)?.ok_or_else(|| invalid("recorded managed lesson missing"))?;
+    crate::managed_artifacts::capture_lesson(c, &lesson, now)?;
+    Ok(lesson)
 }
 
 pub fn save_lesson(c: &Connection, number: i64, expected: i64, lesson: Lesson) -> Result<Lesson> {

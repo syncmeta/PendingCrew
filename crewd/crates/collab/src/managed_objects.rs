@@ -225,6 +225,42 @@ fn active_decision(expected: &str, decision: &Decision) -> Result<i64> {
     Ok(revision)
 }
 
+/// Artifact edges use the source object's existing editing authority. Ledger
+/// associations are annotations and leave the work state untouched.
+pub(crate) fn artifact_link_authority(
+    c: &Connection,
+    actor: Actor<'_>,
+    subject: &crewd_proto::managed_artifacts::Subject,
+) -> Result<()> {
+    use crewd_proto::managed_artifacts::Subject;
+    actor.principal(c)?;
+    let id = match subject {
+        Subject::Work { id } => {
+            crate::work::get(c, id)?;
+            return Ok(());
+        }
+        Subject::Requirement { id } => {
+            crate::requirements::get(c, id)?;
+            return Ok(());
+        }
+        Subject::Decision { id } | Subject::Lesson { id } | Subject::Risk { id }
+        | Subject::Row { id } | Subject::Table { id } => id,
+    };
+    let object = get_with_defaults(c, actor, id, true)?;
+    match &object {
+        Object::Decision { decision } => {
+            decision_target(c, actor, &decision.crew_id, id)?;
+        }
+        Object::Risk { .. } | Object::Lesson { .. } => {
+            risks_lessons::artifact_link_authority(c, actor, &object)?;
+        }
+        Object::Row { .. } | Object::Table { .. } => {
+            actor.owner(c, object.crew_id(), true)?;
+        }
+    }
+    Ok(())
+}
+
 fn decision_write_refusal(error: CollabError) -> CollabError {
     match error {
         CollabError::Conflict(ref refusal) if refusal.code == Code::CrewRemoved => {

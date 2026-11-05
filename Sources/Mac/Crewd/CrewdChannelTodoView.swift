@@ -359,6 +359,11 @@ struct CrewdChannelTodoView:View {
             if let answer=detail["answer"].string { MarkdownText(text: "答复：" + answer, variant: .todoNote).textSelection(.enabled) }
             if let reason=detail["withdrawReason"].string { MarkdownText(text: "撤回理由：" + reason, variant: .todoNote).textSelection(.enabled) }
             if id.kind == .requirement {
+                if let workspace,let sourceCrew=row["crewId"].string {
+                    let sourceScope=group.readScope,sourceDetail=detailToken
+                    CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:.requirement,id:id.raw),crew:sourceCrew,
+                        frozen:detail["frozen"] == .bool(true),current:{group.readScope==sourceScope && detailToken==sourceDetail && selected?["object"]==row["object"]})
+                }
                 CrewdJudgmentInspectionView(store: work, crew: row["crewId"].string ?? crew, kind: "requirement", sourceID: id.raw, members: members)
                 Button("新建计划"){openPlan(id, row: row)}.font(.caption)
                     .disabled(busy || openingPlan || CrewdWorkStore.requirementBlocksPlan(row)

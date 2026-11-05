@@ -644,6 +644,183 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn artifact_tools_keep_canonical_identity_and_recheck_current_attachment() {
+        use serde_json::Value;
+
+        async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
+            peer.call(methods::CALL, json!({"tool":name,"args":args})).await.unwrap()
+        }
+        fn decoded(result: Value) -> Value {
+            assert_eq!(result["isError"], false, "{result}");
+            serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
+        }
+
+        let f = Fixture::new().await;
+        let foreign = f.add_crew("Other artifact owner", None).await;
+        let other = "artifact-foreign-worker";
+        f.add_session(&foreign, other, Role::Worker, "Artifact reader").await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let server = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut writer = RpcClient::connect(&socket).await;
+        let mut reader = RpcClient::connect(&socket).await;
+        for (peer, session) in [(&mut writer, f.worker.as_str()), (&mut reader, other)] {
+            peer.call(methods::ATTACH, json!({"sessionId":session,"token":f.token(session)})).await.unwrap();
+        }
+        let captured = decoded(tool(&mut writer, "managed_object_scope_get", json!({})).await);
+        let scope = captured["scope"].clone();
+        let input = json!({"kind":"commit","value":"b".repeat(40),"repository":null});
+        let reference = decoded(tool(&mut writer, "artifact_preview", json!({"crewId":f.crew,"input":input})).await);
+        assert_eq!(reference, json!({"namespace":{"kind":"global"},"key":format!("commit:{}", "b".repeat(40))}));
+        let file = json!({"kind":"file","value":"Sources/Fixture.swift","repository":null});
+        assert_eq!(decoded(tool(&mut writer, "artifact_preview", json!({"crewId":f.crew,"input":file})).await),
+                   json!({"namespace":{"kind":"unassigned","crewId":f.crew},"key":"file:Sources/Fixture.swift"}));
+        assert_eq!(tool(&mut reader, "artifact_preview", json!({"crewId":f.crew,"input":file})).await["isError"], true,
+                   "preview cannot create another crew's unassigned identity");
+        let mut repository_refs = Vec::new();
+        for repository in ["repo-a", "repo-b"] {
+            repository_refs.push(decoded(tool(&mut writer, "artifact_preview", json!({
+                "crewId":f.crew,"input":{"kind":"file","value":"Sources/Fixture.swift","repository":repository}
+            })).await));
+        }
+        assert_ne!(repository_refs[0], repository_refs[1]);
+        let register = json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
+                              "change":{"kind":"register","input":input}});
+        let mut changes = f.state.hub.subscribe_collab();
+        let receipt = decoded(tool(&mut writer, "artifact_submit", register.clone()).await);
+        assert_eq!(receipt["effect"], json!({"kind":"registered","created":true,"claimAdded":true}));
+        assert_eq!(decoded(tool(&mut writer, "artifact_submit", register.clone()).await), receipt);
+        let lookup = json!({"scope":scope,"crewId":f.crew,"requestId":register["requestId"]});
+        assert_eq!(decoded(tool(&mut writer, "artifact_request_get", lookup.clone()).await), json!({"status":"known","receipt":receipt}));
+        assert_eq!(decoded(tool(&mut reader, "artifact_get", json!({"reference":reference})).await), receipt["artifact"]);
+        let mut no_op = register.clone();
+        no_op["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        let unchanged = decoded(tool(&mut writer, "artifact_submit", no_op).await);
+        assert_eq!(unchanged["effect"], json!({"kind":"registered","created":false,"claimAdded":false}));
+        let progress = std::iter::from_fn(|| changes.try_recv().ok())
+            .filter(|change| matches!(change, Change::Progress { session_id, .. } if session_id == &f.worker))
+            .count();
+        assert_eq!(progress, 1, "lookup, exact replay, and no-op claim must not count as fresh progress");
+        let decision = decoded(tool(&mut writer, "managed_object_submit", json!({
+            "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"recordDecision","draft":{"question":"Which artifact to retain?",
+                "choice":"Keep the exact pointer","rationale":"Explicit fixture","about":[{"kind":"crew","id":f.crew}]}}
+        })).await)["object"].clone();
+        let subject = json!({"kind":"decision","id":decision["decision"]["id"]});
+        let link = json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
+                          "change":{"kind":"link","input":input,"subject":subject,"relation":"relates"}});
+        let linked = decoded(tool(&mut writer, "artifact_submit", link.clone()).await);
+        let edge = linked["effect"]["edge"].clone();
+        assert_eq!(linked["change"], link["change"]);
+        assert_eq!(edge["origin"], json!({"kind":"manual","actor":{"kind":"session","sessionId":f.worker}}));
+        assert_eq!(decoded(tool(&mut reader, "artifact_backlinks", json!({"reference":reference})).await),
+                   json!({"items":[edge],"nextAfter":null}));
+        assert_eq!(decoded(tool(&mut reader, "artifact_subject", json!({"subject":subject})).await),
+                   json!({"items":[edge],"nextAfter":null}));
+        assert_eq!(decoded(tool(&mut reader, "artifacts_list", json!({})).await)["items"], json!([receipt["artifact"]]));
+        let mut stolen = link.clone();
+        stolen["crewId"] = json!(foreign);
+        stolen["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        assert_eq!(tool(&mut reader, "artifact_submit", stolen.clone()).await["isError"], true,
+                   "global reads must not confer edit authority on another crew's Decision");
+        assert_eq!(tool(&mut reader, "artifact_request_get", lookup.clone()).await["isError"], true);
+        let mut stale = register.clone();
+        stale["scope"]["restoreEpoch"] = json!(uuid::Uuid::new_v4().to_string());
+        stale["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        assert_eq!(tool(&mut writer, "artifact_submit", stale.clone()).await["isError"], true);
+        assert_eq!(decoded(tool(&mut writer, "artifact_request_get", json!({
+            "scope":stale["scope"],"crewId":f.crew,"requestId":register["requestId"]}
+        )).await), json!({"status":"historical","receipt":null}),
+                   "synthetic mismatched epoch checks parameter semantics only");
+        let unlink = json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"unlink","reference":reference,"subject":subject,"relation":"relates","expectedEdgeId":edge["id"]}});
+        let unlinked = decoded(tool(&mut writer, "artifact_submit", unlink.clone()).await);
+        assert_eq!(unlinked["effect"], json!({"kind":"unlinked","edgeId":edge["id"]}));
+        assert_eq!(decoded(tool(&mut writer, "artifact_submit", unlink).await), unlinked);
+        assert_eq!(decoded(tool(&mut writer, "artifact_request_get", json!({
+            "scope":scope,"crewId":f.crew,"requestId":link["requestId"]}
+        )).await), json!({"status":"known","receipt":linked}));
+        assert_eq!(decoded(tool(&mut reader, "managed_object_get", json!({"id":decision["decision"]["id"]})).await), decision);
+
+        let unassigned = decoded(tool(&mut writer, "artifact_submit", json!({
+            "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"register","input":file}
+        })).await)["artifact"].clone();
+        let other_decision = decoded(tool(&mut reader, "managed_object_submit", json!({
+            "scope":scope,"crewId":foreign,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"recordDecision","draft":{"question":"Which shared pointer?",
+                "choice":"Keep the existing unassigned pointer","rationale":"Explicit cross-crew fixture",
+                "about":[{"kind":"crew","id":foreign}]}}
+        })).await)["object"].clone();
+        let other_subject = json!({"kind":"decision","id":other_decision["decision"]["id"]});
+        let existing = json!({"scope":scope,"crewId":foreign,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"linkExisting","reference":unassigned["reference"],"subject":other_subject,"relation":"relates"}});
+        let held = decoded(tool(&mut reader, "artifact_submit", existing.clone()).await);
+        assert_eq!(held["effect"]["created"], false);
+        assert_eq!(held["effect"]["added"], true);
+        assert_eq!(held["artifact"], unassigned);
+        let held_edge = held["effect"]["edge"].clone();
+        assert_eq!(held_edge["crewId"], foreign);
+        assert_eq!(held_edge["reference"]["namespace"], json!({"kind":"unassigned","crewId":f.crew}));
+        let mut missing_foreign = existing.clone();
+        missing_foreign["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        missing_foreign["change"]["reference"]["key"] = json!("file:NeverRegistered.swift");
+        assert_eq!(tool(&mut reader, "artifact_submit", missing_foreign).await["isError"], true,
+                   "linkExisting cannot implicitly create a foreign unassigned pointer");
+        f.add_session(&foreign, &f.worker, Role::Worker, "Moved artifact user").await;
+        assert_eq!(tool(&mut writer, "artifact_submit", register.clone()).await["isError"], true);
+        assert_eq!(tool(&mut writer, "artifact_preview", json!({"crewId":f.crew,"input":file})).await["isError"], true);
+        assert_eq!(decoded(tool(&mut writer, "artifact_get", json!({"reference":reference})).await), receipt["artifact"]);
+        f.state.tokens.revoke(&f.worker);
+        for (name, args) in [
+            ("artifact_preview", json!({"crewId":foreign,"input":file})), ("artifacts_list", json!({})),
+            ("artifact_get", json!({"reference":reference})), ("artifact_backlinks", json!({"reference":reference})),
+            ("artifact_subject", json!({"subject":subject})), ("artifact_submit", stolen), ("artifact_request_get", lookup),
+        ] {
+            assert_eq!(tool(&mut writer, name, args).await["isError"], true, "invalidated attachment used {name}");
+        }
+        assert_eq!(decoded(tool(&mut reader, "artifact_backlinks", json!({"reference":reference})).await),
+                   json!({"items":[],"nextAfter":null}));
+        let requirement = f.rpc("todo.create", json!({
+            "crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"text":"Preserve frozen ledger"
+        })).await;
+        let work = f.rpc("work.create", json!({
+            "crewId":f.crew,"title":"Retained ledger","goal":"Preserve current ledger",
+            "acceptance":"External edges never change the ledger","sources":[requirement["requirementId"]]
+        })).await;
+        let purged = f.crew.clone();
+        f.state.collab(move |tx| crewd_collab::crews::archive(tx, &purged)).await.unwrap();
+        let frozen = f.rpc("work.get", json!({"id":work["id"]})).await;
+        assert_eq!(frozen["frozen"], true);
+        let frozen_subject = json!({"kind":"work","id":work["id"]});
+        let frozen_link = json!({"scope":scope,"crewId":foreign,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"linkExisting","reference":unassigned["reference"],
+                      "subject":frozen_subject,"relation":"evidence"}});
+        let retained_edge = decoded(tool(&mut reader, "artifact_submit", frozen_link).await)["effect"]["edge"].clone();
+        assert_eq!(retained_edge["crewId"], foreign);
+        assert_eq!(f.rpc("work.get", json!({"id":work["id"]})).await, frozen);
+        let clear_frozen = json!({"scope":scope,"crewId":foreign,"requestId":uuid::Uuid::new_v4().to_string(),
+            "change":{"kind":"unlink","reference":unassigned["reference"],"subject":frozen_subject,
+                      "relation":"evidence","expectedEdgeId":retained_edge["id"]}});
+        let cleared = decoded(tool(&mut reader, "artifact_submit", clear_frozen).await);
+        assert_eq!(cleared["effect"], json!({"kind":"unlinked","edgeId":retained_edge["id"]}));
+        assert_eq!(f.rpc("work.get", json!({"id":work["id"]})).await, frozen,
+                   "B may maintain its own edges without editing A's frozen ledger");
+        let purged = f.crew.clone();
+        f.state.collab(move |tx| crewd_collab::crews::purge(tx, &purged)).await.unwrap();
+        assert_eq!(decoded(tool(&mut reader, "artifact_get", json!({"reference":unassigned["reference"]})).await), unassigned,
+                   "the original namespace crew's purge cannot remove another crew's retained edge");
+        assert_eq!(decoded(tool(&mut reader, "artifact_backlinks", json!({"reference":unassigned["reference"]})).await),
+                   json!({"items":[held_edge],"nextAfter":null}));
+        assert_eq!(decoded(tool(&mut reader, "artifact_request_get", json!({
+            "scope":scope,"crewId":foreign,"requestId":existing["requestId"]}
+        )).await), json!({"status":"known","receipt":held}));
+        drop((writer, reader));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), server).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn managed_message_tools_recheck_attached_scope_and_keep_private_sources() {
         use serde_json::Value;
 

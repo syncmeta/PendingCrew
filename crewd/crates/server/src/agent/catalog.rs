@@ -31,6 +31,7 @@ pub enum Ty {
     DocumentEdits,
     WorkContinuation,
     CoordinationChildren,
+    ArtifactInput, ArtifactReference, ArtifactSubject, ArtifactChange,
     ManagedObjectScope,
     ManagedObjectChange,
     ManagedMessageChange,
@@ -681,6 +682,15 @@ pub const CATALOG: &[ToolSpec] = &[
             c("runner", false, RUNNERS),
         ],
     )),
+    ro(crew_member("artifact_preview",&[p("crewId",Str,true),p("input",ArtifactInput,true)])),
+    ro(crew_member("artifacts_list",&[p("after",ArtifactReference,false)])),
+    ro(crew_member("artifact_get",&[p("reference",ArtifactReference,true)])),
+    ro(crew_member("artifact_backlinks",&[p("reference",ArtifactReference,true),p("after",Str,false)])),
+    ro(crew_member("artifact_subject",&[p("subject",ArtifactSubject,true),p("after",Str,false)])),
+    ToolSpec { destructive:true,idempotent:true,..crew_member("artifact_submit",&[
+        p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true),p("change",ArtifactChange,true),
+    ]) },
+    ro(crew_member("artifact_request_get",&[p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true)])),
     ro(crew_member("managed_object_scope_get", &[])),
     ro(crew_member(
         "managed_object_get",
@@ -867,6 +877,36 @@ fn work_continuation_schema(loc: Locale) -> Value {
     ]})
 }
 
+
+fn artifact_input_schema()->Value {
+    json!({"type":"object","properties":{
+        "kind":{"type":"string","enum":["commit","pullRequest","file","test","link"]},
+        "value":{"type":"string","minLength":1,"maxLength":4096},
+        "repository":{"type":["string","null"],"minLength":1,"maxLength":512}
+    },"required":["kind","value"],"additionalProperties":false})
+}
+fn artifact_reference_schema()->Value {
+    json!({"type":"object","properties":{
+        "namespace":{"oneOf":[
+            {"type":"object","properties":{"kind":{"const":"global"}},"required":["kind"],"additionalProperties":false},
+            {"type":"object","properties":{"kind":{"const":"repository"},"id":{"type":"string","minLength":1,"maxLength":512}},"required":["kind","id"],"additionalProperties":false},
+            {"type":"object","properties":{"kind":{"const":"unassigned"},"crewId":{"type":"string"}},"required":["kind","crewId"],"additionalProperties":false}
+        ]},"key":{"type":"string","minLength":1,"maxLength":4096}
+    },"required":["namespace","key"],"additionalProperties":false})
+}
+fn artifact_subject_schema()->Value {
+    json!({"type":"object","properties":{"kind":{"type":"string","enum":["work","requirement","decision","lesson","risk","row","table"]},"id":{"type":"string"}},"required":["kind","id"],"additionalProperties":false})
+}
+fn artifact_change_schema()->Value {
+    let relation=json!({"type":"string","enum":["evidence","appliesTo","relates"]});
+    json!({"oneOf":[
+        {"type":"object","properties":{"kind":{"const":"register"},"input":artifact_input_schema()},"required":["kind","input"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"link"},"input":artifact_input_schema(),"subject":artifact_subject_schema(),"relation":relation},"required":["kind","input","subject","relation"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"linkExisting"},"reference":artifact_reference_schema(),"subject":artifact_subject_schema(),"relation":relation},"required":["kind","reference","subject","relation"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"unlink"},"reference":artifact_reference_schema(),"subject":artifact_subject_schema(),"relation":relation,"expectedEdgeId":{"type":"string","pattern":"^[1-9][0-9]*$"}},"required":["kind","reference","subject","relation","expectedEdgeId"],"additionalProperties":false}
+    ]})
+}
+
 fn managed_change_schema() -> Value {
     let text = json!({"type":"string"});
     let object = |properties: Value, required: &[&str]| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
@@ -1033,6 +1073,10 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
             ManagedObjectScope => json!({"type":"object","properties":{
                 "dbId":{"type":"string"},"restoreEpoch":{"type":"string"}
             },"required":["dbId","restoreEpoch"],"additionalProperties":false}),
+            ArtifactInput=>artifact_input_schema(),
+            ArtifactReference=>artifact_reference_schema(),
+            ArtifactSubject=>artifact_subject_schema(),
+            ArtifactChange=>artifact_change_schema(),
             ManagedObjectChange => managed_change_schema(),
             ManagedMessageChange => {
                 let mut schema=managed_change_schema();
@@ -1246,6 +1290,7 @@ mod tests {
                 "get_quota",
                 "inspect_session",
                 "list_sessions",
+                "artifact_preview", "artifacts_list", "artifact_get", "artifact_backlinks", "artifact_subject", "artifact_request_get",
                 "managed_object_scope_get",
                 "managed_object_get",
                 "managed_tables_list",
@@ -1271,6 +1316,7 @@ mod tests {
                 "stop_session",
                 "handoff_captain",
                 "crew_structure",
+                "artifact_submit",
                 "managed_object_from_message",
                 "managed_object_submit",
             ]
@@ -1309,6 +1355,7 @@ mod tests {
                 "change_workdir",
                 "set_crew_status",
                 "delegation_policy",
+                "artifact_submit",
                 "managed_object_from_message",
                 "managed_object_submit",
             ]
@@ -1341,6 +1388,7 @@ mod tests {
                 "get_quota",
                 "inspect_session",
                 "list_sessions",
+                "artifact_preview", "artifacts_list", "artifact_get", "artifact_backlinks", "artifact_subject", "artifact_request_get",
                 "managed_object_scope_get",
                 "managed_object_get",
                 "managed_tables_list",

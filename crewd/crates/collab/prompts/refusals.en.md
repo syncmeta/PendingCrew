@@ -577,3 +577,6 @@ The original question or its state changed. Reload the question before answering
 ## ask.inbox_changed
 
 The question or its inbox schedule changed. Open it again before making changes.
+
+## artifact.edge_changed
+This artifact association changed. Read its current associations before removing one.

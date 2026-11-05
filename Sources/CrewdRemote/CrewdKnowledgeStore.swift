@@ -2718,3 +2718,165 @@ extension CrewdManagedDirectoryStore {
         }
     }
 }
+
+/// Core-owned natural keys. No filesystem lookup or client-side normalization.
+@MainActor final class CrewdArtifactStore:ObservableObject {
+    typealias Wire=CrewdArtifactWire
+    typealias Origin=CrewdKnowledgeStore.Origin
+    typealias Scope=CrewdManagedDirectoryStore.BrowseScope
+    typealias Problem=CrewdManagedDirectoryWire.Problem
+    private let origin:()->Origin?
+    private let rpc:CrewdKnowledgeStore.RPC
+    private let journal:()throws->CrewdPresentationJournal
+    private let available:()->Bool
+    @Published private(set) var invalidation=UUID()
+    init(origin:@escaping ()->Origin?,rpc:@escaping CrewdKnowledgeStore.RPC,journal:@escaping ()throws->CrewdPresentationJournal,available:@escaping ()->Bool) {
+        self.origin=origin;self.rpc=rpc;self.journal=journal;self.available=available
+    }
+    var supported:Bool {available()}
+    func owns(_ scope:Scope)->Bool {supported && origin()==scope.origin}
+    func handleEvent(_ name:String,_ data:CrewdValue,connection:UUID) {
+        guard let active=origin(),active.connection==connection else {return}
+        if name=="artifact.changed" {
+            guard case .object(let fields)=data,Set(fields.keys)==["crewId"],data["crewId"].string?.isEmpty==false else {return}
+        } else if !["onto.changed","work.changed","crew.changed","crew.purged","events.lagged"].contains(name) {return}
+        invalidation=UUID()
+    }
+    private func valid(_ active:Origin,_ current:@MainActor ()->Bool)->Bool {supported && current() && origin()==active && !Task.isCancelled}
+    private func call<T:Decodable>(_ method:String,_ params:CrewdValue,_ scope:Scope,_ current:@MainActor ()->Bool) async throws->T {
+        guard valid(scope.origin,current) else {throw Problem.stale}
+        let raw=try await rpc(method,params)
+        guard valid(scope.origin,current) else {throw Problem.stale}
+        return try CrewdKnowledgeStore.decode(raw,T.self)
+    }
+    func scope(stillCurrent:@MainActor ()->Bool) async throws->Scope {
+        guard supported,let active=origin(),valid(active,stillCurrent) else {throw Problem.unavailable}
+        let raw=try await rpc("managedObject.scope",.object([:]))
+        guard valid(active,stillCurrent) else {throw Problem.stale}
+        let authority=try CrewdKnowledgeStore.decode(raw,CrewdManagedDirectoryWire.Scope.self)
+        guard authority.dbId==active.scope.databaseID,!authority.restoreEpoch.isEmpty else {throw Problem.invalid}
+        return .init(origin:active,authority:authority)
+    }
+    private func check(_ expected:Scope,_ current:@MainActor ()->Bool) async throws {
+        guard try await scope(stillCurrent:current)==expected else {throw Problem.stale}
+    }
+    func preview(_ input:Wire.Input,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->Wire.Reference {
+        let params:CrewdValue = .object(["crewId":.string(scope.origin.crew),"input":try CrewdKnowledgeStore.encode(input)])
+        let reference:Wire.Reference=try await call(Wire.preview,params,scope,stillCurrent)
+        guard reference.valid,reference.namespace.kind != "unassigned" || reference.namespace.crewId?.utf8.elementsEqual(scope.origin.crew.utf8)==true else {throw Problem.invalid}
+        try await check(scope,stillCurrent);return reference
+    }
+    func list(_ scope:Scope,after:Wire.Reference?,stillCurrent:@MainActor ()->Bool) async throws->Wire.Page {
+        let p=try after.map(CrewdKnowledgeStore.encode) ?? .null
+        let page:Wire.Page=try await call(Wire.list,.object(["after":p]),scope,stillCurrent)
+        guard page.items.count<=16,page.items.allSatisfy(\.valid),Set(page.items.map(\.id)).count==page.items.count,
+              page.nextAfter==nil || (page.items.last?.reference==page.nextAfter && page.nextAfter != after) else {throw Problem.invalid}
+        try await check(scope,stillCurrent);return page
+    }
+    func get(_ reference:Wire.Reference,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->Wire.Artifact {
+        let item:Wire.Artifact=try await call(Wire.get,.object(["reference":try CrewdKnowledgeStore.encode(reference)]),scope,stillCurrent)
+        guard item.valid,item.reference==reference else {throw Problem.invalid};try await check(scope,stillCurrent);return item
+    }
+    func edges(_ scope:Scope,reference:Wire.Reference?=nil,subject:Wire.Subject?=nil,after:String?,stillCurrent:@MainActor ()->Bool) async throws->Wire.EdgePage {
+        guard (reference != nil) != (subject != nil) else {throw Problem.invalid}
+        var p:[String:CrewdValue]=["after":after.map(CrewdValue.string) ?? .null]
+        if let reference {p["reference"]=try CrewdKnowledgeStore.encode(reference)}
+        if let subject {p["subject"]=try CrewdKnowledgeStore.encode(subject)}
+        let page:Wire.EdgePage=try await call(reference==nil ? Wire.subject:Wire.backlinks,.object(p),scope,stillCurrent)
+        guard page.items.count<=16,page.items.allSatisfy({$0.valid && (reference==nil || $0.reference==reference) && (subject==nil || $0.subject==subject)}),
+              Set(page.items.map(\.id)).count==page.items.count,
+              page.nextAfter==nil || (page.nextAfter==page.items.last?.id && page.nextAfter != after) else {throw Problem.invalid}
+        try await check(scope,stillCurrent);return page
+    }
+    struct Witness:Codable {let scope:CrewdManagedDirectoryWire.Scope;let crewId:String;let requestId:String;let change:Wire.Change;let reference:Wire.Reference;let target:String}
+    struct Pending:Identifiable {let record:CrewdPresentationJournal.Prepared;let witness:Witness;var id:UUID {record.id}}
+    struct Observation {let receipt:Wire.Receipt;let historical:Bool}
+    func pending(_ scope:Scope)throws->[Pending] {
+        guard valid(scope.origin,{true}) else {throw Problem.stale}
+        let ledger=try journal();guard ledger.scope==scope.origin.scope else {throw Problem.stale}
+        return try ledger.unknownRecords().filter{$0.method==Wire.observation && $0.scope==ledger.scope && $0.crew.utf8.elementsEqual(scope.origin.crew.utf8)}.map {record in
+            let witness=try CrewdKnowledgeStore.decode(record.params,Witness.self)
+            guard witness.crewId.utf8.elementsEqual(record.crew.utf8),witness.scope.dbId==scope.authority.dbId,witness.change.valid,witness.reference.valid,
+                  UUID(uuidString:witness.requestId)?.uuidString.lowercased()==witness.requestId else {throw Problem.invalid}
+            return .init(record:record,witness:witness)
+        }
+    }
+    func submit(_ change:Wire.Change,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->Observation {
+        guard change.valid else {throw Problem.invalid}
+        try await check(scope,stillCurrent)
+        let reference:Wire.Reference
+        if let input=change.input {reference=try await preview(input,scope:scope,stillCurrent:stillCurrent)}
+        else if let ref=change.reference {
+            if change.kind=="linkExisting" {reference=try await get(ref,scope:scope,stillCurrent:stillCurrent).reference}
+            else {reference=ref}
+        } else {throw Problem.invalid}
+        if change.relation == .appliesTo,!reference.key.hasPrefix("file:") {throw Problem.invalid}
+        let id=UUID().uuidString.lowercased()
+        let target=reference.id+":"+(change.subject?.kind.rawValue ?? "register")+":"+(change.subject?.id ?? "")+":"+(change.relation?.rawValue ?? "")
+        let witness=Witness(scope:scope.authority,crewId:scope.origin.crew,requestId:id,change:change,reference:reference,target:target)
+        let ledger=try journal();guard ledger.scope==scope.origin.scope,valid(scope.origin,stillCurrent) else {throw Problem.stale}
+        let prepared=try ledger.prepareArtifact(CrewdKnowledgeStore.encode(witness),crew:witness.crewId)
+        do {
+            let receipt:Wire.Receipt=try await call(Wire.submit,CrewdKnowledgeStore.encode(Wire.Submit(scope:witness.scope,crewId:witness.crewId,requestId:id,change:change)),scope,stillCurrent)
+            try Self.verify(receipt,witness);try await check(scope,stillCurrent)
+            try ledger.finish(prepared,state:"replyObserved")
+            return .init(receipt:receipt,historical:false)
+        } catch {
+            let e=error as? CrewdClientError
+            let refused=e?.kind == .notSubmitted || CrewdManagedDirectoryStore.decisionInputRefused(error) || (e?.code == -32009 && ["resource.frozen","artifact.edge_changed"].contains(e?.refusal ?? ""))
+            try? ledger.finish(prepared,state:refused ? "refused":"unknown");throw error
+        }
+    }
+    func lookup(_ pending:Pending,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->Observation? {
+        guard try self.pending(scope).contains(where:{$0.id==pending.id && Wire.exact($0.witness,pending.witness)}) else {throw Problem.stale}
+        let w=pending.witness
+        let raw:CrewdValue = .object(["scope":try CrewdKnowledgeStore.encode(w.scope),"crewId":.string(w.crewId),"requestId":.string(w.requestId)])
+        let result:Wire.Lookup=try await call(Wire.lookup,raw,scope,stillCurrent);try await check(scope,stillCurrent)
+        switch (result.status,result.receipt) {
+        case ("known",.some(let receipt)),("historical",.some(let receipt)):
+            guard (result.status=="known")==Wire.exact(w.scope,scope.authority) else {throw Problem.invalid}
+            try Self.verify(receipt,w);try await check(scope,stillCurrent)
+            try journal().acknowledge(pending.record,detail:"已核对产物原请求，未重新提交。")
+            return .init(receipt:receipt,historical:result.status=="historical")
+        case ("notFound",nil) where Wire.exact(w.scope,scope.authority):return nil
+        case ("historical",nil) where !Wire.exact(w.scope,scope.authority):return nil
+        default:throw Problem.invalid
+        }
+    }
+    private static func verify(_ r:Wire.Receipt,_ w:Witness)throws {
+        guard Wire.exact(r.scope,w.scope),r.crewId.utf8.elementsEqual(w.crewId.utf8),r.requestId==w.requestId,
+              Wire.exact(r.change,w.change),r.change.valid,r.artifact.valid,r.artifact.reference==w.reference,!r.recordedAt.isEmpty else {throw Problem.invalid}
+        let e=r.effect
+        guard e.created != true || r.artifact.createdAt.utf8.elementsEqual(r.recordedAt.utf8) else {throw Problem.invalid}
+        switch w.change.kind {
+        case "register":guard e.kind=="registered",e.created != nil,e.claimAdded != nil,e.added==nil,e.edge==nil,e.edgeId==nil else {throw Problem.invalid}
+        case "link","linkExisting":
+            guard w.change.kind != "linkExisting" || e.created==false else {throw Problem.invalid}
+            guard e.kind=="linked",e.created != nil,e.added != nil,e.claimAdded==nil,e.edgeId==nil,let edge=e.edge,edge.valid,
+                  edge.reference==w.reference,edge.subject==w.change.subject,edge.relation==w.change.relation,
+                  edge.crewId.utf8.elementsEqual(w.crewId.utf8),e.added==false || (edge.origin.manual && edge.origin.actor?.kind=="human") else {throw Problem.invalid}
+        case "unlink":guard e.kind=="unlinked",e.edgeId==w.change.expectedEdgeId,e.edge==nil,e.created==nil,e.added==nil,e.claimAdded==nil else {throw Problem.invalid}
+        default:throw Problem.invalid
+        }
+    }
+}
+
+extension CrewdArtifactStore {
+    func readSubject(_ edge:Wire.Edge,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->CrewdValue {
+        guard edge.valid,valid(scope.origin,stillCurrent) else {throw Problem.stale}
+        let s=edge.subject
+        let method=s.kind == .work ? "work.get":s.kind == .requirement ? "todo.get":"managedObject.get"
+        var p:[String:CrewdValue]=["id":.string(s.id)]
+        if method=="managedObject.get" {p["includeSystemDefaults"] = .bool(true)}
+        let raw=try await rpc(method,.object(p));try await check(scope,stillCurrent)
+        if method=="managedObject.get" {
+            let object=try CrewdKnowledgeStore.decode(raw,CrewdManagedDirectoryWire.Object.self)
+            guard object.valid,object.id==s.id,object.kind==s.kind.rawValue,
+                  raw[s.kind.rawValue]["crewId"].string?.isEmpty==false else {throw Problem.invalid}
+        } else {
+            let key=s.kind == .work ? "id":"requirementId"
+            guard raw[key].string==s.id,raw["crewId"].string?.isEmpty==false else {throw Problem.invalid}
+        }
+        return raw
+    }
+}

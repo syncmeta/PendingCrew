@@ -1676,3 +1676,70 @@ The exact source message ID.
 
 ## managed_objects_from_message.after
 The exact nextAfter returned by the previous page; omit for the first page.
+
+
+## artifact_preview
+Read the canonical artifact reference without registering, verifying, accessing repositories or networking. Use your current crew. Full SHAs and absolute URLs are global; short SHAs, files and tests without an explicit opaque repository ID remain unassigned in your crew. PRs and ordinary links normalize to the same url: pointer.
+
+## artifact_preview.crewId
+The exact current or owning crew ID, never inferred from a working directory.
+
+## artifact_preview.input
+Explicit kind and value; optional repository is an explicitly declared opaque repository ID, never guessed from cwd.
+
+## artifacts_list
+Read the organization artifact directory in pages of at most 16. All artifacts remain unverified.
+
+## artifacts_list.after
+Copy the exact nextAfter from the previous page; omit for the first page.
+
+## artifact_get
+Read an unverified artifact by its exact canonical reference. Does not check whether a file or external link exists.
+
+## artifact_get.reference
+Copy namespace and key exactly from preview or a previously read artifact.
+
+## artifact_backlinks
+Read bounded backlinks to an artifact, preserving owning crew and manual/automatic provenance. A link is not system verification.
+
+## artifact_backlinks.reference
+Copy namespace and key exactly from preview or a previously read artifact.
+
+## artifact_backlinks.after
+Copy the exact nextAfter from the previous page; omit for the first page.
+
+## artifact_subject
+Read bounded artifact links of the exact W/#/D/L/R/O/T without changing that work or object.
+
+## artifact_subject.subject
+The exact kind and global ID of the existing subject.
+
+## artifact_subject.after
+Copy the exact nextAfter from the previous page; omit for the first page.
+
+## artifact_submit
+Explicitly register, link or remove a manual artifact link. First use artifact_preview and retain the exact scope, original UUID and full intent. Existing ownership/frozen authority applies. Automatic Work completion and lesson evidence links cannot be removed. Registration records a pointer without verification, git scanning, chat or wakes. Recover uncertainty only through artifact_request_get, never resubmit.
+
+## artifact_submit.scope
+Copy dbId and restoreEpoch exactly from managed_object_scope_get.
+
+## artifact_submit.crewId
+The exact current or owning crew ID, never inferred from a working directory.
+
+## artifact_submit.requestId
+Retain one canonical original UUID for the exact intent; never replace it during recovery.
+
+## artifact_submit.change
+register explicitly pins a pointer; link lazily creates and links atomically; unlink removes only the exact manual expectedEdgeId. L appliesTo accepts only files, W/# allow evidence or relates, and other objects allow relates. linkExisting links an already-read canonical reference without creating or reassigning it, including another crew's unassigned pointer.
+
+## artifact_request_get
+Read the immutable receipt of the original artifact request, separate from ordinary objects and message recording. Historical or absent results never authorize replay.
+
+## artifact_request_get.scope
+Copy dbId and restoreEpoch exactly from managed_object_scope_get.
+
+## artifact_request_get.crewId
+The exact current or owning crew ID, never inferred from a working directory.
+
+## artifact_request_get.requestId
+Retain one canonical original UUID for the exact intent; never replace it during recovery.

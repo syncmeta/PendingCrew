@@ -71,6 +71,46 @@ async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult,
                 .await,
             )
         }
+        "artifact_preview" => {
+            let p: crewd_proto::managed_artifacts::PreviewParams=parse_args(cx,args)?;
+            result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::managed_artifacts::preview(c,Actor::Session(&by.session_id),&p.crew_id,&p.input)
+            }).await)
+        }
+        "artifacts_list" => {
+            let p: crewd_proto::managed_artifacts::ListParams=parse_args(cx,args)?;
+            result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::managed_artifacts::list(c,Actor::Session(&by.session_id),p.after.as_ref())
+            }).await)
+        }
+        "artifact_get" => {
+            let p: crewd_proto::managed_artifacts::GetParams=parse_args(cx,args)?;
+            result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::managed_artifacts::get(c,Actor::Session(&by.session_id),&p.reference)
+            }).await)
+        }
+        "artifact_backlinks" => {
+            let p: crewd_proto::managed_artifacts::BacklinksParams=parse_args(cx,args)?;
+            result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::managed_artifacts::backlinks(c,Actor::Session(&by.session_id),&p.reference,p.after.as_deref())
+            }).await)
+        }
+        "artifact_subject" => {
+            let p: crewd_proto::managed_artifacts::SubjectParams=parse_args(cx,args)?;
+            result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::managed_artifacts::subject(c,Actor::Session(&by.session_id),&p.subject,p.after.as_deref())
+            }).await)
+        }
+        "artifact_submit" => {
+            let p: crewd_proto::managed_artifacts::Submit=parse_args(cx,args)?;
+            result(cx,port::artifact_submit(cx.st,cx.me,p).await)
+        }
+        "artifact_request_get" => {
+            let p: RequestParams=parse_args(cx,args)?;
+            result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::managed_artifacts::lookup(c,Actor::Session(&by.session_id),&p.scope,&p.crew_id,&p.request_id)
+            }).await)
+        }
         "managed_object_scope_get" => {
             let Empty {} = parse_args(cx, args)?;
             result(

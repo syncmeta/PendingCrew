@@ -367,6 +367,7 @@ final class CrewdClient: ObservableObject {
         if includePersonalDraft { topics.append("personalDraft") }
         topics += ["documents","viewFolders","data"].filter { capabilities.contains($0) }
         if capabilities.contains("managedObjects.events.v1") { topics.append("onto") }
+        if capabilities.contains("managedArtifacts.v1") { topics.append("artifact") }
         return topics
     }
 

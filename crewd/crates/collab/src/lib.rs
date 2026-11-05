@@ -37,6 +37,7 @@ pub mod message_provenance;
 pub mod messages;
 pub mod decision_asks;
 pub mod managed_objects;
+pub mod managed_artifacts;
 pub mod managed_message_sources;
 pub mod patrol_brief;
 pub mod channel_responsibility;
@@ -132,6 +133,9 @@ pub enum Change {
     OntologyChanged {
         crew_id: String,
         object_ids: Vec<String>,
+    },
+    ArtifactChanged {
+        crew_id: String,
     },
     DocumentChanged {
         crew_id: String,

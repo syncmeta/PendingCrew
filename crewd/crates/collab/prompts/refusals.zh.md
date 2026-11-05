@@ -577,3 +577,6 @@ expectedStatus 必须是原始需求状态。
 ## ask.inbox_changed
 
 待处理事项或稍后时间已经变化，请重新打开事项后再操作。
+
+## artifact.edge_changed
+产物关联已变更。请先读取当前关联，再选择要移除的关联。

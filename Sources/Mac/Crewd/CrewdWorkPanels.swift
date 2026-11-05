@@ -589,6 +589,11 @@ struct CrewdWorkPanels: View {
         let raw=store.requirements[id] ?? .null
         let status=raw["status"].string ?? "", note=closeNotes[id] ?? ""
         documentLinksButton(id, crew: raw["crewId"].string)
+        if let workspace=patrolWorkspace,let crew=raw["crewId"].string {
+            let sourceScope=store.readScope
+            CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:.requirement,id:id.raw),crew:crew,
+                frozen:raw["frozen"] == .bool(true),current:{store.readScope==sourceScope && selected==id.raw})
+        }
         if raw["closure"] != .null {
             Text("关闭理由：" + (raw["closure"]["note"].string ?? "")).textSelection(.enabled)
         }

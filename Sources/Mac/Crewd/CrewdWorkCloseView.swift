@@ -35,6 +35,10 @@ struct CrewdWorkCloseView: View {
                 Text("关闭说明：" + (current["closure"]["note"].string ?? ""))
                 Text("关闭凭据：" + (current["closure"]["evidence"]["value"].string ?? "")).textSelection(.enabled)
             }
+            if let workspace,!crew.isEmpty {
+                CrewdArtifactSubjectEntry(workspace:workspace,subject:.init(kind:.work,id:id.raw),crew:crew,
+                    frozen:current["frozen"] == .bool(true),current:scopeIsCurrent)
+            }
             recovery(scopedOriginals,crew:crew)
             if scopedOriginals.isEmpty, !["done","dropped"].contains(current["status"].string ?? ""),
                current["frozen"] != .bool(true) {

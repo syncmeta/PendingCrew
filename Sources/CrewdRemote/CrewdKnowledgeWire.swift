@@ -1540,3 +1540,108 @@ enum CrewdManagedMessageWire {
         let nextAfter: String?
     }
 }
+
+/// Independent artifact transport: existing Work and managed-object DTOs stay unchanged.
+enum CrewdArtifactWire {
+    static let capability="managedArtifacts.v1",preview="artifact.preview",list="artifact.list",get="artifact.get"
+    static let backlinks="artifact.backlinks",subject="artifact.subject",submit="artifact.submit",lookup="artifact.request.get"
+    static let observation="artifact.submit.observation"
+    typealias Directory=CrewdManagedDirectoryWire
+    static func bytes<T:Encodable>(_ value:T)throws->Data {let e=JSONEncoder();e.outputFormatting=[.sortedKeys];return try e.encode(value)}
+    static func exact<T:Encodable>(_ a:T,_ b:T)->Bool {(try? bytes(a)) == (try? bytes(b))}
+    struct Namespace:Codable,Equatable {
+        let kind:String
+        var id:String?=nil
+        var crewId:String?=nil
+        var valid:Bool {
+            switch kind {
+            case "global":id==nil && crewId==nil
+            case "repository":id?.isEmpty==false && crewId==nil
+            case "unassigned":crewId?.isEmpty==false && id==nil
+            default:false
+            }
+        }
+        static func ==(a:Self,b:Self)->Bool {CrewdArtifactWire.exact(a,b)}
+    }
+    struct Reference:Codable,Equatable,Identifiable {
+        let namespace:Namespace
+        let key:String
+        var id:String {(try? bytes(self).base64EncodedString()) ?? ""}
+        var valid:Bool {namespace.valid && ["commit:","url:","file:","test:"].contains(where:{key.hasPrefix($0) && key.count>$0.count})}
+        var unassigned:Bool {namespace.kind=="unassigned"}
+        var location:String {switch namespace.kind {case "repository":"仓库标识："+(namespace.id ?? "");case "unassigned":"仓库未归属 · "+(namespace.crewId ?? "");default:"全局指针"}}
+        static func ==(a:Self,b:Self)->Bool {CrewdArtifactWire.exact(a,b)}
+    }
+    enum InputKind:String,Codable,CaseIterable,Identifiable {
+        case commit,pullRequest,file,test,link
+        var id:Self {self}
+        var title:String {switch self {case .commit:"提交";case .pullRequest:"PR";case .file:"仓库内文件";case .test:"测试";case .link:"链接"}}
+    }
+    struct Input:Codable {var kind:InputKind;var value:String;var repository:String?}
+    enum SubjectKind:String,Codable,CaseIterable,Identifiable {
+        case work,requirement,decision,lesson,risk,row,table
+        var id:Self {self}
+        var prefix:Character {switch self {case .work:"W";case .requirement:"#";case .decision:"D";case .lesson:"L";case .risk:"R";case .row:"O";case .table:"T"}}
+        var title:String {switch self {case .work:"计划";case .requirement:"需求";case .decision:"决定";case .lesson:"教训";case .risk:"风险";case .row:"记录";case .table:"组织表"}}
+    }
+    struct Subject:Codable,Equatable,Identifiable {
+        let kind:SubjectKind
+        let id:String
+        var valid:Bool {Directory.objectNumber(id,prefix:kind.prefix) != nil}
+        var relations:[Relation] {switch kind {case .work,.requirement:[.evidence,.relates];case .lesson:[.evidence,.appliesTo,.relates];default:[.relates]}}
+        static func ==(a:Self,b:Self)->Bool {a.kind==b.kind && a.id.utf8.elementsEqual(b.id.utf8)}
+    }
+    enum Relation:String,Codable,CaseIterable,Identifiable {
+        case evidence,appliesTo,relates
+        var id:Self {self}
+        var title:String {switch self {case .evidence:"证据";case .appliesTo:"适用文件";case .relates:"相关产物"}}
+    }
+    struct Artifact:Codable,Identifiable {
+        let reference:Reference
+        let createdAt:String
+        let verification:String
+        var id:String {reference.id}
+        var valid:Bool {reference.valid && !createdAt.isEmpty && verification=="unverified"}
+    }
+    struct Origin:Codable {
+        let kind:String
+        let actor:Directory.DecisionAuthor?
+        let eventSeq:String?
+        var manual:Bool {kind=="manual"}
+        var valid:Bool {switch kind {case "manual":actor?.valid==true && eventSeq==nil;case "workDone":actor==nil && eventSeq.flatMap(Directory.positive) != nil;case "lessonEvidence":actor==nil && eventSeq==nil;default:false}}
+        var title:String {switch kind {case "manual":"手工关联";case "workDone":"完成事实 · 事件 "+(eventSeq ?? "");default:"教训原证据"}}
+    }
+    struct Edge:Codable,Identifiable {
+        let id:String
+        let reference:Reference
+        let crewId:String
+        let subject:Subject
+        let relation:Relation
+        let origin:Origin
+        let createdAt:String
+        var valid:Bool {Directory.positive(id) != nil && reference.valid && !crewId.isEmpty && subject.valid && subject.relations.contains(relation) && origin.valid && !createdAt.isEmpty && (relation != .appliesTo || reference.key.hasPrefix("file:"))}
+    }
+    struct Change:Codable {
+        let kind:String
+        var input:Input?=nil
+        var subject:Subject?=nil
+        var relation:Relation?=nil
+        var reference:Reference?=nil
+        var expectedEdgeId:String?=nil
+        var valid:Bool {
+            switch kind {
+            case "register":input != nil && subject==nil && relation==nil && reference==nil && expectedEdgeId==nil
+            case "link":input != nil && subject?.valid==true && relation.map{subject?.relations.contains($0)==true}==true && reference==nil && expectedEdgeId==nil
+            case "linkExisting":input==nil && reference?.valid==true && subject?.valid==true && relation.map{subject?.relations.contains($0)==true}==true && expectedEdgeId==nil
+            case "unlink":input==nil && reference?.valid==true && subject?.valid==true && relation.map{subject?.relations.contains($0)==true}==true && expectedEdgeId.flatMap(Directory.positive) != nil
+            default:false
+            }
+        }
+    }
+    struct Effect:Codable {let kind:String;let created:Bool?;let claimAdded:Bool?;let added:Bool?;let edge:Edge?;let edgeId:String?}
+    struct Submit:Encodable {let scope:Directory.Scope;let crewId:String;let requestId:String;let change:Change}
+    struct Receipt:Codable {let scope:Directory.Scope;let crewId:String;let requestId:String;let recordedAt:String;let change:Change;let artifact:Artifact;let effect:Effect}
+    struct Lookup:Decodable {let status:String;let receipt:Receipt?}
+    struct Page:Decodable {let items:[Artifact];let nextAfter:Reference?}
+    struct EdgePage:Decodable {let items:[Edge];let nextAfter:String?}
+}

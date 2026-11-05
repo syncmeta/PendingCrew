@@ -1938,6 +1938,26 @@
       ],
       "type": "string"
     },
+    "Artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "verification": {
+          "$ref": "#/$defs/Verification"
+        }
+      },
+      "required": [
+        "reference",
+        "createdAt",
+        "verification"
+      ],
+      "type": "object"
+    },
     "Ask": {
       "description": "一条人类待确认；H 号全组织签发，旧机组编号仅保留为显式别名。",
       "properties": {
@@ -2494,6 +2514,24 @@
       "required": [
         "kind",
         "id"
+      ],
+      "type": "object"
+    },
+    "BacklinksParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        }
+      },
+      "required": [
+        "reference"
       ],
       "type": "object"
     },
@@ -3274,6 +3312,118 @@
           "type": "object"
         }
       ]
+    },
+    "Change2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/Input"
+            },
+            "kind": {
+              "const": "register",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "input": {
+              "$ref": "#/$defs/Input"
+            },
+            "kind": {
+              "const": "link",
+              "type": "string"
+            },
+            "relation": {
+              "$ref": "#/$defs/Relation"
+            },
+            "subject": {
+              "$ref": "#/$defs/Subject"
+            }
+          },
+          "required": [
+            "kind",
+            "input",
+            "subject",
+            "relation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "linkExisting",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            },
+            "relation": {
+              "$ref": "#/$defs/Relation"
+            },
+            "subject": {
+              "$ref": "#/$defs/Subject"
+            }
+          },
+          "required": [
+            "kind",
+            "reference",
+            "subject",
+            "relation"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedEdgeId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unlink",
+              "type": "string"
+            },
+            "reference": {
+              "$ref": "#/$defs/Reference"
+            },
+            "relation": {
+              "$ref": "#/$defs/Relation"
+            },
+            "subject": {
+              "$ref": "#/$defs/Subject"
+            }
+          },
+          "required": [
+            "kind",
+            "reference",
+            "subject",
+            "relation",
+            "expectedEdgeId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Changed": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
     },
     "Channel": {
       "properties": {
@@ -10131,6 +10281,130 @@
       ],
       "type": "object"
     },
+    "Edge": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        },
+        "relation": {
+          "$ref": "#/$defs/Relation"
+        },
+        "subject": {
+          "$ref": "#/$defs/Subject"
+        }
+      },
+      "required": [
+        "id",
+        "reference",
+        "crewId",
+        "subject",
+        "relation",
+        "origin",
+        "createdAt"
+      ],
+      "type": "object"
+    },
+    "EdgePage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Edge"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "Effect": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "claimAdded": {
+              "type": "boolean"
+            },
+            "created": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "registered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "created",
+            "claimAdded"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "added": {
+              "type": "boolean"
+            },
+            "created": {
+              "type": "boolean"
+            },
+            "edge": {
+              "$ref": "#/$defs/Edge"
+            },
+            "kind": {
+              "const": "linked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "created",
+            "added",
+            "edge"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edgeId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unlinked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "edgeId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Empty": {
       "additionalProperties": false,
       "description": "空结果（`crew.purge` 等）。",
@@ -10338,6 +10612,22 @@
             },
             "event": {
               "const": "onto.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Changed"
+            },
+            "event": {
+              "const": "artifact.changed",
               "type": "string"
             }
           },
@@ -11055,6 +11345,18 @@
       ],
       "type": "object"
     },
+    "GetParams4": {
+      "additionalProperties": false,
+      "properties": {
+        "reference": {
+          "$ref": "#/$defs/Reference"
+        }
+      },
+      "required": [
+        "reference"
+      ],
+      "type": "object"
+    },
     "HealthKindView": {
       "enum": [
         "auth_required",
@@ -11534,6 +11836,28 @@
       ],
       "type": "object"
     },
+    "Input": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        },
+        "repository": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
     "JudgmentBackend": {
       "enum": [
         "typesafe"
@@ -11989,6 +12313,16 @@
       ],
       "type": "object"
     },
+    "Kind": {
+      "enum": [
+        "commit",
+        "pullRequest",
+        "file",
+        "test",
+        "link"
+      ],
+      "type": "string"
+    },
     "Lagged": {
       "description": "`events.lagged`：漏掉的事件条数，客户端应全量重拉。",
       "properties": {
@@ -12387,6 +12721,22 @@
       ],
       "type": "object"
     },
+    "ListParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "LocalClientTrustMode": {
       "enum": [
         "exactCode",
@@ -12556,6 +12906,63 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/RecordReceipt"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Lookup3": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/Receipt2"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Receipt2"
                 },
                 {
                   "type": "null"
@@ -13429,6 +13836,57 @@
       ],
       "type": "string"
     },
+    "Namespace": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "global",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "repository",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "crewId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unassigned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "crewId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "NoParams": {
       "additionalProperties": false,
       "description": "无参数方法只收 null 或 {}。",
@@ -14246,6 +14704,57 @@
       ],
       "type": "object"
     },
+    "Origin": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/ResourceActor"
+            },
+            "kind": {
+              "const": "manual",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "eventSeq": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "workDone",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "eventSeq"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "lessonEvidence",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "OriginParams": {
       "additionalProperties": false,
       "properties": {
@@ -14255,6 +14764,31 @@
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "Page": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Reference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items"
       ],
       "type": "object"
     },
@@ -15277,6 +15811,22 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "PreviewParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "input": {
+          "$ref": "#/$defs/Input"
+        }
+      },
+      "required": [
+        "crewId",
+        "input"
+      ],
+      "type": "object"
+    },
     "PublicCommand": {
       "description": "Closed typed whitelist. Resource-specific requestId/CAS methods keep their\nexisting contracts; this is not an arbitrary RPC proxy.",
       "oneOf": [
@@ -16224,6 +16774,42 @@
       "type": "object"
     },
     "Receipt2": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/Artifact"
+        },
+        "change": {
+          "$ref": "#/$defs/Change2"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect"
+        },
+        "recordedAt": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "recordedAt",
+        "change",
+        "artifact",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "Receipt3": {
       "description": "`message.receipts` 的一行：一条消息叫醒的一个 session（S54；N2 再加「开始了 / 回复了」）。",
       "properties": {
         "attempts": {
@@ -16344,6 +16930,30 @@
         "object"
       ],
       "type": "object"
+    },
+    "Reference": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "namespace": {
+          "$ref": "#/$defs/Namespace"
+        }
+      },
+      "required": [
+        "namespace",
+        "key"
+      ],
+      "type": "object"
+    },
+    "Relation": {
+      "enum": [
+        "evidence",
+        "appliesTo",
+        "relates"
+      ],
+      "type": "string"
     },
     "RemoteAcceptParams": {
       "additionalProperties": false,
@@ -18908,11 +19518,176 @@
         }
       ]
     },
+    "Subject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "requirement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "lesson",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "risk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "row",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SubjectParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subject": {
+          "$ref": "#/$defs/Subject"
+        }
+      },
+      "required": [
+        "subject"
+      ],
+      "type": "object"
+    },
     "Submit": {
       "additionalProperties": false,
       "properties": {
         "change": {
           "$ref": "#/$defs/Change"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "change"
+      ],
+      "type": "object"
+    },
+    "Submit2": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/Change2"
         },
         "crewId": {
           "type": "string"
@@ -18954,7 +19729,8 @@
               "viewFolders",
               "personalDraft",
               "data",
-              "onto"
+              "onto",
+              "artifact"
             ],
             "type": "string"
           },
@@ -19902,6 +20678,12 @@
         "role"
       ],
       "type": "object"
+    },
+    "Verification": {
+      "enum": [
+        "unverified"
+      ],
+      "type": "string"
     },
     "View": {
       "additionalProperties": false,
@@ -21933,6 +22715,9 @@
   },
   "apiVersion": 3,
   "events": {
+    "artifact.changed": {
+      "$ref": "#/$defs/Changed"
+    },
     "ask.changed": {
       "$ref": "#/$defs/Ask"
     },
@@ -22141,6 +22926,69 @@
       },
       "result": {
         "$ref": "#/$defs/WorkDuplicatesPage"
+      }
+    },
+    "artifact.backlinks": {
+      "params": {
+        "$ref": "#/$defs/BacklinksParams"
+      },
+      "result": {
+        "$ref": "#/$defs/EdgePage"
+      }
+    },
+    "artifact.get": {
+      "params": {
+        "$ref": "#/$defs/GetParams4"
+      },
+      "result": {
+        "$ref": "#/$defs/Artifact"
+      }
+    },
+    "artifact.list": {
+      "params": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ListParams"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/Page"
+      }
+    },
+    "artifact.preview": {
+      "params": {
+        "$ref": "#/$defs/PreviewParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Reference"
+      }
+    },
+    "artifact.request.get": {
+      "params": {
+        "$ref": "#/$defs/RequestParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Lookup3"
+      }
+    },
+    "artifact.subject": {
+      "params": {
+        "$ref": "#/$defs/SubjectParams"
+      },
+      "result": {
+        "$ref": "#/$defs/EdgePage"
+      }
+    },
+    "artifact.submit": {
+      "params": {
+        "$ref": "#/$defs/Submit2"
+      },
+      "result": {
+        "$ref": "#/$defs/Receipt2"
       }
     },
     "ask.answer": {
@@ -22988,7 +23836,7 @@
       },
       "result": {
         "items": {
-          "$ref": "#/$defs/Receipt2"
+          "$ref": "#/$defs/Receipt3"
         },
         "type": "array"
       }
@@ -23763,7 +24611,8 @@
     "viewFolders",
     "personalDraft",
     "data",
-    "onto"
+    "onto",
+    "artifact"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

@@ -179,6 +179,8 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
     match tool {
         "ask_decision"
         | "ask_decision_request_get"
+        | "artifact_preview" | "artifacts_list" | "artifact_get" | "artifact_backlinks"
+        | "artifact_subject" | "artifact_submit" | "artifact_request_get"
         | "managed_object_scope_get"
         | "managed_object_get"
         | "managed_tables_list"

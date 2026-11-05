@@ -619,7 +619,8 @@ fn physical_reopen_and_official_restore_preserve_original_receipts_without_reexe
 fn protected_v26_migration_retains_existing_objects_and_original_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().canonicalize().unwrap();
-    let mut s = disk_fixture(&data);
+    let mut s = crewd_store::testing::open_legacy_store(26).unwrap();
+    s.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew-a','A','t','t');").unwrap();
     let scope = objects::scope(s.conn()).unwrap();
     let prior = ok(&mut s, |tx| {
         objects::submit(
@@ -634,17 +635,14 @@ fn protected_v26_migration_retains_existing_objects_and_original_snapshot() {
         )
     });
     let prior_number: i64 = object_id(&prior.object)[1..].parse().unwrap();
+    s.conn().execute("VACUUM INTO ?1", [data.join(crewd_store::DB_FILE).to_str().unwrap()]).unwrap();
     drop(s);
-    // Exact pre27 shape: the new two tables were absent, while the v26 real object remains.
-    let raw = rusqlite::Connection::open(data.join(crewd_store::DB_FILE)).unwrap();
-    raw.execute_batch("DROP TABLE managed_message_receipts; DROP TABLE managed_message_sources; PRAGMA user_version=26;").unwrap();
-    drop(raw);
     let s = Store::open_data_dir(&data).unwrap();
     assert_eq!(
         s.conn()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        27
+        crewd_store::schema::SCHEMA_VERSION
     );
     assert_eq!(
         objects::get(s.conn(), HUMAN, object_id(&prior.object)).unwrap(),
@@ -661,7 +659,7 @@ fn protected_v26_migration_retains_existing_objects_and_original_snapshot() {
             path.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("crewd-v26-pre-v27-")
+                .starts_with(&format!("crewd-v26-pre-v{}-", crewd_store::schema::SCHEMA_VERSION))
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -703,7 +701,7 @@ fn protected_v26_migration_retains_existing_objects_and_original_snapshot() {
             .filter(|entry| entry
                 .file_name()
                 .to_string_lossy()
-                .starts_with("crewd-v26-pre-v27-"))
+                .starts_with(&format!("crewd-v26-pre-v{}-", crewd_store::schema::SCHEMA_VERSION)))
             .count(),
         1,
         "ordinary reopen must not migrate again"

@@ -32,6 +32,7 @@ refusal_codes! {
     ManagedDecisionChanged = "managed_object.decision_changed" [],
     ManagedRiskChanged = "managed_object.risk_changed" [],
     ManagedLessonChanged = "managed_object.lesson_changed" [],
+    ArtifactEdgeChanged = "artifact.edge_changed" [],
     CommandReceiptCapacity = "command.receipt_capacity" [],
     DocumentRevisionConflict = "document.revision_conflict" ["id"],
     DocumentDeleted = "document.deleted" ["id"],

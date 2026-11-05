@@ -1676,3 +1676,70 @@ managed_tables_list 或 managed_object_get 返回的准确 T 编号。
 
 ## managed_objects_from_message.after
 上一页返回的准确nextAfter；省略以从第一页开始。
+
+
+## artifact_preview
+只读核对产物的规范自然键，不登记、不核验、不访问仓库或网络。使用当前机组；完整SHA或绝对URL为全局，短SHA/文件/测试无显式仓库标识时标记本机组未归属。PR和普通链接规范化为同一url:指针。
+
+## artifact_preview.crewId
+当前或实际归属机组的准确编号，不从工作目录推断。
+
+## artifact_preview.input
+明确类型和值；repository为显式不透明仓库标识，可省略，不能猜cwd。
+
+## artifacts_list
+分页读取组织产物目录，每页最多16项。所有产物均未核验。
+
+## artifacts_list.after
+准确复制上一页的nextAfter，省略从第一页开始。
+
+## artifact_get
+读取精确规范引用的未核验产物，不检查文件或外链是否存在。
+
+## artifact_get.reference
+准确复制preview或已读取对象的namespace与key。
+
+## artifact_backlinks
+分页反查这项产物的实际关联。保留归属机组与自动/手工来源区别，不能把关联当作系统已验证。
+
+## artifact_backlinks.reference
+准确复制preview或已读取对象的namespace与key。
+
+## artifact_backlinks.after
+准确复制上一页的nextAfter，省略从第一页开始。
+
+## artifact_subject
+分页读取原W/#/D/L/R/O/T的产物关联，不更改原工作或对象。
+
+## artifact_subject.subject
+原有全局对象的准确kind和id。
+
+## artifact_subject.after
+准确复制上一页的nextAfter，省略从第一页开始。
+
+## artifact_submit
+明确登记、关联或移除手工产物关联。先用artifact_preview核对自然键，保留原范围、UUID与完整意图。对象归属与冻结权限沿现有规则；自动完成事实和教训证据边不能移除。登记是指针，不验证、不扫git、不发消息或唤醒。结果不确定只查原artifact_request_get，不重发。
+
+## artifact_submit.scope
+准确复制managed_object_scope_get的dbId和restoreEpoch。
+
+## artifact_submit.crewId
+当前或实际归属机组的准确编号，不从工作目录推断。
+
+## artifact_submit.requestId
+为确切意图保留一个规范原始UUID，恢复时不得另建。
+
+## artifact_submit.change
+register显式登记；link原子懒建并关联；unlink只移除精确expectedEdgeId的手工边。L appliesTo仅文件，W/# evidence或relates，其余对象仅relates。 linkExisting使用已读的规范引用关联原对象，不新建或改归属，允许关联其他机组的未归属指针。
+
+## artifact_request_get
+只读查询原始产物请求的不可变回执；与普通对象/消息登记回执独立。历史或缺失结果均不授权重发。
+
+## artifact_request_get.scope
+准确复制managed_object_scope_get的dbId和restoreEpoch。
+
+## artifact_request_get.crewId
+当前或实际归属机组的准确编号，不从工作目录推断。
+
+## artifact_request_get.requestId
+为确切意图保留一个规范原始UUID，恢复时不得另建。
