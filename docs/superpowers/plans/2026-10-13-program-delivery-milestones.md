@@ -23,6 +23,12 @@
 
 8 项本机验收和配对重启、撤权通过。注入回执写入失败后，原工作和依赖变更一起回退。Swift 回归覆盖旧版返回值的三种关闭类型、未知结果保留、恢复后跨机组同号隔离和已知群链接失效。Mac Debug 私有预览通过严格签名和动态库核验，iPhoneOS arm64 Debug 完整编译通过。见 `/private/tmp/pcw-work-close-integration.UiUIeDos/mac-debug-preview/candidate.json` 和 `/private/tmp/pcw-work-close-integration.UiUIeDos/ios-debug-proof.json`。
 
+`19a02771` 接通同机组资料库的原生建表、浏览、增加及编辑行。写入使用绑定的类型化参数，编辑保留主键。宽表按字节提前截页，继续位置由最后一条已返回的稳定主键确定。实测旧表的主键和唯一键冲突均拒绝替换，原有两行保留。触发器、外键及其他超出原生单行编辑范围的旧表仍可浏览。组织可读对象、T/O 全局编号及本体关联属于后续交付。
+
+准确普通 Core 和实际 Swift 数据层均完成独立联调。普通后台验证首次空库建表、两次干净退出、附着连接同机组读取和跨机组拒绝。Swift 与后台实际退出并重开后，只按原 UUID 核对，磁盘仅有一条原回执，稍后的写入也保留。3 项表格存储回归和 8 项资料库后台回归通过。实际普通后台导出的公开 API 与仓库定义逐字节一致。原生 Mac 私有 Debug 预览核对嵌入后台、严格签名及动态库。iPhoneOS arm64 Debug 核对 iPhone、iPad 目标及实际 Swift 调试动态库。记录见 `/private/tmp/pcw-table-run.uh9t7jam/result.json`、`/private/tmp/pcw-swtab-run.1tz6mti9/result.json`、`/private/tmp/pcw-table-integration.H3l6ymfq/mac-final-debug-preview/candidate.json` 和 `/private/tmp/pcw-table-integration.H3l6ymfq/ios-final-debug-proof.json`。
+
+行政协调的 macOS 普通后台 `08a3c48e` 已在隔离机组实测 Jev 本机 HTTPS 证书拒绝。捕获实际 TLS 拒绝，后台持久记录服务不可用，保留原工作，没有新增协调唤醒、指派或拆项。实际退出重开后记录一致，未重试该轮请求。此验收使用合成证书及仅回环服务。成功 HTTPS 响应和真实提供方分别验收，见 `/private/tmp/pcw-jev-tls.f9dc78wn/result.json`。
+
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
 早先 `2ef0998d` 的隔离升级及回滚也通过，Apple 回执为 `09351a3b-b20d-40e9-91fe-00c5a40eeff2`。`945cd2c6`（0.2.3，构建 `20761.65326`）通过 Apple 公证、票据及 Gatekeeper 检查，回执为 `59254362-f660-49e3-ba3c-61f331ddfddc`。首条回复的后续修正在 `9a5a6a08`。
