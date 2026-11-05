@@ -2679,6 +2679,36 @@
       ],
       "type": "object"
     },
+    "Capture": {
+      "additionalProperties": false,
+      "properties": {
+        "decisionId": {
+          "type": "string"
+        },
+        "eventSeq": {
+          "type": "string"
+        },
+        "humanReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "optionId": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        }
+      },
+      "required": [
+        "decisionId",
+        "eventSeq",
+        "optionId",
+        "source"
+      ],
+      "type": "object"
+    },
     "CausalBlockageView": {
       "properties": {
         "cursorUnknown": {
@@ -9601,6 +9631,40 @@
       ],
       "type": "object"
     },
+    "DecisionsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "includeSystemDefaults": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DefaultChoice": {
+      "additionalProperties": false,
+      "properties": {
+        "afterMinutes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "optionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "optionId",
+        "afterMinutes"
+      ],
+      "type": "object"
+    },
     "Desired": {
       "enum": [
         "running",
@@ -10009,6 +10073,61 @@
         "expectedRevision",
         "title",
         "body"
+      ],
+      "type": "object"
+    },
+    "Draft": {
+      "additionalProperties": false,
+      "properties": {
+        "about": {
+          "items": {
+            "$ref": "#/$defs/DecisionAbout"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "context": {
+          "type": "string"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DefaultChoice"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "options": {
+          "description": "Stable identifiers A through H follow the immutable option order.",
+          "items": {
+            "$ref": "#/$defs/OptionDraft"
+          },
+          "maxItems": 8,
+          "minItems": 2,
+          "type": "array"
+        },
+        "question": {
+          "type": "string"
+        },
+        "reversibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionReversibility"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "question",
+        "context",
+        "options",
+        "about"
       ],
       "type": "object"
     },
@@ -10897,10 +11016,30 @@
       "properties": {
         "id": {
           "type": "string"
+        },
+        "includeSystemDefaults": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "GetParams2": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "ask"
       ],
       "type": "object"
     },
@@ -13907,6 +14046,107 @@
       "required": [
         "crewId",
         "objectIds"
+      ],
+      "type": "object"
+    },
+    "OpenLookup": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/OpenReceipt"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/OpenReceipt"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OpenReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "opened": {
+          "$ref": "#/$defs/View"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "requestId",
+        "opened"
+      ],
+      "type": "object"
+    },
+    "OptionDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "type": "object"
+    },
+    "OriginParams": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
       ],
       "type": "object"
     },
@@ -18413,6 +18653,13 @@
       ],
       "type": "object"
     },
+    "Source": {
+      "enum": [
+        "human",
+        "systemDefault"
+      ],
+      "type": "string"
+    },
     "Submit": {
       "additionalProperties": false,
       "properties": {
@@ -19405,6 +19652,36 @@
       },
       "required": [
         "role"
+      ],
+      "type": "object"
+    },
+    "View": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "type": "string"
+        },
+        "capture": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "draft": {
+          "$ref": "#/$defs/Draft"
+        }
+      },
+      "required": [
+        "crewId",
+        "ask",
+        "draft"
       ],
       "type": "object"
     },
@@ -21626,6 +21903,21 @@
         "$ref": "#/$defs/Ask"
       }
     },
+    "ask.decisionGet": {
+      "params": {
+        "$ref": "#/$defs/GetParams2"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/View"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
     "ask.get": {
       "params": {
         "$ref": "#/$defs/AskGetParams"
@@ -22237,11 +22529,26 @@
         "$ref": "#/$defs/LoopRecovered"
       }
     },
+    "managedObject.decisionOrigin": {
+      "params": {
+        "$ref": "#/$defs/OriginParams"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/View"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
     "managedObject.decisions": {
       "params": {
         "anyOf": [
           {
-            "$ref": "#/$defs/TablesParams"
+            "$ref": "#/$defs/DecisionsParams"
           },
           {
             "type": "null"

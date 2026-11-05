@@ -2278,6 +2278,210 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Ask the Human to select one option for your current crew. A selected answer or applied default creates an organization-readable decision. Include only question, context, options, and links that the organization may read. Use ask for a private or free-text question. Retain the original request UUID and scope if the result is uncertain.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "draft": {
+            "additionalProperties": false,
+            "description": "Provide the question, the background, two to eight different single-line options in order, and the exact related object IDs. Option IDs run from A in order. If specifying a default, give one of those IDs and the delay in whole minutes.",
+            "properties": {
+              "about": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "crew",
+                        "work",
+                        "requirement",
+                        "row",
+                        "risk"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "context": {
+                "maxLength": 900,
+                "minLength": 1,
+                "type": "string"
+              },
+              "default": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "afterMinutes": {
+                        "maximum": 10080,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "optionId": {
+                        "enum": [
+                          "A",
+                          "B",
+                          "C",
+                          "D",
+                          "E",
+                          "F",
+                          "G",
+                          "H"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "optionId",
+                      "afterMinutes"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "options": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 2,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "question": {
+                "maxLength": 60,
+                "minLength": 1,
+                "type": "string"
+              },
+              "reversibility": {
+                "enum": [
+                  "reversible",
+                  "hardToReverse",
+                  "irreversible",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "question",
+              "context",
+              "options",
+              "about"
+            ],
+            "type": "object"
+          },
+          "requestId": {
+            "description": "Generate one canonical UUID for this exact request and retain it for lookup.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy the current dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "requestId",
+          "draft"
+        ],
+        "type": "object"
+      },
+      "name": "ask_decision"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Look up the original structured question opening receipt for this session. The result records the original opening. Check the Human Ask or exact decision separately for the current outcome. A missing or historical receipt does not authorize another execution.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "description": "The exact original request UUID.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "The original dbId and restoreEpoch from the opening request.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "ask_decision_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -2810,6 +3014,10 @@
           "id": {
             "description": "The exact T table, O row, D decision, R risk, or L lesson ID.",
             "type": "string"
+          },
+          "includeSystemDefaults": {
+            "description": "Include decisions recorded by an applied default when true. Omit or use false for the earlier read behavior.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2880,6 +3088,10 @@
           "after": {
             "description": "The previous page's nextAfter D ID. Omit for the first page.",
             "type": "string"
+          },
+          "includeSystemDefaults": {
+            "description": "Include decisions recorded by an applied default when true. Keep the same value across the pages of one browse.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -6216,6 +6428,210 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Ask the Human to select one option for your current crew. A selected answer or applied default creates an organization-readable decision. Include only question, context, options, and links that the organization may read. Use ask for a private or free-text question. Retain the original request UUID and scope if the result is uncertain.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "draft": {
+            "additionalProperties": false,
+            "description": "Provide the question, the background, two to eight different single-line options in order, and the exact related object IDs. Option IDs run from A in order. If specifying a default, give one of those IDs and the delay in whole minutes.",
+            "properties": {
+              "about": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "crew",
+                        "work",
+                        "requirement",
+                        "row",
+                        "risk"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "context": {
+                "maxLength": 900,
+                "minLength": 1,
+                "type": "string"
+              },
+              "default": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "afterMinutes": {
+                        "maximum": 10080,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "optionId": {
+                        "enum": [
+                          "A",
+                          "B",
+                          "C",
+                          "D",
+                          "E",
+                          "F",
+                          "G",
+                          "H"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "optionId",
+                      "afterMinutes"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "options": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 2,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "question": {
+                "maxLength": 60,
+                "minLength": 1,
+                "type": "string"
+              },
+              "reversibility": {
+                "enum": [
+                  "reversible",
+                  "hardToReverse",
+                  "irreversible",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "question",
+              "context",
+              "options",
+              "about"
+            ],
+            "type": "object"
+          },
+          "requestId": {
+            "description": "Generate one canonical UUID for this exact request and retain it for lookup.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy the current dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "requestId",
+          "draft"
+        ],
+        "type": "object"
+      },
+      "name": "ask_decision"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Look up the original structured question opening receipt for this session. The result records the original opening. Check the Human Ask or exact decision separately for the current outcome. A missing or historical receipt does not authorize another execution.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "description": "The exact original request UUID.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "The original dbId and restoreEpoch from the opening request.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "ask_decision_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -6374,6 +6790,10 @@
           "id": {
             "description": "The exact T table, O row, D decision, R risk, or L lesson ID.",
             "type": "string"
+          },
+          "includeSystemDefaults": {
+            "description": "Include decisions recorded by an applied default when true. Omit or use false for the earlier read behavior.",
+            "type": "boolean"
           }
         },
         "required": [
@@ -6444,6 +6864,10 @@
           "after": {
             "description": "The previous page's nextAfter D ID. Omit for the first page.",
             "type": "string"
+          },
+          "includeSystemDefaults": {
+            "description": "Include decisions recorded by an applied default when true. Keep the same value across the pages of one browse.",
+            "type": "boolean"
           }
         },
         "type": "object"

@@ -1075,6 +1075,7 @@ enum CrewdManagedDirectoryWire {
             guard kind == "session", let sessionId, !sessionId.isEmpty, sessionId.utf8.count <= 500 else { return false }
             return !sessionId.unicodeScalars.contains { $0.properties.generalCategory == .control }
         }
+        var validDecisionOrigin: Bool { valid || (kind == "systemDefault" && sessionId == nil) }
     }
     enum DecisionAboutKind: String, Codable, CaseIterable, Identifiable {
         case crew, work, requirement, row, risk
@@ -1141,7 +1142,7 @@ enum CrewdManagedDirectoryWire {
         let withdrawal: DecisionWithdrawal?
         var valid: Bool {
             guard let number = objectNumber(id,prefix:"D"), positive(revision) != nil, !crewId.isEmpty,
-                  draft.valid, author.valid, !createdAt.isEmpty else { return false }
+                  draft.valid, author.validDecisionOrigin, !createdAt.isEmpty else { return false }
             if let predecessor = supersedes {
                 guard let old = objectNumber(predecessor,prefix:"D"), old < number else { return false }
             }

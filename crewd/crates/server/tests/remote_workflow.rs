@@ -745,6 +745,116 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
 }
 
 #[tokio::test]
+async fn paired_structured_ask_captures_direct_group_and_system_decisions() {
+    use crewd_collab::{asks, decision_asks as domain, managed_objects, sessions};
+    use crewd_proto::{
+        Role, commands::ASK_RESOLVE, decision_asks::*, managed_objects::DecisionAbout,
+        methods::ASK_RESOLVE_CHECK,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
+    let crew = local(&mut running.owner, "crew.create", json!({
+        "title":"Structured Ask fixture","workingDirectory":dir.path()
+    })).await["id"].as_str().unwrap().to_owned();
+    stopped(running).await;
+    let questions = {
+        let now = crewd_store::now_ms();
+        let mut store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
+        let (questions, _) = crewd_collab::run(&mut store, now - 180_000, |tx| {
+            let worker = sessions::register(tx, sessions::NewSession {
+                crew_id: crew.clone(),
+                role: Role::Worker,
+                executor: "codex".into(),
+                title: Some("H fixture worker".into()),
+                ..Default::default()
+            })?;
+            let scope = managed_objects::scope(tx.conn())?;
+            ["Automatic", "Direct", "Group", "Revoked"].into_iter().enumerate().map(|(index, name)| {
+                let (receipt, fresh) = domain::open(tx, &worker.id, Open {
+                    scope: scope.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    draft: Draft {
+                        question: format!("{name} choice"),
+                        context: "Published decision context".into(),
+                        options: vec![OptionDraft { label: "First".into() }, OptionDraft { label: "Second".into() }],
+                        about: vec![DecisionAbout::Crew { id: crew.clone() }],
+                        default: (index == 0).then(|| DefaultChoice { option_id: "B".into(), after_minutes: 1 }),
+                        reversibility: None,
+                    },
+                })?;
+                assert!(fresh);
+                asks::get(tx.conn(), &crew, &receipt.opened.ask)
+            }).collect::<crewd_collab::Result<Vec<_>>>()
+        }).unwrap();
+        let (defaults, _) = crewd_collab::run(&mut store, now, asks::apply_all_due_defaults).unwrap();
+        assert_eq!(defaults, [questions[0].ask.clone()]);
+        questions
+    };
+    let mut running = service(dir.path()).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert!(hello["capabilities"].as_array().unwrap().iter().any(|cap| cap == CAPABILITY));
+    let key = |index: usize| json!({"crewId":crew,"ask":questions[index].ask});
+
+    let defaulted = remote.call(GET, key(0)).await;
+    assert_eq!(defaulted["capture"]["source"], "systemDefault");
+    assert_eq!(defaulted["capture"]["optionId"], "B");
+    assert!(defaulted["capture"]["humanReason"].is_null());
+    let default_id = &defaulted["capture"]["decisionId"];
+    assert!(remote.frame("managedObject.get", json!({"id":default_id})).await.unwrap()["error"].is_object());
+    assert_eq!(remote.call("managedObject.decisions", json!({})).await["items"], json!([]));
+    let default_object = remote.call("managedObject.get", json!({"id":default_id,"includeSystemDefaults":true})).await;
+    assert_eq!(default_object["decision"]["author"]["kind"], "systemDefault");
+    assert_eq!(default_object["decision"]["draft"]["choice"], "Second");
+    assert_eq!(remote.call(DECISION_ORIGIN, json!({"id":default_id})).await, defaulted);
+
+    let checked = remote.call(ASK_RESOLVE_CHECK, key(1)).await;
+    let direct = draft_packet(&hello, ASK_RESOLVE, json!({
+        "crewId":crew,"ask":questions[1].ask,"expectedResolutionRevision":checked["resolutionRevision"],
+        "disposition":"answer","text":"A\nHuman reasoning"
+    }));
+    let committed = remote.call("command.submit", direct.clone()).await;
+    assert_eq!(remote.call("command.submit", direct).await, committed);
+    let answered = remote.call(GET, key(1)).await;
+    assert_eq!(answered["capture"]["source"], "human");
+    assert_eq!(answered["capture"]["humanReason"], "Human reasoning");
+    assert_eq!(answered["capture"]["eventSeq"], committed["result"]["eventSeq"]);
+
+    let channel = crewd_store::channels::human_id(&crew);
+    let before = remote.call("message.list", json!({"channelId":channel})).await;
+    let unstructured = remote.frame("message.post", json!({
+        "channelId":channel,"inReplyTo":questions[2].message_id,"text":"Maybe the second one"
+    })).await.unwrap();
+    assert!(unstructured["error"].is_object());
+    assert_eq!(remote.call("message.list", json!({"channelId":channel})).await, before);
+    assert!(remote.call(GET, key(2)).await["capture"].is_null());
+    let group = draft_packet(&hello, "message.post", json!({
+        "channelId":channel,"inReplyTo":questions[2].message_id,"text":"B"
+    }));
+    let group_receipt = remote.call("command.submit", group.clone()).await;
+    assert_eq!(remote.call("command.submit", group).await, group_receipt);
+    let group_decision = remote.call(GET, key(2)).await;
+    assert_eq!(group_decision["capture"]["source"], "human");
+    assert_eq!(group_decision["capture"]["optionId"], "B");
+    assert_eq!(remote.call("managedObject.decisions", json!({})).await["items"].as_array().unwrap().len(), 2);
+    assert_eq!(remote.call("managedObject.decisions", json!({"includeSystemDefaults":true})).await["items"].as_array().unwrap().len(), 3);
+
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"close structured fixture"
+    })).await;
+    let revoked = remote.frame("message.post", json!({
+        "channelId":channel,"inReplyTo":questions[3].message_id,"text":"A"
+    })).await;
+    assert!(revoked.is_err() || revoked.unwrap()["error"].is_object());
+    assert!(local(&mut running.owner, GET, key(3)).await["capture"].is_null());
+    drop(remote);
+    stopped(running).await;
+}
+
+#[tokio::test]
 async fn paired_human_factual_duplicate_close_keeps_receipt_scope_and_revocation() {
     use crewd_proto::admin_cases::{WORK_DUPLICATE_CLOSE, WORK_DUPLICATE_HISTORY, WORK_DUPLICATES};
 

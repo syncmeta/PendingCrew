@@ -1,12 +1,13 @@
-//! Typed organization-object tools. Their connection and token must be
+//! Typed organization-object and decision-request tools. Their connection and token must be
 //! revalidated at the same FIFO cut as every read or write.
 use super::{Ctx, parse_args, port};
 use crewd_collab::managed_objects::{self as objects, Actor};
 use crewd_proto::{
     Empty,
     agent::CallResult,
+    decision_asks::{LookupParams, Open},
     managed_objects::{Scope, Submit},
-    managed_objects_api::{GetParams, RequestParams, RowsParams, TablesParams},
+    managed_objects_api::{DecisionsParams, GetParams, RequestParams, RowsParams, TablesParams},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -42,6 +43,34 @@ pub(super) async fn call(cx: &Ctx<'_>, tool: &str, args: Value) -> CallResult {
 
 async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult, CallResult> {
     let output = match tool {
+        "ask_decision" => {
+            let p: Open = parse_args(cx, args)?;
+            let (receipt, fresh) = port::open_decision_ask(cx.st, cx.me, p)
+                .await
+                .map_err(|error| cx.fail(error))?;
+            if fresh {
+                crate::agent::turn::note_post(
+                    cx.st,
+                    cx.me,
+                    &[crewd_proto::Mention {
+                        kind: crewd_proto::MentionKind::Human,
+                        target_id: None,
+                    }],
+                )
+                .await;
+            }
+            result(cx, Ok(receipt))
+        }
+        "ask_decision_request_get" => {
+            let p: LookupParams = parse_args(cx, args)?;
+            result(
+                cx,
+                port::managed_read(cx.st, cx.me, move |c, by| {
+                    crewd_collab::decision_asks::lookup(c, &by.session_id, &p.scope, &p.request_id)
+                })
+                .await,
+            )
+        }
         "managed_object_scope_get" => {
             let Empty {} = parse_args(cx, args)?;
             result(
@@ -60,7 +89,12 @@ async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult,
             result(
                 cx,
                 port::managed_read(cx.st, cx.me, move |c, by| {
-                    objects::get(c, Actor::Session(&by.session_id), &p.id)
+                    objects::get_with_defaults(
+                        c,
+                        Actor::Session(&by.session_id),
+                        &p.id,
+                        p.include_system_defaults,
+                    )
                 })
                 .await,
             )
@@ -91,11 +125,16 @@ async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult,
             )
         }
         "managed_decisions_list" => {
-            let p: ListParams = parse_args(cx, args)?;
+            let p: DecisionsParams = parse_args(cx, args)?;
             result(
                 cx,
                 port::managed_read(cx.st, cx.me, move |c, by| {
-                    objects::decisions(c, Actor::Session(&by.session_id), p.after.as_deref())
+                    objects::decisions_with_defaults(
+                        c,
+                        Actor::Session(&by.session_id),
+                        p.after.as_deref(),
+                        p.include_system_defaults,
+                    )
                 })
                 .await,
             )

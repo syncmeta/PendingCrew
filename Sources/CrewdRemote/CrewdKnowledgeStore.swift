@@ -2100,15 +2100,18 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     private let journal: () throws -> CrewdPresentationJournal
     private let decisionsAvailable: () -> Bool
     private let riskLessonsAvailable: () -> Bool
+    private let structuredDecisionsAvailable: () -> Bool
 
     init(origin: @escaping () -> Origin?, rpc: @escaping RPC, journal: @escaping () throws -> CrewdPresentationJournal,
          decisionsAvailable: @escaping () -> Bool = { false },
-         riskLessonsAvailable: @escaping () -> Bool = { false }) {
+         riskLessonsAvailable: @escaping () -> Bool = { false },
+         structuredDecisionsAvailable: @escaping () -> Bool = { false }) {
         self.origin = origin
         self.rpc = rpc
         self.journal = journal
         self.decisionsAvailable = decisionsAvailable
         self.riskLessonsAvailable = riskLessonsAvailable
+        self.structuredDecisionsAvailable = structuredDecisionsAvailable
     }
 
     func scope(stillCurrent: @MainActor () -> Bool) async throws -> BrowseScope {
@@ -2140,9 +2143,10 @@ struct CrewdPendingKnowledgeLink: Identifiable {
 
     func decisions(_ scope: BrowseScope, after: String?, stillCurrent: @MainActor () -> Bool) async throws -> Wire.DecisionPage {
         guard decisionsAvailable() else { throw Wire.Problem.unavailable }
+        let includeDefaults=structuredDecisionsAvailable()
         let page: Wire.DecisionPage = try await call("managedObject.decisions",
-            .object(["after":after.map(CrewdValue.string) ?? .null]),scope.origin,stillCurrent)
-        guard page.items.allSatisfy(\.valid), Wire.validPage(page.items.map(\.id),after:after,
+            decisionParams(["after":after.map(CrewdValue.string) ?? .null],includeDefaults:includeDefaults),scope.origin,stillCurrent)
+        guard page.items.allSatisfy({ $0.valid && (includeDefaults || $0.author.kind != "systemDefault") }), Wire.validPage(page.items.map(\.id),after:after,
               next:page.nextAfter,prefix:"D",newestFirst:true) else { throw Wire.Problem.invalid }
         try await check(scope,stillCurrent)
         return page
@@ -2150,10 +2154,38 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     func decision(_ scope: BrowseScope, id: String, stillCurrent: @MainActor () -> Bool) async throws -> Wire.Decision {
         guard decisionsAvailable() else { throw Wire.Problem.unavailable }
         guard Wire.objectNumber(id,prefix:"D") != nil else { throw Wire.Problem.invalid }
-        let object: Wire.Object = try await call("managedObject.get",.object(["id":.string(id)]),scope.origin,stillCurrent)
-        guard object.valid, let decision = object.decision, decision.id == id else { throw Wire.Problem.invalid }
+        let includeDefaults=structuredDecisionsAvailable()
+        let object: Wire.Object = try await call("managedObject.get",
+            decisionParams(["id":.string(id)],includeDefaults:includeDefaults),scope.origin,stillCurrent)
+        guard object.valid, let decision = object.decision, decision.id == id,
+              includeDefaults || decision.author.kind != "systemDefault" else { throw Wire.Problem.invalid }
         try await check(scope,stillCurrent)
         return decision
+    }
+
+    private func decisionParams(_ fields:[String:CrewdValue],includeDefaults:Bool) -> CrewdValue {
+        var params=fields
+        if includeDefaults { params["includeSystemDefaults"] = .bool(true) }
+        return .object(params)
+    }
+
+    func decisionOrigin(_ scope:BrowseScope, decision:Wire.Decision,
+                        stillCurrent:@MainActor () -> Bool) async throws -> CrewdStructuredAskWire.Review? {
+        guard structuredDecisionsAvailable() else { return nil }
+        guard decision.valid, valid(scope.origin,stillCurrent) else { throw Wire.Problem.stale }
+        let raw=try await rpc(CrewdStructuredAskWire.originMethod,.object(["id":.string(decision.id)]))
+        try await check(scope,stillCurrent)
+        if raw == .null {
+            guard decision.author.kind != "systemDefault" else { throw Wire.Problem.invalid }
+            return nil
+        }
+        let source=try CrewdStructuredAskWire.Review(raw,crew:decision.crewId)
+        guard let capture=source.capture, capture.decisionId==decision.id,
+              capture.source.rawValue==decision.author.kind, Wire.exact(source.question,decision.draft.question),
+              Wire.exact(source.context,decision.draft.rationale),
+              let option=source.option(capture.optionId), Wire.exact(option.label,decision.draft.choice)
+        else { throw Wire.Problem.invalid }
+        return source
     }
 
     func riskLessons(_ scope: BrowseScope, lessons: Bool, after: String?,

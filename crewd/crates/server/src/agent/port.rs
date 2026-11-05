@@ -966,6 +966,22 @@ pub(crate) async fn managed_submit(
     .await
 }
 
+pub(crate) async fn open_decision_ask(
+    st: &AppState,
+    by: &Identity,
+    request: crewd_proto::decision_asks::Open,
+) -> PortResult<(crewd_proto::decision_asks::OpenReceipt, bool)> {
+    let scoped = scoped_actor(st, by)?;
+    let by = by.clone();
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        let receipt = crewd_collab::decision_asks::open(tx, &by.session_id, request)?;
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        Ok(receipt)
+    })
+    .await
+}
+
 pub async fn channel_archive_check(
     st: &AppState,
     by: &Identity,

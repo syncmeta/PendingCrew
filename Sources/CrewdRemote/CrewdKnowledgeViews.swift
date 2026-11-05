@@ -2312,17 +2312,43 @@ private struct CrewdNativeTablesView: View {
     }
 }
 
+/// Open the exact D that the committed structured H captured, using the
+/// same directory scope and detail renderer as ordinary navigation.
+struct CrewdAskCapturedDecisionLink: View {
+    @ObservedObject var workspace:CrewdWorkspace
+    let source:CrewdStructuredAskWire.Review
+    @State private var showing=false
+    var body:some View {
+        if let capture=source.capture {
+            Button("查看决定 " + capture.decisionId,systemImage:"arrow.up.right.square") { showing=true }
+                .sheet(isPresented:$showing) {
+                    NavigationStack {
+                        CrewdManagedDirectoryView(workspace:workspace,store:workspace.managedDirectory,fromAsk:source)
+                            .navigationTitle("组织决定 " + capture.decisionId)
+                            .toolbar {
+                                ToolbarItem(placement:.cancellationAction) { Button("关闭") { showing=false } }
+                            }
+                    }
+                }
+        }
+    }
+}
+
 private struct CrewdManagedDirectoryView: View {
     typealias Wire = CrewdManagedDirectoryWire
     typealias Store = CrewdManagedDirectoryStore
     @ObservedObject var workspace: CrewdWorkspace
     @ObservedObject private var client: CrewdClient
     @ObservedObject var store: Store
+    private let linkedAsk: CrewdStructuredAskWire.Review?
 
-    init(workspace:CrewdWorkspace,store:Store) {
-        self.workspace = workspace
-        self.client = workspace.client
-        self.store = store
+    init(workspace:CrewdWorkspace,store:Store,fromAsk:CrewdStructuredAskWire.Review? = nil) {
+        self.workspace=workspace
+        self.client=workspace.client
+        self.store=store
+        self.linkedAsk=fromAsk
+        self._section=State(initialValue:fromAsk == nil ? .tables:.decisions)
+        self._initialDecision=State(initialValue:fromAsk?.capture?.decisionId)
     }
     private enum SectionMode: Hashable {
         case tables, decisions, risks, lessons
@@ -2333,6 +2359,8 @@ private struct CrewdManagedDirectoryView: View {
     @State private var scope: Store.BrowseScope?
     @State private var decisions: [Wire.Decision] = []
     @State private var decision: Wire.Decision?
+    @State private var decisionSource: CrewdStructuredAskWire.Review?
+    @State private var initialDecision: String?
     @State private var nextDecision: String?
     @State private var riskLessonItems: [Wire.RiskLessonEntry] = []
     @State private var riskLessonDetail: Wire.RiskLessonEntry?
@@ -2497,7 +2525,8 @@ private struct CrewdManagedDirectoryView: View {
                 busy = false
                 return
             }
-            await reload(captured,target:matches ? link?.id : (preserve ? selectedID:nil),
+            let entry = captured.journalReady && captured.section == .decisions ? initialDecision:nil
+            await reload(captured,target:entry ?? (matches ? link?.id : (preserve ? selectedID:nil)),
                          reset:!preserve,kind:preserve ? .reconnect:.ordinary)
         }
         .onChange(of:store.invalidation) { _, change in
@@ -2669,6 +2698,11 @@ private struct CrewdManagedDirectoryView: View {
                 .font(.caption).foregroundStyle(.secondary)
             LabeledContent("决定者",value:author(item.author))
             LabeledContent("记录时间",value:item.createdAt)
+            if let decisionSource, let capture=decisionSource.capture {
+                LabeledContent("拍板来源",value:decisionSource.ask + " · " + capture.source.label + " · 选项 " + capture.optionId)
+                    .textSelection(.enabled)
+                if let reason=capture.humanReason { decisionText("拍板时填写的理由",reason) }
+            }
             decisionText("选择",item.draft.choice)
             decisionText("理由",item.draft.rationale)
             if let alternatives = item.draft.alternatives { decisionText("其他方案",alternatives) }
@@ -2705,7 +2739,11 @@ private struct CrewdManagedDirectoryView: View {
         }
     }
     private func author(_ value: Wire.DecisionAuthor) -> String {
-        value.kind == "human" ? "人" : "Agent " + (value.sessionId ?? "")
+        switch value.kind {
+        case "human": "人"
+        case "systemDefault": "系统执行默认方案"
+        default: "Agent " + (value.sessionId ?? "")
+        }
     }
     private func showDecision(_ id: String?) {
         let captured = route
@@ -2945,12 +2983,18 @@ private struct CrewdManagedDirectoryView: View {
             } else if captured.section == .decisions {
                 if let target {
                     let item = try await store.decision(active,id:target,stillCurrent:current)
+                    let source = try await store.decisionOrigin(active,decision:item,stillCurrent:current)
                     guard current() else { return }
-                    decision = item
+                    if let linkedAsk, target == linkedAsk.capture?.decisionId {
+                        guard let source, source.sameDraft(as:linkedAsk), source.capture == linkedAsk.capture
+                        else { throw Wire.Problem.invalid }
+                    }
+                    decision=item; decisionSource=source
+                    if target == initialDecision { initialDecision=nil }
                 } else {
                     let page = try await store.decisions(active,after:nil,stillCurrent:current)
                     guard current() else { return }
-                    decisions = page.items; nextDecision = page.nextAfter; decision = nil
+                    decisions = page.items; nextDecision = page.nextAfter; decision = nil; decisionSource = nil
                 }
             } else if let target {
                 let page = try await store.rows(active,table:target,after:nil,stillCurrent:current)
@@ -2967,9 +3011,10 @@ private struct CrewdManagedDirectoryView: View {
         } catch {
             guard current() else { return }
             if let requested, Self.provenMissing(error) {
+                if requested == initialDecision { initialDecision=nil }
                 // A committed purge can remove the selected object. Clear only
                 // that projection and return to the active catalogue.
-                table = nil; rows = []; nextRow = nil; decision = nil; riskLessonDetail = nil
+                table = nil; rows = []; nextRow = nil; decision = nil; decisionSource = nil; riskLessonDetail = nil
                 tables.removeAll { $0.id == requested }
                 decisions.removeAll { $0.id == requested }
                 riskLessonItems.removeAll { $0.id == requested }
@@ -2982,7 +3027,7 @@ private struct CrewdManagedDirectoryView: View {
     }
     private func resetProjection(clearNotice: Bool) {
         scope = nil; shownSection = nil; tables = []; table = nil; rows = []; nextTable = nil; nextRow = nil
-        decisions = []; decision = nil; nextDecision = nil
+        decisions = []; decision = nil; decisionSource = nil; nextDecision = nil
         riskLessonItems = []; riskLessonDetail = nil; nextRiskLesson = nil
         pending = []; editor = nil; problem = nil
         if clearNotice { notice = nil }

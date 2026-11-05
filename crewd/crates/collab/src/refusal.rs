@@ -76,6 +76,7 @@ refusal_codes! {
     AskResolutionChanged = "ask.resolution_changed" [],
     AskInboxChanged = "ask.inbox_changed" [],
     AskInUse = "ask.in_use" ["ask"],
+    AskDecisionOptionRequired = "ask.decision_option_required" [],
     AskQuestionEmpty = "ask.question_empty" [],
     // channel
     ChannelNotFound = "channel.not_found" ["channel"],

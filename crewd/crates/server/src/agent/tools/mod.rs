@@ -177,7 +177,9 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
-        "managed_object_scope_get"
+        "ask_decision"
+        | "ask_decision_request_get"
+        | "managed_object_scope_get"
         | "managed_object_get"
         | "managed_tables_list"
         | "managed_rows_list"

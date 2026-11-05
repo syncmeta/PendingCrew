@@ -627,7 +627,21 @@ pub fn build_batch_after(
                     }
                     Err(e) => return Err(e),
                 };
-                let answer = a.answer.clone().unwrap_or_default();
+                let mut answer = a.answer.clone().unwrap_or_default();
+                if let Some(decision) = crate::decision_asks::get(conn, &a.crew_id, &a.ask)?
+                    && let Some(capture) = decision.capture
+                    && let Some(index) =
+                        crewd_store::decision_asks::option_index(&decision.draft, &capture.option_id)
+                {
+                    answer = format!(
+                        "{} {} ({})",
+                        capture.option_id, decision.draft.options[index].label, capture.decision_id
+                    );
+                    if let Some(reason) = capture.human_reason {
+                        answer.push('\n');
+                        answer.push_str(&reason);
+                    }
+                }
                 let body = match a.state {
                     AskStateView::Answered => WakeBody::AskAnswered {
                         ask: a.ask,

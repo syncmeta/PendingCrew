@@ -88,6 +88,10 @@ fn object_number(value: &str, prefix: char, field: &str) -> Result<i64> {
 }
 
 pub fn get(c: &Connection, actor: Actor<'_>, id: &str) -> Result<Object> {
+    get_with_defaults(c, actor, id, false)
+}
+
+pub fn get_with_defaults(c: &Connection, actor: Actor<'_>, id: &str, include_system_defaults: bool) -> Result<Object> {
     actor.principal(c)?;
     if id.starts_with('T') {
         let number = object_number(id, 'T', "id")?;
@@ -97,6 +101,7 @@ pub fn get(c: &Connection, actor: Actor<'_>, id: &str) -> Result<Object> {
     } else if id.starts_with('D') {
         Ok(Object::Decision {
             decision: decisions_db::get(c, object_number(id, 'D', "id")?)?
+                .filter(|decision| include_system_defaults || decision.author.kind != "systemDefault")
                 .ok_or_else(|| missing(id))?,
         })
     } else if id.starts_with('R') || id.starts_with('L') {
@@ -150,11 +155,17 @@ pub fn rows(c: &Connection, actor: Actor<'_>, table: &str, after: Option<&str>) 
 }
 
 pub fn decisions(c: &Connection, actor: Actor<'_>, after: Option<&str>) -> Result<DecisionPage> {
+    decisions_with_defaults(c, actor, after, false)
+}
+
+pub fn decisions_with_defaults(
+    c: &Connection, actor: Actor<'_>, after: Option<&str>, include_system_defaults: bool,
+) -> Result<DecisionPage> {
     actor.principal(c)?;
     let after = after
         .map(|id| object_number(id, 'D', "after"))
         .transpose()?;
-    let numbers = decisions_db::numbers(c, after, PAGE_LIMIT + 1)?;
+    let numbers = decisions_db::numbers(c, after, PAGE_LIMIT + 1, include_system_defaults)?;
     let next_after = (numbers.len() > PAGE_LIMIT as usize)
         .then(|| format!("D{}", numbers[PAGE_LIMIT as usize - 1]));
     let items = numbers
@@ -232,7 +243,7 @@ fn about_refusal(error: CollabError, id: &str) -> CollabError {
     }
 }
 
-fn check_decision_draft(c: &Connection, draft: &DecisionDraft) -> Result<()> {
+pub(crate) fn check_decision_draft(c: &Connection, draft: &DecisionDraft) -> Result<()> {
     if !decisions_db::draft_valid(draft) {
         return Err(invalid("draft"));
     }
@@ -893,7 +904,9 @@ mod tests {
         let s = Store::open_data_dir(dir.path()).unwrap();
         s.conn()
             .execute_batch(
-                "DROP TABLE managed_lessons;
+                "DROP TABLE decision_ask_open_receipts;
+             DROP TABLE decision_asks;
+             DROP TABLE managed_lessons;
              DROP TABLE managed_risks;
              DROP TABLE managed_decisions;
              DROP TABLE managed_object_receipts;
@@ -917,7 +930,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 25);
+        assert_eq!(version, 26);
         assert_eq!(
             object_refs::get(s.conn(), ObjectKind::Plan, prior.number).unwrap(),
             Some(prior.clone())

@@ -263,6 +263,7 @@ fn create(
 fn sql_effect(
     tx: &mut collab::Tx<'_>,
     command: PublicCommand,
+    state: &Arc<AppState>,
     actor: &Actor,
     request_id: &str,
 ) -> collab::Result<Value> {
@@ -321,7 +322,7 @@ fn sql_effect(
             Ok(serde_json::json!({"crew":crew,"message":message.message}))
         }
         PublicCommand::MessagePost(p) => {
-            serde_json::to_value(crate::ask_resolution::post_human(tx, p)?)
+            serde_json::to_value(crate::ask_resolution::post_authorized_human(tx, p, state, actor)?)
         }
         PublicCommand::PatrolStart(p) => serde_json::to_value(collab::patrol_manual::start(tx, &p.crew_id)?),
         PublicCommand::RequirementReview(p) => serde_json::to_value(collab::requirement_review::apply(tx, p)?),
@@ -482,7 +483,7 @@ async fn submit_sql_with_home(
                         p.command.clone(),
                         service_home.as_deref(),
                     )?;
-                    let result = sql_effect(tx, command, &own_actor, &p.request_id)?;
+                    let result = sql_effect(tx, command, &own_state, &own_actor, &p.request_id)?;
                     // Existing receipts return above without any filesystem effect.
                     if let Some(directory) = directory {
                         create_first_message_directory(&directory)?;

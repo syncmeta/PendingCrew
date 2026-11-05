@@ -368,8 +368,14 @@ pub(crate) fn resolution_subject(
     {
         // Bind the authoritative original facts, independent of reminder
         // tiers, wall-clock passage, and the next worker to wake.
-        Some(crate::judgments::fingerprint(&(
-            crewd_store::judgment_state::epoch(conn)?,
+        let structured = crewd_store::decision_asks::read_ask(conn, reference.number)?;
+        let epoch = if structured.is_some() {
+            crewd_store::personal_drafts::epoch(conn)?
+        } else {
+            crewd_store::judgment_state::epoch(conn)?
+        };
+        let facts = (
+            epoch,
             &crew.id,
             &crew.created_at,
             &reference.source_id,
@@ -383,7 +389,11 @@ pub(crate) fn resolution_subject(
             question.standalone,
             &view.message_id,
             &view.resume_note,
-        ))?)
+        );
+        Some(match structured {
+            Some(s) => crate::judgments::fingerprint(&("decision-ask-v1", &facts, s.draft))?,
+            None => crate::judgments::fingerprint(&facts)?,
+        })
     } else {
         None
     };
@@ -411,6 +421,12 @@ pub(crate) fn resolution_subject(
 }
 
 pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
+    open_with_message(tx, asker, o, None)
+}
+
+pub(crate) fn open_with_message(
+    tx: &mut Tx<'_>, asker: &str, o: OpenAsk, announcement: Option<String>,
+) -> Result<Ask> {
     let s = sessions::get(tx.conn(), asker)?;
     let crew = crews::get(tx.conn(), &s.crew_id)?;
     // 归档的机组只读（终审 5）：二级机组的 home 人类群还活着，不能靠公告发不进去碰巧挡住。
@@ -435,7 +451,9 @@ pub fn open(tx: &mut Tx<'_>, asker: &str, o: OpenAsk) -> Result<Ask> {
     let reference = public_ask(tx.conn(), h)?;
     let home = crews::home_of(tx.conn(), &crew.id)?;
     let posted =
-        messages::announce_to_human(tx, &home, Sender::Session(asker.into()), question, "ask")?;
+        messages::announce_to_human(
+            tx, &home, Sender::Session(asker.into()), announcement.unwrap_or(question), "ask",
+        )?;
     tx.conn().execute(
         "INSERT INTO ask_meta(crew_id,ask,resume_note,message_id) VALUES(?1,?2,?3,?4)",
         params![
@@ -533,15 +551,17 @@ fn closed(
     events: &[crewd_work::Event],
 ) -> Result<Ask> {
     let a = get(tx.conn(), crew, &public_ask(tx.conn(), h)?.id())?;
-    closed_view(tx, crew, standalone, events, a)
+    closed_view(tx, crew, h, standalone, events, a)
 }
 fn closed_view(
     tx: &mut Tx<'_>,
     crew: &str,
+    h: AskId,
     standalone: bool,
     events: &[crewd_work::Event],
     a: Ask,
 ) -> Result<Ask> {
+    crate::decision_asks::capture(tx, &a, h, events)?;
     let cleared: Vec<(String, Option<String>)> = events
         .iter()
         .filter_map(|e| match &e.kind {
@@ -584,6 +604,7 @@ fn closed_view(
 
 pub fn answer(tx: &mut Tx<'_>, crew: &str, ask: &str, text: &str) -> Result<Ask> {
     let h = resolve_ask(tx.conn(), crew, ask)?;
+    crate::decision_asks::validate_answer(tx.conn(), public_ask(tx.conn(), h)?.number, text)?;
     let (applied, standalone) = with_book(tx, crew, |b, now| {
         let standalone = b.ask(h).map(|a| a.standalone).unwrap_or(false);
         b.answer_ask(&Actor::Human, now, h, text)
@@ -852,7 +873,7 @@ fn apply_defaults(tx: &mut Tx<'_>, only: Option<&str>) -> Result<Vec<String>> {
             &crew,
             after.ask(h).expect("applied existing ask"),
         )?;
-        ids.push(closed_view(tx, &crew, standalone, &events, a)?.ask);
+        ids.push(closed_view(tx, &crew, h, standalone, &events, a)?.ask);
     }
     Ok(ids)
 }

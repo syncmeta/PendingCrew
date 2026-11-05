@@ -90,6 +90,8 @@ pub const REQUIRED: &[(&str, &[&str])] = &[
     ("notice.restart.hibernate", &["count"]),
     ("notice.restart.item", &["name"]),
     ("notice.ask.crew_removed", &[]),
+    ("notice.ask.decision_capture", &[]),
+    ("notice.ask.decision_default", &["option", "minutes"]),
     ("notice.admin.handoff", &["request", "targets", "reason"]),
     (
         "notice.admin.custody",

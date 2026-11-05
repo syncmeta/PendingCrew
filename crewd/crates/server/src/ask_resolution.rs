@@ -61,6 +61,11 @@ async fn route(state: &Arc<AppState>, actor: &Actor, req: Request) -> Result<Val
             let view = state
                 .collab(move |tx| {
                     actor.authorize_tx(&owner, tx.conn(), methods::ASK_ANSWER)?;
+                    if matches!(&actor, Actor::Remote(_))
+                        && crewd_collab::decision_asks::get(tx.conn(), &p.crew_id, &p.ask)?.is_some()
+                    {
+                        actor.authorize_tx(&owner, tx.conn(), crewd_proto::commands::ASK_RESOLVE)?;
+                    }
                     asks::answer(tx, &p.crew_id, &p.ask, &p.text)
                 })
                 .await
@@ -84,7 +89,7 @@ async fn route(state: &Arc<AppState>, actor: &Actor, req: Request) -> Result<Val
             let message = state
                 .collab(move |tx| {
                     actor.authorize_tx(&owner, tx.conn(), methods::MESSAGE_POST)?;
-                    post_human(tx, p)
+                    post_authorized_human(tx, p, &owner, &actor)
                 })
                 .await
                 .map_err(dispatch::collab_err)?;
@@ -95,6 +100,21 @@ async fn route(state: &Arc<AppState>, actor: &Actor, req: Request) -> Result<Val
             "Unknown Human Ask method",
         )),
     }
+}
+
+pub(crate) fn post_authorized_human(
+    tx: &mut crewd_collab::Tx<'_>,
+    p: MessagePostParams,
+    state: &Arc<AppState>,
+    actor: &Actor,
+) -> crewd_collab::Result<Message> {
+    if matches!(actor, Actor::Remote(_))
+        && let Some(reply) = &p.in_reply_to
+        && crewd_collab::decision_asks::reply_is_structured(tx.conn(), &p.channel_id, reply)?
+    {
+        actor.authorize_tx(state, tx.conn(), crewd_proto::commands::ASK_RESOLVE)?;
+    }
+    post_human(tx, p)
 }
 
 pub(crate) fn post_human(

@@ -570,6 +570,163 @@ enum CrewdAskResolutionWire {
     }
 }
 
+enum CrewdStructuredAskWire {
+    static let capability = "structuredAskDecisions.v1"
+    static let method = "ask.decisionGet"
+    static let originMethod = "managedObject.decisionOrigin"
+    private static let optionIDs = Array("ABCDEFGH").map(String.init)
+
+    struct Option: Equatable, Identifiable {
+        let id: String
+        let label: String
+    }
+    struct DefaultChoice: Equatable {
+        let optionId: String
+        let afterMinutes: Int
+    }
+    struct Capture: Equatable {
+        let decisionId: String
+        let eventSeq: String
+        let optionId: String
+        let source: Source
+        let humanReason: String?
+        enum Source: String {
+            case human, systemDefault
+            var label: String { self == .human ? "人类拍板" : "系统执行默认方案" }
+        }
+    }
+    struct Review: Equatable {
+        let crewId: String
+        let ask: String
+        let question: String
+        let context: String
+        let options: [Option]
+        let defaultChoice: DefaultChoice?
+        let capture: Capture?
+        private let draftBytes: Data
+
+        func sameDraft(as other: Self) -> Bool {
+            crewId.utf8.elementsEqual(other.crewId.utf8) && ask == other.ask && draftBytes == other.draftBytes
+        }
+        func option(_ id: String) -> Option? { options.first { $0.id == id } }
+        func matches(_ resolution: CrewdAskResolutionWire.Review) -> Bool {
+            guard crewId.utf8.elementsEqual(resolution.crewID.utf8), ask == resolution.askID,
+                  resolution.ask["default"]["text"].string == defaultChoice?.optionId,
+                  resolution.ask["default"]["afterMinutes"].int == defaultChoice?.afterMinutes else { return false }
+            switch (resolution.ask["state"].string,capture?.source) {
+            case ("open",nil), ("withdrawn",nil): return true
+            case ("answered",.human), ("defaulted",.systemDefault):
+                guard let capture, let actual = resolution.ask["answer"].string else { return false }
+                let expected=capture.optionId + (capture.humanReason.map { "\n" + $0 } ?? "")
+                return actual.utf8.elementsEqual(expected.utf8)
+            default: return false
+            }
+        }
+        func answer(option id: String, reason: String) throws -> String {
+            guard capture == nil, option(id) != nil else { throw CrewdAskResolutionWire.invalid() }
+            let normalized = CrewdAskResolutionWire.trim(reason)
+            if normalized.isEmpty { return id }
+            guard validText(normalized,limit:500) else { throw CrewdAskResolutionWire.invalid() }
+            return id + "\n" + normalized
+        }
+
+        init(_ value: CrewdValue, crew: String? = nil, ask expectedAsk: String? = nil) throws {
+            guard case .object(let fields) = value, Set(fields.keys) == ["crewId","ask","draft","capture"],
+                  let owner = value["crewId"].string, validID(owner),
+                  crew.map({ owner.utf8.elementsEqual($0.utf8) }) ?? true,
+                  let ask = value["ask"].string, CrewdAskResolutionWire.canonicalID(value["ask"]),
+                  expectedAsk.map({ ask == $0 }) ?? true,
+                  case .object(let draft) = value["draft"],
+                  Set(draft.keys).isSubset(of:["question","context","options","about","default","reversibility"]),
+                  let question = draft["question"]?.string, validText(question,limit:60), trimmedExactly(question),
+                  let context = draft["context"]?.string, validText(context,limit:900),
+                  case .array(let options) = draft["options"], (2...8).contains(options.count),
+                  case .array(let about) = draft["about"], (1...8).contains(about.count)
+            else { throw CrewdAskResolutionWire.invalid() }
+            if let reversible = draft["reversibility"], reversible != .null,
+               !["reversible","hardToReverse","irreversible"].contains(reversible.string ?? "") {
+                throw CrewdAskResolutionWire.invalid()
+            }
+            var references=Set<Data>()
+            for item in about {
+                guard case .object(let keys) = item, Set(keys.keys) == ["kind","id"],
+                      let kind=item["kind"].string, let id=item["id"].string,
+                      validAbout(kind,id:id), references.insert(Data((kind+":"+id).utf8)).inserted
+                else { throw CrewdAskResolutionWire.invalid() }
+            }
+            let choices = try options.enumerated().map { index,option -> Option in
+                guard case .object(let keys) = option, Set(keys.keys) == ["label"],
+                      let label=option["label"].string, validText(label,limit:120), trimmedExactly(label),
+                      !label.unicodeScalars.contains(where:{ $0.properties.generalCategory == .control ||
+                          $0.value == 0x2028 || $0.value == 0x2029 })
+                else { throw CrewdAskResolutionWire.invalid() }
+                return .init(id:optionIDs[index],label:label)
+            }
+            guard Set(choices.map { Data($0.label.utf8) }).count == choices.count else { throw CrewdAskResolutionWire.invalid() }
+            var fallback: DefaultChoice?
+            if let supplied = draft["default"], supplied != .null {
+                guard case .object(let keys) = supplied, Set(keys.keys) == ["optionId","afterMinutes"],
+                      let id = supplied["optionId"].string, choices.contains(where:{ $0.id == id }),
+                      let minutes = supplied["afterMinutes"].int, (1...10_080).contains(minutes)
+                else { throw CrewdAskResolutionWire.invalid() }
+                fallback = .init(optionId:id,afterMinutes:minutes)
+            }
+            var captured: Capture?
+            if value["capture"] != .null {
+                let raw=value["capture"]
+                guard case .object(let keys) = raw,
+                      Set(keys.keys).isSubset(of:["decisionId","eventSeq","optionId","source","humanReason"]),
+                      let decision=raw["decisionId"].string, validNumber(decision,prefix:"D"),
+                      let decisionNumber=Int64(decision.dropFirst()), let askNumber=Int64(ask.dropFirst()),
+                      decisionNumber > askNumber,
+                      let sequence=raw["eventSeq"].string, positive(sequence),
+                      let option=raw["optionId"].string, choices.contains(where:{ $0.id == option }),
+                      let source=raw["source"].string.flatMap(Capture.Source.init(rawValue:)),
+                      raw["humanReason"] == .null || raw["humanReason"].string.map({ validText($0,limit:500) }) == true
+                else { throw CrewdAskResolutionWire.invalid() }
+                let reason=raw["humanReason"].string
+                guard source != .systemDefault || (reason == nil && fallback?.optionId == option)
+                else { throw CrewdAskResolutionWire.invalid() }
+                captured = .init(decisionId:decision,eventSeq:sequence,optionId:option,source:source,humanReason:reason)
+            }
+            let encoder=JSONEncoder()
+            encoder.outputFormatting=[.sortedKeys]
+            self.draftBytes=try encoder.encode(value["draft"])
+            self.crewId=owner; self.ask=ask; self.question=question; self.context=context
+            self.options=choices; self.defaultChoice=fallback; self.capture=captured
+        }
+    }
+
+    private static func validAbout(_ kind:String,id:String) -> Bool {
+        switch kind {
+        case "crew": validID(id)
+        case "work": validNumber(id,prefix:"W")
+        case "requirement": validNumber(id,prefix:"#")
+        case "row": validNumber(id,prefix:"O")
+        case "risk": validNumber(id,prefix:"R")
+        default: false
+        }
+    }
+    private static func validID(_ id:String) -> Bool {
+        !id.isEmpty && id.utf8.count <= 128 && trimmedExactly(id) &&
+            !id.unicodeScalars.contains { $0.properties.generalCategory == .control }
+    }
+    private static func trimmedExactly(_ value:String) -> Bool {
+        CrewdAskResolutionWire.trim(value).utf8.elementsEqual(value.utf8)
+    }
+    private static func positive(_ value:String) -> Bool {
+        guard let number=Int64(value), number > 0 else { return false }
+        return String(number)==value
+    }
+    private static func validNumber(_ value:String,prefix:Character) -> Bool {
+        value.first==prefix && positive(String(value.dropFirst()))
+    }
+    private static func validText(_ text:String,limit:Int) -> Bool {
+        !CrewdAskResolutionWire.trim(text).isEmpty && text.unicodeScalars.count <= limit &&
+            !text.unicodeScalars.contains { $0.value == 0 }
+    }
+}
+
 enum CrewdAskInboxWire {
     struct Review: Equatable {
         let revision: String

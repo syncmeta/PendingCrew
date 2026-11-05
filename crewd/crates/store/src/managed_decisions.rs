@@ -138,11 +138,25 @@ pub fn get(c: &Connection, number: i64) -> Result<Option<Decision>> {
                     .as_deref()
                     .map(serde_json::from_str::<DecisionWithdrawal>)
                     .transpose()?;
+                let capture = crate::decision_asks::read_decision(c, number)?;
+                let author_valid = match capture {
+                    None => actor_valid(&author),
+                    Some(origin) => {
+                        let capture = origin.capture.ok_or_else(|| invalid("captured decision proof missing"))?;
+                        let expected_kind = match capture.source {
+                            crewd_proto::decision_asks::Source::Human => "human",
+                            crewd_proto::decision_asks::Source::SystemDefault => "systemDefault",
+                        };
+                        author.kind == expected_kind && author.session_id.is_none()
+                            && origin.crew_id == crew_id
+                            && crate::decision_asks::decision_draft(&origin.draft, &capture.option_id)? == draft
+                    }
+                };
                 if !managed_objects::source(ObjectKind::Decision, &source)
                     || !chain_valid
                     || created_at.is_empty()
                     || !draft_valid(&draft)
-                    || !actor_valid(&author)
+                    || !author_valid
                     || withdrawal.as_ref().is_some_and(|w| {
                         !actor_valid(&w.author) || !valid_text(&w.reason, 1500) || w.at.is_empty()
                     })
@@ -167,9 +181,13 @@ pub fn get(c: &Connection, number: i64) -> Result<Option<Decision>> {
         .transpose()
 }
 
-pub fn numbers(c: &Connection, after: Option<i64>, limit: u16) -> Result<Vec<i64>> {
-    let mut q = c.prepare("SELECT number FROM managed_decisions WHERE ?1 IS NULL OR number<?1 ORDER BY number DESC LIMIT ?2")?;
-    Ok(q.query_map(params![after, limit], |r| r.get(0))?
+pub fn numbers(c: &Connection, after: Option<i64>, limit: u16, include_system_defaults: bool) -> Result<Vec<i64>> {
+    let mut q = c.prepare(
+        "SELECT number FROM managed_decisions
+         WHERE (?1 IS NULL OR number<?1) AND (?3 OR json_extract(author_json,'$.kind')<>'systemDefault')
+         ORDER BY number DESC LIMIT ?2",
+    )?;
+    Ok(q.query_map(params![after, limit, include_system_defaults], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?)
 }
 
@@ -181,6 +199,39 @@ pub fn record(
     at: &str,
     supersedes: Option<i64>,
 ) -> Result<Decision> {
+    if !actor_valid(author) {
+        return Err(invalid("direct decision author is invalid"));
+    }
+    let number = insert(c, crew, draft, author, at, supersedes)?;
+    get(c, number)?.ok_or_else(|| invalid("committed decision source missing"))
+}
+
+pub fn record_captured(
+    c: &Connection, ask_number: i64, core_ask: crewd_work::AskId, event: &crewd_work::Event,
+) -> Result<Decision> {
+    let view = crate::decision_asks::read_ask(c, ask_number)?
+        .filter(|view| view.capture.is_none())
+        .ok_or_else(|| invalid("decision question missing or already captured"))?;
+    let (option, reason, source) = crate::decision_asks::terminal_choice(&view.draft, core_ask, event)
+        .ok_or_else(|| invalid("decision question event does not prove capture"))?;
+    let draft = crate::decision_asks::decision_draft(&view.draft, option)?;
+    let author = ResourceActor {
+        kind: match source {
+            crewd_proto::decision_asks::Source::Human => "human",
+            crewd_proto::decision_asks::Source::SystemDefault => "systemDefault",
+        }.into(),
+        session_id: None,
+    };
+    let at = crate::ts_from_ms(event.at.0);
+    let number = insert(c, &view.crew_id, &draft, &author, &at, None)?;
+    crate::decision_asks::complete(c, ask_number, number, event.seq, option, source, reason)?;
+    get(c, number)?.ok_or_else(|| invalid("committed captured decision missing"))
+}
+
+fn insert(
+    c: &Connection, crew: &str, draft: &DecisionDraft, author: &ResourceActor, at: &str,
+    supersedes: Option<i64>,
+) -> Result<i64> {
     managed_objects::transaction(c)?;
     let reference = managed_objects::allocate(c, ObjectKind::Decision, crew, at)?;
     c.execute(
@@ -193,7 +244,7 @@ pub fn record(
             supersedes
         ],
     )?;
-    get(c, reference.number)?.ok_or_else(|| invalid("committed decision source missing"))
+    Ok(reference.number)
 }
 
 pub fn supersede(c: &Connection, number: i64, revision: i64) -> Result<()> {

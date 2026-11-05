@@ -2,7 +2,7 @@
 //! enter through the separately authenticated Agent tools.
 use crate::{AppState, dispatch, public_commands::Actor};
 use crewd_collab::managed_objects as domain;
-use crewd_proto::{Request, Response, RpcError, managed_objects_api::*};
+use crewd_proto::{Request, Response, RpcError, decision_asks, managed_objects_api::*};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ pub(crate) async fn event_allowed(state: &Arc<AppState>, actor: &Actor, data: &V
             let conn = store.conn();
             actor.authorize_tx(&owner, conn, GET).is_ok()
                 && hint.object_ids.iter().all(|id| {
-                    domain::get(conn, domain::Actor::Human(&principal), id)
+                    domain::get_with_defaults(conn, domain::Actor::Human(&principal), id, true)
                         .is_ok_and(|object| object.crew_id() == hint.crew_id)
                 })
         })
@@ -81,7 +81,15 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
                 }
                 GET => {
                     let params: GetParams = crewd_proto::parse_params(params)?;
-                    value(domain::get(conn, human, &params.id).map_err(dispatch::collab_err)?)
+                    value(
+                        domain::get_with_defaults(
+                            conn,
+                            human,
+                            &params.id,
+                            params.include_system_defaults,
+                        )
+                        .map_err(dispatch::collab_err)?,
+                    )
                 }
                 TABLES => {
                     let params: TablesParams = crewd_proto::parse_params_or_default(params)?;
@@ -100,7 +108,26 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
                 DECISIONS => {
                     let params: DecisionsParams = crewd_proto::parse_params_or_default(params)?;
                     value(
-                        domain::decisions(conn, human, params.after.as_deref())
+                        domain::decisions_with_defaults(
+                            conn,
+                            human,
+                            params.after.as_deref(),
+                            params.include_system_defaults,
+                        )
+                        .map_err(dispatch::collab_err)?,
+                    )
+                }
+                decision_asks::GET => {
+                    let params: decision_asks::GetParams = crewd_proto::parse_params(params)?;
+                    value(
+                        crewd_collab::decision_asks::get(conn, &params.crew_id, &params.ask)
+                            .map_err(dispatch::collab_err)?,
+                    )
+                }
+                decision_asks::DECISION_ORIGIN => {
+                    let params: decision_asks::OriginParams = crewd_proto::parse_params(params)?;
+                    value(
+                        crewd_collab::decision_asks::origin(conn, &params.id)
                             .map_err(dispatch::collab_err)?,
                     )
                 }

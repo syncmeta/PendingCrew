@@ -160,6 +160,27 @@ Optional: if nobody answers within this many minutes, you are woken to act on fa
 ## ask.fallback
 What you will do if nobody answers in time ("go with A"). Give together with fallback_after_minutes.
 
+## ask_decision
+Ask the Human to select one option for your current crew. A selected answer or applied default creates an organization-readable decision. Include only question, context, options, and links that the organization may read. Use ask for a private or free-text question. Retain the original request UUID and scope if the result is uncertain.
+
+## ask_decision.scope
+Copy the current dbId and restoreEpoch exactly from managed_object_scope_get.
+
+## ask_decision.requestId
+Generate one canonical UUID for this exact request and retain it for lookup.
+
+## ask_decision.draft
+Provide the question, the background, two to eight different single-line options in order, and the exact related object IDs. Option IDs run from A in order. If specifying a default, give one of those IDs and the delay in whole minutes.
+
+## ask_decision_request_get
+Look up the original structured question opening receipt for this session. The result records the original opening. Check the Human Ask or exact decision separately for the current outcome. A missing or historical receipt does not authorize another execution.
+
+## ask_decision_request_get.scope
+The original dbId and restoreEpoch from the opening request.
+
+## ask_decision_request_get.requestId
+The exact original request UUID.
+
 ## withdraw_ask
 Withdraw an unanswered question that no longer applies. You can withdraw your own; the captain can withdraw any in the crew (the management crew's captain counts as the captain of every crew). A question still blocking a work item cannot be withdrawn.
 
@@ -1544,6 +1565,9 @@ Read a managed table, row, decision, risk, or lesson by its exact organization T
 ## managed_object_get.id
 The exact T table, O row, D decision, R risk, or L lesson ID.
 
+## managed_object_get.includeSystemDefaults
+Include decisions recorded by an applied default when true. Omit or use false for the earlier read behavior.
+
 ## managed_tables_list
 Read one page of managed tables visible across the organization.
 
@@ -1564,6 +1588,9 @@ Read one page of managed decisions visible across the organization, including su
 
 ## managed_decisions_list.after
 The previous page's nextAfter D ID. Omit for the first page.
+
+## managed_decisions_list.includeSystemDefaults
+Include decisions recorded by an applied default when true. Keep the same value across the pages of one browse.
 
 ## managed_risks_list
 Read one page of managed risks visible across the organization, newest first.

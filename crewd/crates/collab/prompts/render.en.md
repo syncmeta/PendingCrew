@@ -160,3 +160,11 @@ The directly linked work still open in {channel} currently has no recorded owner
 
 ## notice.patrol.header
 Administrative patrol brief for this crew (observed through {time}). Check current facts before taking action.
+
+## notice.ask.decision_capture
+
+Reply with the exact option ID. You can add a reason on the following line. The question, context, options, choice, and reason will be recorded in an organization-readable decision.
+
+## notice.ask.decision_default
+
+If nobody answers within {minutes} minute(s), the system will record option {option} as the default.

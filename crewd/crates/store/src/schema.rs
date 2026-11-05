@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent schema. Core21 remains the personal draft
 /// writer barrier; Core22 adds an indexed historical escalation discovery source.
-pub const SCHEMA_VERSION: i64 = 25;
+pub const SCHEMA_VERSION: i64 = 26;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 #[cfg(test)]
@@ -1061,6 +1061,12 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(crate::managed_risks_lessons::DDL)?;
         tx.execute_batch("PRAGMA user_version=25;")?;
+        tx.commit()?;
+    }
+    if v < 26 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::decision_asks::DDL)?;
+        tx.execute_batch("PRAGMA user_version=26;")?;
         tx.commit()?;
     }
     Ok(())

@@ -153,7 +153,12 @@ struct CrewdEmptySurface: View {
 struct CrewdHumanDrafts {
     struct Key:Hashable {let scope:String;let crew:String;let ask:String}
     enum Action:String,CaseIterable {case answer="答复",withdraw="撤回"}
-    struct Fields:Equatable {var action=Action.answer;var text=""}
+    struct Fields:Equatable {
+        var action=Action.answer
+        var text=""
+        var decisionOption=""
+        var decisionReason=""
+    }
     struct Snapshot:Equatable {let key:Key;let fields:Fields;let version:UUID}
     private var entries:[Key:Snapshot]=[:]
     private var pending:[Key:UUID]=[:]
@@ -164,9 +169,11 @@ struct CrewdHumanDrafts {
     var allUnknownSnapshots:[Snapshot] {unknown.values.flatMap{$0}.sorted{$0.version.uuidString < $1.version.uuidString}}
     mutating func edit(_ key:Key,_ fields:Fields) {if self.fields(key) != fields {entries[key]=Snapshot(key:key,fields:fields,version:UUID())}}
     mutating func begin(_ key:Key,validText:(String)->Bool = { !$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty })->Snapshot? {
-        guard !busy(key),validText(fields(key).text) else {return nil}
-        if entries[key] == nil {return nil}
-        let snapshot=entries[key]!;pending[key]=snapshot.version;return snapshot
+        begin(key,validFields:{ validText($0.text) })
+    }
+    mutating func begin(_ key:Key,validFields:(Fields)->Bool)->Snapshot? {
+        guard !busy(key),let snapshot=entries[key],validFields(snapshot.fields) else {return nil}
+        pending[key]=snapshot.version;return snapshot
     }
     mutating func finish(_ snapshot:Snapshot,accepted:Bool,uncertain:Bool=false) {
         if pending[snapshot.key] == snapshot.version {pending[snapshot.key]=nil}
@@ -211,6 +218,7 @@ private struct CrewdTypedHumanActions: View {
     @State private var scope: UUID?
     @State private var readID = UUID()
     @State private var review: CrewdAskResolutionWire.Review?
+    @State private var decisionReview: CrewdStructuredAskWire.Review?
     @State private var reviewOrigin: InboxOrigin?
     @State private var reading = false
     @State private var scheduling = false
@@ -238,8 +246,14 @@ private struct CrewdTypedHumanActions: View {
     private var busy: Bool { drafts.busy(key) || scheduling }
     private var hasOriginal: Bool { !workspace.originalAskRecords(crew:key.crew,ask:key.ask).isEmpty }
     private var canSubmit: Bool {
-        current && workspace.originalJournalReady && store.supportsAskResolution && review?.revision != nil &&
-            !reading && !busy && !hasOriginal && CrewdAskResolutionWire.validInput(fields.text)
+        current && reviewOrigin == inboxOrigin && workspace.originalJournalReady && store.supportsAskResolution &&
+            review?.revision != nil && !reading && !busy && !hasOriginal && submissionText(fields,decisionReview) != nil
+    }
+    private func submissionText(_ fields:CrewdHumanDrafts.Fields,_ decision:CrewdStructuredAskWire.Review?) -> String? {
+        if fields.action == .answer, let decision {
+            return try? decision.answer(option:fields.decisionOption,reason:fields.decisionReason)
+        }
+        return CrewdAskResolutionWire.validInput(fields.text) ? fields.text:nil
     }
     private var canSchedule: Bool {
         current && reviewOrigin == inboxOrigin && inboxIsCurrent?() == true && workspace.originalJournalReady &&
@@ -254,15 +268,34 @@ private struct CrewdTypedHumanActions: View {
     }
 
     var body: some View {
+        Group {
+            #if os(macOS)
+            if decisionReview != nil { ScrollView { form } } else { form }
+            #else
+            form
+            #endif
+        }
+        .modifier(CrewdAdaptiveFormFrame(width:540,height:580))
+        .interactiveDismissDisabled(busy)
+        .task(id:target.id) {
+            scope = store.readScope; active = true
+            await refresh()
+        }
+        .onChange(of:store.readScope) { _,_ in review = nil; decisionReview = nil; dismiss() }
+        .onDisappear { active = false; readID = UUID(); reading = false }
+    }
+
+    private var form: some View {
         VStack(alignment:.leading,spacing:12) {
             CrewdPanelHeader(title:"处理人工待办",
                 detail:inboxIsCurrent?() == true && store.supportsAskInboxSchedule ? "核对原问题后答复、稍后处理或撤回。" : "核对原问题后答复或撤回。",
                 symbol:"person.crop.circle.badge.questionmark")
             Text(key.ask + " · " + (target.crewTitle ?? key.crew)).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             if let review, current {
-                Text(verbatim:review.ask["question"].string ?? "").textSelection(.enabled)
+                if let decisionReview { structuredSummary(decisionReview,open:review.revision != nil) }
+                else { Text(verbatim:review.ask["question"].string ?? "").textSelection(.enabled) }
                 if let item = review.ask["item"].string { Text("关联计划 " + item).font(.caption).textSelection(.enabled) }
-                if let original = review.ask["default"]["text"].string {
+                if decisionReview == nil, let original = review.ask["default"]["text"].string {
                     Text("预设答复 " + original).font(.caption).textSelection(.enabled)
                 }
                 if review.revision == nil {
@@ -286,9 +319,22 @@ private struct CrewdTypedHumanActions: View {
                 Picker("操作",selection:input(\.action)) {
                     ForEach(CrewdHumanDrafts.Action.allCases,id:\.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.segmented).disabled(busy)
-                CrewdFormField(title:fields.action == .answer ? "你的答复" : "撤回理由") {
-                    TextField(fields.action == .answer ? "写下处理意见" : "说明撤回的原因",text:input(\.text),axis:.vertical)
-                        .lineLimit(4...10).disabled(busy)
+                if fields.action == .answer, let decisionReview {
+                    Picker("拍板选项",selection:input(\.decisionOption)) {
+                        Text("请选择").tag("")
+                        ForEach(decisionReview.options) { option in
+                            Text(verbatim:option.id + " · " + option.label).tag(option.id)
+                        }
+                    }.pickerStyle(.menu).disabled(busy)
+                    CrewdFormField(title:"决定理由（可选）") {
+                        TextField("理由也会写入组织决定日志",text:input(\.decisionReason),axis:.vertical)
+                            .lineLimit(2...5).disabled(busy)
+                    }
+                } else {
+                    CrewdFormField(title:fields.action == .answer ? "你的答复" : "撤回理由") {
+                        TextField(fields.action == .answer ? "写下处理意见" : "说明撤回的原因",text:input(\.text),axis:.vertical)
+                            .lineLimit(4...10).disabled(busy)
+                    }
                 }
                 if fields.action == .withdraw {
                     Text("仍阻塞活跃计划的问题需要负责人先调整计划。").font(.caption).foregroundStyle(.secondary)
@@ -300,18 +346,29 @@ private struct CrewdTypedHumanActions: View {
                 Button("重新核对当前问题") { Task { await refresh() } }
                     .disabled(!current || !store.supportsAskResolution || reading || busy)
                 Spacer()
-                Button(drafts.busy(key) ? "提交中" : "提交") { submit() }
+                Button(drafts.busy(key) ? "提交中" : (decisionReview != nil && fields.action == .answer ? "提交并记录决定":"提交")) { submit() }
                     .buttonStyle(CrewdPrimaryButtonStyle()).disabled(!canSubmit)
             }
         }
-        .padding(20).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:540,height:580))
-        .interactiveDismissDisabled(busy)
-        .task(id:target.id) {
-            scope = store.readScope; active = true
-            await refresh()
+        .padding(20).font(CrewdType.body)
+    }
+
+    private func structuredSummary(_ decision:CrewdStructuredAskWire.Review,open:Bool) -> some View {
+        VStack(alignment:.leading,spacing:6) {
+            Text(verbatim:decision.question).font(.headline).textSelection(.enabled)
+            Text(verbatim:decision.context).textSelection(.enabled)
+            if let capture=decision.capture, let chosen=decision.option(capture.optionId) {
+                Text(capture.source.label + " · " + chosen.id + " · " + chosen.label).textSelection(.enabled)
+                if let reason=capture.humanReason { Text(verbatim:reason).textSelection(.enabled) }
+                CrewdAskCapturedDecisionLink(workspace:workspace,source:decision)
+            } else if open {
+                Text("问题、背景、选项、选择和所填理由会写入组织决定日志，组织成员可阅读。").font(.caption).foregroundStyle(.secondary)
+            }
+            if let fallback=decision.defaultChoice, let option=decision.option(fallback.optionId) {
+                Text("默认方案 · " + option.id + " · " + option.label + " · " + String(fallback.afterMinutes) + " 分钟后")
+                    .font(.caption).textSelection(.enabled)
+            }
         }
-        .onChange(of:store.readScope) { _,_ in review = nil; dismiss() }
-        .onDisappear { active = false; readID = UUID(); reading = false }
     }
 
     private func inboxActions(_ inbox: CrewdAskInboxWire.Review) -> some View {
@@ -367,45 +424,66 @@ private struct CrewdTypedHumanActions: View {
         }
     }
 
+    private func read(_ id:CrewdWorkID) async throws -> (CrewdAskResolutionWire.Review,CrewdStructuredAskWire.Review?) {
+        let resolution = try await store.humanResolutionCheck(id,crew:key.crew)
+        let structured = try await store.humanDecisionReview(id,crew:key.crew)
+        if let structured, !structured.matches(resolution) { throw CrewdAskResolutionWire.invalid() }
+        return (resolution,structured)
+    }
+    private func publish(_ fresh:CrewdAskResolutionWire.Review,_ structured:CrewdStructuredAskWire.Review?,
+                         previous:CrewdStructuredAskWire.Review?,origin:InboxOrigin) {
+        if let previous, structured.map({ previous.sameDraft(as:$0) }) != true {
+            var updated=drafts.fields(key)
+            updated.decisionOption=""
+            drafts.edit(key,updated)
+        }
+        review=fresh; decisionReview=structured; reviewOrigin=origin
+    }
     private func refresh() async {
         guard let id, current, !reading, store.supportsAskResolution else { return }
         let token = UUID(); readID = token; reading = true; failure = nil
-        let origin = inboxOrigin
+        let origin = inboxOrigin, previous = decisionReview
         review = nil; reviewOrigin = nil
         defer { if readID == token { reading = false } }
         do {
-            let fresh = try await store.humanResolutionCheck(id,crew:key.crew)
-            guard current && readID == token else { return }
-            review = fresh
-            if inboxOrigin == origin { reviewOrigin = origin }
+            let (fresh,structured) = try await read(id)
+            guard current, readID == token, inboxOrigin == origin, !Task.isCancelled else { return }
+            publish(fresh,structured,previous:previous,origin:origin)
         } catch {
-            if current && readID == token { failure = error.localizedDescription }
+            if current && readID == token && inboxOrigin == origin { failure = error.localizedDescription }
         }
     }
 
     private func submit() {
+        let shownDecision=decisionReview, origin=inboxOrigin
         guard canSubmit, let shown = review, let id, let scope,
-              let snapshot = drafts.begin(key,validText:CrewdAskResolutionWire.validInput) else { return }
+              let snapshot = drafts.begin(key,validFields:{ submissionText($0,shownDecision) != nil }),
+              let text=submissionText(snapshot.fields,shownDecision) else { return }
         failure = nil
         Task { @MainActor in
             var committed = false
+            let keepOpen = shownDecision != nil && snapshot.fields.action == .answer
             defer {
                 drafts.finish(snapshot,accepted:committed)
-                if committed && current { dismiss() }
+                if committed && current && inboxOrigin == origin && !keepOpen { dismiss() }
             }
             do {
-                let fresh = try await store.humanResolutionCheck(id,crew:key.crew)
-                guard current, !Task.isCancelled, review == shown else { throw CancellationError() }
-                guard fresh.sameResolution(as:shown) else {
-                    review = fresh
+                let (fresh,structured) = try await read(id)
+                guard current, inboxOrigin == origin, !Task.isCancelled, review == shown else { throw CancellationError() }
+                guard fresh.sameResolution(as:shown),
+                      shownDecision.map({ previous in structured.map { previous.sameDraft(as:$0) } == true }) ?? (structured == nil)
+                else {
+                    publish(fresh,structured,previous:shownDecision,origin:origin)
                     failure = "原问题已变化。请核对当前内容后重新决定。"
                     return
                 }
                 let disposition: CrewdAskResolutionWire.Disposition = snapshot.fields.action == .answer ? .answer : .withdraw
-                let receipt = try await workspace.submitAskResolution(fresh,disposition:disposition,text:snapshot.fields.text,
+                let receipt = try await workspace.submitAskResolution(fresh,disposition:disposition,text:text,
                     selectedCrew:key.scope,scope:scope)
-                if receipt.phase == .committed && !receipt.historical { committed = true }
-                else if current {
+                if receipt.phase == .committed && !receipt.historical {
+                    committed = true
+                    if keepOpen && current && inboxOrigin == origin { await refresh() }
+                } else if current && inboxOrigin == origin {
                     if [.rejected,.suppressed].contains(receipt.phase) {
                         review = nil
                         failure = "后台已拒绝此次处理。请重新核对当前问题。"
@@ -414,7 +492,7 @@ private struct CrewdTypedHumanActions: View {
             } catch is CancellationError {
                 return
             } catch {
-                if current { failure = error.localizedDescription }
+                if current && inboxOrigin == origin { failure = error.localizedDescription }
             }
         }
     }
@@ -479,7 +557,7 @@ struct CrewdHumanResolutionRecovery: View {
                 let receipt = if schedule {
                     try await workspace.recoverAskInboxSchedule(id,stillCurrent:current)
                 } else {
-                    try await workspace.recoverAskResolution(id)
+                    try await workspace.recoverAskResolution(id,stillCurrent:current)
                 }
                 guard current() else { return }
                 switch receipt?.phase {

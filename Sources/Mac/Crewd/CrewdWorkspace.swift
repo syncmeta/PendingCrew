@@ -234,6 +234,8 @@ final class CrewdWorkspace: ObservableObject {
         self?.client.capabilities.contains(CrewdManagedDirectoryWire.decisionsCapability) == true
     }, riskLessonsAvailable: { [weak self] in
         self?.client.capabilities.contains(CrewdManagedDirectoryWire.riskLessonsCapability) == true
+    }, structuredDecisionsAvailable: { [weak self] in
+        self?.client.capabilities.contains(CrewdStructuredAskWire.capability) == true
     })
     lazy var knowledge: CrewdKnowledgeStore = CrewdKnowledgeStore(origin: { [weak self] in
         guard let self, self.client.capabilities.contains("data"), self.originalJournalReady,
@@ -1233,7 +1235,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     private func isReadOnly(_ method: String) -> Bool {
         if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements", "adminCase.requirementReviews",
-            "adminCase.workDuplicates", "adminCase.workDuplicateHistory", "ask.resolveCheck", "work.coordinationStatus",
+            "adminCase.workDuplicates", "adminCase.workDuplicateHistory", "ask.resolveCheck", CrewdStructuredAskWire.method, "work.coordinationStatus",
             "todo.rulingCheck", "todo.rulingResult", CrewdRequirementCreateWire.lookupMethod,
             CrewdChannelResponsibilityPage.method, CrewdMessageDeliveryExplanation.method].contains(method) { return true }
         if ["command.lookup", "command.listUnknown", "session.controlTarget", "session.terminal.watch"].contains(method) { return true }
@@ -1662,9 +1664,11 @@ final class CrewdWorkspace: ObservableObject {
         return receipt
     }
 
-    func recoverAskResolution(_ id: UUID) async throws -> CrewdPublicReceipt? {
+    func recoverAskResolution(_ id: UUID, stillCurrent: @MainActor () -> Bool = { true }) async throws -> CrewdPublicReceipt? {
+        guard stillCurrent(), !Task.isCancelled else { throw CancellationError() }
         guard let record = originalAskResolutionRecords().first(where:{ $0.id == id }) else { throw CrewdPublicWire.invalid() }
         let receipt = try await lookupOriginalCommand(record)
+        guard stillCurrent(), !Task.isCancelled else { throw CancellationError() }
         if let receipt, [.committed,.rejected,.suppressed].contains(receipt.phase) {
             try acknowledgeOriginalCommand(record,receipt:receipt)
             if receipt.phase == .committed { workDirty = true; scheduleSync() }

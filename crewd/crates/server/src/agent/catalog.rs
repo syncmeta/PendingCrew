@@ -33,6 +33,7 @@ pub enum Ty {
     CoordinationChildren,
     ManagedObjectScope,
     ManagedObjectChange,
+    DecisionAskDraft,
     /// `[{text, category?}]`
     Messages,
 }
@@ -575,6 +576,18 @@ pub const CATALOG: &[ToolSpec] = &[
             p("fallback", Str, false),
         ],
     ),
+    idempotent(crew_member(
+        "ask_decision",
+        &[
+            p("scope", ManagedObjectScope, true),
+            p("requestId", Str, true),
+            p("draft", DecisionAskDraft, true),
+        ],
+    )),
+    ro(crew_member(
+        "ask_decision_request_get",
+        &[p("scope", ManagedObjectScope, true), p("requestId", Str, true)],
+    )),
     all(
         "withdraw_ask",
         &[
@@ -668,7 +681,10 @@ pub const CATALOG: &[ToolSpec] = &[
         ],
     )),
     ro(crew_member("managed_object_scope_get", &[])),
-    ro(crew_member("managed_object_get", &[p("id", Str, true)])),
+    ro(crew_member(
+        "managed_object_get",
+        &[p("id", Str, true), p("includeSystemDefaults", Bool, false)],
+    )),
     ro(crew_member(
         "managed_tables_list",
         &[p("after", Str, false)],
@@ -679,7 +695,7 @@ pub const CATALOG: &[ToolSpec] = &[
     )),
     ro(crew_member(
         "managed_decisions_list",
-        &[p("after", Str, false)],
+        &[p("after", Str, false), p("includeSystemDefaults", Bool, false)],
     )),
     ro(crew_member("managed_risks_list", &[p("after", Str, false)])),
     ro(crew_member(
@@ -942,6 +958,39 @@ fn managed_change_schema() -> Value {
     ]})
 }
 
+fn decision_ask_draft_schema() -> Value {
+    let object = |properties: Value, required: &[&str]| json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
+    let option = object(
+        json!({"label":{"type":"string","minLength":1,"maxLength":120}}),
+        &["label"],
+    );
+    let about = object(
+        json!({
+            "kind":{"type":"string","enum":["crew","work","requirement","row","risk"]},
+            "id":{"type":"string","minLength":1,"maxLength":128},
+        }),
+        &["kind", "id"],
+    );
+    let default = object(
+        json!({
+            "optionId":{"type":"string","enum":["A","B","C","D","E","F","G","H"]},
+            "afterMinutes":{"type":"integer","minimum":1,"maximum":10080},
+        }),
+        &["optionId", "afterMinutes"],
+    );
+    object(
+        json!({
+            "question":{"type":"string","minLength":1,"maxLength":60},
+            "context":{"type":"string","minLength":1,"maxLength":900},
+            "options":{"type":"array","minItems":2,"maxItems":8,"uniqueItems":true,"items":option},
+            "about":{"type":"array","minItems":1,"maxItems":8,"uniqueItems":true,"items":about},
+            "default":{"oneOf":[default,{"type":"null"}]},
+            "reversibility":{"type":["string","null"],"enum":["reversible","hardToReverse","irreversible",null]},
+        }),
+        &["question", "context", "options", "about"],
+    )
+}
+
 pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
@@ -971,6 +1020,7 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
                 "dbId":{"type":"string"},"restoreEpoch":{"type":"string"}
             },"required":["dbId","restoreEpoch"],"additionalProperties":false}),
             ManagedObjectChange => managed_change_schema(),
+            DecisionAskDraft => decision_ask_draft_schema(),
             CoordinationChildren => json!({"type":"array","minItems":2,"maxItems":8,"items":{
                 "type":"object",
                 "properties":{
@@ -1170,6 +1220,7 @@ mod tests {
                 "list_channels",
                 "channel_archive_check",
                 "directory",
+                "ask_decision_request_get",
                 "get_quota",
                 "inspect_session",
                 "list_sessions",
@@ -1226,6 +1277,7 @@ mod tests {
                 crewd_collab::work_coordination::SPLIT_TOOL,
                 "work_item_reassign_lost",
                 "channel_listen",
+                "ask_decision",
                 "set_session_profile",
                 "rename_crew",
                 "change_workdir",
@@ -1258,6 +1310,7 @@ mod tests {
                 "channel_archive_check",
                 "channel_listen",
                 "directory",
+                "ask_decision_request_get",
                 "get_quota",
                 "inspect_session",
                 "list_sessions",

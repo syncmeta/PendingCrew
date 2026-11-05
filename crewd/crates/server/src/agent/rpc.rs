@@ -1086,6 +1086,182 @@ mod tests {
         assert!(!revoked.to_string().contains(&risk));
     }
 
+    #[tokio::test]
+    async fn decision_ask_tools_keep_original_receipt_and_opt_in_to_system_defaults() {
+        use serde_json::Value;
+
+        async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
+            peer.call(methods::CALL, json!({"tool":name,"args":args}))
+                .await
+                .unwrap()
+        }
+
+        fn decoded(result: Value) -> Value {
+            assert_eq!(result["isError"], false, "{result}");
+            serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
+        }
+
+        let f = Fixture::new().await;
+        let foreign = f.add_crew("Foreign decision ask fixture", None).await;
+        let other = "foreign-decision-ask-worker";
+        f.add_session(&foreign, other, Role::Worker, "Foreign worker")
+            .await;
+        let admin = "decision-ask-admin";
+        f.add_session(&f.crew, admin, Role::Admin, "Fixture admin")
+            .await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let task = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut author = RpcClient::connect(&socket).await;
+        let mut reader = RpcClient::connect(&socket).await;
+        let mut restricted = RpcClient::connect(&socket).await;
+        for (peer, id) in [
+            (&mut author, f.worker.as_str()),
+            (&mut reader, other),
+            (&mut restricted, admin),
+        ] {
+            peer.call(methods::ATTACH, json!({"sessionId":id,"token":f.token(id)}))
+                .await
+                .unwrap();
+            let catalog = peer.call(methods::TOOLS, json!({})).await.unwrap();
+            for name in ["ask_decision", "ask_decision_request_get"] {
+                assert_eq!(
+                    catalog
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|item| item["name"] == name),
+                    id != admin,
+                );
+            }
+        }
+
+        let captured = decoded(tool(&mut author, "managed_object_scope_get", json!({})).await);
+        let scope = &captured["scope"];
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let original = json!({
+            "scope":scope,"requestId":uuid,
+            "draft":{
+                "question":"Where should the synthetic fixture run?",
+                "context":"The original options were cleared for organization-wide capture.",
+                "options":[{"label":"Isolated workspace"},{"label":"Separate test machine"}],
+                "about":[{"kind":"crew","id":f.crew}],
+                "default":{"optionId":"A","afterMinutes":1},
+                "reversibility":"reversible",
+            },
+        });
+        let lookup = json!({"scope":scope,"requestId":uuid});
+        let mut changes = f.state.hub.subscribe_collab();
+        assert_eq!(
+            tool(&mut restricted, "ask_decision", original.clone()).await["isError"],
+            true
+        );
+        let mut forged = original.clone();
+        forged["crewId"] = json!(foreign);
+        assert_eq!(
+            tool(&mut author, "ask_decision", forged).await["isError"],
+            true
+        );
+        let first = decoded(tool(&mut author, "ask_decision", original.clone()).await);
+        assert_eq!(first["scope"], *scope);
+        assert_eq!(first["requestId"], uuid);
+        assert_eq!(first["opened"]["crewId"], f.crew);
+        assert!(first["opened"]["ask"].as_str().unwrap().starts_with('H'));
+        assert!(first["opened"]["capture"].is_null());
+        assert_eq!(
+            decoded(tool(&mut author, "ask_decision", original.clone()).await),
+            first
+        );
+        let mut changed = original;
+        changed["draft"]["context"] = json!("Different context using the original UUID");
+        assert_eq!(
+            tool(&mut author, "ask_decision", changed).await["isError"],
+            true
+        );
+        let other_lookup = tool(&mut reader, "ask_decision_request_get", lookup.clone()).await;
+        if other_lookup["isError"] == false {
+            assert_eq!(decoded(other_lookup), json!({"status":"notFound"}));
+        }
+
+        let (mut progress, mut announced) = (0, 0);
+        while let Ok(change) = changes.try_recv() {
+            match change {
+                Change::Progress { session_id, .. } if session_id == f.worker => progress += 1,
+                Change::AskChanged { crew_id, ask }
+                    if crew_id == f.crew && first["opened"]["ask"] == ask =>
+                {
+                    announced += 1
+                }
+                _ => {}
+            }
+        }
+        assert_eq!((progress, announced), (1, 1));
+
+        let crew = f.crew.clone();
+        let applied = f
+            .state
+            .db
+            .call_result(move |store| {
+                crewd_collab::run(store, crewd_store::now_ms() + 120_000, |tx| {
+                    crewd_collab::asks::apply_due_defaults(tx, &crew)
+                })
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        assert_eq!(
+            applied,
+            vec![first["opened"]["ask"].as_str().unwrap().to_owned()]
+        );
+
+        let ordinary = decoded(tool(&mut reader, "managed_decisions_list", json!({})).await);
+        assert_eq!(ordinary["items"], json!([]));
+        let opted = decoded(
+            tool(
+                &mut reader,
+                "managed_decisions_list",
+                json!({"includeSystemDefaults":true}),
+            )
+            .await,
+        );
+        let defaults = opted["items"].as_array().unwrap();
+        assert_eq!(defaults.len(), 1);
+        let decision = &defaults[0];
+        let id = decision["id"].as_str().unwrap();
+        assert!(id.starts_with('D'));
+        assert_eq!(decision["author"]["kind"], "systemDefault");
+        assert_eq!(
+            tool(&mut reader, "managed_object_get", json!({"id":id})).await["isError"],
+            true
+        );
+        let detail = decoded(
+            tool(
+                &mut reader,
+                "managed_object_get",
+                json!({"id":id,"includeSystemDefaults":true}),
+            )
+            .await,
+        );
+        assert_eq!(detail["decision"], *decision);
+
+        assert_eq!(
+            decoded(tool(&mut author, "ask_decision_request_get", lookup.clone()).await),
+            json!({"status":"known","receipt":first}),
+        );
+        f.state.tokens.revoke(&f.worker);
+        assert_eq!(
+            tool(&mut author, "ask_decision_request_get", lookup).await["isError"],
+            true
+        );
+        drop((author, reader, restricted));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
     fn assert_role_tools(value: &serde_json::Value, role: Role) {
         use std::collections::BTreeSet;
         let actual: BTreeSet<_> = value

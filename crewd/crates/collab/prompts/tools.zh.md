@@ -160,6 +160,27 @@ true = 停止收听这个群（不能和 minutes、senders 一起给）。本来
 ## ask.fallback
 到点没人答时你打算怎么办（「就按 A 做」）。和 fallback_after_minutes 一起给。
 
+## ask_decision
+请人类为你当前机组选择一项。人类选定方案或系统采用默认方案后，会生成组织可读的决定。问题、背景、选项和关联对象都应可以向组织公开。私密问题或需要自由文字回答的问题用 ask。结果不确定时保留原请求 UUID 和范围。
+
+## ask_decision.scope
+准确复制 managed_object_scope_get 返回的当前 dbId 与 restoreEpoch。
+
+## ask_decision.requestId
+为这项确切请求生成一个规范 UUID，保留它供查询回执。
+
+## ask_decision.draft
+填写问题、背景、按顺序排列的二至八个不重复单行选项，以及准确的关联对象编号。选项从 A 依次编号。若设默认方案，填写其中一个选项编号和整数分钟的等待时间。
+
+## ask_decision_request_get
+查询本会话发起的结构化问题的原始回执。回执记录当时如何发起。当前结果可另查待人类处理记录或对应的决定。回执缺失或仅为历史记录时，不能据此重执行。
+
+## ask_decision_request_get.scope
+发起请求时的原始 dbId 与 restoreEpoch。
+
+## ask_decision_request_get.requestId
+准确的原始请求 UUID。
+
 ## withdraw_ask
 撤回一条还没人答的问（那件事已经不成立了）。你自己提的能撤；机长能撤本机组的任何一条（总机组的机长在每个机组都算机长）。还卡着工作项的问撤不了。
 
@@ -1544,6 +1565,9 @@ messages、todo、documents、progress，与工作图父级独立。
 ## managed_object_get.id
 准确的 T 表编号、O 行编号、D 决策编号、R 风险编号或 L 教训编号。
 
+## managed_object_get.includeSystemDefaults
+设为 true 时可读取采用默认方案生成的决定。省略或填 false 沿用此前的读取行为。
+
 ## managed_tables_list
 读取组织内可见的受管表，一次一页。
 
@@ -1564,6 +1588,9 @@ managed_tables_list 或 managed_object_get 返回的准确 T 编号。
 
 ## managed_decisions_list.after
 上一页返回的 nextAfter D 编号。首页省略。
+
+## managed_decisions_list.includeSystemDefaults
+设为 true 时纳入采用默认方案生成的决定。同一次分页浏览请保持这一参数一致。
 
 ## managed_risks_list
 按从新到旧的顺序分页读取组织内可见的受管风险。

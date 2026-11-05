@@ -1580,6 +1580,14 @@ final class CrewdWorkStore: ObservableObject {
         try check(token)
         return try .init(value,crew:crew,id:id.raw)
     }
+    func humanDecisionReview(_ id:CrewdWorkID,crew:String) async throws -> CrewdStructuredAskWire.Review? {
+        guard id.kind == .human, !crew.isEmpty else { throw CrewdAskResolutionWire.invalid() }
+        guard capabilities.contains(CrewdStructuredAskWire.capability) else { return nil }
+        let token = generation
+        let value = try await call(CrewdStructuredAskWire.method,.object(["crewId":.string(crew),"ask":.string(id.raw)]))
+        try check(token)
+        return value == .null ? nil:try .init(value,crew:crew,ask:id.raw)
+    }
     func humanTodoAttributes(_ id:CrewdWorkID)async throws->CrewdValue {
         let token=generation
         let value=try await call("todo.attributesGet",.object(["object":.object(["kind":.string("humanTask"),"id":.string(id.raw)])]))

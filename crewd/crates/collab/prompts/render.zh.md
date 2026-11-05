@@ -160,3 +160,11 @@ crewd 重启打断了你上一轮的工作。先核对当前状态（工作区�
 
 ## notice.patrol.header
 本机组行政巡检简报（观察结束于 {time}）。以下为历史观察，处理前请核对当前事实。
+
+## notice.ask.decision_capture
+
+请回复准确的选项编号，也可在下一行补充理由。问题、背景、选项、选择和理由会写入组织可读的决定。
+
+## notice.ask.decision_default
+
+如果 {minutes} 分钟内无人答复，系统将记录选项 {option} 为默认决定。

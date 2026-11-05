@@ -25,6 +25,10 @@ The withdraw reason cannot be empty. Say in one sentence what changed.
 ## ask.in_use
 {ask} still blocks a live work item and cannot be withdrawn. Have the owner reroute that item (report it back to open / active) first, then withdraw.
 
+## ask.decision_option_required
+
+Reply with the exact option ID (for example, A). Put an optional reason on the following line.
+
 ## ask.question_empty
 The question cannot be empty. Write the decision you need, ideally with the options and your preference.
 

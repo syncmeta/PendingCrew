@@ -25,6 +25,10 @@
 ## ask.in_use
 {ask} 还卡着一个活项，撤不了；先让负责人改道（把那一项报回 open / active），再撤
 
+## ask.decision_option_required
+
+请回复选项编号（例如 A），或在编号下一行补充理由。
+
 ## ask.question_empty
 问题不能为空；写清要人拍板的那件事，最好带上选项和你的倾向
 

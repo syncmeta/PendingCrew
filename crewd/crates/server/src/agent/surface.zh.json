@@ -2278,6 +2278,210 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "请人类为你当前机组选择一项。人类选定方案或系统采用默认方案后，会生成组织可读的决定。问题、背景、选项和关联对象都应可以向组织公开。私密问题或需要自由文字回答的问题用 ask。结果不确定时保留原请求 UUID 和范围。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "draft": {
+            "additionalProperties": false,
+            "description": "填写问题、背景、按顺序排列的二至八个不重复单行选项，以及准确的关联对象编号。选项从 A 依次编号。若设默认方案，填写其中一个选项编号和整数分钟的等待时间。",
+            "properties": {
+              "about": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "crew",
+                        "work",
+                        "requirement",
+                        "row",
+                        "risk"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "context": {
+                "maxLength": 900,
+                "minLength": 1,
+                "type": "string"
+              },
+              "default": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "afterMinutes": {
+                        "maximum": 10080,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "optionId": {
+                        "enum": [
+                          "A",
+                          "B",
+                          "C",
+                          "D",
+                          "E",
+                          "F",
+                          "G",
+                          "H"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "optionId",
+                      "afterMinutes"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "options": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 2,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "question": {
+                "maxLength": 60,
+                "minLength": 1,
+                "type": "string"
+              },
+              "reversibility": {
+                "enum": [
+                  "reversible",
+                  "hardToReverse",
+                  "irreversible",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "question",
+              "context",
+              "options",
+              "about"
+            ],
+            "type": "object"
+          },
+          "requestId": {
+            "description": "为这项确切请求生成一个规范 UUID，保留它供查询回执。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "准确复制 managed_object_scope_get 返回的当前 dbId 与 restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "requestId",
+          "draft"
+        ],
+        "type": "object"
+      },
+      "name": "ask_decision"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "查询本会话发起的结构化问题的原始回执。回执记录当时如何发起。当前结果可另查待人类处理记录或对应的决定。回执缺失或仅为历史记录时，不能据此重执行。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "description": "准确的原始请求 UUID。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "发起请求时的原始 dbId 与 restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "ask_decision_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -2810,6 +3014,10 @@
           "id": {
             "description": "准确的 T 表编号、O 行编号、D 决策编号、R 风险编号或 L 教训编号。",
             "type": "string"
+          },
+          "includeSystemDefaults": {
+            "description": "设为 true 时可读取采用默认方案生成的决定。省略或填 false 沿用此前的读取行为。",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2880,6 +3088,10 @@
           "after": {
             "description": "上一页返回的 nextAfter D 编号。首页省略。",
             "type": "string"
+          },
+          "includeSystemDefaults": {
+            "description": "设为 true 时纳入采用默认方案生成的决定。同一次分页浏览请保持这一参数一致。",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -6216,6 +6428,210 @@
     {
       "annotations": {
         "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "请人类为你当前机组选择一项。人类选定方案或系统采用默认方案后，会生成组织可读的决定。问题、背景、选项和关联对象都应可以向组织公开。私密问题或需要自由文字回答的问题用 ask。结果不确定时保留原请求 UUID 和范围。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "draft": {
+            "additionalProperties": false,
+            "description": "填写问题、背景、按顺序排列的二至八个不重复单行选项，以及准确的关联对象编号。选项从 A 依次编号。若设默认方案，填写其中一个选项编号和整数分钟的等待时间。",
+            "properties": {
+              "about": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "crew",
+                        "work",
+                        "requirement",
+                        "row",
+                        "risk"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "context": {
+                "maxLength": 900,
+                "minLength": 1,
+                "type": "string"
+              },
+              "default": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "afterMinutes": {
+                        "maximum": 10080,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "optionId": {
+                        "enum": [
+                          "A",
+                          "B",
+                          "C",
+                          "D",
+                          "E",
+                          "F",
+                          "G",
+                          "H"
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "optionId",
+                      "afterMinutes"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "options": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "label"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "minItems": 2,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "question": {
+                "maxLength": 60,
+                "minLength": 1,
+                "type": "string"
+              },
+              "reversibility": {
+                "enum": [
+                  "reversible",
+                  "hardToReverse",
+                  "irreversible",
+                  null
+                ],
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "question",
+              "context",
+              "options",
+              "about"
+            ],
+            "type": "object"
+          },
+          "requestId": {
+            "description": "为这项确切请求生成一个规范 UUID，保留它供查询回执。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "准确复制 managed_object_scope_get 返回的当前 dbId 与 restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "requestId",
+          "draft"
+        ],
+        "type": "object"
+      },
+      "name": "ask_decision"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "查询本会话发起的结构化问题的原始回执。回执记录当时如何发起。当前结果可另查待人类处理记录或对应的决定。回执缺失或仅为历史记录时，不能据此重执行。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "description": "准确的原始请求 UUID。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "发起请求时的原始 dbId 与 restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "ask_decision_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": false,
         "readOnlyHint": false
@@ -6374,6 +6790,10 @@
           "id": {
             "description": "准确的 T 表编号、O 行编号、D 决策编号、R 风险编号或 L 教训编号。",
             "type": "string"
+          },
+          "includeSystemDefaults": {
+            "description": "设为 true 时可读取采用默认方案生成的决定。省略或填 false 沿用此前的读取行为。",
+            "type": "boolean"
           }
         },
         "required": [
@@ -6444,6 +6864,10 @@
           "after": {
             "description": "上一页返回的 nextAfter D 编号。首页省略。",
             "type": "string"
+          },
+          "includeSystemDefaults": {
+            "description": "设为 true 时纳入采用默认方案生成的决定。同一次分页浏览请保持这一参数一致。",
+            "type": "boolean"
           }
         },
         "type": "object"

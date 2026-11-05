@@ -23,6 +23,7 @@ pub mod commands;
 pub mod host;
 pub mod judgments;
 pub mod managed_objects;
+pub mod decision_asks;
 pub mod managed_objects_api;
 mod managed_risks_lessons;
 pub mod message_attribution;
@@ -208,6 +209,8 @@ pub mod methods {
         crate::managed_objects_api::LESSONS,
         crate::managed_objects_api::SUBMIT,
         crate::managed_objects_api::REQUEST_GET,
+        crate::decision_asks::GET,
+        crate::decision_asks::DECISION_ORIGIN,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
         crate::commands::COMMAND_SUBMIT,
         crate::commands::COMMAND_LOOKUP,
@@ -721,6 +724,8 @@ pub fn api_schema() -> Value {
     let _ = sub::<notifications::NotificationOpenContext>(g);
     let _ = sub::<AskResolutionReceipt>(g);
     let _ = sub::<AskInboxScheduleReceipt>(g);
+    let _ = sub::<decision_asks::OpenReceipt>(g);
+    let _ = sub::<decision_asks::OpenLookup>(g);
     let _ = sub::<WorkCloseReceipt>(g);
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
@@ -768,6 +773,14 @@ pub fn api_schema() -> Value {
         (
             managed::REQUEST_GET,
             m(sub::<managed::RequestParams>(g), sub::<managed_objects::Lookup>(g)),
+        ),
+        (
+            decision_asks::GET,
+            m(sub::<decision_asks::GetParams>(g), nullable(sub::<decision_asks::View>(g))),
+        ),
+        (
+            decision_asks::DECISION_ORIGIN,
+            m(sub::<decision_asks::OriginParams>(g), nullable(sub::<decision_asks::View>(g))),
         ),
         (
             "notification.status",

@@ -26,6 +26,8 @@ pub const METHODS: &[&str] = &[
     LESSONS,
     SUBMIT,
     REQUEST_GET,
+    crate::decision_asks::GET,
+    crate::decision_asks::DECISION_ORIGIN,
 ];
 
 /// An invalidation, not a write receipt or an object snapshot.
@@ -41,6 +43,8 @@ pub struct OntologyChanged {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GetParams {
     pub id: String,
+    #[serde(default)]
+    pub include_system_defaults: bool,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
@@ -49,7 +53,13 @@ pub struct TablesParams {
     pub after: Option<String>,
 }
 
-pub type DecisionsParams = TablesParams;
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecisionsParams {
+    pub after: Option<String>,
+    #[serde(default)]
+    pub include_system_defaults: bool,
+}
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

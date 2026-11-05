@@ -1013,7 +1013,9 @@ mod tests {
         assert!(!serde_json::to_string(&old).unwrap().contains("occurrence"));
         s.conn()
             .execute_batch(
-                "DROP TABLE managed_lessons;
+                "DROP TABLE decision_ask_open_receipts;
+             DROP TABLE decision_asks;
+             DROP TABLE managed_lessons;
              DROP TABLE managed_risks;
              ALTER TABLE managed_object_receipts DROP COLUMN member_confirmation;
              PRAGMA user_version=24;",
@@ -1025,7 +1027,7 @@ mod tests {
             s.conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            25
+            26
         );
         assert_eq!(
             managed::lookup(s.conn(), HUMAN, &table.scope, "crew-a", &table.request_id).unwrap(),
