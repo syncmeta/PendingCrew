@@ -862,7 +862,8 @@ enum CrewdNativeTable {
 
         func statement(row: [CrewdDataCell], original: [CrewdDataCell]?) throws -> CrewdDataSql {
             guard row.count == columns.count,
-                  zip(row, columns).allSatisfy({ CrewdNativeTable.accepts($0.0, column:$0.1) }) else { throw Failure.invalid }
+                  zip(row, columns).allSatisfy({ CrewdNativeTable.accepts($0.0, column:$0.1) }),
+                  try JSONEncoder().encode(row).count <= 512 * 1024 else { throw Failure.invalid }
             let table = try CrewdNativeTable.identifier(schema.name)
             let names = try columns.map { try CrewdNativeTable.identifier($0.name) }
             if let original {

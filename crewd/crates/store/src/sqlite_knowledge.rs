@@ -518,7 +518,13 @@ impl Knowledge {
                     });
                 }
                 Mutation::Sql { sql, params } => {
-                    run_sql(&tx, &DataSql { sql, params }, false, confirmed, 1000)?;
+                    run_sql(
+                        &tx,
+                        &DataSql { sql, params },
+                        false,
+                        confirmed,
+                        RowLimit::Exact(1000),
+                    )?;
                 }
             }
         }
@@ -574,7 +580,7 @@ impl Knowledge {
         s: &DataSql,
         limit: u32,
     ) -> Result<(Vec<String>, Vec<Vec<DataCell>>, bool)> {
-        run_sql(&self.conn, s, true, false, limit)
+        run_sql(&self.conn, s, true, false, RowLimit::Exact(limit))
     }
     pub fn preview(&mut self, p: DataPreviewParams, principal: &str) -> Result<DataPreview> {
         self.check(&p.context)?;
@@ -590,7 +596,7 @@ impl Knowledge {
             if Instant::now() >= deadline {
                 return Err(invalid("preview deadline exceeded"));
             }
-            run_sql(&tx, s, false, true, 1000)?;
+            run_sql(&tx, s, false, true, RowLimit::Exact(1000))?;
         }
         let after_tables = business_counts(&tx)?;
         let dropped_rows: u64 = before_tables
@@ -1106,14 +1112,23 @@ fn authorize(
         Authorization::Deny
     }
 }
+enum RowLimit {
+    Exact(u32),
+    Page(u32),
+}
+
 fn run_sql(
     c: &Connection,
     s: &DataSql,
     readonly: bool,
     confirmed: bool,
-    limit: u32,
+    limit: RowLimit,
 ) -> Result<(Vec<String>, Vec<Vec<DataCell>>, bool)> {
-    bound(limit, 1000)?;
+    let (max_rows, short_page) = match limit {
+        RowLimit::Exact(count) => (count, false),
+        RowLimit::Page(count) => (count, true),
+    };
+    bound(max_rows, 1000)?;
     if s.sql.len() > 65536 || s.params.len() > 256 {
         return Err(invalid("SQL input bounds exceeded"));
     }
@@ -1147,7 +1162,7 @@ fn run_sql(
         let mut bytes = 0;
         let mut truncated = false;
         while let Some(row) = q.next()? {
-            if rows.len() == limit as usize {
+            if rows.len() == max_rows as usize {
                 truncated = true;
                 break;
             }
@@ -1156,6 +1171,10 @@ fn run_sql(
                 .collect::<Result<Vec<_>>>()?;
             bytes += serde_json::to_vec(&cells)?.len();
             if bytes > 1024 * 1024 {
+                if short_page && !rows.is_empty() {
+                    truncated = true;
+                    break;
+                }
                 return Err(invalid("SQL result byte bound exceeded"));
             }
             rows.push(cells);

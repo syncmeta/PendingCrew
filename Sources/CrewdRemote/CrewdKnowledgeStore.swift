@@ -583,7 +583,7 @@ enum CrewdKnowledgeTitleSearch {
             CrewdDataTableParams(context:context,table:table.name,afterKey:after,atRevision:nil,limit:16),preservingPresentation:true)
         guard current(o,token), workspace?.context == context, page.context == context, page.generation == context.generation,
               page.rows.count <= 16, !page.columns.isEmpty, page.rows.allSatisfy({ $0.count == page.columns.count }),
-              after == nil || page.stableOrder, page.nextKey == nil || (page.stableOrder && page.rows.count == 16),
+              after == nil || page.stableOrder, page.nextKey == nil || (page.stableOrder && !page.rows.isEmpty),
               !page.stableOrder || page.truncated == (page.nextKey != nil) else { throw Failure.invalid }
         if page.stableOrder {
             let keys = table.columns.filter { $0.primaryKeyPosition > 0 }

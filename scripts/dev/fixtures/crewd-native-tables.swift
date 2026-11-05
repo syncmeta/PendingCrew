@@ -51,6 +51,12 @@ import Foundation
         fake.shortCatalog = false
         let page = try await store.nativeTablePage(schema,context:fake.context)
         precondition(page.stableOrder && page.rows.isEmpty)
+        fake.shortTablePage = true
+        let byteShort = try await store.nativeTablePage(schema,context:fake.context)
+        precondition(byteShort.rows.count == 1 && byteShort.nextKey == [original[0]])
+        let byteContinuation = try await store.nativeTablePage(schema,context:fake.context,after:byteShort.nextKey)
+        precondition(byteContinuation.rows.first?.first == .text(value:"z") && byteContinuation.nextKey == nil)
+        fake.shortTablePage = false
 
         let add = try store.saveNativeTableRow(model,row:original,original:nil,context:fake.context)
         let addPreview = try await store.previewNativeTable(add,stillCurrent:{true})
@@ -111,7 +117,7 @@ import Foundation
         var rows: [CrewdDataCell]
         var context = CrewdDataContext(dbId:"db",authorityId:"db",restoreEpoch:"initial",crewId:"crew",namespace:"sqlite",generation:"0")
         var initialized = false, hasRow = false, dropReply = false, missing = false
-        var shortCatalog = false
+        var shortCatalog = false, shortTablePage = false
         var currentSchema: String?
         var calls: [String] = [], originalID = ""
         var staged: CrewdDataPreview?, last: CrewdDataChangeResult?
@@ -130,6 +136,17 @@ import Foundation
                 }
                 return try CrewdKnowledgeStore.encode(CrewdDataSchemaResult(context:context,generation:context.generation,objects:[schema],next:shortCatalog ? schema.name:nil))
             case "data.table.get":
+                if shortTablePage {
+                    let input = try CrewdKnowledgeStore.decode(params,CrewdDataTableParams.self)
+                    let first = input.afterKey == nil
+                    var current = rows
+                    if !first {
+                        precondition(input.afterKey == [rows[0]])
+                        current[0] = .text(value:"z")
+                    }
+                    return try CrewdKnowledgeStore.encode(CrewdDataTablePage(context:context,generation:context.generation,
+                        columns:schema.columns.map(\.name),rows:[current],nextKey:first ? [current[0]] : nil,truncated:first,stableOrder:true))
+                }
                 return try CrewdKnowledgeStore.encode(CrewdDataTablePage(context:context,generation:context.generation,columns:schema.columns.map(\.name),
                     rows:hasRow ? [rows] : [],nextKey:nil,truncated:false,stableOrder:true))
             case "data.preview":

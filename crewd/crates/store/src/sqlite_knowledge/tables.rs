@@ -1,5 +1,5 @@
 //! Business table metadata and explicit primary-key pagination for SQLite.
-use super::{Knowledge, bound, invalid, protected};
+use super::{Knowledge, RowLimit, bound, invalid, protected, run_sql};
 use crate::Result;
 use crewd_proto::team_data::{DataCell, DataColumn, DataSql, DataTablePage, DataTableParams};
 use rusqlite::{Connection, OptionalExtension};
@@ -205,7 +205,13 @@ impl Knowledge {
             (None, Some(_)) => return Err(invalid("table has no supported stable primary key")),
         };
         let sql = format!("{selection} LIMIT {}", p.limit + 1);
-        let (columns, rows, truncated) = self.query(&DataSql { sql, params }, p.limit)?;
+        let (columns, rows, truncated) = run_sql(
+            &self.conn,
+            &DataSql { sql, params },
+            true,
+            false,
+            RowLimit::Page(p.limit),
+        )?;
         let mut next_key = None;
         if let Some(key) = &data.key {
             let name = &data.columns[key.column].name;
@@ -401,5 +407,35 @@ mod tests {
         let mut historical = page(&k, "账\"簿", 1, None);
         historical.at_revision = Some("0".into());
         assert!(k.table_page(historical).is_err());
+    }
+
+    #[test]
+    fn byte_bound_keeps_the_last_emitted_key() {
+        let (_temp, k) = seeded(
+            "CREATE TABLE wide(id INTEGER PRIMARY KEY, value TEXT) STRICT;
+             INSERT INTO wide VALUES (1,hex(zeroblob(225000))),
+               (2,hex(zeroblob(225000))),(3,hex(zeroblob(225000)));",
+        );
+        let first = k.table_page(page(&k, "wide", 16, None)).unwrap();
+        assert_eq!(first.rows.len(), 2);
+        assert!(first.truncated);
+        assert!(matches!(
+            first.next_key.as_deref(),
+            Some([DataCell::Integer(key)]) if key == "2"
+        ));
+        let next = k.table_page(page(&k, "wide", 16, first.next_key)).unwrap();
+        assert_eq!(next.rows.len(), 1);
+        assert!(matches!(&next.rows[0][0], DataCell::Integer(key) if key == "3"));
+        assert!(!next.truncated);
+        assert!(
+            k.query(
+                &DataSql {
+                    sql: "SELECT * FROM wide".into(),
+                    params: vec![]
+                },
+                16
+            )
+            .is_err()
+        );
     }
 }
