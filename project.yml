@@ -89,12 +89,14 @@ targets:
         PENDINGCREW_DATA_DIR: $(SRCROOT)/.test-data-root
     # 版本戳地基(Shared/)：把「这个产物从哪个 commit 出的」写进产物
     # Info.plist。跑在 code signing 之前，所以不会让签名失效。
-    # basedOnDependencyAnalysis: false —— 没有输入/输出文件可声明，必须每次
-    # 构建都跑，否则增量构建会沿用上一次的戳（戳就成了谎报）。
+    # 显式依赖处理后的产物 Info.plist，确保 Xcode 不会在打戳后重新生成并覆盖它。
+    # basedOnDependencyAnalysis: false —— 每次构建都读取当前来源与时间，防止增量沿用旧戳。
     postBuildScripts:
       - name: Stamp build info
         script: |
           "$SRCROOT/Shared/scripts/stamp-build-info.sh"
+        inputFiles:
+          - "$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"
         basedOnDependencyAnalysis: false
       - name: Embed coordinated local Core
         script: |
