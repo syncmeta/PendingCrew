@@ -580,3 +580,6 @@ The question or its inbox schedule changed. Open it again before making changes.
 
 ## artifact.edge_changed
 This artifact association changed. Read its current associations before removing one.
+
+## artifact.history_changed
+This history indexing job changed or finished. Read its current progress before processing another page.

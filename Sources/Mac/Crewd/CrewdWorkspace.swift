@@ -226,7 +226,8 @@ final class CrewdWorkspace: ObservableObject {
     },journal:{[weak self] in
         guard let self,let journal=self.originalJournal,self.originalJournalReady else {throw CrewdManagedDirectoryWire.Problem.unavailable}
         return journal
-    },available:{[weak self] in self?.client.capabilities.contains(CrewdArtifactWire.capability)==true})
+    },available:{[weak self] in self?.client.capabilities.contains(CrewdArtifactWire.capability)==true},
+    historyAvailable:{[weak self] in self?.client.capabilities.contains(CrewdArtifactHistoryWire.capability)==true})
     lazy var managedDirectory = CrewdManagedDirectoryStore(origin: { [weak self] in
         guard let self, !self.retired, self.client.readyForWork,
               self.client.capabilities.contains(CrewdManagedDirectoryWire.capability),
@@ -585,7 +586,7 @@ final class CrewdWorkspace: ObservableObject {
             guard let self, !self.retired else { return }
             self.artifacts.handleEvent(name,data,connection:self.client.connectionEpoch)
             switch name {
-            case "artifact.changed":return
+            case "artifact.changed","artifact.historyChanged":return
             case "onto.changed":
                 if self.client.capabilities.contains("managedObjects.events.v1") {
                     self.managedDirectory.handleEvent(name,data,connection:self.client.connectionEpoch)
@@ -1252,6 +1253,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     private func isReadOnly(_ method: String) -> Bool {
+        if [CrewdArtifactHistoryWire.status,CrewdArtifactHistoryWire.lookup].contains(method) {return true}
         if [CrewdArtifactWire.preview,CrewdArtifactWire.list,CrewdArtifactWire.get,CrewdArtifactWire.backlinks,CrewdArtifactWire.subject,CrewdArtifactWire.lookup].contains(method) {return true}
         if [CrewdManagedMessageWire.source,CrewdManagedMessageWire.objects,CrewdManagedMessageWire.lookup].contains(method) { return true }
 

@@ -2526,6 +2526,10 @@
             "null"
           ]
         },
+        "includeLegacySources": {
+          "default": false,
+          "type": "boolean"
+        },
         "reference": {
           "$ref": "#/$defs/Reference"
         }
@@ -2553,6 +2557,26 @@
         "channelId",
         "unreadForHuman",
         "humanMentions"
+      ],
+      "type": "object"
+    },
+    "BeginParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId"
       ],
       "type": "object"
     },
@@ -3422,6 +3446,22 @@
       },
       "required": [
         "crewId"
+      ],
+      "type": "object"
+    },
+    "Changed2": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "jobId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "jobId"
       ],
       "type": "object"
     },
@@ -6811,6 +6851,42 @@
       ],
       "type": "object"
     },
+    "Counts": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactsAdded": {
+          "type": "string"
+        },
+        "doneEvents": {
+          "type": "string"
+        },
+        "edgesAdded": {
+          "type": "string"
+        },
+        "legacySnapshots": {
+          "type": "string"
+        },
+        "lessons": {
+          "type": "string"
+        },
+        "missingTargets": {
+          "type": "string"
+        },
+        "scanned": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scanned",
+        "doneEvents",
+        "legacySnapshots",
+        "lessons",
+        "missingTargets",
+        "artifactsAdded",
+        "edgesAdded"
+      ],
+      "type": "object"
+    },
     "CredentialState": {
       "enum": [
         "missing",
@@ -7190,6 +7266,60 @@
       },
       "required": [
         "crewId"
+      ],
+      "type": "object"
+    },
+    "Cursor": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        }
+      },
+      "required": [
+        "phase",
+        "after"
+      ],
+      "type": "object"
+    },
+    "Cut": {
+      "additionalProperties": false,
+      "properties": {
+        "eventSeq": {
+          "type": "string"
+        },
+        "legacyEventSeq": {
+          "type": "string"
+        },
+        "legacyItem": {
+          "type": "string"
+        },
+        "legacyRetainedEvents": {
+          "type": "string"
+        },
+        "legacySnapshotDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "legacySnapshotSeq": {
+          "type": "string"
+        },
+        "lessonNumber": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "legacyEventSeq",
+        "legacyItem",
+        "legacySnapshotSeq",
+        "legacyRetainedEvents",
+        "eventSeq",
+        "lessonNumber"
       ],
       "type": "object"
     },
@@ -10405,6 +10535,52 @@
         }
       ]
     },
+    "Effect2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "created": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "begun",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "created"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "beforeCursor": {
+              "$ref": "#/$defs/Cursor"
+            },
+            "beforeRevision": {
+              "type": "string"
+            },
+            "delta": {
+              "$ref": "#/$defs/Counts"
+            },
+            "kind": {
+              "const": "advanced",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "beforeRevision",
+            "beforeCursor",
+            "delta"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Empty": {
       "additionalProperties": false,
       "description": "空结果（`crew.purge` 等）。",
@@ -10628,6 +10804,22 @@
             },
             "event": {
               "const": "artifact.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Changed2"
+            },
+            "event": {
+              "const": "artifact.historyChanged",
               "type": "string"
             }
           },
@@ -11858,6 +12050,56 @@
       ],
       "type": "object"
     },
+    "Job": {
+      "additionalProperties": false,
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/Counts"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "cursor": {
+          "$ref": "#/$defs/Cursor"
+        },
+        "cut": {
+          "$ref": "#/$defs/Cut"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lastRequestId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "crewId",
+        "cut",
+        "cursor",
+        "revision",
+        "counts",
+        "createdAt",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
     "JudgmentBackend": {
       "enum": [
         "typesafe"
@@ -12963,6 +13205,63 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/Receipt2"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Lookup4": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/Receipt3"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Receipt3"
                 },
                 {
                   "type": "null"
@@ -14692,6 +14991,55 @@
       ],
       "type": "object"
     },
+    "Operation": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "begin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedCursor": {
+              "$ref": "#/$defs/Cursor"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "jobId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "step",
+              "type": "string"
+            },
+            "limit": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "jobId",
+            "expectedRevision",
+            "expectedCursor",
+            "limit"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "OptionDraft": {
       "additionalProperties": false,
       "properties": {
@@ -14737,6 +15085,56 @@
           "required": [
             "kind",
             "eventSeq"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "crewId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "legacyWorkDone",
+              "type": "string"
+            },
+            "legacyWorkId": {
+              "type": "string"
+            },
+            "localSeq": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "crewId",
+            "localSeq",
+            "legacyWorkId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "crewId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "legacyWorkSnapshot",
+              "type": "string"
+            },
+            "legacyWorkId": {
+              "type": "string"
+            },
+            "snapshotSeq": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "crewId",
+            "legacyWorkId",
+            "snapshotSeq"
           ],
           "type": "object"
         },
@@ -15811,6 +16209,16 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "Phase": {
+      "enum": [
+        "legacyEvents",
+        "legacySnapshots",
+        "events",
+        "lessons",
+        "complete"
+      ],
+      "type": "string"
+    },
     "PreviewParams": {
       "additionalProperties": false,
       "properties": {
@@ -16810,6 +17218,42 @@
       "type": "object"
     },
     "Receipt3": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect2"
+        },
+        "job": {
+          "$ref": "#/$defs/Job"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation"
+        },
+        "recordedAt": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "recordedAt",
+        "operation",
+        "job",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "Receipt4": {
       "description": "`message.receipts` 的一行：一条消息叫醒的一个 session（S54；N2 再加「开始了 / 回复了」）。",
       "properties": {
         "attempts": {
@@ -19518,6 +19962,93 @@
         }
       ]
     },
+    "Status": {
+      "additionalProperties": false,
+      "properties": {
+        "canContinue": {
+          "type": "boolean"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Job"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "canContinue"
+      ],
+      "type": "object"
+    },
+    "StatusParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "jobId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "StepParams": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "expectedCursor": {
+          "$ref": "#/$defs/Cursor"
+        },
+        "expectedRevision": {
+          "type": "string"
+        },
+        "jobId": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 64,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "jobId",
+        "expectedRevision",
+        "expectedCursor",
+        "limit"
+      ],
+      "type": "object"
+    },
     "Subject": {
       "oneOf": [
         {
@@ -19649,6 +20180,10 @@
             "string",
             "null"
           ]
+        },
+        "includeLegacySources": {
+          "default": false,
+          "type": "boolean"
         },
         "subject": {
           "$ref": "#/$defs/Subject"
@@ -22718,6 +23253,9 @@
     "artifact.changed": {
       "$ref": "#/$defs/Changed"
     },
+    "artifact.historyChanged": {
+      "$ref": "#/$defs/Changed2"
+    },
     "ask.changed": {
       "$ref": "#/$defs/Ask"
     },
@@ -22942,6 +23480,38 @@
       },
       "result": {
         "$ref": "#/$defs/Artifact"
+      }
+    },
+    "artifact.history.begin": {
+      "params": {
+        "$ref": "#/$defs/BeginParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Receipt3"
+      }
+    },
+    "artifact.history.request.get": {
+      "params": {
+        "$ref": "#/$defs/RequestParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Lookup4"
+      }
+    },
+    "artifact.history.status": {
+      "params": {
+        "$ref": "#/$defs/StatusParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Status"
+      }
+    },
+    "artifact.history.step": {
+      "params": {
+        "$ref": "#/$defs/StepParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Receipt3"
       }
     },
     "artifact.list": {
@@ -23836,7 +24406,7 @@
       },
       "result": {
         "items": {
-          "$ref": "#/$defs/Receipt3"
+          "$ref": "#/$defs/Receipt4"
         },
         "type": "array"
       }

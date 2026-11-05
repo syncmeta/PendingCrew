@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent schema. Core21 remains the personal draft
 /// writer barrier; Core22 adds an indexed historical escalation discovery source.
-pub const SCHEMA_VERSION: i64 = 28;
+pub const SCHEMA_VERSION: i64 = 29;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 #[cfg(test)]
@@ -795,9 +795,9 @@ pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
 }
 
 pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Result<()> {
-    if !(4..=26).contains(&target) || target == 16 {
+    if !(4..=28).contains(&target) || target == 16 {
         return Err(StoreError::Invalid(
-            "historical fixture supports versions 4 through 26 except reserved Core16".into(),
+            "historical fixture supports versions 4 through 28 except reserved Core16".into(),
         ));
     }
     let objects: i64 = conn.query_row(
@@ -894,6 +894,18 @@ pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Resul
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(crate::decision_asks::DDL)?;
         tx.execute_batch("PRAGMA user_version=26;")?;
+        tx.commit()?;
+    }
+    if target >= 27 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_message_sources::DDL)?;
+        tx.execute_batch("PRAGMA user_version=27;")?;
+        tx.commit()?;
+    }
+    if target >= 28 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_artifacts::DDL)?;
+        tx.execute_batch("PRAGMA user_version=28;")?;
         tx.commit()?;
     }
     Ok(())
@@ -1141,6 +1153,14 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(crate::managed_artifacts::DDL)?;
         tx.execute_batch("PRAGMA user_version=28;")?;
+        tx.commit()?;
+    }
+    if v < 29 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::artifact_history::DDL)?;
+        tx.execute_batch("CREATE INDEX artifact_history_work_source ON organization_work_events(crew_id,seq);
+            CREATE INDEX artifact_history_lesson_source ON managed_lessons(crew_id,number);
+            PRAGMA user_version=29;")?;
         tx.commit()?;
     }
     Ok(())

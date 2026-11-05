@@ -71,6 +71,26 @@ async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult,
                 .await,
             )
         }
+        "artifact_history_status" => {
+            let p:crewd_proto::artifact_history::StatusParams=parse_args(cx,args)?;
+            result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::artifact_history::status(c,Actor::Session(&by.session_id),p)
+            }).await)
+        }
+        "artifact_history_begin" => {
+            let p:crewd_proto::artifact_history::BeginParams=parse_args(cx,args)?;
+            result(cx,port::artifact_history_begin(cx.st,cx.me,p).await)
+        }
+        "artifact_history_step" => {
+            let p:crewd_proto::artifact_history::StepParams=parse_args(cx,args)?;
+            result(cx,port::artifact_history_step(cx.st,cx.me,p).await)
+        }
+        "artifact_history_request_get" => {
+            let p:RequestParams=parse_args(cx,args)?;
+            result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::artifact_history::lookup(c,Actor::Session(&by.session_id),&p.scope,&p.crew_id,&p.request_id)
+            }).await)
+        }
         "artifact_preview" => {
             let p: crewd_proto::managed_artifacts::PreviewParams=parse_args(cx,args)?;
             result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
@@ -92,13 +112,13 @@ async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult,
         "artifact_backlinks" => {
             let p: crewd_proto::managed_artifacts::BacklinksParams=parse_args(cx,args)?;
             result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
-                crewd_collab::managed_artifacts::backlinks(c,Actor::Session(&by.session_id),&p.reference,p.after.as_deref())
+                crewd_collab::managed_artifacts::backlinks_with_legacy(c,Actor::Session(&by.session_id),&p.reference,p.after.as_deref(),p.include_legacy_sources)
             }).await)
         }
         "artifact_subject" => {
             let p: crewd_proto::managed_artifacts::SubjectParams=parse_args(cx,args)?;
             result(cx,port::artifact_read(cx.st,cx.me,move |c,by| {
-                crewd_collab::managed_artifacts::subject(c,Actor::Session(&by.session_id),&p.subject,p.after.as_deref())
+                crewd_collab::managed_artifacts::subject_with_legacy(c,Actor::Session(&by.session_id),&p.subject,p.after.as_deref(),p.include_legacy_sources)
             }).await)
         }
         "artifact_submit" => {

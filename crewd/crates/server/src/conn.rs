@@ -144,6 +144,11 @@ where
                 && !crate::managed_artifacts::event_allowed(&writer_state,&writer_actor,&event.data).await {
                 continue;
             }
+            if let ServerFrame::Event(event) = &frame
+                && event.event == crewd_proto::artifact_history::CHANGED
+                && !crate::artifact_history::event_allowed(&writer_state,&writer_actor,&event.data).await {
+                continue;
+            }
             let mut line = match serde_json::to_vec(&frame) {
                 Ok(l) => l,
                 Err(_) => continue,
@@ -807,6 +812,16 @@ async fn request_step(
                 ServerFrame::Response(crate::managed_artifacts::handle(state,&peer.command_actor(),req).await)
             }
         }
+        Ok(req) if crewd_proto::artifact_history::METHODS.contains(&req.method.as_str()) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(req.id,crate::dispatch::refused(
+                    RpcError::FORBIDDEN,
+                    crewd_collab::refusal::Refusal::new(crewd_collab::refusal::Code::ResourceForbidden),
+                )))
+            } else {
+                ServerFrame::Response(crate::artifact_history::handle(state,&peer.command_actor(),req).await)
+            }
+        }
         Ok(req) if crewd_proto::managed_objects_api::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(
@@ -1220,6 +1235,7 @@ fn spawn_forwarder(
                                 | events::ASK_INBOX_CHANGED
                                 | events::ONTO_CHANGED
                                 | crewd_proto::managed_artifacts::CHANGED
+                                | crewd_proto::artifact_history::CHANGED
                                 | events::TODO_ATTRIBUTES_CHANGED
                                 | events::DATA_CHANGED
                                 | events::DOCUMENT_CHANGED

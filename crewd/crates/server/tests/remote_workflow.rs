@@ -4457,3 +4457,137 @@ async fn paired_work_close_recovers_unread_original_after_restart_and_obeys_revo
     drop(remote);
     stopped(running).await;
 }
+
+#[tokio::test]
+async fn paired_artifact_history_keeps_original_receipts_across_restart_and_rechecks_grants() {
+    use crewd_proto::artifact_history::*;
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert!(hello["capabilities"].as_array().unwrap().iter().any(|c| c == CAPABILITY));
+    let crew = remote.call("crew.create", json!({"title":"Historical index", "workingDirectory":dir.path()})).await["id"].clone();
+    let requirement = remote.call("todo.create", json!({"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"text":"Retain the original evidence"})).await;
+    for n in 0..3 {
+        let work = remote.call("work.create", json!({"crewId":crew,"title":format!("Actual completed source {n}"),"goal":"Keep factual evidence","acceptance":"Original evidence remains exact","sources":[requirement["requirementId"]]})).await;
+        let done = remote.call("work.update", json!({"id":work["id"],"expectedRevision":work["revision"],"status":"done","evidence":{"kind":"text","value":format!("https://example.test/history-{n}")}})).await;
+        assert_eq!(done["status"], "done");
+    }
+    let scope = remote.call("managedObject.scope", json!({})).await;
+    assert_eq!(remote.call(STATUS,json!({"crewId":crew})).await["job"], Value::Null);
+    let begin = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string()});
+    // Submit once and deliberately never read this response. The independent status read proves commit.
+    let mut unread = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    unread.call("system.hello", json!({})).await;
+    unread.io.get_mut().write_all(format!("{}\n",json!({"id":unread.next,"method":BEGIN,"params":begin})).as_bytes()).await.unwrap();
+    let first = tokio::time::timeout(LIMIT, async {
+        loop {
+            let status=remote.call(STATUS,json!({"crewId":crew})).await;
+            if status["job"].is_object() { break status; }
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    assert_eq!(first["job"]["lastRequestId"],begin["requestId"]);
+    assert_eq!(first["canContinue"],true);
+    let step = json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":first["job"]["id"],"expectedRevision":first["job"]["revision"],"expectedCursor":first["job"]["cursor"],"limit":1});
+    let advanced=remote.call(STEP,step.clone()).await;
+    assert_eq!(advanced["effect"]["delta"]["scanned"],"1");
+    assert_eq!(remote.call(STEP,step.clone()).await,advanced,"exact original replay precedes old CAS");
+    let lookup=json!({"scope":scope,"crewId":crew,"requestId":step["requestId"]});
+    assert_eq!(local(&mut running.owner,REQUEST_GET,lookup.clone()).await,json!({"status":"notFound"}),"owner cannot borrow paired principal's request ledger");
+    let begin_lookup=json!({"scope":scope,"crewId":crew,"requestId":begin["requestId"]});
+    drop(unread);
+    drop(remote);
+    stopped(running).await;
+
+    let mut running=service(dir.path()).await;
+    let mut remote=RemoteRpc::connect(port,&cert,&identity.spki_sha256).await;
+    let reopened=remote.call("system.hello",json!({})).await;
+    assert_ne!(reopened["runtimeIdentity"]["runtimeBindingId"],hello["runtimeIdentity"]["runtimeBindingId"]);
+    assert_eq!(remote.call(REQUEST_GET,lookup.clone()).await,json!({"status":"known","receipt":advanced}));
+    let begun=remote.call(REQUEST_GET,begin_lookup).await;
+    assert_eq!(begun["status"],"known");
+    assert_eq!(begun["receipt"]["job"],first["job"],"unread original begin cannot be replaced by the later job");
+    let before=remote.call(STATUS,json!({"crewId":crew})).await["job"].clone();
+    let race=json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":before["id"],"expectedRevision":before["revision"],"expectedCursor":before["cursor"],"limit":1});
+    let mut competing=race.clone(); competing["requestId"]=json!(uuid::Uuid::new_v4().to_string());
+    let mut second=RemoteRpc::connect(port,&cert,&identity.spki_sha256).await;
+    second.call("system.hello",json!({})).await;
+    let (one,two)=tokio::join!(remote.frame(STEP,race.clone()),second.frame(STEP,competing.clone()));
+    let frames=[one.unwrap(),two.unwrap()];
+    assert_eq!(frames.iter().filter(|f|f.get("result").is_some()).count(),1);
+    let refused=frames.iter().find(|f|f.get("error").is_some()).unwrap();
+    assert_eq!(refused["error"]["code"],crewd_proto::RpcError::CONFLICT);
+    assert_eq!(refused["error"]["data"]["refusal"],"artifact.history_changed");
+    let mut current=remote.call(STATUS,json!({"crewId":crew})).await["job"].clone();
+    assert_eq!(current["revision"].as_str().unwrap().parse::<u64>().unwrap(),before["revision"].as_str().unwrap().parse::<u64>().unwrap()+1);
+    let mut invalid_scope=race.clone(); invalid_scope["scope"]["restoreEpoch"]=json!(uuid::Uuid::new_v4().to_string()); invalid_scope["requestId"]=json!(uuid::Uuid::new_v4().to_string());
+    assert!(remote.frame(STEP,invalid_scope.clone()).await.unwrap()["error"].is_object());
+    assert_eq!(remote.call(REQUEST_GET,json!({"scope":invalid_scope["scope"],"crewId":crew,"requestId":step["requestId"]})).await,json!({"status":"historical","receipt":null}));
+    assert_eq!(remote.call(REQUEST_GET,lookup.clone()).await,json!({"status":"known","receipt":advanced}));
+    let mut updates=RemoteRpc::connect(port,&cert,&identity.spki_sha256).await;
+    updates.call("system.hello",json!({})).await;
+    assert_eq!(updates.call("events.subscribe",json!({"topics":["artifact"]})).await,json!({"topics":["artifact"]}));
+    let local_step=json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1});
+    current=local(&mut running.owner,STEP,local_step).await["job"].clone();
+    assert_eq!(updates.event().await,json!({"event":CHANGED,"data":{"crewId":crew,"jobId":current["id"]}}));
+    let mut peers=Vec::new();
+    for (method,params) in [
+        (STATUS,json!({"crewId":crew})),
+        (BEGIN,json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string()})),
+        (STEP,json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1})),
+        (REQUEST_GET,lookup),
+    ] {
+        let mut peer=RemoteRpc::connect(port,&cert,&identity.spki_sha256).await;
+        peer.call("system.hello",json!({})).await;
+        peers.push((method,params,peer));
+    }
+    local(&mut running.owner,"remote.revoke",json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"End historical index fixture"})).await;
+    // A real post-revocation commit must not leak an already-subscribed invalidation.
+    let post_revoke=json!({"scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":current["id"],"expectedRevision":current["revision"],"expectedCursor":current["cursor"],"limit":1});
+    local(&mut running.owner,STEP,post_revoke).await;
+    let mut after_revoke=String::new();
+    assert!(matches!(tokio::time::timeout(LIMIT,updates.io.read_line(&mut after_revoke)).await,Ok(Ok(0)|Err(_))),"revoked subscriber received {after_revoke}");
+    for (method,params,mut peer) in peers {
+        if let Ok(reply)=tokio::time::timeout(LIMIT,peer.frame(method,params)).await.unwrap() {
+            assert_eq!(reply["error"]["code"],crewd_proto::RpcError::FORBIDDEN,"{method}: {reply}");
+            assert!(reply.get("result").is_none());
+        }
+    }
+    drop(remote); drop(second);
+    stopped(running).await;
+}
+
+#[tokio::test]
+async fn attached_agent_cannot_use_human_artifact_history_methods() {
+    use crewd_proto::artifact_history::METHODS;
+    let fixture=crewd_server::agent::testkit::Fixture::new().await;
+    let (stop,stopping)=tokio::sync::oneshot::channel();
+    let server=fixture.spawn_owned_socket(stopping).await;
+    let mut agent=RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    local(&mut agent,"agent.attach",json!({"sessionId":fixture.worker,"token":fixture.token(&fixture.worker)})).await;
+    let before=durable_state(&fixture).await;
+    for method in METHODS {
+        let refusal=tokio::time::timeout(LIMIT,agent.call(method,json!({"deliberatelyInvalid":"no Human history oracle"}))).await.unwrap().unwrap_err();
+        assert_eq!(refusal.0,crewd_proto::RpcError::FORBIDDEN,"{method}");
+    }
+    assert_eq!(durable_state(&fixture).await,before);
+    // Subscribe through the actual attached connection, then observe a Human-only hint
+    // on an independent Human subscriber to prove the event was really published.
+    local(&mut agent,"events.subscribe",json!({"topics":["artifact"]})).await;
+    let mut human=RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    local(&mut human,"events.subscribe",json!({"topics":["artifact"]})).await;
+    let scope=local(&mut human,"managedObject.scope",json!({})).await;
+    let receipt=local(&mut human,"artifact.history.begin",json!({"scope":scope,"crewId":fixture.crew,"requestId":uuid::Uuid::new_v4().to_string()})).await;
+    let published=human.next_event(LIMIT).await.unwrap();
+    assert_eq!(published.event,crewd_proto::artifact_history::CHANGED);
+    assert_eq!(published.data,json!({"crewId":fixture.crew,"jobId":receipt["job"]["id"]}));
+    local(&mut agent,crewd_proto::agent::methods::TOOLS,json!({})).await;
+    assert!(agent.next_event(Duration::from_millis(200)).await.is_none(),"Human history invalidation leaked to attached Agent");
+    drop(human);
+
+    drop(agent); stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT,server).await.unwrap().unwrap();
+}

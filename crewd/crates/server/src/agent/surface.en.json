@@ -2992,6 +2992,213 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read the retained artifact-evidence indexing job of your own current live crew. Distinguish fixed cuts, genuine legacy completion events, frozen legacy snapshots, organization events and lesson evidence. An advanced cursor does not prove that your request succeeded.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current unarchived crew of this session; Agents cannot maintain another crew.",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The exact job UUID to inspect; status reads the default job when omitted.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crewId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly fix a history cut for your own current live crew, or reuse an existing job. This only begins a job, never processes its next page, scans git, rewrites business facts/events, chats or wakes. Retain the original UUID. Jobs in an older restore epoch are historical and never auto-resumed.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current unarchived crew of this session; Agents cannot maintain another crew.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_begin"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly process one page of 1–64 retained sources using the exact job revision and cursor just read. Pointers remain unverified, and frozen snapshots are not original completion events. Recover uncertainty only by the original UUID; never infer success from current progress, resend a step, or auto-continue across restore epochs.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current unarchived crew of this session; Agents cannot maintain another crew.",
+            "type": "string"
+          },
+          "expectedCursor": {
+            "additionalProperties": false,
+            "description": "Copy the entire job cursor including phase and after; never calculate it yourself.",
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "phase": {
+                "enum": [
+                  "legacyEvents",
+                  "legacySnapshots",
+                  "events",
+                  "lessons",
+                  "complete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase",
+              "after"
+            ],
+            "type": "object"
+          },
+          "expectedRevision": {
+            "description": "Copy the job revision just read; reread status after a conflict instead of resending.",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The exact job UUID to inspect; status reads the default job when omitted.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "The explicit source budget for this page, an integer from 1 to 64.",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "jobId",
+          "expectedRevision",
+          "expectedCursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_step"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the immutable receipt of your own original history-index request, independently of ordinary artifact receipts. known/historical/notFound never authorize replay.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current unarchived crew of this session; Agents cannot maintain another crew.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read the canonical artifact reference without registering, verifying, accessing repositories or networking. Use your current crew. Full SHAs and absolute URLs are global; short SHAs, files and tests without an explicit opaque repository ID remain unassigned in your crew. PRs and ordinary links normalize to the same url: pointer.",
       "inputSchema": {
         "additionalProperties": false,
@@ -3225,6 +3432,10 @@
             "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
             "type": "string"
           },
+          "includeLegacySources": {
+            "description": "Set true to include genuine legacy Done and frozen-snapshot provenance. Never treat snapshots as original events. Defaults to false for the legacy Origin set.",
+            "type": "boolean"
+          },
           "reference": {
             "additionalProperties": false,
             "description": "Copy namespace and key exactly from preview or a previously read artifact.",
@@ -3313,6 +3524,10 @@
           "after": {
             "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
             "type": "string"
+          },
+          "includeLegacySources": {
+            "description": "Set true to include genuine legacy Done and frozen-snapshot provenance. Never treat snapshots as original events. Defaults to false for the legacy Origin set.",
+            "type": "boolean"
           },
           "subject": {
             "additionalProperties": false,
@@ -8179,6 +8394,213 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "Read the retained artifact-evidence indexing job of your own current live crew. Distinguish fixed cuts, genuine legacy completion events, frozen legacy snapshots, organization events and lesson evidence. An advanced cursor does not prove that your request succeeded.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current unarchived crew of this session; Agents cannot maintain another crew.",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The exact job UUID to inspect; status reads the default job when omitted.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crewId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly fix a history cut for your own current live crew, or reuse an existing job. This only begins a job, never processes its next page, scans git, rewrites business facts/events, chats or wakes. Retain the original UUID. Jobs in an older restore epoch are historical and never auto-resumed.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current unarchived crew of this session; Agents cannot maintain another crew.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_begin"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly process one page of 1–64 retained sources using the exact job revision and cursor just read. Pointers remain unverified, and frozen snapshots are not original completion events. Recover uncertainty only by the original UUID; never infer success from current progress, resend a step, or auto-continue across restore epochs.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current unarchived crew of this session; Agents cannot maintain another crew.",
+            "type": "string"
+          },
+          "expectedCursor": {
+            "additionalProperties": false,
+            "description": "Copy the entire job cursor including phase and after; never calculate it yourself.",
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "phase": {
+                "enum": [
+                  "legacyEvents",
+                  "legacySnapshots",
+                  "events",
+                  "lessons",
+                  "complete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase",
+              "after"
+            ],
+            "type": "object"
+          },
+          "expectedRevision": {
+            "description": "Copy the job revision just read; reread status after a conflict instead of resending.",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The exact job UUID to inspect; status reads the default job when omitted.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "The explicit source budget for this page, an integer from 1 to 64.",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "jobId",
+          "expectedRevision",
+          "expectedCursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_step"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the immutable receipt of your own original history-index request, independently of ordinary artifact receipts. known/historical/notFound never authorize replay.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The exact current unarchived crew of this session; Agents cannot maintain another crew.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy dbId and restoreEpoch exactly from managed_object_scope_get.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "Read the canonical artifact reference without registering, verifying, accessing repositories or networking. Use your current crew. Full SHAs and absolute URLs are global; short SHAs, files and tests without an explicit opaque repository ID remain unassigned in your crew. PRs and ordinary links normalize to the same url: pointer.",
       "inputSchema": {
         "additionalProperties": false,
@@ -8412,6 +8834,10 @@
             "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
             "type": "string"
           },
+          "includeLegacySources": {
+            "description": "Set true to include genuine legacy Done and frozen-snapshot provenance. Never treat snapshots as original events. Defaults to false for the legacy Origin set.",
+            "type": "boolean"
+          },
           "reference": {
             "additionalProperties": false,
             "description": "Copy namespace and key exactly from preview or a previously read artifact.",
@@ -8500,6 +8926,10 @@
           "after": {
             "description": "Copy the exact nextAfter from the previous page; omit for the first page.",
             "type": "string"
+          },
+          "includeLegacySources": {
+            "description": "Set true to include genuine legacy Done and frozen-snapshot provenance. Never treat snapshots as original events. Defaults to false for the legacy Origin set.",
+            "type": "boolean"
           },
           "subject": {
             "additionalProperties": false,

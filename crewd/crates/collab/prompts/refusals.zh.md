@@ -580,3 +580,6 @@ expectedStatus 必须是原始需求状态。
 
 ## artifact.edge_changed
 产物关联已变更。请先读取当前关联，再选择要移除的关联。
+
+## artifact.history_changed
+历史索引任务已变化或完成。请先读取当前进度，再决定是否处理下一页。

@@ -2729,14 +2729,23 @@ extension CrewdManagedDirectoryStore {
     private let rpc:CrewdKnowledgeStore.RPC
     private let journal:()throws->CrewdPresentationJournal
     private let available:()->Bool
+    private let historyAvailable:()->Bool
+    @Published private(set) var historyInvalidation=UUID()
     @Published private(set) var invalidation=UUID()
-    init(origin:@escaping ()->Origin?,rpc:@escaping CrewdKnowledgeStore.RPC,journal:@escaping ()throws->CrewdPresentationJournal,available:@escaping ()->Bool) {
-        self.origin=origin;self.rpc=rpc;self.journal=journal;self.available=available
+    init(origin:@escaping ()->Origin?,rpc:@escaping CrewdKnowledgeStore.RPC,journal:@escaping ()throws->CrewdPresentationJournal,available:@escaping ()->Bool,historyAvailable:@escaping ()->Bool = {false}) {
+        self.origin=origin;self.rpc=rpc;self.journal=journal;self.available=available;self.historyAvailable=historyAvailable
     }
     var supported:Bool {available()}
+    var historySupported:Bool {supported && historyAvailable()}
     func owns(_ scope:Scope)->Bool {supported && origin()==scope.origin}
     func handleEvent(_ name:String,_ data:CrewdValue,connection:UUID) {
         guard let active=origin(),active.connection==connection else {return}
+        if name=="artifact.historyChanged" {
+            guard historySupported,case .object(let fields)=data,Set(fields.keys)==["crewId","jobId"],
+                  data["crewId"].string?.isEmpty==false,data["jobId"].string.map(CrewdArtifactHistoryWire.uuid)==true else {return}
+            historyInvalidation=UUID();return
+        }
+        if ["crew.changed","crew.purged","events.lagged"].contains(name) {historyInvalidation=UUID()}
         if name=="artifact.changed" {
             guard case .object(let fields)=data,Set(fields.keys)==["crewId"],data["crewId"].string?.isEmpty==false else {return}
         } else if !["onto.changed","work.changed","crew.changed","crew.purged","events.lagged"].contains(name) {return}
@@ -2782,8 +2791,9 @@ extension CrewdManagedDirectoryStore {
         var p:[String:CrewdValue]=["after":after.map(CrewdValue.string) ?? .null]
         if let reference {p["reference"]=try CrewdKnowledgeStore.encode(reference)}
         if let subject {p["subject"]=try CrewdKnowledgeStore.encode(subject)}
+        if historySupported {p["includeLegacySources"] = .bool(true)}
         let page:Wire.EdgePage=try await call(reference==nil ? Wire.subject:Wire.backlinks,.object(p),scope,stillCurrent)
-        guard page.items.count<=16,page.items.allSatisfy({$0.valid && (reference==nil || $0.reference==reference) && (subject==nil || $0.subject==subject)}),
+        guard page.items.count<=16,page.items.allSatisfy({$0.valid && (!$0.origin.legacy || historySupported) && (reference==nil || $0.reference==reference) && (subject==nil || $0.subject==subject)}),
               Set(page.items.map(\.id)).count==page.items.count,
               page.nextAfter==nil || (page.nextAfter==page.items.last?.id && page.nextAfter != after) else {throw Problem.invalid}
         try await check(scope,stillCurrent);return page
@@ -2878,5 +2888,117 @@ extension CrewdArtifactStore {
             guard raw[key].string==s.id,raw["crewId"].string?.isEmpty==false else {throw Problem.invalid}
         }
         return raw
+    }
+}
+
+extension CrewdArtifactStore {
+    typealias History=CrewdArtifactHistoryWire
+    struct HistoryWitness:Codable {
+        let scope:History.Scope
+        let crewId:String
+        let requestId:String
+        let operation:History.Operation
+        let before:History.Job?
+        let target:String
+    }
+    struct HistoryPending:Identifiable {let record:CrewdPresentationJournal.Prepared;let witness:HistoryWitness;var id:UUID {record.id}}
+    struct HistoryObservation {let receipt:History.Receipt;let historical:Bool}
+    func historyCrews(_ scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->[CrewdValue] {
+        guard historySupported,valid(scope.origin,stillCurrent) else {throw Problem.unavailable}
+        let raw=try await rpc("crew.list",.object(["all":.bool(true)]));try await check(scope,stillCurrent)
+        guard case .array(let rows)=raw else {throw Problem.invalid}
+        let ids=rows.compactMap{$0["id"].string}
+        guard ids.count==rows.count,ids.allSatisfy({!$0.isEmpty}),Set(ids.map{Data($0.utf8)}).count==ids.count else {throw Problem.invalid}
+        return rows
+    }
+    func historyStatus(_ crew:String,job:String?=nil,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->History.Status {
+        guard historySupported,!crew.isEmpty,job.map(History.uuid) ?? true else {throw Problem.unavailable}
+        var p:[String:CrewdValue]=["crewId":.string(crew)]
+        if let job {p["jobId"] = .string(job)}
+        let status:History.Status=try await call(History.status,.object(p),scope,stillCurrent)
+        guard Wire.exact(status.scope,scope.authority),status.crewId.utf8.elementsEqual(crew.utf8) else {throw Problem.invalid}
+        if let actual=status.job {
+            guard actual.valid,actual.crewId.utf8.elementsEqual(crew.utf8),actual.scope.dbId==scope.authority.dbId,
+                  job==nil || actual.id==job else {throw Problem.invalid}
+        }
+        try await check(scope,stillCurrent);return status
+    }
+    func historyPending(_ scope:Scope,crew:String?=nil)throws->[HistoryPending] {
+        guard historySupported,valid(scope.origin,{true}) else {throw Problem.unavailable}
+        let ledger=try journal();guard ledger.scope==scope.origin.scope else {throw Problem.stale}
+        return try ledger.unknownRecords().filter{$0.method==History.observation && $0.scope==ledger.scope &&
+            (crew==nil || $0.crew.utf8.elementsEqual(crew!.utf8))}.map {record in
+            let w=try CrewdKnowledgeStore.decode(record.params,HistoryWitness.self)
+            guard w.scope.dbId==scope.authority.dbId,w.crewId.utf8.elementsEqual(record.crew.utf8),History.uuid(w.requestId),
+                  w.operation.valid,!w.target.isEmpty else {throw Problem.invalid}
+            if let before=w.before {
+                guard before.valid,Wire.exact(before.scope,w.scope),before.crewId.utf8.elementsEqual(w.crewId.utf8) else {throw Problem.invalid}
+            }
+            return .init(record:record,witness:w)
+        }
+    }
+    func beginHistory(_ crew:String,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->HistoryObservation {
+        try await historyWrite(.init(kind:"begin"),crew:crew,before:nil,scope:scope,stillCurrent:stillCurrent)
+    }
+    func stepHistory(_ job:History.Job,limit:Int,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->HistoryObservation {
+        guard job.valid,Wire.exact(job.scope,scope.authority),job.cursor.phase != .complete,(1...64).contains(limit) else {throw Problem.stale}
+        return try await historyWrite(.init(kind:"step",jobId:job.id,expectedRevision:job.revision,expectedCursor:job.cursor,limit:limit),crew:job.crewId,before:job,scope:scope,stillCurrent:stillCurrent)
+    }
+    private func historyWrite(_ operation:History.Operation,crew:String,before:History.Job?,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->HistoryObservation {
+        guard historySupported,operation.valid,!crew.isEmpty else {throw Problem.unavailable}
+        try await check(scope,stillCurrent)
+        let uuid=UUID().uuidString.lowercased()
+        let target=(try Wire.bytes(scope.authority).base64EncodedString())+":"+crew
+        let w=HistoryWitness(scope:scope.authority,crewId:crew,requestId:uuid,operation:operation,before:before,target:target)
+        let params:CrewdValue
+        if operation.kind=="begin" {params=try CrewdKnowledgeStore.encode(History.BeginParams(scope:w.scope,crewId:crew,requestId:uuid))}
+        else {params=try CrewdKnowledgeStore.encode(History.StepParams(scope:w.scope,crewId:crew,requestId:uuid,jobId:operation.jobId!,expectedRevision:operation.expectedRevision!,expectedCursor:operation.expectedCursor!,limit:operation.limit!))}
+        let ledger=try journal();guard ledger.scope==scope.origin.scope,valid(scope.origin,stillCurrent) else {throw Problem.stale}
+        let prepared=try ledger.prepareArtifactHistory(CrewdKnowledgeStore.encode(w),crew:crew)
+        do {
+            let receipt:History.Receipt=try await call(operation.kind=="begin" ? History.begin:History.step,params,scope,stillCurrent)
+            try Self.verifyHistory(receipt,w);try await check(scope,stillCurrent)
+            try ledger.finish(prepared,state:"replyObserved")
+            return .init(receipt:receipt,historical:false)
+        } catch {
+            let e=error as? CrewdClientError
+            let refused=e?.kind == .notSubmitted || CrewdManagedDirectoryStore.decisionInputRefused(error) ||
+                (e?.code == -32009 && ["resource.frozen","artifact.history_changed"].contains(e?.refusal ?? ""))
+            try? ledger.finish(prepared,state:refused ? "refused":"unknown");throw error
+        }
+    }
+    func lookupHistory(_ pending:HistoryPending,scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->HistoryObservation? {
+        guard historySupported,try historyPending(scope).contains(where:{$0.id==pending.id && Wire.exact($0.witness,pending.witness)}) else {throw Problem.stale}
+        let w=pending.witness
+        let p:CrewdValue = .object(["scope":try CrewdKnowledgeStore.encode(w.scope),"crewId":.string(w.crewId),"requestId":.string(w.requestId)])
+        let result:History.Lookup=try await call(History.lookup,p,scope,stillCurrent);try await check(scope,stillCurrent)
+        switch (result.status,result.receipt) {
+        case ("known",.some(let receipt)),("historical",.some(let receipt)):
+            guard (result.status=="known")==Wire.exact(w.scope,scope.authority) else {throw Problem.invalid}
+            try Self.verifyHistory(receipt,w);try await check(scope,stillCurrent)
+            try journal().acknowledge(pending.record,detail:"已核对历史凭据索引原请求；未重发、未继续下一页。")
+            return .init(receipt:receipt,historical:result.status=="historical")
+        case ("notFound",nil) where Wire.exact(w.scope,scope.authority):return nil
+        case ("historical",nil) where !Wire.exact(w.scope,scope.authority):return nil
+        default:throw Problem.invalid
+        }
+    }
+    private static func verifyHistory(_ r:History.Receipt,_ w:HistoryWitness)throws {
+        guard Wire.exact(r.scope,w.scope),r.crewId.utf8.elementsEqual(w.crewId.utf8),r.requestId==w.requestId,
+              Wire.exact(r.operation,w.operation),r.operation.valid,!r.recordedAt.isEmpty,r.job.valid,
+              Wire.exact(r.job.scope,w.scope),r.job.crewId.utf8.elementsEqual(w.crewId.utf8) else {throw Problem.invalid}
+        let effect=r.effect
+        if w.operation.kind=="begin" {
+            guard effect.kind=="begun",effect.created != nil,effect.beforeRevision==nil,effect.beforeCursor==nil,effect.delta==nil,w.before==nil else {throw Problem.invalid}
+            if effect.created==true {guard r.job.revision=="1",r.job.counts.zero else {throw Problem.invalid}}
+        } else {
+            guard let before=w.before,let revision=w.operation.expectedRevision.flatMap(History.number),revision<UInt64.max,
+                  r.job.id==w.operation.jobId,before.id==r.job.id,before.revision==w.operation.expectedRevision,r.job.lastRequestId==r.requestId,
+                  effect.kind=="advanced",effect.created==nil,effect.beforeRevision==w.operation.expectedRevision,
+                  effect.beforeCursor==w.operation.expectedCursor,before.cursor==w.operation.expectedCursor,
+                  let delta=effect.delta,delta.valid,History.number(delta.scanned)!<=UInt64(w.operation.limit!),
+                  let total=before.counts.adding(delta),Wire.exact(total,r.job.counts),r.job.revision==String(revision+1),
+                  Wire.exact(before.cut,r.job.cut),before.createdAt.utf8.elementsEqual(r.job.createdAt.utf8) else {throw Problem.invalid}
+        }
     }
 }

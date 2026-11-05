@@ -644,6 +644,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn artifact_history_tools_recheck_current_identity_without_model_progress() {
+        use serde_json::Value;
+        async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
+            peer.call(methods::CALL,json!({"tool":name,"args":args})).await.unwrap()
+        }
+        fn decoded(result:Value)->Value {
+            assert_eq!(result["isError"],false,"{result}");
+            serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
+        }
+        let f=Fixture::new().await;
+        let foreign=f.add_crew("Other history owner",None).await;
+        let other="history-foreign-worker";
+        f.add_session(&foreign,other,Role::Worker,"Other historical worker").await;
+        let (stop,stopping)=tokio::sync::oneshot::channel();
+        let server=f.spawn_owned_socket(stopping).await;
+        let socket=f.data_dir().join("crewd.sock");
+        let mut writer=RpcClient::connect(&socket).await;
+        let mut reader=RpcClient::connect(&socket).await;
+        for (peer,session) in [(&mut writer,f.worker.as_str()),(&mut reader,other)] {
+            peer.call(methods::ATTACH,json!({"sessionId":session,"token":f.token(session)})).await.unwrap();
+        }
+        let captured=decoded(tool(&mut writer,"managed_object_scope_get",json!({})).await);
+        let scope=captured["scope"].clone();
+        let mut changes=f.state.hub.subscribe_collab();
+        let begin=json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string()});
+        let begun=decoded(tool(&mut writer,"artifact_history_begin",begin.clone()).await);
+        assert_eq!(begun["effect"],json!({"kind":"begun","created":true}));
+        assert_eq!(decoded(tool(&mut writer,"artifact_history_begin",begin.clone()).await),begun);
+        let status=decoded(tool(&mut writer,"artifact_history_status",json!({"crewId":f.crew})).await);
+        assert_eq!(status["job"],begun["job"]);
+        assert_eq!(status["canContinue"],true);
+        let mut reuse=begin.clone(); reuse["requestId"]=json!(uuid::Uuid::new_v4().to_string());
+        let reused=decoded(tool(&mut writer,"artifact_history_begin",reuse.clone()).await);
+        assert_eq!(reused["effect"],json!({"kind":"begun","created":false}));
+        assert_eq!(reused["job"],begun["job"]);
+        assert_eq!(reused["job"]["lastRequestId"],begin["requestId"],"reuse is not an invented new advancement");
+        let original=json!({"scope":scope,"crewId":f.crew,"requestId":begin["requestId"]});
+        assert_eq!(decoded(tool(&mut writer,"artifact_history_request_get",original.clone()).await),json!({"status":"known","receipt":begun}));
+        let step=json!({"scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"jobId":begun["job"]["id"],"expectedRevision":begun["job"]["revision"],"expectedCursor":begun["job"]["cursor"],"limit":64});
+        let advanced=decoded(tool(&mut writer,"artifact_history_step",step.clone()).await);
+        assert_eq!(advanced["job"]["cursor"],json!({"phase":"complete","after":"0"}));
+        assert_eq!(advanced["effect"]["delta"]["scanned"],"0","empty phases consume no invented rows");
+        assert_eq!(decoded(tool(&mut writer,"artifact_history_step",step.clone()).await),advanced,"original UUID replays before the now-complete CAS");
+        assert_eq!(decoded(tool(&mut writer,"artifact_history_request_get",original.clone()).await),json!({"status":"known","receipt":begun}),"current complete cursor never substitutes for original Begin receipt");
+        let calls=[
+            ("artifact_history_status",json!({"crewId":f.crew,"jobId":begun["job"]["id"]})),
+            ("artifact_history_begin",begin.clone()),
+            ("artifact_history_step",step.clone()),
+            ("artifact_history_request_get",original.clone()),
+        ];
+        for (name,args) in calls.clone() {
+            assert_eq!(tool(&mut reader,name,args).await["isError"],true,"foreign worker used {name}");
+        }
+        let archived=f.crew.clone();
+        f.state.collab(move|tx|crewd_collab::crews::archive(tx,&archived)).await.unwrap();
+        for (name,args) in calls.clone() {
+            assert_eq!(tool(&mut writer,name,args).await["isError"],true,"archived Agent used {name}, even for original replay");
+        }
+        let mut human=RpcClient::connect(&socket).await;
+        assert_eq!(human.call("artifact.history.status",json!({"crewId":f.crew})).await.unwrap()["job"],advanced["job"],"Human may inspect archived retained facts");
+        drop(human);
+        f.add_session(&foreign,&f.worker,Role::Worker,"Changed current crew").await;
+        for (name,args) in calls.clone() {
+            assert_eq!(tool(&mut writer,name,args).await["isError"],true,"changed current crew borrowed old {name}");
+        }
+        f.state.tokens.revoke(&f.worker);
+        for (name,args) in calls {
+            assert_eq!(tool(&mut writer,name,args).await["isError"],true,"invalid attachment used {name}");
+        }
+        assert!(!std::iter::from_fn(||changes.try_recv().ok()).any(|change|matches!(change,Change::Progress{..})),"historical maintenance, replay, reuse and empty steps never manufacture model progress");
+        drop((writer,reader)); stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10),server).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn artifact_tools_keep_canonical_identity_and_recheck_current_attachment() {
         use serde_json::Value;
 

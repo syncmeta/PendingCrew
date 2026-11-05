@@ -1743,3 +1743,67 @@ register显式登记；link原子懒建并关联；unlink只移除精确expected
 
 ## artifact_request_get.requestId
 为确切意图保留一个规范原始UUID，恢复时不得另建。
+
+
+## artifact_history_status
+只读查看本会话当前活机组的历史凭据索引。明确区分固定范围、旧版真实完成流水、旧版冻结快照、组织流水及教训证据。状态游标前进不能证明你的某笔请求成功。
+
+## artifact_history_status.crewId
+本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。
+
+## artifact_history_status.jobId
+要核对的准确任务UUID；status省略时读取默认任务。
+
+## artifact_history_begin
+为本会话当前活机组显式固定一份历史范围；已有任务可复用。仅建任务，不处理下一页，不扫git、不更改旧业务或原事件、不发帖或唤醒。保留原UUID；范围恢复到旧epoch后只能读历史，不自动续跑。
+
+## artifact_history_begin.scope
+原样复制managed_object_scope_get的dbId和restoreEpoch。
+
+## artifact_history_begin.crewId
+本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。
+
+## artifact_history_begin.requestId
+为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。
+
+## artifact_history_step
+依据刚读到的同一任务修订和完整游标，显式处理1至64条来源的一页。只把保留证据记为未核验产物；冻结快照不能冒充原完成事件。结果不确定只查本次原UUID，禁止从当前进度推断成功、重发原步骤或跨epoch自动继续。
+
+## artifact_history_step.scope
+原样复制managed_object_scope_get的dbId和restoreEpoch。
+
+## artifact_history_step.crewId
+本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。
+
+## artifact_history_step.requestId
+为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。
+
+## artifact_history_step.jobId
+要核对的准确任务UUID；status省略时读取默认任务。
+
+## artifact_history_step.expectedRevision
+原样复制本次读取的任务revision；冲突后先读状态，不重发。
+
+## artifact_history_step.expectedCursor
+原样复制该任务完整cursor，包括phase和after，不自己计算游标。
+
+## artifact_history_step.limit
+这次明确推进的来源上限，整数1至64。
+
+## artifact_history_request_get
+只读查询本会话某个原历史索引请求的不可变回执。与普通产物请求独立；known/historical/notFound均不授权重放。
+
+## artifact_history_request_get.scope
+原样复制managed_object_scope_get的dbId和restoreEpoch。
+
+## artifact_history_request_get.crewId
+本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。
+
+## artifact_history_request_get.requestId
+为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。
+
+## artifact_backlinks.includeLegacySources
+为true时包含旧版真实Done和冻结快照的诚实来源；快照不得当作原事件。省略为false，兼容旧Origin集合。
+
+## artifact_subject.includeLegacySources
+为true时包含旧版真实Done和冻结快照的诚实来源；快照不得当作原事件。省略为false，兼容旧Origin集合。

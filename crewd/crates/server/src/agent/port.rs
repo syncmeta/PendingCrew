@@ -984,6 +984,38 @@ pub(crate) async fn managed_record_from_message(
 
 pub(crate) use managed_read as artifact_read;
 
+pub(crate) async fn artifact_history_begin(
+    st: &AppState,
+    by: &Identity,
+    request: crewd_proto::artifact_history::BeginParams,
+) -> PortResult<crewd_proto::artifact_history::Receipt> {
+    let scoped = scoped_actor(st, by)?;
+    let by = by.clone();
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        let receipt = crewd_collab::artifact_history::begin(tx,
+            crewd_collab::managed_objects::Actor::Session(&by.session_id), request)?;
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        Ok(receipt)
+    }).await
+}
+
+pub(crate) async fn artifact_history_step(
+    st: &AppState,
+    by: &Identity,
+    request: crewd_proto::artifact_history::StepParams,
+) -> PortResult<crewd_proto::artifact_history::Receipt> {
+    let scoped = scoped_actor(st, by)?;
+    let by = by.clone();
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        let receipt = crewd_collab::artifact_history::step(tx,
+            crewd_collab::managed_objects::Actor::Session(&by.session_id), request)?;
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        Ok(receipt)
+    }).await
+}
+
 pub(crate) async fn artifact_submit(
     st: &AppState,
     by: &Identity,

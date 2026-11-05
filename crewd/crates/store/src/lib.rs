@@ -16,6 +16,7 @@ pub mod knowledge_purge;
 pub mod local_clients;
 pub mod managed_objects;
 pub mod managed_artifacts;
+pub mod artifact_history;
 pub mod managed_message_sources;
 pub mod managed_risks_lessons;
 pub mod decision_asks;

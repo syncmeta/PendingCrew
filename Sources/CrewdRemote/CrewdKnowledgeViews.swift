@@ -3850,6 +3850,7 @@ private struct CrewdArtifactPanel:View {
     var frozen=false
     let current:@MainActor ()->Bool
     @Environment(\.dismiss) private var dismiss
+    @State private var showHistory=false
     @State private var visible=true
     @State private var scope:Store.Scope?
     @State private var artifacts:[Wire.Artifact]=[]
@@ -3887,6 +3888,9 @@ private struct CrewdArtifactPanel:View {
                 .navigationTitle(selected==nil ? (subject.map{$0.id+" 的产物"} ?? "组织产物目录"):"产物详情")
                 .toolbar {
                     ToolbarItem(placement:.cancellationAction) {Button("关闭") {visible=false;dismiss()}}
+                    ToolbarItem(placement:.primaryAction) {
+                        if store.historySupported {Button("索引历史凭据") {showHistory=true}.disabled(!allowed)}
+                    }
                     ToolbarItem(placement:.primaryAction) {Button("刷新") {Task {await load(reset:true)}}.disabled(busy || !allowed)}
                 }
         }
@@ -3899,6 +3903,9 @@ private struct CrewdArtifactPanel:View {
         .onChange(of:busy) {_,_ in refreshIfReady()}
         .onChange(of:form?.id) {_,_ in refreshIfReady()}
         .onDisappear {visible=false;ticket=UUID();artifacts=[];edges=[];detail=nil}
+        .sheet(isPresented:$showHistory) {
+            CrewdArtifactHistorySheet(workspace:workspace,store:store,current:{showHistory && allowed})
+        }
         .sheet(item:$form) {target in
             if let scope {
                 CrewdArtifactEditor(store:store,scope:scope,subject:subject,existing:target.reference,current:{allowed && store.owns(scope) && writable && form?.id==target.id},
@@ -4196,4 +4203,209 @@ private struct CrewdArtifactSubjectInspector:View {
         }
     }
     @ViewBuilder private func text(_ label:String,_ value:CrewdValue)->some View {if let text=value.string,!text.isEmpty {LabeledContent(label) {Text(text).textSelection(.enabled)}}}
+}
+
+/// A maintenance sheet: effects require an explicit Begin or one-page Step.
+/// All lifecycle, reconnect and notification tasks below are reads only.
+private struct CrewdArtifactHistorySheet:View {
+    typealias Wire=CrewdArtifactHistoryWire
+    typealias Store=CrewdArtifactStore
+    @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject private var client:CrewdClient
+    @ObservedObject var store:Store
+    let current:@MainActor ()->Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var visible=true
+    @State private var crews:[CrewdValue]=[]
+    @State private var targetCrew:String
+    @State private var scope:Store.Scope?
+    @State private var status:Wire.Status?
+    @State private var selectedJob:String?
+    @State private var pending:[Store.HistoryPending]=[]
+    @State private var receipt:Store.HistoryObservation?
+    @State private var problem:String?
+    @State private var reading=false
+    @State private var writing=false
+    @State private var queueRead=false
+    @State private var limit=32
+    @State private var readToken=UUID()
+    @State private var confirmBegin=false
+    private struct Route:Hashable {let connection:UUID;let observation:UUID;let authority:UUID;let crew:String;let ready:Bool;let supported:Bool}
+    init(workspace:CrewdWorkspace,store:Store,current:@escaping @MainActor ()->Bool) {
+        self.workspace=workspace;self.client=workspace.client;self.store=store;self.current=current
+        self._targetCrew=State(initialValue:workspace.crewID)
+    }
+    private var route:Route {.init(connection:client.connectionEpoch,observation:workspace.observationGeneration,authority:workspace.authorityRecordID,
+        crew:workspace.crewID,ready:client.readyForWork && workspace.originalJournalReady,supported:store.historySupported)}
+    private var allowed:Bool {visible && current() && route.ready && store.historySupported}
+    private var scoped:Bool {allowed && scope.map(store.owns)==true}
+    private var targetExists:Bool {crews.contains{$0["id"].string?.utf8.elementsEqual(targetCrew.utf8)==true}}
+    private var unresolvedCurrent:Bool {guard let scope else {return true};return pending.contains{CrewdArtifactWire.exact($0.witness.scope,scope.authority)}}
+    private var canBegin:Bool {scoped && targetExists && status != nil && !reading && !writing && !unresolvedCurrent}
+    private var canStep:Bool {guard let status,let job=status.job,let scope else {return false};return canBegin && status.canContinue &&
+        CrewdArtifactWire.exact(job.scope,scope.authority) && job.cursor.phase != .complete}
+    var body:some View {
+        NavigationStack {
+            ScrollView {content.padding()}
+                .navigationTitle("历史凭据索引")
+                .toolbar {ToolbarItem(placement:.cancellationAction) {Button("关闭") {visible=false;dismiss()}}}
+        }
+        #if os(macOS)
+        .frame(minWidth:560,minHeight:520)
+        #endif
+        .task(id:route) {clear();await read(roster:true)}
+        .onChange(of:targetCrew) {_,_ in clear(keepRoster:true);selectedJob=nil;Task {await read(roster:false)}}
+        .onChange(of:client.authorityBinding) {_,_ in clear();Task {await read(roster:true)}}
+        .onChange(of:store.historyInvalidation) {_,_ in queueRead=true;refreshIfReady()}
+        .onChange(of:writing) {_,_ in refreshIfReady()}
+        .onChange(of:reading) {_,_ in refreshIfReady()}
+        .onDisappear {visible=false;readToken=UUID();status=nil;receipt=nil;pending=[];crews=[]}
+        .confirmationDialog("固定此机组的一份历史范围？",isPresented:$confirmBegin) {
+            Button("固定范围，不自动处理下一页") {begin()}
+        } message: {Text("只处理此机组在固定切口内实际保留的完成凭据和教训证据。不扫描仓库，不改写旧工作、教训或事件。已有任务可能被复用。")}
+    }
+    @ViewBuilder private var content:some View {
+        VStack(alignment:.leading,spacing:14) {
+            Text("历史索引只增加未核验的产物指针与来源关联。原业务、原凭据和原事件保留。每次只处理明确的一页，不会在后台自动继续。")
+                .font(.caption).foregroundStyle(.secondary)
+            if let problem,allowed {Text(problem).foregroundStyle(.orange).textSelection(.enabled)}
+            if allowed {
+                Picker("目标机组",selection:$targetCrew) {
+                    if !targetExists {Text("请选择现存机组").tag(targetCrew)}
+                    ForEach(crews.indices,id:\.self) {index in
+                        let row=crews[index],id=row["id"].string ?? ""
+                        Text((row["title"].string ?? id)+(row["removedAt"].string==nil ? "":"（已归档）")).tag(id)
+                    }
+                }.disabled(writing)
+                Text("人类可维护现存归档机组；实际权限每次由后台重新核对。一次只针对选定机组。").font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("读取此机组最新任务") {selectedJob=nil;Task {await read(roster:true)}}.disabled(reading || writing || !targetExists)
+                    if selectedJob != nil {Button("刷新这份固定范围") {Task {await read(roster:false)}}.disabled(reading || writing)}
+                }
+                if scoped,let scope {
+                    recovery(scope)
+                    if let status {
+                        if let job=status.job {jobFacts(job,scope:scope)}
+                        else {Text("未读到这份范围的索引任务。可明确固定一份新范围。")}
+                        Button(status.job==nil ? "固定历史范围":"固定或读取当前范围",systemImage:"pin") {confirmBegin=true}.disabled(!canBegin)
+                        Stepper("本页最多 \(limit) 条来源",value:$limit,in:1...64).disabled(writing)
+                        Button(writing ? "正在提交原步骤…":"处理下一页",systemImage:"forward.frame") {step()}.disabled(!canStep)
+                        if unresolvedCurrent {Text("同一恢复范围有原步骤待核对。当前进度不能代替原 UUID 的回执，暂不推进。").foregroundStyle(.orange)}
+                    }
+                    if let receipt {receiptFacts(receipt)}
+                } else {Text("正在核对原连接与索引范围…").foregroundStyle(.secondary)}
+                if reading {ProgressView("正在读取索引状态…").controlSize(.small)}
+            } else {Text("此连接尚未提供历史索引，或原权限范围已改变。没有推进下一页。")}
+        }
+    }
+    private func jobFacts(_ job:Wire.Job,scope:Store.Scope)->some View {
+        VStack(alignment:.leading,spacing:8) {
+            Text(job.cursor.phase.title).font(.headline)
+            Text("任务 "+job.id+" · 修订 "+job.revision).font(.caption).textSelection(.enabled)
+            if !CrewdArtifactWire.exact(job.scope,scope.authority) {
+                Text("这份任务属于旧恢复范围，只能查看历史。不会继续旧游标；如需处理当前资料，请明确固定新范围。").foregroundStyle(.orange)
+            }
+            LabeledContent("当前游标",value:job.cursor.after).textSelection(.enabled)
+            counts(job.counts,title:"此任务累计索引记录")
+            DisclosureGroup("固定范围与来源") {
+                LabeledContent("旧事件序号上界",value:job.cut.legacyEventSeq)
+                LabeledContent("旧工作号上界",value:job.cut.legacyItem)
+                LabeledContent("冻结快照序号",value:job.cut.legacySnapshotSeq)
+                LabeledContent("实际保留的旧事件数",value:job.cut.legacyRetainedEvents)
+                if let digest=job.cut.legacySnapshotDigest {Text("冻结快照摘要："+digest).font(.caption).textSelection(.enabled)}
+                LabeledContent("组织事件上界",value:job.cut.eventSeq)
+                LabeledContent("教训号上界",value:job.cut.lessonNumber)
+                LabeledContent("索引创建时间",value:job.createdAt)
+                Text("旧版冻结快照是补充来源，不代表保留了原完成事件。全局序号可能稀疏，不能据此计算完成百分比。").font(.caption).foregroundStyle(.secondary)
+            }
+            if let last=job.lastRequestId {Text("任务最近请求编号（不代表本客户端已确认）："+last).font(.caption).textSelection(.enabled)}
+        }
+    }
+    private func counts(_ value:Wire.Counts,title:String)->some View {
+        VStack(alignment:.leading,spacing:4) {
+            Text(title).font(.subheadline)
+            Text("扫描来源 "+value.scanned+" · 真实完成事件 "+value.doneEvents+" · 冻结快照 "+value.legacySnapshots+" · 教训 "+value.lessons)
+            Text("缺失目标 "+value.missingTargets+" · 新增产物 "+value.artifactsAdded+" · 新增关联 "+value.edgesAdded)
+            Text("以上为索引过程累计记录，不是当前产物或关联总数。").font(.caption).foregroundStyle(.secondary)
+        }.font(.caption)
+    }
+    private func recovery(_ scope:Store.Scope)->some View {
+        VStack(alignment:.leading,spacing:8) {
+            ForEach(pending) {item in
+                let historical = !CrewdArtifactWire.exact(item.witness.scope,scope.authority)
+                Text(historical ? "旧恢复范围的原请求待核对":"原索引请求待核对").font(.subheadline)
+                Text(item.witness.requestId).font(.caption).textSelection(.enabled)
+                if let cursor=item.witness.operation.expectedCursor {Text("原步骤："+cursor.phase.title+" · 游标 "+cursor.after).font(.caption)}
+                Button("只查询这笔原回执") {lookup(item,scope:scope)}.disabled(writing || reading)
+            }
+        }
+    }
+    private func receiptFacts(_ observed:Store.HistoryObservation)->some View {
+        let r=observed.receipt
+        return VStack(alignment:.leading,spacing:5) {
+            Text(observed.historical ? "原请求历史回执（不代表当前范围状态）":"已核对原索引回执").font(.headline)
+            Text(r.requestId).font(.caption).textSelection(.enabled)
+            if r.effect.kind=="begun" {Text(r.effect.created==true ? "已固定范围；尚未自动处理下一页。":"本次复用了已有固定范围；没有自动推进。")}
+            if let delta=r.effect.delta {counts(delta,title:"这笔原步骤的实际增量")}
+            Text("回执中的任务修订 "+r.job.revision+"，只证明这笔原操作。最新状态需单独读取。").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private func clear(keepRoster:Bool=false) {readToken=UUID();scope=nil;status=nil;pending=[];receipt=nil;problem=nil;reading=false;queueRead=writing;if !keepRoster {crews=[]}}
+    private func refreshIfReady() {guard queueRead,!reading,!writing,allowed else {return};queueRead=false;Task {await read(roster:false)}}
+    private func refreshPending(_ scope:Store.Scope) {
+        do {pending=try store.historyPending(scope,crew:targetCrew)} catch {if scoped {problem=error.localizedDescription}}
+    }
+    private func read(roster:Bool) async {
+        guard allowed,!writing,!reading else {return};reading=true;let token=UUID();readToken=token
+        let captured=route,target=targetCrew,job=selectedJob
+        func valid()->Bool {allowed && route==captured && targetCrew==target && readToken==token && selectedJob==job}
+        defer {if readToken==token {reading=false}}
+        do {
+            let active=try await store.scope(stillCurrent:valid)
+            guard valid() else {return};scope=active;refreshPending(active)
+            if roster || crews.isEmpty {
+                let rows=try await store.historyCrews(active,stillCurrent:valid)
+                guard valid() else {return};crews=rows
+            }
+            guard valid(),crews.contains(where:{$0["id"].string?.utf8.elementsEqual(target.utf8)==true}) else {throw Store.Problem.unavailable}
+            let state=try await store.historyStatus(target,job:job,scope:active,stillCurrent:valid)
+            guard valid() else {return};scope=active;status=state;problem=nil;refreshPending(active)
+            if selectedJob==nil,let id=state.job?.id {selectedJob=id}
+        } catch {if valid() {status=nil;if scope.map(store.owns) != true {scope=nil;pending=[]};problem=error.localizedDescription}}
+    }
+    private func begin() {
+        guard canBegin,let scope else {return};writing=true;problem=nil
+        let captured=route,target=targetCrew
+        func valid()->Bool {allowed && route==captured && targetCrew==target && store.owns(scope)}
+        Task {defer {writing=false}
+            do {
+                let result=try await store.beginHistory(target,scope:scope,stillCurrent:valid)
+                guard valid() else {return};receipt=result;selectedJob=result.receipt.job.id;refreshPending(scope);queueRead=true
+            } catch {if valid() {problem=error.localizedDescription;refreshPending(scope);queueRead=true}}
+        }
+    }
+    private func step() {
+        guard canStep,let scope,let job=status?.job else {return};writing=true;problem=nil
+        let captured=route,target=targetCrew,budget=limit
+        func valid()->Bool {allowed && route==captured && targetCrew==target && selectedJob==job.id && store.owns(scope)}
+        Task {defer {writing=false}
+            do {
+                let result=try await store.stepHistory(job,limit:budget,scope:scope,stillCurrent:valid)
+                guard valid() else {return};receipt=result;refreshPending(scope);queueRead=true
+            } catch {if valid() {problem=error.localizedDescription;refreshPending(scope);queueRead=true}}
+        }
+    }
+    private func lookup(_ original:Store.HistoryPending,scope:Store.Scope) {
+        guard scoped,!writing,!reading else {return};writing=true;problem=nil
+        let captured=route,target=targetCrew
+        func valid()->Bool {allowed && route==captured && targetCrew==target && store.owns(scope)}
+        Task {defer {writing=false}
+            do {
+                let result=try await store.lookupHistory(original,scope:scope,stillCurrent:valid)
+                guard valid() else {return};receipt=result
+                if result==nil {problem="尚无可确认的原回执。保留原记录，不重发，也不处理下一页。"}
+                refreshPending(scope);queueRead=true
+            } catch {if valid() {problem=error.localizedDescription}}
+        }
+    }
 }

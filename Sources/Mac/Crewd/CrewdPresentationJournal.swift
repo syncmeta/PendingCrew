@@ -89,6 +89,19 @@ final class CrewdPresentationJournal {
         }
     }
 
+    func prepareArtifactHistory(_ params:CrewdValue,crew:String)throws->Prepared {
+        let method="artifact.history.observation"
+        guard params["crewId"].string?.utf8.elementsEqual(crew.utf8)==true,
+              let target=params["target"].string,!target.isEmpty else {throw CrewdPublicWire.invalid()}
+        return try withPrivateLock("artifact-history.lock",message:"同一范围的历史索引原步骤正在核对。") {
+            guard try !unknownRecords().contains(where:{$0.method==method && $0.scope==scope &&
+                $0.params["target"].string?.utf8.elementsEqual(target.utf8)==true}) else {
+                throw CrewdClientError(message:"此机组在同一恢复范围内有原索引请求待核对；未推进下一页。",kind:.notSubmitted)
+            }
+            return try prepare(method:method,params:params,crew:crew)
+        }
+    }
+
     func prepareArtifact(_ params:CrewdValue,crew:String)throws->Prepared {
         let method="artifact.submit.observation"
         guard params["crewId"].string?.utf8.elementsEqual(crew.utf8)==true,

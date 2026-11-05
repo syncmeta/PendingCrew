@@ -1743,3 +1743,67 @@ The exact current or owning crew ID, never inferred from a working directory.
 
 ## artifact_request_get.requestId
 Retain one canonical original UUID for the exact intent; never replace it during recovery.
+
+
+## artifact_history_status
+Read the retained artifact-evidence indexing job of your own current live crew. Distinguish fixed cuts, genuine legacy completion events, frozen legacy snapshots, organization events and lesson evidence. An advanced cursor does not prove that your request succeeded.
+
+## artifact_history_status.crewId
+The exact current unarchived crew of this session; Agents cannot maintain another crew.
+
+## artifact_history_status.jobId
+The exact job UUID to inspect; status reads the default job when omitted.
+
+## artifact_history_begin
+Explicitly fix a history cut for your own current live crew, or reuse an existing job. This only begins a job, never processes its next page, scans git, rewrites business facts/events, chats or wakes. Retain the original UUID. Jobs in an older restore epoch are historical and never auto-resumed.
+
+## artifact_history_begin.scope
+Copy dbId and restoreEpoch exactly from managed_object_scope_get.
+
+## artifact_history_begin.crewId
+The exact current unarchived crew of this session; Agents cannot maintain another crew.
+
+## artifact_history_begin.requestId
+Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.
+
+## artifact_history_step
+Explicitly process one page of 1–64 retained sources using the exact job revision and cursor just read. Pointers remain unverified, and frozen snapshots are not original completion events. Recover uncertainty only by the original UUID; never infer success from current progress, resend a step, or auto-continue across restore epochs.
+
+## artifact_history_step.scope
+Copy dbId and restoreEpoch exactly from managed_object_scope_get.
+
+## artifact_history_step.crewId
+The exact current unarchived crew of this session; Agents cannot maintain another crew.
+
+## artifact_history_step.requestId
+Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.
+
+## artifact_history_step.jobId
+The exact job UUID to inspect; status reads the default job when omitted.
+
+## artifact_history_step.expectedRevision
+Copy the job revision just read; reread status after a conflict instead of resending.
+
+## artifact_history_step.expectedCursor
+Copy the entire job cursor including phase and after; never calculate it yourself.
+
+## artifact_history_step.limit
+The explicit source budget for this page, an integer from 1 to 64.
+
+## artifact_history_request_get
+Read the immutable receipt of your own original history-index request, independently of ordinary artifact receipts. known/historical/notFound never authorize replay.
+
+## artifact_history_request_get.scope
+Copy dbId and restoreEpoch exactly from managed_object_scope_get.
+
+## artifact_history_request_get.crewId
+The exact current unarchived crew of this session; Agents cannot maintain another crew.
+
+## artifact_history_request_get.requestId
+Retain one canonical original UUID for this exact Begin or Step; never replace it during recovery.
+
+## artifact_backlinks.includeLegacySources
+Set true to include genuine legacy Done and frozen-snapshot provenance. Never treat snapshots as original events. Defaults to false for the legacy Origin set.
+
+## artifact_subject.includeLegacySources
+Set true to include genuine legacy Done and frozen-snapshot provenance. Never treat snapshots as original events. Defaults to false for the legacy Origin set.

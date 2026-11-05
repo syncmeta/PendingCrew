@@ -305,6 +305,8 @@ fn origin(v: &Origin) -> String {
     match v {
         Origin::Manual { .. } => "manual".into(),
         Origin::WorkDone { .. } => "work".into(),
+        Origin::LegacyWorkDone { .. } => "legacyWork".into(),
+        Origin::LegacyWorkSnapshot { .. } => "legacySnapshot".into(),
         Origin::LessonEvidence => "lesson".into(),
     }
 }
@@ -358,12 +360,21 @@ pub fn link(
     let n = subject_number(c, subject)?;
     let k = key(reference)?;
     let origin_key = origin(provenance);
+    if matches!(provenance, Origin::LegacyWorkSnapshot { .. }) {
+        let factual=c.query_row("SELECT id,reference,owner_crew,subject_json,relation,origin_json,created_at FROM managed_artifact_edges WHERE reference=?1 AND owner_crew=?2 AND target_number=?3 AND relation=?4 AND origin_key='legacyWork'",params![k,crew,n,relation(rel)],edge_row).optional()?;
+        if let Some(edge) = factual {
+            return Ok((decode_edge(edge)?, false));
+        }
+    }
     let existing=c.query_row("SELECT id,reference,owner_crew,subject_json,relation,origin_json,created_at FROM managed_artifact_edges WHERE reference=?1 AND owner_crew=?2 AND target_number=?3 AND relation=?4 AND origin_key=?5",params![k,crew,n,relation(rel),origin_key],edge_row).optional()?;
     if let Some(edge) = existing {
         return Ok((decode_edge(edge)?, false));
     }
     c.execute("INSERT INTO managed_artifact_edges(reference,owner_crew,target_number,subject_json,relation,origin_key,origin_json,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![k,crew,n,serde_json::to_string(subject)?,relation(rel),origin_key,serde_json::to_string(provenance)?,now])?;
     let edge=c.query_row("SELECT id,reference,owner_crew,subject_json,relation,origin_json,created_at FROM managed_artifact_edges WHERE id=?1",[c.last_insert_rowid()],edge_row)?;
+    if matches!(provenance, Origin::LegacyWorkDone { .. }) {
+        c.execute("DELETE FROM managed_artifact_edges WHERE reference=?1 AND owner_crew=?2 AND target_number=?3 AND relation=?4 AND origin_key='legacySnapshot'",params![k,crew,n,relation(rel)])?;
+    }
     Ok((decode_edge(edge)?, true))
 }
 pub fn unlink(
@@ -388,12 +399,21 @@ pub fn edges(
     subject: Option<&Subject>,
     after: Option<&str>,
 ) -> Result<EdgePage> {
+    edges_with_legacy(c, reference, subject, after, false)
+}
+pub fn edges_with_legacy(
+    c: &Connection,
+    reference: Option<&Reference>,
+    subject: Option<&Subject>,
+    after: Option<&str>,
+    include_legacy: bool,
+) -> Result<EdgePage> {
     let after = after.map(positive).transpose()?.unwrap_or(0);
     let k = reference.map(key).transpose()?;
     let n = subject.map(|v| subject_number(c, v)).transpose()?;
-    let mut q=c.prepare("SELECT id,reference,owner_crew,subject_json,relation,origin_json,created_at FROM managed_artifact_edges WHERE (?1 IS NULL OR reference=?1) AND (?2 IS NULL OR target_number=?2) AND id>?3 ORDER BY id LIMIT 17")?;
+    let mut q=c.prepare("SELECT id,reference,owner_crew,subject_json,relation,origin_json,created_at FROM managed_artifact_edges WHERE (?1 IS NULL OR reference=?1) AND (?2 IS NULL OR target_number=?2) AND id>?3 AND (?4 OR origin_key NOT IN ('legacyWork','legacySnapshot')) ORDER BY id LIMIT 17")?;
     let mut items = q
-        .query_map(params![k, n, after], edge_row)?
+        .query_map(params![k, n, after, include_legacy], edge_row)?
         .map(|r| decode_edge(r?))
         .collect::<Result<Vec<_>>>()?;
     let next_after = (items.len() > PAGE).then(|| items[PAGE - 1].id.clone());
@@ -699,50 +719,22 @@ pub fn extract(crew: &str, evidence: &str) -> Vec<Reference> {
     result
 }
 
-pub fn capture_done(
+/// Reuses explicit pointer identity for historical maintenance without rewriting its evidence.
+pub fn capture_evidence(
     c: &Connection,
     crew: &str,
-    event: &crewd_work::Event,
+    subject: &Subject,
+    evidence: &crewd_work::Evidence,
+    origin: &Origin,
     now: &str,
-) -> Result<()> {
-    if !enabled(c)? {
-        return Ok(());
-    }
+) -> Result<(u64, u64)> {
     transaction(c)?;
-    let crewd_work::EventKind::Done {
-        id,
-        evidence: Some(evidence),
-        ..
-    } = &event.kind
-    else {
-        return Ok(());
-    };
-    let subject_ref =
-        crate::work_organization::reference_for_core(c, ObjectKind::Plan, &id.to_string())?
-            .ok_or_else(bad)?;
-    if subject_ref.crew_id != crew {
-        return Err(bad());
-    }
-    let stored: Option<String> = c
-        .query_row(
-            "SELECT body FROM organization_work_events WHERE crew_id=?1 AND seq=?2",
-            params![crew, i64::try_from(event.seq).map_err(|_| bad())?],
-            |r| r.get(0),
-        )
-        .optional()?;
-    if stored.as_deref() != Some(serde_json::to_string(event)?.as_str()) {
-        return Err(bad());
-    }
-    let subject = Subject::Work {
-        id: subject_ref.id(),
-    };
     let value = match evidence {
         crewd_work::Evidence::Commit(v)
         | crewd_work::Evidence::Url(v)
         | crewd_work::Evidence::Text(v) => v,
     };
     let mut pointers = extract(crew, value);
-    // Typed short commits need no prose prefix; malformed old evidence stays untouched.
     if let crewd_work::Evidence::Commit(v) = evidence
         && let Ok(reference) = canonicalize(
             crew,
@@ -756,54 +748,105 @@ pub fn capture_done(
     {
         pointers.push(reference);
     }
+    let mut counts = (0, 0);
     for reference in pointers {
-        ensure(c, &reference, now)?;
-        link(
+        let (_, created) = ensure(c, &reference, now)?;
+        let (_, added) = link(
             c,
             crew,
             &reference,
-            &subject,
+            subject,
             Relation::Evidence,
-            &Origin::WorkDone {
-                event_seq: event.seq.to_string(),
-            },
+            origin,
             now,
         )?;
+        counts.0 += u64::from(created);
+        counts.1 += u64::from(added);
     }
-    Ok(())
+    Ok(counts)
 }
-pub fn capture_lesson(c: &Connection, lesson: &Lesson, now: &str) -> Result<()> {
+pub fn capture_done(
+    c: &Connection,
+    crew: &str,
+    event: &crewd_work::Event,
+    now: &str,
+) -> Result<()> {
+    capture_done_counts(c, crew, event, now).map(|_| ())
+}
+pub fn capture_done_counts(
+    c: &Connection,
+    crew: &str,
+    event: &crewd_work::Event,
+    now: &str,
+) -> Result<(u64, u64)> {
     if !enabled(c)? {
-        return Ok(());
+        return Ok((0, 0));
     }
     transaction(c)?;
-    let n = subject_number(
-        c,
-        &Subject::Lesson {
-            id: lesson.id.clone(),
-        },
-    )?;
-    if crate::managed_risks_lessons::lesson(c, n)?.as_ref() != Some(lesson) {
+    let crewd_work::EventKind::Done {
+        id,
+        evidence: Some(evidence),
+        ..
+    } = &event.kind
+    else {
+        return Ok((0, 0));
+    };
+    let subject_ref =
+        crate::work_organization::reference_for_core(c, ObjectKind::Plan, &id.to_string())?
+            .ok_or_else(bad)?;
+    // Current ownership can differ from the historical event; the exact retained source is authoritative.
+    let stored: Option<String> = c
+        .query_row(
+            "SELECT body FROM organization_work_events WHERE crew_id=?1 AND seq=?2",
+            params![crew, i64::try_from(event.seq).map_err(|_| bad())?],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if stored.as_deref() != Some(serde_json::to_string(event)?.as_str()) {
         return Err(bad());
     }
+    capture_evidence(
+        c,
+        crew,
+        &Subject::Work {
+            id: subject_ref.id(),
+        },
+        evidence,
+        &Origin::WorkDone {
+            event_seq: event.seq.to_string(),
+        },
+        now,
+    )
+}
+pub fn capture_lesson(c: &Connection, lesson: &Lesson, now: &str) -> Result<()> {
+    capture_lesson_counts(c, lesson, now).map(|_| ())
+}
+pub fn capture_lesson_counts(c: &Connection, lesson: &Lesson, now: &str) -> Result<(u64, u64)> {
+    if !enabled(c)? {
+        return Ok((0, 0));
+    }
+    transaction(c)?;
     let subject = Subject::Lesson {
         id: lesson.id.clone(),
     };
-    for raw in &lesson.draft.evidence {
-        for reference in extract(&lesson.crew_id, raw) {
-            ensure(c, &reference, now)?;
-            link(
-                c,
-                &lesson.crew_id,
-                &reference,
-                &subject,
-                Relation::Evidence,
-                &Origin::LessonEvidence,
-                now,
-            )?;
-        }
+    let n = subject_number(c, &subject)?;
+    if crate::managed_risks_lessons::lesson(c, n)?.as_ref() != Some(lesson) {
+        return Err(bad());
     }
-    Ok(())
+    let mut counts = (0, 0);
+    for raw in &lesson.draft.evidence {
+        let added = capture_evidence(
+            c,
+            &lesson.crew_id,
+            &subject,
+            &crewd_work::Evidence::Text(raw.clone()),
+            &Origin::LessonEvidence,
+            now,
+        )?;
+        counts.0 += added.0;
+        counts.1 += added.1;
+    }
+    Ok(counts)
 }
 
 #[cfg(test)]

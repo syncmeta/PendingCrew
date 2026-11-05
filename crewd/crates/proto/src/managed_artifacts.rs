@@ -96,6 +96,16 @@ pub enum Relation {
 pub enum Origin {
     Manual { actor: ResourceActor },
     WorkDone { event_seq: String },
+    LegacyWorkDone {
+        crew_id: String,
+        local_seq: String,
+        legacy_work_id: String,
+    },
+    LegacyWorkSnapshot {
+        crew_id: String,
+        legacy_work_id: String,
+        snapshot_seq: String,
+    },
     LessonEvidence,
 }
 
@@ -215,6 +225,8 @@ pub struct GetParams {
 pub struct BacklinksParams {
     pub reference: Reference,
     pub after: Option<String>,
+    #[serde(default)]
+    pub include_legacy_sources: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -222,6 +234,8 @@ pub struct BacklinksParams {
 pub struct SubjectParams {
     pub subject: Subject,
     pub after: Option<String>,
+    #[serde(default)]
+    pub include_legacy_sources: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

@@ -2992,6 +2992,213 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "只读查看本会话当前活机组的历史凭据索引。明确区分固定范围、旧版真实完成流水、旧版冻结快照、组织流水及教训证据。状态游标前进不能证明你的某笔请求成功。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "要核对的准确任务UUID；status省略时读取默认任务。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crewId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "为本会话当前活机组显式固定一份历史范围；已有任务可复用。仅建任务，不处理下一页，不扫git、不更改旧业务或原事件、不发帖或唤醒。保留原UUID；范围恢复到旧epoch后只能读历史，不自动续跑。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "原样复制managed_object_scope_get的dbId和restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_begin"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "依据刚读到的同一任务修订和完整游标，显式处理1至64条来源的一页。只把保留证据记为未核验产物；冻结快照不能冒充原完成事件。结果不确定只查本次原UUID，禁止从当前进度推断成功、重发原步骤或跨epoch自动继续。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。",
+            "type": "string"
+          },
+          "expectedCursor": {
+            "additionalProperties": false,
+            "description": "原样复制该任务完整cursor，包括phase和after，不自己计算游标。",
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "phase": {
+                "enum": [
+                  "legacyEvents",
+                  "legacySnapshots",
+                  "events",
+                  "lessons",
+                  "complete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase",
+              "after"
+            ],
+            "type": "object"
+          },
+          "expectedRevision": {
+            "description": "原样复制本次读取的任务revision；冲突后先读状态，不重发。",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "要核对的准确任务UUID；status省略时读取默认任务。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "这次明确推进的来源上限，整数1至64。",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "description": "为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "原样复制managed_object_scope_get的dbId和restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "jobId",
+          "expectedRevision",
+          "expectedCursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_step"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "只读查询本会话某个原历史索引请求的不可变回执。与普通产物请求独立；known/historical/notFound均不授权重放。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "原样复制managed_object_scope_get的dbId和restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "只读核对产物的规范自然键，不登记、不核验、不访问仓库或网络。使用当前机组；完整SHA或绝对URL为全局，短SHA/文件/测试无显式仓库标识时标记本机组未归属。PR和普通链接规范化为同一url:指针。",
       "inputSchema": {
         "additionalProperties": false,
@@ -3225,6 +3432,10 @@
             "description": "准确复制上一页的nextAfter，省略从第一页开始。",
             "type": "string"
           },
+          "includeLegacySources": {
+            "description": "为true时包含旧版真实Done和冻结快照的诚实来源；快照不得当作原事件。省略为false，兼容旧Origin集合。",
+            "type": "boolean"
+          },
           "reference": {
             "additionalProperties": false,
             "description": "准确复制preview或已读取对象的namespace与key。",
@@ -3313,6 +3524,10 @@
           "after": {
             "description": "准确复制上一页的nextAfter，省略从第一页开始。",
             "type": "string"
+          },
+          "includeLegacySources": {
+            "description": "为true时包含旧版真实Done和冻结快照的诚实来源；快照不得当作原事件。省略为false，兼容旧Origin集合。",
+            "type": "boolean"
           },
           "subject": {
             "additionalProperties": false,
@@ -8179,6 +8394,213 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
+      "description": "只读查看本会话当前活机组的历史凭据索引。明确区分固定范围、旧版真实完成流水、旧版冻结快照、组织流水及教训证据。状态游标前进不能证明你的某笔请求成功。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "要核对的准确任务UUID；status省略时读取默认任务。",
+            "type": "string"
+          }
+        },
+        "required": [
+          "crewId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_status"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "为本会话当前活机组显式固定一份历史范围；已有任务可复用。仅建任务，不处理下一页，不扫git、不更改旧业务或原事件、不发帖或唤醒。保留原UUID；范围恢复到旧epoch后只能读历史，不自动续跑。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "原样复制managed_object_scope_get的dbId和restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_begin"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "依据刚读到的同一任务修订和完整游标，显式处理1至64条来源的一页。只把保留证据记为未核验产物；冻结快照不能冒充原完成事件。结果不确定只查本次原UUID，禁止从当前进度推断成功、重发原步骤或跨epoch自动继续。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。",
+            "type": "string"
+          },
+          "expectedCursor": {
+            "additionalProperties": false,
+            "description": "原样复制该任务完整cursor，包括phase和after，不自己计算游标。",
+            "properties": {
+              "after": {
+                "type": "string"
+              },
+              "phase": {
+                "enum": [
+                  "legacyEvents",
+                  "legacySnapshots",
+                  "events",
+                  "lessons",
+                  "complete"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "phase",
+              "after"
+            ],
+            "type": "object"
+          },
+          "expectedRevision": {
+            "description": "原样复制本次读取的任务revision；冲突后先读状态，不重发。",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "要核对的准确任务UUID；status省略时读取默认任务。",
+            "type": "string"
+          },
+          "limit": {
+            "description": "这次明确推进的来源上限，整数1至64。",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "description": "为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "原样复制managed_object_scope_get的dbId和restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "jobId",
+          "expectedRevision",
+          "expectedCursor",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_step"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "只读查询本会话某个原历史索引请求的不可变回执。与普通产物请求独立；known/historical/notFound均不授权重放。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "本会话当前且未归档的准确机组编号；Agent不得替其他机组维护索引。",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "为这次确切Begin或Step保留一个规范原始UUID，恢复不换号。",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "原样复制managed_object_scope_get的dbId和restoreEpoch。",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "artifact_history_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
       "description": "只读核对产物的规范自然键，不登记、不核验、不访问仓库或网络。使用当前机组；完整SHA或绝对URL为全局，短SHA/文件/测试无显式仓库标识时标记本机组未归属。PR和普通链接规范化为同一url:指针。",
       "inputSchema": {
         "additionalProperties": false,
@@ -8412,6 +8834,10 @@
             "description": "准确复制上一页的nextAfter，省略从第一页开始。",
             "type": "string"
           },
+          "includeLegacySources": {
+            "description": "为true时包含旧版真实Done和冻结快照的诚实来源；快照不得当作原事件。省略为false，兼容旧Origin集合。",
+            "type": "boolean"
+          },
           "reference": {
             "additionalProperties": false,
             "description": "准确复制preview或已读取对象的namespace与key。",
@@ -8500,6 +8926,10 @@
           "after": {
             "description": "准确复制上一页的nextAfter，省略从第一页开始。",
             "type": "string"
+          },
+          "includeLegacySources": {
+            "description": "为true时包含旧版真实Done和冻结快照的诚实来源；快照不得当作原事件。省略为false，兼容旧Origin集合。",
+            "type": "boolean"
           },
           "subject": {
             "additionalProperties": false,

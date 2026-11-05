@@ -73,8 +73,17 @@ pub fn backlinks(
     reference: &Reference,
     after: Option<&str>,
 ) -> Result<EdgePage> {
+    backlinks_with_legacy(c, actor, reference, after, false)
+}
+pub fn backlinks_with_legacy(
+    c: &Connection,
+    actor: Actor<'_>,
+    reference: &Reference,
+    after: Option<&str>,
+    include_legacy: bool,
+) -> Result<EdgePage> {
     get(c, actor, reference)?;
-    let page = db::edges(c, Some(reference), None, after)?;
+    let page = db::edges_with_legacy(c, Some(reference), None, after, include_legacy)?;
     for edge in &page.items {
         readable(c, actor, &edge.subject)?;
     }
@@ -86,8 +95,23 @@ pub fn subject(
     target: &Subject,
     after: Option<&str>,
 ) -> Result<EdgePage> {
+    subject_with_legacy(c, actor, target, after, false)
+}
+pub fn subject_with_legacy(
+    c: &Connection,
+    actor: Actor<'_>,
+    target: &Subject,
+    after: Option<&str>,
+    include_legacy: bool,
+) -> Result<EdgePage> {
     readable(c, actor, target)?;
-    Ok(db::edges(c, None, Some(target), after)?)
+    Ok(db::edges_with_legacy(
+        c,
+        None,
+        Some(target),
+        after,
+        include_legacy,
+    )?)
 }
 fn author(actor: Actor<'_>) -> ResourceActor {
     match actor {

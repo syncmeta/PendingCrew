@@ -1607,9 +1607,32 @@ enum CrewdArtifactWire {
         let kind:String
         let actor:Directory.DecisionAuthor?
         let eventSeq:String?
+        var crewId:String?=nil
+        var localSeq:String?=nil
+        var legacyWorkId:String?=nil
+        var snapshotSeq:String?=nil
+        var legacy:Bool {kind=="legacyWorkDone" || kind=="legacyWorkSnapshot"}
         var manual:Bool {kind=="manual"}
-        var valid:Bool {switch kind {case "manual":actor?.valid==true && eventSeq==nil;case "workDone":actor==nil && eventSeq.flatMap(Directory.positive) != nil;case "lessonEvidence":actor==nil && eventSeq==nil;default:false}}
-        var title:String {switch kind {case "manual":"手工关联";case "workDone":"完成事实 · 事件 "+(eventSeq ?? "");default:"教训原证据"}}
+        var valid:Bool {
+            let oldFields=crewId==nil && localSeq==nil && legacyWorkId==nil && snapshotSeq==nil
+            switch kind {
+            case "manual":return oldFields && actor?.valid==true && eventSeq==nil
+            case "workDone":return oldFields && actor==nil && eventSeq.flatMap(Directory.positive) != nil
+            case "lessonEvidence":return oldFields && actor==nil && eventSeq==nil
+            case "legacyWorkDone":return actor==nil && eventSeq==nil && crewId?.isEmpty==false && legacyWorkId?.isEmpty==false && localSeq.flatMap(Directory.positive) != nil && snapshotSeq==nil
+            case "legacyWorkSnapshot":return actor==nil && eventSeq==nil && crewId?.isEmpty==false && legacyWorkId?.isEmpty==false && localSeq==nil && snapshotSeq.flatMap(CrewdArtifactHistoryWire.number) != nil
+            default:return false
+            }
+        }
+        var title:String {
+            switch kind {
+            case "manual":"手工关联"
+            case "workDone":"完成事实 · 事件 "+(eventSeq ?? "")
+            case "legacyWorkDone":"旧版真实完成事件 · 本地序号 "+(localSeq ?? "")+" · 旧工作 "+(legacyWorkId ?? "")
+            case "legacyWorkSnapshot":"旧版冻结快照（非原完成事件） · 快照序号 "+(snapshotSeq ?? "")+" · 旧工作 "+(legacyWorkId ?? "")
+            default:"教训原证据"
+            }
+        }
     }
     struct Edge:Codable,Identifiable {
         let id:String
@@ -1644,4 +1667,74 @@ enum CrewdArtifactWire {
     struct Lookup:Decodable {let status:String;let receipt:Receipt?}
     struct Page:Decodable {let items:[Artifact];let nextAfter:Reference?}
     struct EdgePage:Decodable {let items:[Edge];let nextAfter:String?}
+}
+
+/// One explicit bounded history job; no business fact is reconstructed by the client.
+enum CrewdArtifactHistoryWire {
+    static let capability="managedArtifacts.history.v1"
+    static let status="artifact.history.status",begin="artifact.history.begin",step="artifact.history.step",lookup="artifact.history.request.get"
+    static let observation="artifact.history.observation"
+    typealias Scope=CrewdManagedDirectoryWire.Scope
+    static func number(_ value:String)->UInt64? {guard let n=UInt64(value),String(n)==value else {return nil};return n}
+    static func uuid(_ value:String)->Bool {UUID(uuidString:value)?.uuidString.lowercased()==value}
+    enum Phase:String,Codable,CaseIterable {
+        case legacyEvents,legacySnapshots,events,lessons,complete
+        var title:String {switch self {case .legacyEvents:"旧版保留事件";case .legacySnapshots:"旧版冻结快照";case .events:"组织完成事件";case .lessons:"教训原证据";case .complete:"固定范围已处理完毕"}}
+    }
+    struct Cursor:Codable,Equatable {let phase:Phase;let after:String;var valid:Bool {after.utf8.count<=4096};static func ==(a:Self,b:Self)->Bool {a.phase==b.phase && a.after.utf8.elementsEqual(b.after.utf8)}}
+    struct Cut:Codable {
+        let legacyEventSeq:String,legacyItem:String,legacySnapshotSeq:String
+        let legacySnapshotDigest:String?
+        let legacyRetainedEvents:String,eventSeq:String,lessonNumber:String
+        var valid:Bool {
+            [legacyEventSeq,legacyItem,legacySnapshotSeq,legacyRetainedEvents,eventSeq,lessonNumber].allSatisfy{number($0) != nil} &&
+                (legacySnapshotDigest.map{$0.utf8.count==64 && $0.utf8.allSatisfy{(48...57).contains($0)||(97...102).contains($0)}} ?? true)
+        }
+    }
+    struct Counts:Codable {
+        let scanned:String,doneEvents:String,legacySnapshots:String,lessons:String,missingTargets:String,artifactsAdded:String,edgesAdded:String
+        var values:[String] {[scanned,doneEvents,legacySnapshots,lessons,missingTargets,artifactsAdded,edgesAdded]}
+        var valid:Bool {values.allSatisfy{number($0) != nil}}
+        var zero:Bool {values.allSatisfy{$0=="0"}}
+        func adding(_ delta:Self)->Self? {
+            guard valid,delta.valid else {return nil}
+            var totals:[String]=[]
+            for (a,b) in zip(values,delta.values) {
+                let (value,overflow)=number(a)!.addingReportingOverflow(number(b)!)
+                guard !overflow else {return nil};totals.append(String(value))
+            }
+            return .init(scanned:totals[0],doneEvents:totals[1],legacySnapshots:totals[2],lessons:totals[3],missingTargets:totals[4],artifactsAdded:totals[5],edgesAdded:totals[6])
+        }
+    }
+    struct Job:Codable,Identifiable {
+        let id:String
+        let scope:Scope
+        let crewId:String
+        let cut:Cut
+        let cursor:Cursor
+        let revision:String
+        let counts:Counts
+        let createdAt:String,updatedAt:String
+        let lastRequestId:String?
+        var valid:Bool {uuid(id) && !scope.dbId.isEmpty && uuid(scope.restoreEpoch) && !crewId.isEmpty && cut.valid && cursor.valid &&
+            number(revision).map{$0>0}==true && counts.valid && !createdAt.isEmpty && !updatedAt.isEmpty && (lastRequestId.map(uuid) ?? true)}
+    }
+    struct Status:Decodable {let scope:Scope;let crewId:String;let job:Job?;let canContinue:Bool}
+    struct Operation:Codable {
+        let kind:String
+        var jobId:String?=nil
+        var expectedRevision:String?=nil
+        var expectedCursor:Cursor?=nil
+        var limit:Int?=nil
+        var valid:Bool {
+            if kind=="begin" {return jobId==nil && expectedRevision==nil && expectedCursor==nil && limit==nil}
+            return kind=="step" && jobId.map(uuid)==true && expectedRevision.flatMap(number).map{$0>0}==true &&
+                expectedCursor?.valid==true && limit.map{(1...64).contains($0)}==true
+        }
+    }
+    struct Effect:Codable {let kind:String;let created:Bool?;let beforeRevision:String?;let beforeCursor:Cursor?;let delta:Counts?}
+    struct Receipt:Codable {let scope:Scope;let crewId:String;let requestId:String;let recordedAt:String;let operation:Operation;let job:Job;let effect:Effect}
+    struct Lookup:Decodable {let status:String;let receipt:Receipt?}
+    struct BeginParams:Encodable {let scope:Scope;let crewId:String;let requestId:String}
+    struct StepParams:Encodable {let scope:Scope;let crewId:String;let requestId:String;let jobId:String;let expectedRevision:String;let expectedCursor:Cursor;let limit:Int}
 }

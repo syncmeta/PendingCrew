@@ -24,6 +24,7 @@ pub mod host;
 pub mod judgments;
 pub mod managed_objects;
 pub mod managed_artifacts;
+pub mod artifact_history;
 pub mod managed_message_sources;
 pub mod decision_asks;
 pub mod managed_objects_api;
@@ -364,6 +365,7 @@ pub mod methods {
             .copied()
             .chain(crate::team_data_api::METHODS.iter().copied())
             .chain(crate::managed_artifacts::METHODS.iter().copied())
+            .chain(crate::artifact_history::METHODS.iter().copied())
             .chain(crate::lifecycle::METHODS.iter().copied())
             .chain(std::iter::once(crate::executors::EXECUTOR_LIST))
             .collect()
@@ -618,6 +620,7 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         (events::ASK_INBOX_CHANGED, sub::<CrewRef>(g)),
         (events::ONTO_CHANGED, sub::<managed_objects_api::OntologyChanged>(g)),
         (managed_artifacts::CHANGED, sub::<managed_artifacts::Changed>(g)),
+        (artifact_history::CHANGED, sub::<artifact_history::Changed>(g)),
         (events::WORK_CHANGED, sub::<WorkChanged>(g)),
         (events::CHANNEL_WORK_CHANGED, sub::<ChannelWorkChanged>(g)),
         (events::DATA_CHANGED, sub::<CrewRef>(g)),
@@ -819,6 +822,10 @@ pub fn api_schema() -> Value {
         (managed_artifacts::SUBJECT,m(sub::<managed_artifacts::SubjectParams>(g),sub::<managed_artifacts::EdgePage>(g))),
         (managed_artifacts::SUBMIT,m(sub::<managed_artifacts::Submit>(g),sub::<managed_artifacts::Receipt>(g))),
         (managed_artifacts::REQUEST_GET,m(sub::<managed_objects_api::RequestParams>(g),sub::<managed_artifacts::Lookup>(g))),
+        (artifact_history::STATUS,m(sub::<artifact_history::StatusParams>(g),sub::<artifact_history::Status>(g))),
+        (artifact_history::BEGIN,m(sub::<artifact_history::BeginParams>(g),sub::<artifact_history::Receipt>(g))),
+        (artifact_history::STEP,m(sub::<artifact_history::StepParams>(g),sub::<artifact_history::Receipt>(g))),
+        (artifact_history::REQUEST_GET,m(sub::<managed_objects_api::RequestParams>(g),sub::<artifact_history::Lookup>(g))),
         (
             "notification.status",
             m(sub::<Empty>(g), sub::<notifications::NotificationStatus>(g)),

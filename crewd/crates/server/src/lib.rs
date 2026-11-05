@@ -19,6 +19,7 @@ mod group_knowledge;
 pub mod host_admin;
 mod managed_objects;
 mod managed_artifacts;
+mod artifact_history;
 pub mod hub;
 mod judgments;
 pub mod ledger;

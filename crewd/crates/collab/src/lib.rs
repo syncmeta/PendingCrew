@@ -38,6 +38,7 @@ pub mod messages;
 pub mod decision_asks;
 pub mod managed_objects;
 pub mod managed_artifacts;
+pub mod artifact_history;
 pub mod managed_message_sources;
 pub mod patrol_brief;
 pub mod channel_responsibility;
@@ -136,6 +137,10 @@ pub enum Change {
     },
     ArtifactChanged {
         crew_id: String,
+    },
+    ArtifactHistoryChanged {
+        crew_id: String,
+        job_id: String,
     },
     DocumentChanged {
         crew_id: String,
