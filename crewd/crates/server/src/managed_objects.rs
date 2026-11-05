@@ -67,6 +67,13 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
                             .map_err(dispatch::collab_err)?,
                     )
                 }
+                DECISIONS => {
+                    let params: DecisionsParams = crewd_proto::parse_params_or_default(params)?;
+                    value(
+                        domain::decisions(conn, human, params.after.as_deref())
+                            .map_err(dispatch::collab_err)?,
+                    )
+                }
                 REQUEST_GET => {
                     let params: RequestParams = crewd_proto::parse_params(params)?;
                     value(

@@ -2321,7 +2321,13 @@ private struct CrewdManagedDirectoryView: View {
     typealias Store = CrewdManagedDirectoryStore
     @ObservedObject var workspace: CrewdWorkspace
     let store: Store
+    private enum SectionMode: Hashable { case tables, decisions }
+    @State private var section: SectionMode = .tables
+    @State private var shownSection: SectionMode?
     @State private var scope: Store.BrowseScope?
+    @State private var decisions: [Wire.Decision] = []
+    @State private var decision: Wire.Decision?
+    @State private var nextDecision: String?
     @State private var tables: [Wire.Table] = []
     @State private var table: Wire.Table?
     @State private var rows: [Wire.Row] = []
@@ -2339,25 +2345,49 @@ private struct CrewdManagedDirectoryView: View {
         let observation: UUID
         let connection: UUID
         let journalReady: Bool
+        let section: SectionMode
     }
     private var route: Route {
         .init(crew:workspace.crewID,observation:workspace.observationGeneration,
               connection:workspace.client.connectionEpoch,
-              journalReady:workspace.originalJournalReady && workspace.client.readyForWork)
+              journalReady:workspace.originalJournalReady && workspace.client.readyForWork,
+              section:decisionsAvailable ? section : .tables)
     }
+    private var decisionsAvailable: Bool { workspace.client.capabilities.contains(Wire.decisionsCapability) }
+    private var selectedID: String? { route.section == .decisions ? decision?.id : table?.id }
     private var presentsCurrentScope: Bool {
         guard let active = scope?.origin else { return false }
-        return route.journalReady && active.observation == route.observation &&
+        return route.journalReady && shownSection == route.section && active.observation == route.observation &&
             active.connection == route.connection && Wire.exact(active.crew,route.crew)
     }
     private struct EditorTarget: Identifiable {
-        enum Mode { case create; case add(Wire.Table); case edit(Wire.Table, Wire.Row) }
+        enum Mode {
+            case create, add(Wire.Table), edit(Wire.Table, Wire.Row)
+            case recordDecision, replaceDecision(Wire.Decision), withdrawDecision(Wire.Decision)
+        }
         let id = UUID()
         let mode: Mode
         let scope: Store.BrowseScope
         let route: Route
         var title: String {
-            switch mode { case .create: "新建组织表"; case .add: "新增记录"; case .edit: "编辑记录" }
+            switch mode {
+            case .create: "新建组织表"
+            case .add: "新增记录"
+            case .edit: "编辑记录"
+            case .recordDecision: "记录决定"
+            case .replaceDecision(let old): "取代 " + old.id
+            case .withdrawDecision(let old): "撤回 " + old.id
+            }
+        }
+        var isWithdrawal: Bool {
+            if case .withdrawDecision = mode { return true }
+            return false
+        }
+        var isDecision: Bool {
+            switch mode {
+            case .recordDecision, .replaceDecision, .withdrawDecision: true
+            case .create, .add, .edit: false
+            }
         }
     }
 
@@ -2369,7 +2399,9 @@ private struct CrewdManagedDirectoryView: View {
                 if presentsCurrentScope {
                     if let notice { Text(notice).foregroundStyle(.secondary).textSelection(.enabled) }
                     if !pending.isEmpty { pendingPanel }
-                    if let table { records(table) } else { catalog }
+                    if route.section == .decisions {
+                        if let decision { decisionDetail(decision) } else { decisionLog }
+                    } else if let table { records(table) } else { catalog }
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -2386,7 +2418,7 @@ private struct CrewdManagedDirectoryView: View {
                 guard editor?.id == target.id && route == target.route else { return }
                 editor = nil
                 notice = "已保存 " + (result.receipt.object.id ?? "组织对象") + "。"
-                let selected = table?.id
+                let selected = target.isDecision ? result.receipt.object.decision?.id : table?.id
                 Task { await reload(target.route, target: selected, reset: false) }
             }, refreshPending: {
                 guard route == target.route && scope == target.scope else { return }
@@ -2401,11 +2433,18 @@ private struct CrewdManagedDirectoryView: View {
                 if busy { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("刷新",systemImage:"arrow.clockwise") {
-                    let captured = route, selected = table?.id
+                    let captured = route, selected = selectedID
                     Task { await reload(captured, target: selected, reset: false) }
                 }.disabled(busy)
             }
-            Text("其他机组的组织表可阅读。本机组维护自己的表和记录。")
+            if decisionsAvailable {
+                Picker("组织目录内容",selection:$section) {
+                    Text("组织表").tag(SectionMode.tables)
+                    Text("决定日志").tag(SectionMode.decisions)
+                }.pickerStyle(.segmented).disabled(editor != nil)
+            }
+            Text(route.section == .decisions ? "全组织可读。本机组可以记录、取代或撤回自己的决定。" :
+                    "其他机组的组织表可阅读。本机组维护自己的表和记录。")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -2476,15 +2515,94 @@ private struct CrewdManagedDirectoryView: View {
             }
         }
     }
+    private var decisionLog: some View {
+        VStack(alignment:.leading,spacing:10) {
+            Button("记录决定",systemImage:"plus") { open(.recordDecision) }
+                .disabled(busy || scope == nil || currentCrewFrozen || blocked("recordDecision"))
+            if decisions.isEmpty && !busy { Text("还没有组织决定。").foregroundStyle(.secondary) }
+            ForEach(decisions) { item in
+                Button {
+                    showDecision(item.id)
+                } label: {
+                    HStack {
+                        VStack(alignment:.leading,spacing:3) {
+                            Text(item.draft.question).foregroundStyle(.primary)
+                            Text(item.id + " · " + item.status.label + " · " + owner(item.crewId) + " · " + author(item.author))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName:"chevron.right").font(.caption)
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain).disabled(busy)
+                Divider()
+            }
+            if let nextDecision {
+                Button("更早的决定") { loadMore(after:nextDecision,table:nil) }.disabled(busy)
+            }
+        }
+    }
+
+    private func decisionDetail(_ item: Wire.Decision) -> some View {
+        VStack(alignment:.leading,spacing:12) {
+            Button("返回决定日志",systemImage:"chevron.backward") { showDecision(nil) }.disabled(busy)
+            Text(item.draft.question).font(.title3).textSelection(.enabled)
+            Text(item.id + " · " + item.status.label + " · " + owner(item.crewId) + (item.frozen ? " · 已归档，只读" : ""))
+                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("决定者",value:author(item.author))
+            LabeledContent("记录时间",value:item.createdAt)
+            decisionText("选择",item.draft.choice)
+            decisionText("理由",item.draft.rationale)
+            if let alternatives = item.draft.alternatives { decisionText("其他方案",alternatives) }
+            if let reversibility = item.draft.reversibility { LabeledContent("可逆性",value:reversibility.label) }
+            Text("关于").font(.subheadline)
+            ForEach(item.draft.about.indices,id:\.self) { index in
+                let link = item.draft.about[index]
+                LabeledContent(link.kind.label,value:link.id).textSelection(.enabled)
+            }
+            if let predecessor = item.supersedes {
+                Button("查看被取代的 " + predecessor,systemImage:"arrow.backward") { showDecision(predecessor) }
+                    .disabled(busy)
+            }
+            if let successor = item.supersededBy {
+                Button("查看后续决定 " + successor,systemImage:"arrow.forward") { showDecision(successor) }
+                    .disabled(busy)
+            }
+            if let withdrawal = item.withdrawal {
+                decisionText("撤回理由",withdrawal.reason)
+                LabeledContent("撤回记录",value:author(withdrawal.author) + " · " + withdrawal.at)
+            }
+            if item.canChange(crew:route.crew) && !currentCrewFrozen {
+                HStack {
+                    Button("用新决定取代",systemImage:"arrow.triangle.swap") { open(.replaceDecision(item)) }
+                    Button("撤回决定",systemImage:"xmark.circle",role:.destructive) { open(.withdrawDecision(item)) }
+                }.disabled(busy || blocked(item.id))
+            }
+        }
+    }
+    private func decisionText(_ title: String, _ value: String) -> some View {
+        VStack(alignment:.leading,spacing:4) {
+            Text(title).font(.subheadline)
+            Text(value).textSelection(.enabled)
+        }
+    }
+    private func author(_ value: Wire.DecisionAuthor) -> String {
+        value.kind == "human" ? "人" : "Agent " + (value.sessionId ?? "")
+    }
+    private func showDecision(_ id: String?) {
+        let captured = route
+        Task { await reload(captured,target:id,reset:false) }
+    }
+
     private var pendingPanel: some View {
         VStack(alignment:.leading,spacing:5) {
             Text("原请求待核对").font(.subheadline)
             ForEach(pending) { item in
                 HStack {
-                    let label = item.witness.kind == "createTable" ? "新建组织表" : item.witness.target
+                    let label = item.witness.kind == "createTable" ? "新建组织表" :
+                        item.witness.kind == "recordDecision" ? "记录决定" : item.witness.target
                     Text(label + " · " + String(item.witness.requestId.prefix(8))).font(.caption)
                     Spacer()
-                    Button("查看原回执") { lookup(item) }.disabled(busy)
+                    Button("查看原回执") { lookup(item) }.disabled(busy || (item.witness.isDecision && !decisionsAvailable))
                 }
             }
         }.padding(10).background(.secondary.opacity(0.10),in:RoundedRectangle(cornerRadius:8))
@@ -2513,8 +2631,8 @@ private struct CrewdManagedDirectoryView: View {
         let token = UUID()
         ticket = token
         if reset {
-            scope = nil; tables = []; table = nil; rows = []; nextTable = nil; nextRow = nil
-            pending = []; editor = nil; notice = nil
+            scope = nil; shownSection = nil; tables = []; table = nil; rows = []; nextTable = nil; nextRow = nil
+            decisions = []; decision = nil; nextDecision = nil; pending = []; editor = nil; notice = nil
         }
         guard captured.journalReady else { busy = false; return }
         busy = true; problem = nil
@@ -2522,7 +2640,17 @@ private struct CrewdManagedDirectoryView: View {
         defer { if current() { busy = false } }
         do {
             let active = try await store.scope(stillCurrent:current)
-            if let target {
+            if captured.section == .decisions {
+                if let target {
+                    let item = try await store.decision(active,id:target,stillCurrent:current)
+                    guard current() else { return }
+                    decision = item
+                } else {
+                    let page = try await store.decisions(active,after:nil,stillCurrent:current)
+                    guard current() else { return }
+                    decisions = page.items; nextDecision = page.nextAfter; decision = nil
+                }
+            } else if let target {
                 let page = try await store.rows(active,table:target,after:nil,stillCurrent:current)
                 guard current() else { return }
                 table = page.table; rows = page.items; nextRow = page.nextAfter
@@ -2532,6 +2660,7 @@ private struct CrewdManagedDirectoryView: View {
                 tables = page.items; nextTable = page.nextAfter; table = nil; rows = []; nextRow = nil
             }
             scope = active
+            shownSection = captured.section
             refreshPending(active)
         } catch { if current() { scope = nil; problem = error.localizedDescription } }
     }
@@ -2543,7 +2672,11 @@ private struct CrewdManagedDirectoryView: View {
             @MainActor func current() -> Bool { ticket == token && route == captured && self.scope == scope && !Task.isCancelled }
             defer { if current() { busy = false } }
             do {
-                if let target {
+                if captured.section == .decisions {
+                    let page = try await store.decisions(scope,after:after,stillCurrent:current)
+                    guard current(), decision == nil else { return }
+                    decisions += page.items; nextDecision = page.nextAfter
+                } else if let target {
                     let page = try await store.rows(scope,table:target,after:after,stillCurrent:current)
                     guard current(), table?.id == target else { return }
                     table = page.table; rows += page.items; nextRow = page.nextAfter
@@ -2586,13 +2719,16 @@ private struct CrewdManagedDirectoryView: View {
         @State private var title = ""
         @State private var fields: [Wire.Field] = [.init(name:"",fieldType:.text,nullable:false)]
         @State private var inputs: [Input] = []
+        @State private var decisionDraft = Wire.DecisionDraft(question:"",choice:"",rationale:"",about:[])
+        @State private var alternatives = ""
+        @State private var withdrawalReason = ""
         @State private var busy = false
         @State private var stopped = false
         @State private var problem: String?
         private struct Input { var text = ""; var null = false }
         private var model: (Wire.Table, Wire.Row?)? {
             switch target.mode {
-            case .create: nil
+            case .create, .recordDecision, .replaceDecision, .withdrawDecision: nil
             case .add(let table): (table,nil)
             case .edit(let table,let row): (table,row)
             }
@@ -2600,7 +2736,9 @@ private struct CrewdManagedDirectoryView: View {
         var body: some View {
             NavigationStack {
                 Form {
-                    if let (table,row) = model {
+                    if target.isDecision {
+                        decisionFields
+                    } else if let (table,row) = model {
                         Section(row.map { "记录 " + $0.id + " · 版本 " + $0.revision } ?? "填写记录") {
                             ForEach(inputs.indices,id:\.self) { index in
                                 let field = table.fields[index]
@@ -2637,12 +2775,23 @@ private struct CrewdManagedDirectoryView: View {
                         Button(stopped ? "关闭" : "取消") { dismiss() }.disabled(busy)
                     }
                     ToolbarItem(placement:.confirmationAction) {
-                        Button("保存") { save() }.disabled(busy || stopped || (model != nil && inputs.isEmpty))
+                        Button(target.isWithdrawal ? "确认撤回" : "保存") { save() }
+                            .disabled(busy || stopped || (model != nil && inputs.isEmpty))
                     }
                 }
             }
             .interactiveDismissDisabled(busy)
             .task {
+                switch target.mode {
+                case .recordDecision:
+                    decisionDraft.about = [.init(kind:.crew,id:target.scope.origin.crew)]
+                case .replaceDecision(let original):
+                    decisionDraft = original.draft
+                    alternatives = decisionDraft.alternatives ?? ""
+                    decisionDraft.choice = ""
+                    decisionDraft.rationale = ""
+                default: break
+                }
                 if let (table,row) = model {
                     inputs = table.fields.indices.map { index in
                         let original = row?.values[index]
@@ -2654,7 +2803,60 @@ private struct CrewdManagedDirectoryView: View {
             .frame(minWidth:440,minHeight:350)
             #endif
         }
+        @ViewBuilder private var decisionFields: some View {
+            if case .withdrawDecision(let original) = target.mode {
+                Section(original.id + " · " + original.draft.question) {
+                    Text("撤回后，原文保留在历史中；先前被取代的决定不会自动恢复。")
+                    TextField("撤回理由",text:$withdrawalReason,axis:.vertical)
+                }
+            } else {
+                if case .replaceDecision(let original) = target.mode {
+                    Section("现行决定 " + original.id) {
+                        Text(original.draft.choice)
+                        Text("保存会记录一个新决定，原文与原作者仍可查阅。").foregroundStyle(.secondary)
+                    }
+                }
+                TextField("要决定的问题",text:$decisionDraft.question)
+                TextField("决定",text:$decisionDraft.choice,axis:.vertical)
+                TextField("理由",text:$decisionDraft.rationale,axis:.vertical)
+                TextField("其他方案（可选）",text:$alternatives,axis:.vertical)
+                Picker("可逆性",selection:$decisionDraft.reversibility) {
+                    Text("未填写").tag(nil as Wire.DecisionReversibility?)
+                    ForEach(Wire.DecisionReversibility.allCases) { value in Text(value.label).tag(Optional(value)) }
+                }
+                Section("关于（至少一项）") {
+                    ForEach(decisionDraft.about.indices,id:\.self) { index in
+                        Picker("引用类型",selection:$decisionDraft.about[index].kind) {
+                            ForEach(Wire.DecisionAboutKind.allCases.filter { $0 != .risk }) { kind in Text(kind.label).tag(kind) }
+                        }
+                        TextField("对象编号或机组 ID",text:$decisionDraft.about[index].id)
+                        if decisionDraft.about.count > 1 {
+                            Button("移除此引用",role:.destructive) { decisionDraft.about.remove(at:index) }
+                        }
+                    }
+                    Button("添加引用",systemImage:"plus") {
+                        decisionDraft.about.append(.init(kind:.work,id:""))
+                    }.disabled(decisionDraft.about.count >= 8)
+                }
+            }
+        }
         private func mutation() throws -> Store.Mutation {
+            if target.isDecision {
+                var draft = decisionDraft
+                draft.alternatives = alternatives.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? nil : alternatives
+                switch target.mode {
+                case .recordDecision:
+                    guard draft.valid else { throw Wire.Problem.invalid }
+                    return .recordDecision(draft)
+                case .replaceDecision(let old):
+                    guard draft.valid else { throw Wire.Problem.invalid }
+                    return .replaceDecision(old,draft)
+                case .withdrawDecision(let old):
+                    guard Wire.decisionText(withdrawalReason) else { throw Wire.Problem.invalid }
+                    return .withdrawDecision(old,withdrawalReason)
+                default: throw Wire.Problem.invalid
+                }
+            }
             if let (table,row) = model {
                 let values = try zip(inputs,table.fields).map { try Wire.Cell.parse($0.0.text,null:$0.0.null,field:$0.1) }
                 guard Wire.validValues(values, fields:table.fields) else { throw Wire.Problem.invalid }
@@ -2680,7 +2882,7 @@ private struct CrewdManagedDirectoryView: View {
                     guard current() else { return }
                     refreshPending()
                     problem = error.localizedDescription
-                    stopped = true
+                    stopped = !target.isDecision || !Store.decisionInputRefused(error)
                 }
             }
         }

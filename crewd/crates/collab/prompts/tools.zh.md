@@ -1539,10 +1539,10 @@ messages、todo、documents、progress，与工作图父级独立。
 读取当前受管对象的数据库、恢复范围和你所在的机组编号。新提交要携带完整范围，并将原范围与请求编号一同保留。
 
 ## managed_object_get
-按组织内的准确 T 或 O 编号读取受管表或行。归档机组的对象仍可读取，并标为冻结。
+按组织内的准确 T、O 或 D 编号读取受管表、行或决策。归档机组的对象仍可读取，并标为冻结。
 
 ## managed_object_get.id
-准确的 T 表编号或 O 行编号。
+准确的 T 表编号、O 行编号或 D 决策编号。
 
 ## managed_tables_list
 读取组织内可见的受管表，一次一页。
@@ -1559,20 +1559,26 @@ managed_tables_list 或 managed_object_get 返回的准确 T 编号。
 ## managed_rows_list.after
 此表上一页返回的 nextAfter O 编号。首页省略。
 
+## managed_decisions_list
+分页读取组织内可见的受管决策，包括已被替换或撤回的记录。
+
+## managed_decisions_list.after
+上一页返回的 nextAfter D 编号。首页省略。
+
 ## managed_object_submit
-在你当前有效的机组内建表、加行或编辑行。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑需要最新的行版本，并替换完整一行。回执不确定时查询原请求，保留原 UUID 与范围。
+在你当前有效的机组内建表、加行、编辑行或记录决策。决策作者或归属机组的现任机长可用最新 D 版本替换或撤回决策。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑行需要最新的行版本，并替换完整一行。回执不确定时，用原 UUID 与范围查询原请求。
 
 ## managed_object_submit.scope
 准确复制 managed_object_scope_get 返回的 dbId 与 restoreEpoch。
 
 ## managed_object_submit.crewId
-managed_object_scope_get 返回的当前机组编号。
+记录决策或写入表和行时，使用 managed_object_scope_get 返回的当前机组编号。替换或撤回决策时，使用该决策的归属机组编号。
 
 ## managed_object_submit.requestId
 为这项确切意图生成一个规范的原始 UUID，保留它供查询回执。
 
 ## managed_object_submit.change
-类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。
+提供类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。记录或替换决策时提供问题、选定方案、理由和准确的关联对象编号。撤回决策时提供撤回理由。
 
 ## managed_object_request_get
 读取本会话提交的原请求回执。查询是只读的。回执缺失或仅为历史记录时，不能据此重执行。

@@ -478,12 +478,20 @@ Object {id} is unavailable; refresh its current view.
 ## resource.forbidden
 This connection lacks the actual crew or object access required.
 
+## resource.frozen
+
+This crew is frozen. You can still read its records. Restore the owning crew before editing.
+
 ## resource.request_conflict
 Request {request} already has a different original payload.
 
 ## managed_object.row_changed
 
 This row has changed. Read its current values and version before editing again.
+
+## managed_object.decision_changed
+
+The original decision has changed. Read it and its current successor before submitting again.
 
 ## document.revision_conflict
 Document {id} changed; review its current metadata before editing.

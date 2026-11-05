@@ -677,6 +677,10 @@ pub const CATALOG: &[ToolSpec] = &[
         "managed_rows_list",
         &[p("tableId", Str, true), p("after", Str, false)],
     )),
+    ro(crew_member(
+        "managed_decisions_list",
+        &[p("after", Str, false)],
+    )),
     ToolSpec {
         destructive: true,
         idempotent: true,
@@ -845,6 +849,24 @@ fn managed_change_schema() -> Value {
         object(json!({"type":{"const":"integer"},"value":{"type":"string","pattern":"^(0|-?[1-9][0-9]*)$"}}), &["type","value"]),
         object(json!({"type":{"const":"real"},"value":{"type":"number"}}), &["type","value"]),
     ]}});
+    let decision_id = json!({"type":"string","pattern":"^D[1-9][0-9]*$"});
+    let decision_revision = json!({"type":"string","pattern":"^[1-9][0-9]*$"});
+    let about = object(
+        json!({"kind":{"type":"string","enum":["crew","work","requirement","row"]},
+               "id":{"type":"string","minLength":1,"maxLength":128}}),
+        &["kind", "id"],
+    );
+    let draft = object(
+        json!({
+            "question":{"type":"string","minLength":1,"maxLength":60},
+            "choice":{"type":"string","minLength":1,"maxLength":1500},
+            "rationale":{"type":"string","minLength":1,"maxLength":1500},
+            "alternatives":{"type":["string","null"],"minLength":1,"maxLength":1500},
+            "reversibility":{"type":["string","null"],"enum":["reversible","hardToReverse","irreversible",null]},
+            "about":{"type":"array","minItems":1,"maxItems":8,"uniqueItems":true,"items":about},
+        }),
+        &["question", "choice", "rationale", "about"],
+    );
     json!({"oneOf":[
         object(json!({"kind":{"const":"createTable"},"title":{"type":"string","minLength":1,"maxLength":256},
                       "fields":{"type":"array","minItems":1,"maxItems":32,"items":field}}),
@@ -853,6 +875,12 @@ fn managed_change_schema() -> Value {
                &["kind","tableId","values"]),
         object(json!({"kind":{"const":"editRow"},"rowId":text,"expectedRevision":text,"values":values}),
                &["kind","rowId","expectedRevision","values"]),
+        object(json!({"kind":{"const":"recordDecision"},"draft":draft}), &["kind","draft"]),
+        object(json!({"kind":{"const":"replaceDecision"},"decisionId":decision_id,"expectedRevision":decision_revision,"draft":draft}),
+               &["kind","decisionId","expectedRevision","draft"]),
+        object(json!({"kind":{"const":"withdrawDecision"},"decisionId":decision_id,"expectedRevision":decision_revision,
+                      "reason":{"type":"string","minLength":1,"maxLength":1500}}),
+               &["kind","decisionId","expectedRevision","reason"]),
     ]})
 }
 
@@ -1091,6 +1119,7 @@ mod tests {
                 "managed_object_get",
                 "managed_tables_list",
                 "managed_rows_list",
+                "managed_decisions_list",
                 "managed_object_request_get",
             ]
         );
@@ -1176,6 +1205,7 @@ mod tests {
                 "managed_object_get",
                 "managed_tables_list",
                 "managed_rows_list",
+                "managed_decisions_list",
                 "managed_object_request_get",
             ]
         );

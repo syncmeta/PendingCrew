@@ -3,6 +3,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::ResourceActor;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum FieldType {
@@ -49,11 +51,67 @@ pub struct Row {
     pub values: Vec<Cell>,
     pub frozen: bool,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum DecisionStatus {
+    Active,
+    Superseded,
+    Withdrawn,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum DecisionReversibility {
+    Reversible,
+    HardToReverse,
+    Irreversible,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum DecisionAbout {
+    Crew { id: String },
+    Work { id: String },
+    Requirement { id: String },
+    Row { id: String },
+    Risk { id: String },
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecisionDraft {
+    pub question: String,
+    pub choice: String,
+    pub rationale: String,
+    pub alternatives: Option<String>,
+    pub reversibility: Option<DecisionReversibility>,
+    pub about: Vec<DecisionAbout>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecisionWithdrawal {
+    pub author: ResourceActor,
+    pub reason: String,
+    pub at: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Decision {
+    pub id: String,
+    pub crew_id: String,
+    pub revision: String,
+    pub draft: DecisionDraft,
+    pub author: ResourceActor,
+    pub created_at: String,
+    pub status: DecisionStatus,
+    pub frozen: bool,
+    pub supersedes: Option<String>,
+    pub superseded_by: Option<String>,
+    pub withdrawal: Option<DecisionWithdrawal>,
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Object {
     Table { table: Table },
     Row { row: Row },
+    Decision { decision: Decision },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(
@@ -75,6 +133,19 @@ pub enum Change {
         row_id: String,
         expected_revision: String,
         values: Vec<Cell>,
+    },
+    RecordDecision {
+        draft: DecisionDraft,
+    },
+    ReplaceDecision {
+        decision_id: String,
+        expected_revision: String,
+        draft: DecisionDraft,
+    },
+    WithdrawDecision {
+        decision_id: String,
+        expected_revision: String,
+        reason: String,
     },
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -118,5 +189,11 @@ pub struct TablePage {
 pub struct RowPage {
     pub table: Table,
     pub items: Vec<Row>,
+    pub next_after: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecisionPage {
+    pub items: Vec<Decision>,
     pub next_after: Option<String>,
 }

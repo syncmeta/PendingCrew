@@ -177,10 +177,13 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
-        "managed_object_scope_get" | "managed_object_get" | "managed_tables_list"
-        | "managed_rows_list" | "managed_object_submit" | "managed_object_request_get" => {
-            managed_objects::call(&cx, tool, args).await
-        }
+        "managed_object_scope_get"
+        | "managed_object_get"
+        | "managed_tables_list"
+        | "managed_rows_list"
+        | "managed_decisions_list"
+        | "managed_object_submit"
+        | "managed_object_request_get" => managed_objects::call(&cx, tool, args).await,
         "admin_case_custody_get" => admin_cases::custody_get(&cx, args).await,
         "admin_case_custody_list" => admin_cases::custody_list(&cx, args).await,
         "admin_case_custody_accept" => admin_cases::custody_accept(&cx, args).await,

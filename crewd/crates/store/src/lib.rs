@@ -15,6 +15,7 @@ pub mod knowledge_channels;
 pub mod knowledge_purge;
 pub mod local_clients;
 pub mod managed_objects;
+pub mod managed_decisions;
 pub mod message_evidence;
 pub mod messages;
 pub mod native_execution;

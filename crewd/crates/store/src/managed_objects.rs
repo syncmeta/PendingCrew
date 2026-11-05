@@ -69,7 +69,7 @@ pub fn values_valid(fields: &[Field], values: &[Cell]) -> Result<bool> {
     }
     Ok(serde_json::to_vec(values)?.len() <= MAX_ROW_BYTES)
 }
-fn transaction(c: &Connection) -> Result<()> {
+pub(crate) fn transaction(c: &Connection) -> Result<()> {
     if c.is_autocommit() {
         return Err(invalid(
             "managed object mutation requires a Core transaction",
@@ -77,9 +77,10 @@ fn transaction(c: &Connection) -> Result<()> {
     }
     Ok(())
 }
-fn source(kind: ObjectKind, id: &str) -> bool {
+pub(crate) fn source(kind: ObjectKind, id: &str) -> bool {
     id.strip_prefix(match kind {
         ObjectKind::Table => "managed-table:",
+        ObjectKind::Decision => "managed-decision:",
         ObjectKind::CustomRow => "managed-row:",
         _ => return false,
     })
@@ -171,9 +172,15 @@ pub fn row_numbers(c: &Connection, table_number: i64, after: i64, limit: u16) ->
             .collect::<rusqlite::Result<_>>()?,
     )
 }
-fn allocate(c: &Connection, kind: ObjectKind, crew: &str, at: &str) -> Result<ObjectReference> {
+pub(crate) fn allocate(
+    c: &Connection,
+    kind: ObjectKind,
+    crew: &str,
+    at: &str,
+) -> Result<ObjectReference> {
     let tag = match kind {
         ObjectKind::Table => "managed-table",
+        ObjectKind::Decision => "managed-decision",
         ObjectKind::CustomRow => "managed-row",
         _ => return Err(invalid("invalid managed object allocation kind")),
     };
@@ -250,6 +257,7 @@ pub fn receipt(
             let actual_crew = match &receipt.object {
                 Object::Table { table } => &table.crew_id,
                 Object::Row { row } => &row.crew_id,
+                Object::Decision { decision } => &decision.crew_id,
             };
             if receipt.crew_id != crew || receipt.request_id != request || actual_crew != crew {
                 return Err(invalid("managed object receipt scope mismatch"));

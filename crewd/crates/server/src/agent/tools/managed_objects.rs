@@ -8,7 +8,7 @@ use crewd_proto::{
     managed_objects::{Scope, Submit},
     managed_objects_api::{GetParams, RequestParams, RowsParams, TablesParams},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Serialize)]
@@ -16,6 +16,12 @@ use serde_json::Value;
 struct CurrentScope {
     scope: Scope,
     crew_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DecisionsParams {
+    after: Option<String>,
 }
 
 fn result(cx: &Ctx<'_>, result: port::PortResult<impl Serialize>) -> CallResult {
@@ -80,6 +86,16 @@ async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult,
                         &p.table_id,
                         p.after.as_deref(),
                     )
+                })
+                .await,
+            )
+        }
+        "managed_decisions_list" => {
+            let p: DecisionsParams = parse_args(cx, args)?;
+            result(
+                cx,
+                port::managed_read(cx.st, cx.me, move |c, by| {
+                    objects::decisions(c, Actor::Session(&by.session_id), p.after.as_deref())
                 })
                 .await,
             )

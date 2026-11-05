@@ -532,6 +532,170 @@ mod tests {
             .unwrap();
     }
 
+    #[tokio::test]
+    async fn managed_decision_tools_keep_attached_authority_and_original_receipts() {
+        use serde_json::Value;
+
+        async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
+            peer.call(methods::CALL, json!({"tool":name,"args":args}))
+                .await
+                .unwrap()
+        }
+
+        fn decoded(result: Value) -> Value {
+            assert_eq!(result["isError"], false, "{result}");
+            serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
+        }
+
+        let f = Fixture::new().await;
+        let foreign = f.add_crew("Foreign decision fixture", None).await;
+        let other = "foreign-decision-worker";
+        f.add_session(&foreign, other, Role::Worker, "Foreign worker")
+            .await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let task = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut author = RpcClient::connect(&socket).await;
+        let mut captain = RpcClient::connect(&socket).await;
+        let mut reader = RpcClient::connect(&socket).await;
+        for (peer, id) in [
+            (&mut author, f.worker.as_str()),
+            (&mut captain, f.captain.as_str()),
+            (&mut reader, other),
+        ] {
+            peer.call(methods::ATTACH, json!({"sessionId":id,"token":f.token(id)}))
+                .await
+                .unwrap();
+            let catalog = peer.call(methods::TOOLS, json!({})).await.unwrap();
+            assert!(
+                catalog
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["name"] == "managed_decisions_list")
+            );
+        }
+        let captured = decoded(tool(&mut author, "managed_object_scope_get", json!({})).await);
+        let scope = captured["scope"].clone();
+        let draft = json!({
+            "question":"Where should we keep the review?",
+            "choice":"In this crew",
+            "rationale":"The owning crew can follow it up.",
+            "alternatives":null,
+            "reversibility":"reversible",
+            "about":[{"kind":"crew","id":f.crew}],
+        });
+        let submit = |change: Value| {
+            json!({
+                "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),"change":change,
+            })
+        };
+        let record = submit(json!({"kind":"recordDecision","draft":draft}));
+        let mut forged = record.clone();
+        forged["change"]["draft"]["author"] = json!({"kind":"human"});
+        assert_eq!(
+            tool(&mut author, "managed_object_submit", forged).await["isError"],
+            true
+        );
+        let original = decoded(tool(&mut author, "managed_object_submit", record.clone()).await);
+        let first = &original["object"]["decision"];
+        let id = first["id"].as_str().unwrap();
+        assert!(id.starts_with('D'));
+        assert_eq!(first["status"], "active");
+        assert_eq!(
+            first["author"],
+            json!({"kind":"session","sessionId":f.worker})
+        );
+        assert_eq!(
+            decoded(tool(&mut author, "managed_object_submit", record.clone()).await),
+            original
+        );
+        assert_eq!(
+            decoded(tool(&mut reader, "managed_object_get", json!({"id":id})).await),
+            original["object"]
+        );
+        let list = decoded(tool(&mut reader, "managed_decisions_list", json!({})).await);
+        assert_eq!(list["items"], json!([first]));
+        assert_eq!(
+            tool(
+                &mut reader,
+                "managed_decisions_list",
+                json!({"crewId":f.crew})
+            )
+            .await["isError"],
+            true
+        );
+        let mut changed_draft = draft;
+        changed_draft["choice"] = json!("In the shared review folder");
+        let replace = submit(json!({
+            "kind":"replaceDecision","decisionId":id,"expectedRevision":first["revision"],
+            "draft":changed_draft,
+        }));
+        assert_eq!(
+            tool(&mut reader, "managed_object_submit", replace.clone()).await["isError"],
+            true
+        );
+        let mut stale = replace.clone();
+        stale["change"]["expectedRevision"] = json!("99");
+        assert_eq!(
+            tool(&mut captain, "managed_object_submit", stale).await["isError"],
+            true
+        );
+        let replaced = decoded(tool(&mut captain, "managed_object_submit", replace).await);
+        let second = &replaced["object"]["decision"];
+        let next_id = second["id"].as_str().unwrap();
+        assert_ne!(next_id, id);
+        assert_eq!(second["status"], "active");
+        assert_eq!(
+            second["author"],
+            json!({"kind":"session","sessionId":f.captain})
+        );
+        let previous = decoded(tool(&mut reader, "managed_object_get", json!({"id":id})).await);
+        assert_eq!(previous["decision"]["status"], "superseded");
+        let page = decoded(tool(&mut reader, "managed_decisions_list", json!({})).await);
+        assert_eq!(page["items"], json!([second, previous["decision"]]));
+        let next_page =
+            decoded(tool(&mut reader, "managed_decisions_list", json!({"after":next_id})).await);
+        assert_eq!(next_page["items"], json!([previous["decision"]]));
+        let end = decoded(tool(&mut reader, "managed_decisions_list", json!({"after":id})).await);
+        assert_eq!(end["items"], json!([]));
+        assert_eq!(
+            tool(&mut reader, "managed_decisions_list", json!({"after":"W1"})).await["isError"],
+            true
+        );
+        let withdraw = submit(json!({
+            "kind":"withdrawDecision","decisionId":next_id,"expectedRevision":second["revision"],
+            "reason":"The underlying review has been cancelled.",
+        }));
+        assert_eq!(
+            tool(&mut author, "managed_object_submit", withdraw.clone()).await["isError"],
+            true
+        );
+        let withdrawn = decoded(tool(&mut captain, "managed_object_submit", withdraw).await);
+        assert_eq!(withdrawn["object"]["decision"]["id"], next_id);
+        assert_eq!(withdrawn["object"]["decision"]["status"], "withdrawn");
+
+        let request = json!({"scope":scope,"crewId":f.crew,"requestId":record["requestId"]});
+        let looked_up =
+            decoded(tool(&mut author, "managed_object_request_get", request.clone()).await);
+        assert_eq!(looked_up, json!({"status":"known","receipt":original}));
+        f.state.tokens.revoke(&f.worker);
+        assert_eq!(
+            tool(&mut author, "managed_decisions_list", json!({})).await["isError"],
+            true
+        );
+        assert_eq!(
+            tool(&mut author, "managed_object_request_get", request).await["isError"],
+            true
+        );
+        drop((author, captain, reader));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
     fn assert_role_tools(value: &serde_json::Value, role: Role) {
         use std::collections::BTreeSet;
         let actual: BTreeSet<_> = value

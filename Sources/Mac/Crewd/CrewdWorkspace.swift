@@ -230,6 +230,8 @@ final class CrewdWorkspace: ObservableObject {
         guard let self, self.originalJournalReady, let journal = self.originalJournal
         else { throw CrewdManagedDirectoryWire.Problem.unavailable }
         return journal
+    }, decisionsAvailable: { [weak self] in
+        self?.client.capabilities.contains(CrewdManagedDirectoryWire.decisionsCapability) == true
     })
     lazy var knowledge: CrewdKnowledgeStore = CrewdKnowledgeStore(origin: { [weak self] in
         guard let self, self.client.capabilities.contains("data"), self.originalJournalReady,

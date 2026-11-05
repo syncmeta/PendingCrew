@@ -202,6 +202,7 @@ pub mod methods {
         crate::managed_objects_api::GET,
         crate::managed_objects_api::TABLES,
         crate::managed_objects_api::ROWS,
+        crate::managed_objects_api::DECISIONS,
         crate::managed_objects_api::SUBMIT,
         crate::managed_objects_api::REQUEST_GET,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
@@ -731,6 +732,13 @@ pub fn api_schema() -> Value {
         (
             managed::ROWS,
             m(sub::<managed::RowsParams>(g), sub::<managed_objects::RowPage>(g)),
+        ),
+        (
+            managed::DECISIONS,
+            m(
+                nullable(sub::<managed::DecisionsParams>(g)),
+                sub::<managed_objects::DecisionPage>(g),
+            ),
         ),
         (
             managed::SUBMIT,

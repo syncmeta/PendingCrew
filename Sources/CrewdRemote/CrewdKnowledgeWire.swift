@@ -958,6 +958,7 @@ enum CrewdNativeTable {
 // restore fence. It never interprets a private SQLite table name as an object.
 enum CrewdManagedDirectoryWire {
     static let capability = "managedObjects.v1"
+    static let decisionsCapability = "managedDecisions.v1"
     static let observation = "managedObject.submit.observation"
     static let pageLimit = 16
     static let fieldLimit = 32
@@ -1065,15 +1066,114 @@ enum CrewdManagedDirectoryWire {
                 validValues(values, fields: table.fields)
         }
     }
+    struct DecisionAuthor: Codable, Equatable {
+        let kind: String
+        let sessionId: String?
+        var valid: Bool {
+            if kind == "human" { return sessionId == nil }
+            guard kind == "session", let sessionId, !sessionId.isEmpty, sessionId.utf8.count <= 500 else { return false }
+            return !sessionId.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        }
+    }
+    enum DecisionAboutKind: String, Codable, CaseIterable, Identifiable {
+        case crew, work, requirement, row, risk
+        var id: Self { self }
+        var label: String {
+            switch self { case .crew: "机组"; case .work: "计划 W"; case .requirement: "需求 #"; case .row: "记录 O"; case .risk: "风险 R" }
+        }
+        var prefix: Character? {
+            switch self { case .crew: nil; case .work: "W"; case .requirement: "#"; case .row: "O"; case .risk: "R" }
+        }
+    }
+    struct DecisionAbout: Codable, Equatable {
+        var kind: DecisionAboutKind
+        var id: String
+        var valid: Bool {
+            if let prefix = kind.prefix { return objectNumber(id, prefix: prefix) != nil }
+            return !id.isEmpty && id.utf8.count <= 128 && id == id.trimmingCharacters(in:.whitespacesAndNewlines) &&
+                !id.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        }
+    }
+    enum DecisionReversibility: String, Codable, CaseIterable, Identifiable {
+        case reversible, hardToReverse, irreversible
+        var id: Self { self }
+        var label: String {
+            switch self { case .reversible: "可逆"; case .hardToReverse: "难以撤销"; case .irreversible: "不可逆" }
+        }
+    }
+    struct DecisionDraft: Codable, Equatable {
+        var question: String
+        var choice: String
+        var rationale: String
+        var alternatives: String?
+        var reversibility: DecisionReversibility?
+        var about: [DecisionAbout]
+        var valid: Bool {
+            decisionText(question, limit:60) && decisionText(choice) && decisionText(rationale) &&
+                (alternatives.map { decisionText($0) } ?? true) && (1...8).contains(about.count) &&
+                about.allSatisfy(\.valid) && Set(about.map { Data(($0.kind.rawValue + ":" + $0.id).utf8) }).count == about.count
+        }
+    }
+    enum DecisionStatus: String, Codable {
+        case active, superseded, withdrawn
+        var label: String {
+            switch self { case .active: "现行"; case .superseded: "已被取代"; case .withdrawn: "已撤回" }
+        }
+    }
+    struct DecisionWithdrawal: Codable, Equatable {
+        let author: DecisionAuthor
+        let reason: String
+        let at: String
+        var valid: Bool { author.valid && decisionText(reason) && !at.isEmpty }
+    }
+    struct Decision: Codable, Equatable, Identifiable {
+        let id: String
+        let crewId: String
+        let revision: String
+        let draft: DecisionDraft
+        let author: DecisionAuthor
+        let createdAt: String
+        let status: DecisionStatus
+        let frozen: Bool
+        let supersedes: String?
+        let supersededBy: String?
+        let withdrawal: DecisionWithdrawal?
+        var valid: Bool {
+            guard let number = objectNumber(id,prefix:"D"), positive(revision) != nil, !crewId.isEmpty,
+                  draft.valid, author.valid, !createdAt.isEmpty else { return false }
+            if let predecessor = supersedes {
+                guard let old = objectNumber(predecessor,prefix:"D"), old < number else { return false }
+            }
+            switch status {
+            case .active: return supersededBy == nil && withdrawal == nil
+            case .superseded:
+                guard let successor = supersededBy, let next = objectNumber(successor,prefix:"D") else { return false }
+                return next > number && withdrawal == nil
+            case .withdrawn: return supersededBy == nil && withdrawal?.valid == true
+            }
+        }
+        func canChange(crew: String) -> Bool {
+            valid && !frozen && status == .active && exact(crewId,crew)
+        }
+    }
+    struct DecisionPage: Decodable {
+        let items: [Decision]
+        let nextAfter: String?
+    }
     struct Object: Decodable {
         let kind: String
         let table: Table?
         let row: Row?
+        let decision: Decision?
         var valid: Bool {
-            (kind == "table" && table?.valid == true && row == nil) ||
-                (kind == "row" && row?.valid == true && table == nil)
+            switch kind {
+            case "table": table?.valid == true && row == nil && decision == nil
+            case "row": row?.valid == true && table == nil && decision == nil
+            case "decision": decision?.valid == true && table == nil && row == nil
+            default: false
+            }
         }
-        var id: String? { table?.id ?? row?.id }
+        var id: String? { table?.id ?? row?.id ?? decision?.id }
     }
     struct Change: Encodable {
         let kind: String
@@ -1083,6 +1183,9 @@ enum CrewdManagedDirectoryWire {
         var rowId: String? = nil
         var expectedRevision: String? = nil
         var values: [Cell]? = nil
+        var decisionId: String? = nil
+        var draft: DecisionDraft? = nil
+        var reason: String? = nil
     }
     struct Submit: Encodable {
         let scope: Scope
@@ -1131,6 +1234,10 @@ enum CrewdManagedDirectoryWire {
         guard id.first == prefix else { return nil }
         return positive(String(id.dropFirst()))
     }
+    static func decisionText(_ text: String, limit: Int = 1500) -> Bool {
+        !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && text.unicodeScalars.count <= limit &&
+            !text.unicodeScalars.contains { $0.value == 0 }
+    }
     static func titleValid(_ title: String) -> Bool {
         !title.isEmpty && title.utf8.count <= 256 && title == title.trimmingCharacters(in: .whitespacesAndNewlines)
             && !title.unicodeScalars.contains { $0.properties.generalCategory == .control }
@@ -1150,15 +1257,17 @@ enum CrewdManagedDirectoryWire {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(value)
     }
-    static func validPage(_ ids: [String], after: String?, next: String?, prefix: Character) -> Bool {
+    static func validPage(_ ids: [String], after: String?, next: String?, prefix: Character,
+                          newestFirst: Bool = false) -> Bool {
         guard ids.count <= pageLimit else { return false }
-        var previous: Int64 = 0
+        var previous: Int64?
         if let after {
             guard let start = objectNumber(after, prefix: prefix) else { return false }
             previous = start
         }
         for id in ids {
-            guard let number = objectNumber(id, prefix: prefix), number > previous else { return false }
+            guard let number = objectNumber(id,prefix:prefix),
+                  previous.map({ newestFirst ? number < $0 : number > $0 }) ?? true else { return false }
             previous = number
         }
         return next == nil || (!ids.isEmpty && next == ids.last)

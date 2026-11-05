@@ -2960,6 +2960,73 @@
             "values"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "draft": {
+              "$ref": "#/$defs/DecisionDraft"
+            },
+            "kind": {
+              "const": "recordDecision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "draft"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "decisionId": {
+              "type": "string"
+            },
+            "draft": {
+              "$ref": "#/$defs/DecisionDraft"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "replaceDecision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "decisionId",
+            "expectedRevision",
+            "draft"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "decisionId": {
+              "type": "string"
+            },
+            "expectedRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "withdrawDecision",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "decisionId",
+            "expectedRevision",
+            "reason"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -9021,10 +9088,241 @@
       ],
       "type": "string"
     },
+    "Decision": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/ResourceActor"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "draft": {
+          "$ref": "#/$defs/DecisionDraft"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/DecisionStatus"
+        },
+        "supersededBy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supersedes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "withdrawal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionWithdrawal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "revision",
+        "draft",
+        "author",
+        "createdAt",
+        "status",
+        "frozen"
+      ],
+      "type": "object"
+    },
+    "DecisionAbout": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "crew",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "requirement",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "row",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "risk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DecisionDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "about": {
+          "items": {
+            "$ref": "#/$defs/DecisionAbout"
+          },
+          "type": "array"
+        },
+        "alternatives": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "choice": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "reversibility": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionReversibility"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "question",
+        "choice",
+        "rationale",
+        "about"
+      ],
+      "type": "object"
+    },
     "DecisionKindView": {
       "enum": [
         "terminal",
         "runner_request"
+      ],
+      "type": "string"
+    },
+    "DecisionPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Decision"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "DecisionReversibility": {
+      "enum": [
+        "reversible",
+        "hardToReverse",
+        "irreversible"
+      ],
+      "type": "string"
+    },
+    "DecisionStatus": {
+      "enum": [
+        "active",
+        "superseded",
+        "withdrawn"
       ],
       "type": "string"
     },
@@ -9065,6 +9363,26 @@
         "summary",
         "options",
         "numbered"
+      ],
+      "type": "object"
+    },
+    "DecisionWithdrawal": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "author": {
+          "$ref": "#/$defs/ResourceActor"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "author",
+        "reason",
+        "at"
       ],
       "type": "object"
     },
@@ -13046,6 +13364,23 @@
           "required": [
             "kind",
             "row"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/Decision"
+            },
+            "kind": {
+              "const": "decision",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "decision"
           ],
           "type": "object"
         }
@@ -21059,6 +21394,21 @@
       },
       "result": {
         "$ref": "#/$defs/LoopRecovered"
+      }
+    },
+    "managedObject.decisions": {
+      "params": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TablesParams"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "result": {
+        "$ref": "#/$defs/DecisionPage"
       }
     },
     "managedObject.get": {

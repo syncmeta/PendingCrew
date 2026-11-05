@@ -1977,6 +1977,9 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         let tableId: String?
         let expectedRevision: String?
         let digest: String
+        var isDecision: Bool {
+            ["recordDecision","replaceDecision","withdrawDecision"].contains(kind)
+        }
     }
     struct Pending: Identifiable {
         let record: CrewdPresentationJournal.Prepared
@@ -1991,6 +1994,16 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         case create(String, [Wire.Field])
         case add(Wire.Table, [Wire.Cell])
         case edit(Wire.Table, Wire.Row, [Wire.Cell])
+        case recordDecision(Wire.DecisionDraft)
+        case replaceDecision(Wire.Decision, Wire.DecisionDraft)
+        case withdrawDecision(Wire.Decision, String)
+
+        var isDecision: Bool {
+            switch self {
+            case .recordDecision, .replaceDecision, .withdrawDecision: true
+            case .create, .add, .edit: false
+            }
+        }
 
         func encode(crew: String) throws -> (Wire.Change, String, String?, String?, String) {
             switch self {
@@ -2008,7 +2021,32 @@ struct CrewdPendingKnowledgeLink: Identifiable {
                       Wire.validValues(values, fields: table.fields) else { throw Wire.Problem.invalid }
                 return (.init(kind: "editRow", rowId: row.id, expectedRevision: row.revision, values: values),
                         row.id, table.id, row.revision, try Self.digest(values))
+            case .recordDecision(let draft):
+                guard Self.allowed(draft) else { throw Wire.Problem.invalid }
+                return (.init(kind:"recordDecision",draft:draft),"recordDecision",nil,nil,try Self.digest(draft))
+            case .replaceDecision(let current,let draft):
+                guard current.canChange(crew:crew), Self.allowed(draft) else { throw Wire.Problem.invalid }
+                return (.init(kind:"replaceDecision",expectedRevision:current.revision,decisionId:current.id,draft:draft),
+                        current.id,nil,current.revision,try Self.digest(draft))
+            case .withdrawDecision(let current,let reason):
+                guard current.canChange(crew:crew), Wire.decisionText(reason) else { throw Wire.Problem.invalid }
+                return (.init(kind:"withdrawDecision",expectedRevision:current.revision,decisionId:current.id,reason:reason),
+                        current.id,nil,current.revision,try Self.withdrawalDigest(current,reason:reason))
             }
+        }
+        private static func allowed(_ draft: Wire.DecisionDraft) -> Bool {
+            draft.valid && !draft.about.contains { $0.kind == .risk }
+        }
+        private struct WithdrawalContent: Encodable {
+            let draft: Wire.DecisionDraft
+            let author: Wire.DecisionAuthor
+            let createdAt: String
+            let supersedes: String?
+            let reason: String
+        }
+        static func withdrawalDigest(_ decision: Wire.Decision, reason: String) throws -> String {
+            try digest(WithdrawalContent(draft:decision.draft,author:decision.author,createdAt:decision.createdAt,
+                                         supersedes:decision.supersedes,reason:reason))
         }
         static func definitionDigest(_ title: String, _ fields: [Wire.Field]) throws -> String {
             try digest(Wire.Change(kind: "createTable", title: title, fields: fields))
@@ -2021,11 +2059,14 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     private let origin: () -> Origin?
     private let rpc: RPC
     private let journal: () throws -> CrewdPresentationJournal
+    private let decisionsAvailable: () -> Bool
 
-    init(origin: @escaping () -> Origin?, rpc: @escaping RPC, journal: @escaping () throws -> CrewdPresentationJournal) {
+    init(origin: @escaping () -> Origin?, rpc: @escaping RPC, journal: @escaping () throws -> CrewdPresentationJournal,
+         decisionsAvailable: @escaping () -> Bool = { false }) {
         self.origin = origin
         self.rpc = rpc
         self.journal = journal
+        self.decisionsAvailable = decisionsAvailable
     }
 
     func scope(stillCurrent: @MainActor () -> Bool) async throws -> BrowseScope {
@@ -2055,6 +2096,24 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         return page
     }
 
+    func decisions(_ scope: BrowseScope, after: String?, stillCurrent: @MainActor () -> Bool) async throws -> Wire.DecisionPage {
+        guard decisionsAvailable() else { throw Wire.Problem.unavailable }
+        let page: Wire.DecisionPage = try await call("managedObject.decisions",
+            .object(["after":after.map(CrewdValue.string) ?? .null]),scope.origin,stillCurrent)
+        guard page.items.allSatisfy(\.valid), Wire.validPage(page.items.map(\.id),after:after,
+              next:page.nextAfter,prefix:"D",newestFirst:true) else { throw Wire.Problem.invalid }
+        try await check(scope,stillCurrent)
+        return page
+    }
+    func decision(_ scope: BrowseScope, id: String, stillCurrent: @MainActor () -> Bool) async throws -> Wire.Decision {
+        guard decisionsAvailable() else { throw Wire.Problem.unavailable }
+        guard Wire.objectNumber(id,prefix:"D") != nil else { throw Wire.Problem.invalid }
+        let object: Wire.Object = try await call("managedObject.get",.object(["id":.string(id)]),scope.origin,stillCurrent)
+        guard object.valid, let decision = object.decision, decision.id == id else { throw Wire.Problem.invalid }
+        try await check(scope,stillCurrent)
+        return decision
+    }
+
     func pending(_ scope: BrowseScope) throws -> [Pending] {
         guard valid(scope.origin, { true }) else { throw Wire.Problem.stale }
         let ledger = try journal()
@@ -2071,6 +2130,7 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     }
 
     func submit(_ mutation: Mutation, scope: BrowseScope, stillCurrent: @MainActor () -> Bool) async throws -> Observation {
+        guard !mutation.isDecision || decisionsAvailable() else { throw Wire.Problem.unavailable }
         try await check(scope, stillCurrent)
         let crew = scope.origin.crew
         let (change, target, tableID, revision, digest) = try mutation.encode(crew: crew)
@@ -2093,15 +2153,26 @@ struct CrewdPendingKnowledgeLink: Identifiable {
         } catch {
             let client = error as? CrewdClientError
             let definitelyRefused = client?.kind == .notSubmitted ||
-                (client?.code == -32009 && client?.refusal == "managed_object.row_changed")
+                (client?.code == -32009 && ["managed_object.row_changed","managed_object.decision_changed"]
+                    .contains(client?.refusal ?? "")) || (mutation.isDecision &&
+                    (Self.decisionInputRefused(error) || (client?.code == -32009 && client?.refusal == "resource.frozen")))
             try? ledger.finish(prepared, state: definitelyRefused ? "refused" : "unknown")
             throw error
+        }
+    }
+
+    static func decisionInputRefused(_ error: Error) -> Bool {
+        guard let failure = error as? CrewdClientError else { return false }
+        switch (failure.code,failure.refusal) {
+        case (-32602,"resource.invalid"), (-32004,"resource.not_found"), (-32003,"resource.forbidden"): return true
+        default: return false
         }
     }
 
     func lookup(_ pending: Pending, scope: BrowseScope, stillCurrent: @MainActor () -> Bool) async throws -> Observation? {
         let ledger = try journal()
         let witness = pending.witness
+        guard !witness.isDecision || decisionsAvailable() else { throw Wire.Problem.unavailable }
         guard ledger.scope == scope.origin.scope, pending.record.scope == ledger.scope,
               Wire.exact(witness.crewId, scope.origin.crew), witness.scope.dbId == scope.authority.dbId,
               try self.pending(scope).contains(where: { $0.id == pending.id && $0.witness == witness })
@@ -2150,6 +2221,20 @@ struct CrewdPendingKnowledgeLink: Identifiable {
                       originalRevision < Int64.max, row.revision == String(originalRevision + 1)
                 else { throw Wire.Problem.invalid }
             }
+        case "recordDecision", "replaceDecision":
+            let prior = original.kind == "replaceDecision" ? original.target : nil
+            guard let decision = receipt.object.decision, !decision.frozen, decision.status == .active,
+                  Wire.exact(decision.crewId,original.crewId), decision.author.kind == "human",
+                  decision.revision == "1", decision.supersedes == prior,
+                  decision.createdAt == receipt.recordedAt, try Mutation.digest(decision.draft) == original.digest else { throw Wire.Problem.invalid }
+        case "withdrawDecision":
+            guard let decision = receipt.object.decision, !decision.frozen, decision.status == .withdrawn,
+                  Wire.exact(decision.crewId,original.crewId), decision.id == original.target,
+                  let revision = original.expectedRevision.flatMap(Wire.positive), revision < Int64.max,
+                  decision.revision == String(revision + 1), let withdrawal = decision.withdrawal,
+                  withdrawal.author.kind == "human", withdrawal.at == receipt.recordedAt,
+                  try Mutation.withdrawalDigest(decision,reason:withdrawal.reason) == original.digest
+            else { throw Wire.Problem.invalid }
         default: throw Wire.Problem.invalid
         }
     }

@@ -478,12 +478,20 @@ expectedStatus 必须是原始需求状态。
 ## resource.forbidden
 当前连接没有所需的实际机组或对象访问权限。
 
+## resource.frozen
+
+这个机组的资料已冻结。可继续查看；如需修改，请先恢复所属机组。
+
 ## resource.request_conflict
 请求{request}已对应不同的原始内容。
 
 ## managed_object.row_changed
 
 这行数据已变化。请先读取当前内容和版本，再确认修改。
+
+## managed_object.decision_changed
+
+原决策的状态或版本已变化。请重新读取它与当前替代决策。
 
 ## document.revision_conflict
 文档{id}已经变化，请核对当前元数据后编辑。

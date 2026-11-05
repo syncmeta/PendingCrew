@@ -1465,6 +1465,13 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
             .iter()
             .any(|cap| cap == "managedObjects.v1")
     );
+    assert!(
+        hello["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cap| cap == "managedDecisions.v1")
+    );
     let owner = local(
         &mut running.owner,
         "crew.create",
@@ -1523,12 +1530,38 @@ async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
             .await["items"],
         json!([])
     );
+    let decision_packet = json!({
+        "scope":scope,"crewId":owner,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"recordDecision","draft":{"question":"Which fixture?",
+            "choice":"Use isolation","rationale":"Keep the data private",
+            "about":[{"kind":"crew","id":owner}]}}
+    });
+    let decision = remote.call("managedObject.submit", decision_packet).await;
+    let decision_id = decision["object"]["decision"]["id"].clone();
+    assert_eq!(
+        decision["object"]["decision"]["author"],
+        json!({"kind":"human"})
+    );
+    assert_eq!(
+        remote.call("managedObject.decisions", json!({})).await["items"],
+        json!([decision["object"]["decision"]])
+    );
+    let decision_lookup = json!({"scope":scope,"crewId":owner,"requestId":decision["requestId"]});
+    assert_eq!(
+        remote
+            .call("managedObject.request.get", decision_lookup.clone())
+            .await,
+        json!({"status":"known","receipt":decision})
+    );
     local(&mut running.owner, "remote.revoke",
         json!({"grantId":grant.grant.id,"expectedRevision":grant.grant.revision,"note":"managed fixture complete"})).await;
     for (method, params) in [
         ("managedObject.get", json!({"id":table})),
         ("managedObject.request.get", lookup),
         ("managedObject.submit", original),
+        ("managedObject.get", json!({"id":decision_id})),
+        ("managedObject.decisions", json!({})),
+        ("managedObject.request.get", decision_lookup),
     ] {
         let response = tokio::time::timeout(LIMIT, remote.frame(method, params))
             .await

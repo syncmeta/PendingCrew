@@ -2803,12 +2803,12 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "按组织内的准确 T 或 O 编号读取受管表或行。归档机组的对象仍可读取，并标为冻结。",
+      "description": "按组织内的准确 T、O 或 D 编号读取受管表、行或决策。归档机组的对象仍可读取，并标为冻结。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "准确的 T 表编号或 O 行编号。",
+            "description": "准确的 T 表编号、O 行编号或 D 决策编号。",
             "type": "string"
           }
         },
@@ -2868,17 +2868,37 @@
     },
     {
       "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "分页读取组织内可见的受管决策，包括已被替换或撤回的记录。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页返回的 nextAfter D 编号。首页省略。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_decisions_list"
+    },
+    {
+      "annotations": {
         "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "在你当前有效的机组内建表、加行或编辑行。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑需要最新的行版本，并替换完整一行。回执不确定时查询原请求，保留原 UUID 与范围。",
+      "description": "在你当前有效的机组内建表、加行、编辑行或记录决策。决策作者或归属机组的现任机长可用最新 D 版本替换或撤回决策。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑行需要最新的行版本，并替换完整一行。回执不确定时，用原 UUID 与范围查询原请求。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "change": {
-            "description": "类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。",
+            "description": "提供类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。记录或替换决策时提供问题、选定方案、理由和准确的关联对象编号。撤回决策时提供撤回理由。",
             "oneOf": [
               {
                 "additionalProperties": false,
@@ -3110,11 +3130,229 @@
                   "values"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement",
+                                "row"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "alternatives": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "choice": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "question": {
+                        "maxLength": 60,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "rationale": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reversibility": {
+                        "enum": [
+                          "reversible",
+                          "hardToReverse",
+                          "irreversible",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "question",
+                      "choice",
+                      "rationale",
+                      "about"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordDecision"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "decisionId": {
+                    "pattern": "^D[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement",
+                                "row"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "alternatives": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "choice": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "question": {
+                        "maxLength": 60,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "rationale": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reversibility": {
+                        "enum": [
+                          "reversible",
+                          "hardToReverse",
+                          "irreversible",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "question",
+                      "choice",
+                      "rationale",
+                      "about"
+                    ],
+                    "type": "object"
+                  },
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "replaceDecision"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "decisionId",
+                  "expectedRevision",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "decisionId": {
+                    "pattern": "^D[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "withdrawDecision"
+                  },
+                  "reason": {
+                    "maxLength": 1500,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "decisionId",
+                  "expectedRevision",
+                  "reason"
+                ],
+                "type": "object"
               }
             ]
           },
           "crewId": {
-            "description": "managed_object_scope_get 返回的当前机组编号。",
+            "description": "记录决策或写入表和行时，使用 managed_object_scope_get 返回的当前机组编号。替换或撤回决策时，使用该决策的归属机组编号。",
             "type": "string"
           },
           "requestId": {
@@ -5415,12 +5653,12 @@
         "openWorldHint": false,
         "readOnlyHint": true
       },
-      "description": "按组织内的准确 T 或 O 编号读取受管表或行。归档机组的对象仍可读取，并标为冻结。",
+      "description": "按组织内的准确 T、O 或 D 编号读取受管表、行或决策。归档机组的对象仍可读取，并标为冻结。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "准确的 T 表编号或 O 行编号。",
+            "description": "准确的 T 表编号、O 行编号或 D 决策编号。",
             "type": "string"
           }
         },
@@ -5480,17 +5718,37 @@
     },
     {
       "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "分页读取组织内可见的受管决策，包括已被替换或撤回的记录。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "上一页返回的 nextAfter D 编号。首页省略。",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "managed_decisions_list"
+    },
+    {
+      "annotations": {
         "destructiveHint": true,
         "idempotentHint": true,
         "openWorldHint": false,
         "readOnlyHint": false
       },
-      "description": "在你当前有效的机组内建表、加行或编辑行。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑需要最新的行版本，并替换完整一行。回执不确定时查询原请求，保留原 UUID 与范围。",
+      "description": "在你当前有效的机组内建表、加行、编辑行或记录决策。决策作者或归属机组的现任机长可用最新 D 版本替换或撤回决策。提交时带上当前范围、一个原始 UUID 和完整的类型化意图。编辑行需要最新的行版本，并替换完整一行。回执不确定时，用原 UUID 与范围查询原请求。",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
           "change": {
-            "description": "类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。",
+            "description": "提供类型化表定义，或按字段顺序提供完整行值。整数用十进制字符串，可空字段才接受空值。记录或替换决策时提供问题、选定方案、理由和准确的关联对象编号。撤回决策时提供撤回理由。",
             "oneOf": [
               {
                 "additionalProperties": false,
@@ -5722,11 +5980,229 @@
                   "values"
                 ],
                 "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement",
+                                "row"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "alternatives": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "choice": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "question": {
+                        "maxLength": 60,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "rationale": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reversibility": {
+                        "enum": [
+                          "reversible",
+                          "hardToReverse",
+                          "irreversible",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "question",
+                      "choice",
+                      "rationale",
+                      "about"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordDecision"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "decisionId": {
+                    "pattern": "^D[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement",
+                                "row"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "alternatives": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "choice": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "question": {
+                        "maxLength": 60,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "rationale": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reversibility": {
+                        "enum": [
+                          "reversible",
+                          "hardToReverse",
+                          "irreversible",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "question",
+                      "choice",
+                      "rationale",
+                      "about"
+                    ],
+                    "type": "object"
+                  },
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "replaceDecision"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "decisionId",
+                  "expectedRevision",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "decisionId": {
+                    "pattern": "^D[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "expectedRevision": {
+                    "pattern": "^[1-9][0-9]*$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "withdrawDecision"
+                  },
+                  "reason": {
+                    "maxLength": 1500,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "decisionId",
+                  "expectedRevision",
+                  "reason"
+                ],
+                "type": "object"
               }
             ]
           },
           "crewId": {
-            "description": "managed_object_scope_get 返回的当前机组编号。",
+            "description": "记录决策或写入表和行时，使用 managed_object_scope_get 返回的当前机组编号。替换或撤回决策时，使用该决策的归属机组编号。",
             "type": "string"
           },
           "requestId": {
