@@ -7,7 +7,7 @@
 | Mac 日用与 Tirkadavur | `2cb8f0b3` 公证 Mac 整包通过隔离升级及回滚。早先两次真实机组首条群消息耗时 135 和 179 秒，原生记录显示 WebSocket 约 96 秒后回退 HTTP。Mac 客户端已接入默认关闭的 Codex 本机代理选项，只在下次启动本机后台时生效。使用实际原生参数和普通 Core 的隔离机组完成真实任务，机长读取需求、创建唯一关联工作并引用原消息回复，耗时 22.484 秒。该轮原生记录有七次 WebSocket 请求，未观察到 HTTP 回退，两进程均已退出。 | 正式窗口设置及日用验收。切换前核对现有 Core 与会话的安全停工条件。 |
 | 行政自动化 | 巡检、待人清单及案件动作报告已接线。相近需求和重复工作复核已通过本机、配对及原回执恢复验收。`cd8d439d` 接入人工答复和撤回的原请求回执，实测重启只查原 UUID，配对撤权后拒绝结案。`ae68d397` 将送达决定与机长指派一并入账。`2cb8f0b3` 接入协调拆项，原机长可一次创建两至八个直属子项，父项和原需求关系保持原样。本地模拟判断服务及实际机长连接验证送达、指派与拆项互斥、数据库重开后查回原结果且不重复建项。Mac Debug 嵌入同源普通 Core。 | 普通后台的 Jev HTTPS 链路、正式窗口与日用验收。 |
 | 文档数据 | 原文档编辑、搜索、恢复、回收站及待办双向链接已联调。原生端新增同机组内容块编排，可引用指定版本、排序、移除，并从历史恢复排列。实际普通 Core 与 Swift 数据层验证两份文档引用同一块，原块更新后引用仍固定在原版本。丢回执后，后台重启且文档已有后续编辑，客户端仍只查原请求及其确切版本。恢复保留后续标题和工作关联。组合 Mac Debug 编译通过。 | 从正式窗口验收文档编排和待办的双向操作，以及移动端共享入口。 |
-| iOS 与跨端 | `1aaf0876` 普通 iPhoneOS arm64 Debug 完整编译通过，与已验证的 Mac 预览同源，覆盖共享的裁决和待办恢复代码。iPhone、iPad 目标和实际 Swift 调试动态库均已核对。早先 `09ac03f5` 已用 macOS 原生传输与 `0947711d` Core 验证短链接配对、原授权回执、重连查原巡检和撤权。最近一次读取手机 PendingCrew 版本时设备明确返回锁屏。 | 真机的应用配对、读取、答复及恢复待设备解锁后独立验收。 |
+| iOS 与跨端 | `99a5e1bf` 完整 iPhoneOS arm64 Debug 编译通过，实际 iPhone、iPad 目标及主程序和 Swift 动态库已核对。`a929e312` 修正打戳阶段对最终 Info.plist 的依赖，产物保留准确源码版本戳。共享原生客户端与普通 Core 实测出处登记及原 UUID 恢复，Core 和 Swift 均实际退出重开。 | 真机的配对、读取、答复和恢复操作验收。 |
 
 `a99f433d` 的 macOS Apple Silicon Release 候选为 0.2.8，构建 `20762.18587`，包含结构化 H 到决定日志。Apple 公证 `77390289-1305-44ac-a856-7a31f4a7a099` 为 Accepted，开发者日志与送审 ZIP 摘要一致，记录零问题。附票 ZIP 重新解包后通过严格签名、票据和 Gatekeeper 检查，SHA-256 为 `f877da925355598c1ba3dab8c736b55ceebfbbe3452f61919d7daed29227b657`。签名包的 Core 与实测 Core 内容等价，生成的公开接口与仓库定义逐字节一致。交付物是 `/private/tmp/pcw-028-notary.xSoJ9cSZ/notarized-output/PendingCrew-0.2.8-20762.18587-notarized.zip`，供手动安装。正式窗口、日用安装和公开交付分别验收。
 
@@ -59,7 +59,7 @@
 
 Swift 客户端与同源普通后台实测实际退出并重开。原提交回执返回风险第 2 版和教训第 1 版，当前记录分别保留已关闭的第 3 版与已过时的第 2 版。客户端查询原 UUID 一次，零重发，见 `/private/tmp/pcw-rl-c48-swift-43416/result.json`。组织对象 16 项、编号 9 项、工作上下文 4 项、Agent 与真实配对撤权测试通过。托管及旧版 Claude 的本地守卫与注入测试通过，未调用真实 Claude 服务。普通后台公开协议与仓库定义逐字节一致。
 
-Mac 私有 Debug 预览通过签名、同源后台内容和独立动态库验证，普通 iPhoneOS arm64 Debug 构建通过。见 `/private/tmp/pcw-risk-integration.s3cqlfwo/mac-risk-debug-preview/candidate.json` 和 `/private/tmp/pcw-risk-integration.s3cqlfwo/ios-risk-debug-proof.json`。正式窗口、真机和日用安装另行验收。带权限过滤的消息证据和产物自然键仍待接入。
+Mac 私有 Debug 预览通过签名、同源后台内容和独立动态库验证，普通 iPhoneOS arm64 Debug 构建通过。见 `/private/tmp/pcw-risk-integration.s3cqlfwo/mac-risk-debug-preview/candidate.json` 和 `/private/tmp/pcw-risk-integration.s3cqlfwo/ios-risk-debug-proof.json`。正式窗口、真机和日用安装另行验收。在该版本，带权限过滤的消息证据和产物自然键仍待接入。
 
 `838af5fd` 接通组织目录的提交后通知和真实 Agent 进展。首次成功写入在原回执事务中记录变更，后台提交后才向有人类读取权限的连接发送所属机组与对象编号。表格行变更通知包含表和行，决定取代包含新旧决定，风险发生包含 R 和 L。普通后台实测八次写入各收到一条通知，收件方随即读回正确对象。重放、拒绝及工具回调没有额外通知或进展，重启不重播旧通知，原回执仍可读。真实配对通过跨连接读回、重复提交和撤权。见 `/private/tmp/pcw-onto-evidence.bpnn8v8m/result.json`、`/private/tmp/pcw-onto-integration.LSxfOI2t/paired-onto.log`。
 
@@ -77,7 +77,19 @@ Mac 私有 Debug 预览通过签名、同源后台内容和独立动态库验证
 
 同源 Swift 客户端用实际本机连接提交明确选项和 Unicode 理由。模拟收到回执后、本地确认前中断，Core 和 Swift 均重开后查原 UUID 一次，零重发，读回同一 H 来源、选项和理由，决定仍只有一条。旧 Core 使用普通问题路径。见 `/private/tmp/pcw-native-hd-proof.xjuxg6fw/result.json`。两项隔离验收使用模拟 Agent，正式窗口和真机操作单独验收。
 
-`a99f433d` 的 iPhoneOS Debug 两次编译均成功，实际产物的版本戳核验仍待通过。两次日志都显示写入版本戳后 Xcode 重建了 `Info.plist`。见 `/private/tmp/pcw-h-integration.GlGVkrDq/ios-h-final-debug.log` 与 `ios-h-final-debug-restamp.log`。
+`a99f433d` 的 iPhoneOS Debug 两次编译均成功，当时的实际产物版本戳核验失败。两次日志都显示写入版本戳后 Xcode 重建了 `Info.plist`。该依赖问题随后在 `a929e312` 修复。见 `/private/tmp/pcw-h-integration.GlGVkrDq/ios-h-final-debug.log` 与 `ios-h-final-debug-restamp.log`。
+
+`99a5e1bf` 接通消息出处到组织记忆的显式登记。普通 Mac、iPad 和 iPhone 消息菜单可把当前可读消息记为决定、风险、教训或自建表行，复用既有编辑表单。Core 从实际消息取最多 280 个 Unicode 标量作为摘录，同一消息和同一类型只建一个对象，表行按各自表区分。新请求遇到已有对象时明确返回复用结果，原生端保留本次草稿。对象仍按组织范围读取，出处和反向关联逐次复核消息 B15 权限，受限结果只给受限状态。删除原消息后，存活对象保留快照，摘录继续按原群权限读取。删除对象所属机组会清理其出处及相关原请求回执。
+
+普通 Core 实际由 v26 升级到 v27 并保存迁移前快照，旧决定及其读取结果保持完整。提交连接刻意未读回复，另一连接观察到提交通知后真正退出 Core。重开只查原 UUID，再撤回当前决定，原回执仍返回登记时的版本。新 UUID 重复登记复用原对象，消息、唤醒和进展均无新增。来源机组通过公开入口永久删除后，另一机组的决定和快照仍可读；再重开后查回一致。最后删除对象所属机组，出处和两条回执均被清理。见 `/private/tmp/pcw-source-proof.sl_0txxu/result.json`。
+
+实际原生 Store 与普通 Core 分别退出重开。初次回复已经从真实传输收到，但本地故意未确认。决定后来被合法取代，重开后仅查询原 UUID 一次，零重发，原回执为第 1 版，当前决定为第 2 版。重复登记返回已有对象，草稿在再一次 Core 和 Swift 退出重开后仍保留。旧 Core 缺少新能力时走原入口。15 个实际 Swift 输入逐个绑定最终 Git blob。见 `/private/tmp/pcw-native-source-proof.9sa6nzle/result.json`。
+
+协作层全套 758 项通过，存储层全套 214 项通过、5 项原有忽略。新增出处测试覆盖权限撤销、Unicode 摘录、分页、快照损坏拒绝、两处写入失败的整事务回滚、实际退出重开及正式恢复。真实配对逐个验证四个新入口的撤权，附着 Agent 验证外机组可读对象而出处受限，身份迁移和令牌撤销后立即重验。原先 12 个回归失败及两个防退化测试全部通过。旧版本测试改由真实历史结构初始化，复用原迁移函数，避免将新库改版本号伪装成旧库。见 `/private/tmp/pcw-source-integration.WQQlanfz/`、`/private/tmp/pcw-source-remote-final.5vtsF4/` 和 `/private/tmp/pcw-source-agent-final.SXbuSW/`。
+
+普通后台公开接口与仓库定义逐字节一致。Mac 私有 Debug 预览通过签名、嵌入后台内容等价和独立动态库验证，完整 iPhoneOS arm64 Debug 编译通过，实际最终版本戳与 `99a5e1bf` 一致。见 `/private/tmp/pcw-source-integration.WQQlanfz/final-integration-proof.json`、`mac-source-debug-preview/candidate.json` 和 `ios-source-debug-proof.json`。本轮完成本地 main、隔离后台和原生数据层验收，正式窗口和真机操作分别验收。
+
+产物自然键仍待接入。原规划已确认引用时懒建、未核验标记及反向关联。当前完成凭据和教训证据仍是原有值，尚缺产物对象、登记入口和原请求恢复。文件相对路径、测试名及短提交号的跨仓库身份尚缺明确依据，当前本机工作目录无法充当共享仓库身份。下一模块需将明确的仓库归属、自然键锚点及机组拥有的关联一起接入，继续复用现有真实完成事件、事务和恢复边界。
 
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
