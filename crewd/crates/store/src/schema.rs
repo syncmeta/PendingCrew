@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent schema. Core21 remains the personal draft
 /// writer barrier; Core22 adds an indexed historical escalation discovery source.
-pub const SCHEMA_VERSION: i64 = 26;
+pub const SCHEMA_VERSION: i64 = 27;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 #[cfg(test)]
@@ -30,21 +30,23 @@ mod historical_escalation_index_tests {
     fn real_core21_upgrade_keeps_data_and_draft_authority_and_protects_a_backup() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("core.db");
-        let store = crate::Store::open(&path).unwrap();
-        store.conn().execute_batch("DROP INDEX messages_stop_escalations_seq;
-            PRAGMA user_version=21;
-            INSERT INTO crews(id,title,created_at,updated_at) VALUES('retained21','retained','now','now');
-            INSERT INTO meta(key,value) VALUES('legacy-scan-retained','unchanged');").unwrap();
-        let draft = crate::meta_get(store.conn(), "personalDraft.restoreStamp.v1").unwrap();
-        store.finish().unwrap();
-        drop(store);
+        let conn = Connection::open(&path).unwrap();
+        crate::testing::historical_fixture(&conn, 21).unwrap();
+        conn.execute_batch(
+            "INSERT INTO crews(id,title,created_at,updated_at) VALUES('retained21','retained','now','now');
+             INSERT INTO meta(key,value) VALUES('legacy-scan-retained','unchanged');",
+        ).unwrap();
+        let draft = crate::meta_get(&conn, "personalDraft.restoreStamp.v1").unwrap();
+        assert!(draft.is_some());
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+        drop(conn);
         let upgraded = crate::Store::open(&path).unwrap();
         assert_eq!(
             upgraded
                 .conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            22
+            SCHEMA_VERSION
         );
         assert_eq!(
             crate::meta_get(upgraded.conn(), "legacy-scan-retained")
@@ -100,13 +102,12 @@ mod historical_escalation_index_tests {
 
     #[test]
     fn failed_core22_index_creation_preserves_core21_version_and_evidence() {
-        let store = crate::Store::open_in_memory().unwrap();
-        let conn = store.conn();
+        let original = Connection::open_in_memory().unwrap();
+        crate::testing::historical_fixture(&original, 21).unwrap();
+        let conn = &original;
         conn.execute_batch(
-            "DROP INDEX messages_stop_escalations_seq;
-            PRAGMA user_version=21;
-            CREATE TABLE messages_stop_escalations_seq(retained TEXT);
-            INSERT INTO messages_stop_escalations_seq VALUES('conflicting evidence');",
+            "CREATE TABLE messages_stop_escalations_seq(retained TEXT);
+             INSERT INTO messages_stop_escalations_seq VALUES('conflicting evidence');",
         )
         .unwrap();
         let draft = crate::meta_get(conn, "personalDraft.restoreStamp.v1").unwrap();
@@ -794,9 +795,9 @@ pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
 }
 
 pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Result<()> {
-    if !(4..=9).contains(&target) {
+    if !(4..=26).contains(&target) || target == 16 {
         return Err(StoreError::Invalid(
-            "historical fixture supports versions 4 through 9".into(),
+            "historical fixture supports versions 4 through 26 except reserved Core16".into(),
         ));
     }
     let objects: i64 = conn.query_row(
@@ -828,6 +829,72 @@ pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Resul
     }
     if target >= 9 {
         migrate_v9(conn)?;
+    }
+    if target >= 10 {
+        migrate_v10(conn)?;
+    }
+    if target >= 11 {
+        migrate_v11(conn)?;
+    }
+    if target >= 12 {
+        migrate_v12(conn)?;
+    }
+    if target >= 13 {
+        migrate_v13(conn, false)?;
+    }
+    if target >= 14 {
+        migrate_v14(conn)?;
+    }
+    if target >= 15 {
+        migrate_v15(conn)?;
+    }
+    if target >= 17 {
+        migrate_resource17(conn, target.min(18))?;
+    }
+    if target >= 19 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::notifications::DDL)?;
+        tx.execute_batch("PRAGMA user_version=19;")?;
+        tx.commit()?;
+    }
+    if target >= 20 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::codex_inputs::DDL)?;
+        tx.execute_batch("PRAGMA user_version=20;")?;
+        tx.commit()?;
+    }
+    if target >= 21 {
+        let tx = conn.unchecked_transaction()?;
+        crate::personal_drafts::initialize_new_format(&tx)?;
+        tx.execute_batch("PRAGMA user_version=21;")?;
+        tx.commit()?;
+    }
+    if target >= 22 {
+        migrate_v22(conn)?;
+    }
+    if target >= 23 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_objects::DDL)?;
+        tx.execute_batch("PRAGMA user_version=23;")?;
+        tx.commit()?;
+    }
+    if target >= 24 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_decisions::DDL)?;
+        tx.execute_batch("PRAGMA user_version=24;")?;
+        tx.commit()?;
+    }
+    if target >= 25 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_risks_lessons::DDL)?;
+        tx.execute_batch("PRAGMA user_version=25;")?;
+        tx.commit()?;
+    }
+    if target >= 26 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::decision_asks::DDL)?;
+        tx.execute_batch("PRAGMA user_version=26;")?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -1038,12 +1105,7 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         tx.commit()?;
     }
     if v < 22 {
-        let tx = conn.unchecked_transaction()?;
-        // Match the historical scanner's exact category predicate. Ordinary
-        // chat rows must not cost one background scan turn each.
-        tx.execute_batch("CREATE INDEX messages_stop_escalations_seq ON messages(seq) WHERE category='work_stop_escalation';
-            PRAGMA user_version=22;")?;
-        tx.commit()?;
+        migrate_v22(conn)?;
     }
     if v < 23 {
         let tx = conn.unchecked_transaction()?;
@@ -1069,6 +1131,22 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         tx.execute_batch("PRAGMA user_version=26;")?;
         tx.commit()?;
     }
+    if v < 27 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_message_sources::DDL)?;
+        tx.execute_batch("PRAGMA user_version=27;")?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
+fn migrate_v22(conn: &Connection) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    // Match the historical scanner's exact category predicate. Ordinary
+    // chat rows must not cost one background scan turn each.
+    tx.execute_batch("CREATE INDEX messages_stop_escalations_seq ON messages(seq) WHERE category='work_stop_escalation';
+            PRAGMA user_version=22;")?;
+    tx.commit()?;
     Ok(())
 }
 

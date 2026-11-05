@@ -289,6 +289,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 capabilities.push(crewd_proto::managed_objects_api::RISK_LESSONS_CAPABILITY.into());
                 capabilities.push(crewd_proto::managed_objects_api::EVENTS_CAPABILITY.into());
                 capabilities.push(crewd_proto::decision_asks::CAPABILITY.into());
+                capabilities.push(crewd_proto::managed_message_sources::CAPABILITY.into());
                 capabilities.push("session.claude.recovery".into());
                 capabilities.push("crew.defaultWorkingDirectory".into());
                 if state.orchestra.get().is_some() {

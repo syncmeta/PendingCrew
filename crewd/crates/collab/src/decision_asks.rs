@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn schema_25_upgrade_has_no_automatic_capture_and_keeps_original_ask() {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = Store::open_data_dir(dir.path()).unwrap();
+        let mut s = crewd_store::testing::open_legacy_store(25).unwrap();
         s.conn()
             .execute(
                 "INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew-a','A','t','t')",
@@ -595,19 +595,14 @@ mod tests {
                 &asks::public_ask(tx.conn(), core)?.id(),
             )
         });
-        s.conn().execute_batch(
-            "DROP TABLE public_command_purge_tombstones;
-             DROP TABLE decision_ask_open_receipts;
-             DROP TABLE decision_asks;
-             PRAGMA user_version=25;",
-        ).unwrap();
+        s.conn().execute("VACUUM INTO ?1", [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()]).unwrap();
         drop(s);
         let s = Store::open_data_dir(dir.path()).unwrap();
         assert_eq!(
             s.conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            26
+            crewd_store::schema::SCHEMA_VERSION
         );
         assert_eq!(
             asks::get(s.conn(), "crew-a", &original.ask).unwrap(),

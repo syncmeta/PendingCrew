@@ -993,7 +993,7 @@ mod tests {
     #[test]
     fn guarded_v24_upgrade_keeps_dto_and_original_receipt_then_purge_both_new_objects() {
         let dir = tempfile::tempdir().unwrap();
-        let mut s = Store::open_data_dir(dir.path()).unwrap();
+        let mut s = crewd_store::testing::open_legacy_store(24).unwrap();
         s.conn().execute_batch(
             "INSERT INTO crews(id,title,created_at,updated_at) VALUES ('crew-a','A','t','t'),('crew-x','X','t','t');",
         ).unwrap();
@@ -1009,26 +1009,32 @@ mod tests {
                 }],
             },
         );
-        let old = call(&mut s, HUMAN, table.clone(), NOW).unwrap();
+        // Seed the actual v24 receipt columns. Newer writers require the v25
+        // confirmation column and cannot manufacture a historical v24 write.
+        let old = crate::testkit::ok(&mut s, |tx| {
+            let Change::CreateTable {title,fields} = &table.change else { unreachable!() };
+            let object = Object::Table {
+                table: crewd_store::managed_objects::create_table(tx.conn(),"crew-a",title,fields,&tx.now_ts())?,
+            };
+            let receipt = Receipt {
+                scope:table.scope.clone(),crew_id:table.crew_id.clone(),request_id:table.request_id.clone(),
+                recorded_at:tx.now_ts(),object,occurrence:None,
+            };
+            tx.conn().execute(
+                "INSERT INTO managed_object_receipts(crew_id,principal,request_id,digest,result_json) VALUES(?1,?2,?3,?4,?5)",
+                rusqlite::params![receipt.crew_id,HUMAN.principal(tx.conn())?,receipt.request_id,crate::resource_acl::digest(&table)?,serde_json::to_string(&receipt)?],
+            )?;
+            Ok(receipt)
+        });
         assert!(!serde_json::to_string(&old).unwrap().contains("occurrence"));
-        s.conn()
-            .execute_batch(
-                "DROP TABLE public_command_purge_tombstones;
-             DROP TABLE decision_ask_open_receipts;
-             DROP TABLE decision_asks;
-             DROP TABLE managed_lessons;
-             DROP TABLE managed_risks;
-             ALTER TABLE managed_object_receipts DROP COLUMN member_confirmation;
-             PRAGMA user_version=24;",
-            )
-            .unwrap();
+        s.conn().execute("VACUUM INTO ?1", [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()]).unwrap();
         drop(s);
         let mut s = Store::open_data_dir(dir.path()).unwrap();
         assert_eq!(
             s.conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            26
+            crewd_store::schema::SCHEMA_VERSION
         );
         assert_eq!(
             managed::lookup(s.conn(), HUMAN, &table.scope, "crew-a", &table.request_id).unwrap(),

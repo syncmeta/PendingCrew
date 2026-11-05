@@ -28,6 +28,10 @@ pub const METHODS: &[&str] = &[
     REQUEST_GET,
     crate::decision_asks::GET,
     crate::decision_asks::DECISION_ORIGIN,
+    crate::managed_message_sources::RECORD,
+    crate::managed_message_sources::GET,
+    crate::managed_message_sources::MESSAGE_OBJECTS,
+    crate::managed_message_sources::REQUEST_GET,
 ];
 
 /// An invalidation, not a write receipt or an object snapshot.

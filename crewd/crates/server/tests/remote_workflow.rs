@@ -1568,6 +1568,153 @@ async fn paired_human_manual_patrol_has_original_receipt_and_scoped_progress_aft
 }
 
 #[tokio::test]
+async fn paired_message_sources_keep_original_receipts_and_recheck_each_live_grant() {
+    use crewd_proto::managed_message_sources::{CAPABILITY, GET, MESSAGE_OBJECTS, RECORD, REQUEST_GET};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service(dir.path()).await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, accepted) = approved(&mut running.owner, &identity).await;
+    let (other_cert, _, _) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let hello = remote.call("system.hello", json!({})).await;
+    assert!(hello["capabilities"].as_array().unwrap().iter().any(|cap| cap == CAPABILITY));
+    let crew = local(&mut running.owner, "crew.create", json!({
+        "title":"Paired message record","workingDirectory":dir.path()
+    })).await["id"].clone();
+    let source_crew = local(&mut running.owner, "crew.create", json!({
+        "title":"Separate source crew","workingDirectory":dir.path()
+    })).await["id"].as_str().unwrap().to_owned();
+    let channel = crewd_store::channels::human_id(&source_crew);
+    let text = "Synthetic message source e\u{301} preserved byte-for-byte";
+    let message = local(&mut running.owner, "message.post", json!({
+        "channelId":channel,"text":text
+    })).await;
+    let scope = remote.call("managedObject.scope", json!({})).await;
+    let packet = json!({
+        "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+        "sourceMessageId":message["id"],"change":{"kind":"recordDecision","draft":{
+            "question":"How to retain provenance?","choice":"Preserve the original",
+            "rationale":"Synthetic paired capture","about":[{"kind":"crew","id":crew}]
+        }}
+    });
+    let receipt = remote.call(RECORD, packet.clone()).await;
+    let id = receipt["object"]["decision"]["id"].clone();
+    assert_eq!(receipt["created"], true);
+    assert_eq!(receipt["sourceMessageId"], message["id"]);
+    assert_eq!(receipt["scope"], scope);
+    assert_eq!(receipt["requestId"], packet["requestId"]);
+    assert_eq!(receipt["object"]["decision"]["author"], json!({"kind":"human"}));
+    assert!(receipt.get("excerpt").is_none(), "message body belongs only to the source projection");
+    assert_eq!(remote.call(RECORD, packet.clone()).await, receipt);
+    let lookup = json!({"scope":scope,"crewId":crew,"requestId":packet["requestId"]});
+    assert_eq!(remote.call(REQUEST_GET, lookup.clone()).await, json!({"status":"known","receipt":receipt}));
+    assert_eq!(local(&mut running.owner, REQUEST_GET, lookup.clone()).await, json!({"status":"notFound"}));
+
+    let expected_source = json!({"status":"available","crewId":source_crew,"messageId":message["id"],"channelId":channel,"excerpt":text});
+    assert_eq!(remote.call(GET, json!({"id":id})).await, expected_source);
+    assert_eq!(remote.call(MESSAGE_OBJECTS, json!({"messageId":message["id"]})).await,
+               json!({"items":[receipt["object"]],"nextAfter":null}));
+    let ordinary = remote.call("managedObject.submit", json!({
+        "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"recordDecision","draft":{"question":"Ordinary record",
+            "choice":"Keep no inferred source","rationale":"Explicit source only","about":[{"kind":"crew","id":crew}]}}
+    })).await;
+    assert_eq!(remote.call(GET, json!({"id":ordinary["object"]["decision"]["id"]})).await,
+               json!({"status":"none"}));
+    let mut same_source = packet.clone();
+    same_source["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    let deduplicated = remote.call(RECORD, same_source.clone()).await;
+    assert_eq!(deduplicated["created"], false);
+    assert_eq!(deduplicated["object"], receipt["object"]);
+    assert_eq!(remote.call(RECORD, same_source).await, deduplicated);
+    remote.call("managedObject.submit", json!({
+        "scope":scope,"crewId":crew,"requestId":uuid::Uuid::new_v4().to_string(),
+        "change":{"kind":"withdrawDecision","decisionId":id,
+                  "expectedRevision":receipt["object"]["decision"]["revision"],
+                  "reason":"Later explicit withdrawal"}
+    })).await;
+    assert_eq!(remote.call(GET, json!({"id":id})).await, expected_source);
+    drop(remote);
+    stopped(running).await;
+
+    let mut running = service(dir.path()).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    let restarted = remote.call("system.hello", json!({})).await;
+    assert_ne!(restarted["runtimeIdentity"]["runtimeBindingId"], hello["runtimeIdentity"]["runtimeBindingId"]);
+    assert_eq!(remote.call(REQUEST_GET, lookup.clone()).await, json!({"status":"known","receipt":receipt}));
+    assert_eq!(remote.call("managedObject.get", json!({"id":id})).await["decision"]["status"], "withdrawn");
+    assert_eq!(remote.call(GET, json!({"id":id})).await, expected_source);
+    let mut other = RemoteRpc::connect(port, &other_cert, &identity.spki_sha256).await;
+    other.call("system.hello", json!({})).await;
+    assert_eq!(other.call("managedObject.get", json!({"id":id})).await["decision"]["id"], id);
+    assert_eq!(other.call(GET, json!({"id":id})).await, expected_source);
+    assert_eq!(other.call(REQUEST_GET, lookup.clone()).await, json!({"status":"notFound"}),
+               "organization-wide object/source read cannot inherit another grant's original receipt");
+
+    let mut denied_packet = packet.clone();
+    denied_packet["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+    let denied_request = denied_packet["requestId"].as_str().unwrap().to_owned();
+    let mut revoked_calls = Vec::new();
+    for (method, params) in [
+        (RECORD, denied_packet),
+        (GET, json!({"id":id})),
+        (MESSAGE_OBJECTS, json!({"messageId":message["id"]})),
+        (REQUEST_GET, lookup.clone()),
+    ] {
+        let mut connection = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+        connection.call("system.hello", json!({})).await;
+        revoked_calls.push((method, params, connection));
+    }
+    local(&mut running.owner, "remote.revoke", json!({
+        "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"End paired message fixture"
+    })).await;
+    for (method, params, mut connection) in revoked_calls {
+        if let Ok(reply) = tokio::time::timeout(LIMIT, connection.frame(method, params)).await.unwrap() {
+            assert_eq!(reply["error"]["code"], crewd_proto::RpcError::FORBIDDEN,
+                       "revoked grant used {method}: {reply}");
+            assert!(reply.get("result").is_none());
+        }
+    }
+    assert_eq!(local(&mut running.owner, "managedObject.get", json!({"id":id})).await["decision"]["status"], "withdrawn");
+    assert_eq!(other.call(GET, json!({"id":id})).await, expected_source,
+               "revoking one device leaves the separately paired Human authorized");
+    drop(remote);
+    drop(other);
+    stopped(running).await;
+    let store = crewd_store::Store::open_data_dir(dir.path()).unwrap();
+    let denied_receipts: i64 = store.conn().query_row(
+        "SELECT count(*) FROM managed_message_receipts WHERE request_id=?1",
+        [&denied_request], |row| row.get(0)
+    ).unwrap();
+    assert_eq!(denied_receipts, 0, "revoked write must not reserve an original receipt");
+}
+
+#[tokio::test]
+async fn attached_agent_cannot_use_human_message_source_methods() {
+    use crewd_proto::managed_message_sources::{GET, MESSAGE_OBJECTS, RECORD, REQUEST_GET};
+
+    let fixture = crewd_server::agent::testkit::Fixture::new().await;
+    let (stop, stopping) = tokio::sync::oneshot::channel();
+    let server = fixture.spawn_owned_socket(stopping).await;
+    let mut agent = RpcClient::connect(&fixture.data_dir().join("crewd.sock")).await;
+    local(&mut agent, "agent.attach", json!({
+        "sessionId":fixture.worker,"token":fixture.token(&fixture.worker)
+    })).await;
+    let before = durable_state(&fixture).await;
+    for method in [RECORD, GET, MESSAGE_OBJECTS, REQUEST_GET] {
+        let refusal = tokio::time::timeout(LIMIT, agent.call(method,
+            json!({"deliberatelyInvalid":"no Human source parsing or read oracle"})))
+            .await.unwrap().unwrap_err();
+        assert_eq!(refusal.0, crewd_proto::RpcError::FORBIDDEN, "{method}");
+    }
+    assert_eq!(durable_state(&fixture).await, before);
+    drop(agent);
+    stop.send(()).unwrap();
+    tokio::time::timeout(LIMIT, server).await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn paired_managed_objects_keep_original_principal_and_obey_revocation() {
     let dir = tempfile::tempdir().unwrap();
     let mut running = service(dir.path()).await;

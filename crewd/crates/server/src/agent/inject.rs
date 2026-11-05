@@ -48,7 +48,7 @@ pub fn is_crewd_tool(tool_name: &str) -> bool {
 /// progress in their receipt transaction, since a hook can see a replay or refusal.
 pub fn counts_as_progress(tool_name: &str) -> bool {
     match tool_name.strip_prefix(CREWD_TOOL_PREFIX) {
-        Some("managed_object_submit" | "ask_decision") => false,
+        Some("managed_object_submit" | "managed_object_from_message" | "ask_decision") => false,
         Some(own) => !crate::agent::catalog::find(own).is_some_and(|t| t.passive()),
         None => true,
     }
@@ -735,6 +735,7 @@ mod tests {
             "inspect_session",
             "list_sessions",
             "managed_object_submit",
+            "managed_object_from_message",
         ];
         let tools: Vec<String> = passive.iter().map(|t| format!("mcp__crew__{t}")).collect();
         let tools: Vec<&str> = tools.iter().map(String::as_str).collect();
@@ -777,13 +778,14 @@ mod tests {
         for t in crate::agent::catalog::CATALOG {
             assert_eq!(
                 counts_as_progress(&format!("mcp__crew__{}", t.name)),
-                !t.passive() && !matches!(t.name, "managed_object_submit" | "ask_decision"),
+                !t.passive() && !matches!(t.name, "managed_object_submit" | "managed_object_from_message" | "ask_decision"),
                 "{}",
                 t.name
             );
         }
         assert!(!counts_as_progress("mcp__crew__post"));
         assert!(!counts_as_progress("mcp__crew__managed_object_submit"));
+        assert!(!counts_as_progress("mcp__crew__managed_object_from_message"));
         assert!(!counts_as_progress("mcp__crew__ask_decision"));
         assert!(counts_as_progress("mcp__crew__managed_object_submit_other"));
         assert!(counts_as_progress("mcp__other__managed_object_submit"));

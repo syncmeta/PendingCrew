@@ -186,6 +186,10 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         | "managed_decisions_list"
         | "managed_risks_list"
         | "managed_lessons_list"
+        | "managed_object_from_message"
+        | "managed_message_request_get"
+        | "managed_object_source_get"
+        | "managed_objects_from_message"
         | "managed_object_submit"
         | "managed_object_request_get" => managed_objects::call(&cx, tool, args).await,
         "admin_case_custody_get" => admin_cases::custody_get(&cx, args).await,

@@ -159,6 +159,26 @@ async fn call_inner(cx: &Ctx<'_>, tool: &str, args: Value) -> Result<CallResult,
                 .await,
             )
         }
+        "managed_object_from_message" => {
+            let p: crewd_proto::managed_message_sources::RecordParams = parse_args(cx,args)?;
+            result(cx,port::managed_record_from_message(cx.st,cx.me,p).await)
+        }
+        "managed_message_request_get" => {
+            let p: RequestParams = parse_args(cx,args)?;
+            result(cx,port::managed_message_request_get(cx.st,cx.me,p).await)
+        }
+        "managed_object_source_get" => {
+            let p: crewd_proto::managed_message_sources::GetParams = parse_args(cx,args)?;
+            result(cx,port::managed_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::managed_message_sources::source(c,Actor::Session(&by.session_id),&p.id)
+            }).await)
+        }
+        "managed_objects_from_message" => {
+            let p: crewd_proto::managed_message_sources::MessageObjectsParams = parse_args(cx,args)?;
+            result(cx,port::managed_read(cx.st,cx.me,move |c,by| {
+                crewd_collab::managed_message_sources::objects_from_message(c,Actor::Session(&by.session_id),&p.message_id,p.after.as_deref())
+            }).await)
+        }
         "managed_object_submit" => {
             let p: Submit = parse_args(cx, args)?;
             result(cx, port::managed_submit(cx.st, cx.me, p).await)

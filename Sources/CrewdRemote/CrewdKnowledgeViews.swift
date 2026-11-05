@@ -2334,7 +2334,7 @@ struct CrewdAskCapturedDecisionLink: View {
     }
 }
 
-private struct CrewdManagedDirectoryView: View {
+struct CrewdManagedDirectoryView: View {
     typealias Wire = CrewdManagedDirectoryWire
     typealias Store = CrewdManagedDirectoryStore
     @ObservedObject var workspace: CrewdWorkspace
@@ -2350,7 +2350,7 @@ private struct CrewdManagedDirectoryView: View {
         self._section=State(initialValue:fromAsk == nil ? .tables:.decisions)
         self._initialDecision=State(initialValue:fromAsk?.capture?.decisionId)
     }
-    private enum SectionMode: Hashable {
+    enum SectionMode: Hashable {
         case tables, decisions, risks, lessons
         var riskLesson: Bool { self == .risks || self == .lessons }
     }
@@ -2381,13 +2381,13 @@ private struct CrewdManagedDirectoryView: View {
     @State private var queuedInvalidation: Store.Invalidation?
     @State private var refreshWake: UUID?
 
-    private struct PresentationRoute: Equatable {
+    struct PresentationRoute: Equatable {
         let authority: UUID
         let crew: String
         let section: SectionMode
     }
-    private enum ReloadKind: Equatable { case ordinary, reconnect, invalidation }
-    private struct Route: Equatable, Hashable {
+    enum ReloadKind: Equatable { case ordinary, reconnect, invalidation }
+    struct Route: Equatable, Hashable {
         let crew: String
         let observation: UUID
         let connection: UUID
@@ -2396,7 +2396,7 @@ private struct CrewdManagedDirectoryView: View {
         let authority: UUID
         var presentation: PresentationRoute { .init(authority:authority,crew:crew,section:section) }
     }
-    private struct RiskLessonNavigation {
+    struct RiskLessonNavigation {
         let id: String
         let origin: Route
         let section: SectionMode
@@ -2425,7 +2425,7 @@ private struct CrewdManagedDirectoryView: View {
             active.observation == route.observation &&
             active.connection == route.connection && Wire.exact(active.crew,route.crew)
     }
-    private enum RiskLessonMode {
+    enum RiskLessonMode {
         case registerRisk, updateRisk(Wire.Risk), assignRisk(Wire.Risk), reviewRisk(Wire.Risk)
         case riskStatus(Wire.Risk,Wire.RiskStatus), occurrence(Wire.Risk)
         case recordLesson, confirmLesson(Wire.Lesson), staleLesson(Wire.Lesson)
@@ -2448,7 +2448,7 @@ private struct CrewdManagedDirectoryView: View {
             return false
         }
     }
-    private struct EditorTarget: Identifiable {
+    struct EditorTarget: Identifiable {
         enum Mode {
             case create, add(Wire.Table), edit(Wire.Table, Wire.Row)
             case recordDecision, replaceDecision(Wire.Decision), withdrawDecision(Wire.Decision)
@@ -2497,6 +2497,9 @@ private struct CrewdManagedDirectoryView: View {
                         if presentsCurrentScope {
                             if let notice { Text(notice).foregroundStyle(.secondary).textSelection(.enabled) }
                             if !pending.isEmpty { pendingPanel }
+                            if let scope,store.supportsMessageSources {
+                                CrewdManagedMessageHistoryView(workspace:workspace,store:store,scope:scope,current:{presentsCurrentScope})
+                            }
                             if route.section.riskLesson {
                                 if let riskLessonDetail { riskLessonObject(riskLessonDetail) } else { riskLessonCatalog }
                             } else if route.section == .decisions {
@@ -2538,7 +2541,7 @@ private struct CrewdManagedDirectoryView: View {
         .onChange(of:busy) { _,_ in scheduleInvalidation() }
         .onDisappear { ticket = UUID(); editor = nil; refreshWake = nil; queuedInvalidation = nil }
         .sheet(item: $editor) { target in
-            Editor(target: target, allowRiskReferences:riskLessonsAvailable, riskOwners:workspace.sessions,
+            Editor(mode:target.mode,scope:target.scope,heading:target.title, allowRiskReferences:riskLessonsAvailable, riskOwners:workspace.sessions,
                    current: { editor?.id == target.id && route == target.route && scope == target.scope &&
                       (!currentCrewFrozen || target.riskLessonMode?.confirmLesson == true) },
                    submit: { mutation, current in
@@ -2650,6 +2653,7 @@ private struct CrewdManagedDirectoryView: View {
                                 .disabled(busy || blocked(row.id))
                         }
                     }
+                    messageSource(row.id)
                     ForEach(selected.fields.indices,id:\.self) { index in
                         LabeledContent(selected.fields[index].name) {
                             Text(row.values[index].display).textSelection(.enabled)
@@ -2696,6 +2700,7 @@ private struct CrewdManagedDirectoryView: View {
             Text(item.draft.question).font(.title3).textSelection(.enabled)
             Text(item.id + " · " + item.status.label + " · " + owner(item.crewId) + (item.frozen ? " · 已归档，只读" : ""))
                 .font(.caption).foregroundStyle(.secondary)
+            messageSource(item.id)
             LabeledContent("决定者",value:author(item.author))
             LabeledContent("记录时间",value:item.createdAt)
             if let decisionSource, let capture=decisionSource.capture {
@@ -2730,6 +2735,12 @@ private struct CrewdManagedDirectoryView: View {
                     Button("撤回决定",systemImage:"xmark.circle",role:.destructive) { open(.withdrawDecision(item)) }
                 }.disabled(busy || blocked(item.id))
             }
+        }
+    }
+    @ViewBuilder private func messageSource(_ id: String) -> some View {
+        if let scope, store.supportsMessageSources {
+            CrewdManagedMessageSourceView(workspace:workspace,store:store,scope:scope,objectID:id,
+                current:{ self.scope == scope && presentsCurrentScope })
         }
     }
     private func decisionText(_ title: String, _ value: String) -> some View {
@@ -2813,6 +2824,7 @@ private struct CrewdManagedDirectoryView: View {
             let captured = route
             Task { await reload(captured,target:nil,reset:false) }
         }.disabled(busy)
+        messageSource(entry.id)
         switch entry {
         case .risk(let risk): riskDetail(risk)
         case .lesson(let lesson): lessonDetail(lesson)
@@ -3102,13 +3114,17 @@ private struct CrewdManagedDirectoryView: View {
         }
     }
 
-    private struct Editor: View {
-        let target: EditorTarget
+    struct Editor<Output>: View {
+        let mode: EditorTarget.Mode
+        let scope: Store.BrowseScope
+        let heading: String
+        var originalDraft: Store.Mutation? = nil
+        var readOnly = false
         let allowRiskReferences: Bool
         let riskOwners: [CrewdValue]
         let current: @MainActor () -> Bool
-        let submit: @MainActor (Store.Mutation, @MainActor () -> Bool) async throws -> Store.Observation
-        let complete: @MainActor (Store.Observation) -> Void
+        let submit: @MainActor (Store.Mutation, @MainActor () -> Bool) async throws -> Output
+        let complete: @MainActor (Output) -> Void
         let refreshPending: @MainActor () -> Void
         @Environment(\.dismiss) private var dismiss
         @State private var title = ""
@@ -3128,18 +3144,25 @@ private struct CrewdManagedDirectoryView: View {
         @State private var problem: String?
         private struct Input { var text = ""; var null = false }
         private var model: (Wire.Table, Wire.Row?)? {
-            switch target.mode {
+            switch mode {
             case .create, .recordDecision, .replaceDecision, .withdrawDecision, .riskLesson: nil
             case .add(let table): (table,nil)
             case .edit(let table,let row): (table,row)
             }
         }
+        private var riskLessonMode: RiskLessonMode? {
+            if case .riskLesson(let operation) = mode { return operation }; return nil
+        }
+        private var isWithdrawal: Bool { if case .withdrawDecision = mode { return true }; return false }
+        private var isDecision: Bool {
+            switch mode { case .recordDecision,.replaceDecision,.withdrawDecision: true; default: false }
+        }
         var body: some View {
             NavigationStack {
                 Form {
-                    if let operation = target.riskLessonMode {
+                    if let operation = riskLessonMode {
                         riskLessonFields(operation)
-                    } else if target.isDecision {
+                    } else if isDecision {
                         decisionFields
                     } else if let (table,row) = model {
                         Section(row.map { "记录 " + $0.id + " · 版本 " + $0.revision } ?? "填写记录") {
@@ -3175,25 +3198,25 @@ private struct CrewdManagedDirectoryView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .disabled(busy || stopped)
-                .navigationTitle(target.title)
+                .disabled(busy || stopped || readOnly)
+                .navigationTitle(heading)
                 .toolbar {
                     ToolbarItem(placement:.cancellationAction) {
                         Button(stopped || !current() ? "关闭" : "取消") { dismiss() }.disabled(busy && current())
                     }
                     ToolbarItem(placement:.confirmationAction) {
-                        Button(target.isWithdrawal ? "确认撤回" : "保存") { save() }
-                            .disabled(busy || stopped || !current() || (model != nil && inputs.isEmpty))
+                        Button(isWithdrawal ? "确认撤回" : "保存") { save() }
+                            .disabled(readOnly || busy || stopped || !current() || (model != nil && inputs.isEmpty))
                     }
                 }
             }
             .interactiveDismissDisabled(busy && current())
             .task {
-                switch target.mode {
+                switch mode {
                 case .riskLesson(let operation):
                     prepareRiskLesson(operation)
                 case .recordDecision:
-                    decisionDraft.about = [.init(kind:.crew,id:target.scope.origin.crew)]
+                    decisionDraft.about = [.init(kind:.crew,id:scope.origin.crew)]
                 case .replaceDecision(let original):
                     decisionDraft = original.draft
                     alternatives = decisionDraft.alternatives ?? ""
@@ -3207,19 +3230,33 @@ private struct CrewdManagedDirectoryView: View {
                         return .init(text:original == .null ? "" : original?.display ?? "",null:original == .null)
                     }
                 }
+                if let originalDraft {
+                    switch originalDraft {
+                    case .recordDecision(let draft):
+                        decisionDraft = draft; alternatives = draft.alternatives ?? ""
+                    case .riskLesson(.recordRisk(let draft,let owner)):
+                        riskDraft = draft; mitigation = draft.mitigation ?? ""
+                        selectedOwner = owner.sessionId ?? ""
+                    case .riskLesson(.recordLesson(let draft)):
+                        lessonDraft = draft; detection = draft.detection ?? ""
+                    case .add(_,let values):
+                        inputs = values.map { .init(text:$0 == .null ? "" : $0.display,null:$0 == .null) }
+                    default: break
+                    }
+                }
             }
             #if os(macOS)
             .frame(minWidth:440,minHeight:350)
             #endif
         }
         @ViewBuilder private var decisionFields: some View {
-            if case .withdrawDecision(let original) = target.mode {
+            if case .withdrawDecision(let original) = mode {
                 Section(original.id + " · " + original.draft.question) {
                     Text("撤回后，原文保留在历史中；先前被取代的决定不会自动恢复。")
                     TextField("撤回理由",text:$withdrawalReason,axis:.vertical)
                 }
             } else {
-                if case .replaceDecision(let original) = target.mode {
+                if case .replaceDecision(let original) = mode {
                     Section("现行决定 " + original.id) {
                         Text(original.draft.choice)
                         Text("保存会记录一个新决定，原文与原作者仍可查阅。").foregroundStyle(.secondary)
@@ -3336,7 +3373,7 @@ private struct CrewdManagedDirectoryView: View {
         private func prepareRiskLesson(_ operation: RiskLessonMode) {
             switch operation {
             case .registerRisk:
-                riskDraft.about = [.init(kind:.crew,id:target.scope.origin.crew)]
+                riskDraft.about = [.init(kind:.crew,id:scope.origin.crew)]
             case .updateRisk(let item):
                 riskDraft = item.draft
                 mitigation = item.draft.mitigation ?? ""
@@ -3378,11 +3415,11 @@ private struct CrewdManagedDirectoryView: View {
             value.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? nil:value
         }
         private func mutation() throws -> Store.Mutation {
-            if let operation = target.riskLessonMode { return .riskLesson(try riskLessonMutation(operation)) }
-            if target.isDecision {
+            if let operation = riskLessonMode { return .riskLesson(try riskLessonMutation(operation)) }
+            if isDecision {
                 var draft = decisionDraft
                 draft.alternatives = alternatives.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? nil : alternatives
-                switch target.mode {
+                switch mode {
                 case .recordDecision:
                     guard draft.valid else { throw Wire.Problem.invalid }
                     return .recordDecision(draft)
@@ -3416,13 +3453,354 @@ private struct CrewdManagedDirectoryView: View {
                     let result = try await submit(change,current)
                     guard current() else { return }
                     complete(result)
+                    stopped = true
                 } catch {
                     guard current() else { return }
                     refreshPending()
                     problem = error.localizedDescription
-                    stopped = !(target.isDecision || target.riskLessonMode != nil) || !Store.decisionInputRefused(error)
+                    stopped = !(isDecision || riskLessonMode != nil) || !Store.decisionInputRefused(error)
                 }
             }
+        }
+    }
+}
+
+/// Source text is always the current Core projection, never a local draft excerpt.
+private struct CrewdManagedMessageSourceView: View {
+    @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject var store:CrewdManagedDirectoryStore
+    let scope:CrewdManagedDirectoryStore.BrowseScope
+    let objectID:String
+    let current:@MainActor ()->Bool
+    @State private var source:CrewdManagedMessageWire.Source?
+    @State private var problem:String?
+    @State private var loading=false
+    @State private var visible=true
+    private var allowed:Bool { visible && current() && store.supportsMessageSources }
+    var body:some View {
+        VStack(alignment:.leading,spacing:8) {
+            Text("消息出处").font(.headline)
+            if allowed {
+                if let source {
+                    switch source {
+                    case .none: Text("未记录消息出处。")
+                    case .restricted: Text("当前无权查看原消息。")
+                    case .deleted(let excerpt): Text("原消息已删除").foregroundStyle(.secondary); Text(excerpt).textSelection(.enabled)
+                    case .available(_,_,_,let excerpt):
+                        Text(excerpt).textSelection(.enabled)
+                        Button("打开来源会话",systemImage:"arrow.up.right.square") { open() }.disabled(loading)
+                        Text("打开对应会话；较早的原消息可能不在当前显示范围。").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else { Text("尚未核对出处。") }
+                if let problem { Text(problem).foregroundStyle(.red) }
+                Button("重新核对出处") { Task { await load() } }.disabled(loading)
+            } else { Text("连接或权限已改变，请重新打开对象。") }
+        }
+        .task(id:objectID) { await load() }
+        .onChange(of:workspace.client.connectionEpoch) { _,_ in source=nil;problem=nil }
+        .onChange(of:workspace.client.authorityBinding) { _,_ in source=nil;problem=nil }
+        .onChange(of:store.invalidation) { _,_ in source=nil; Task { await load() } }
+        .onAppear { visible=true }
+        .onDisappear { visible=false;source=nil }
+    }
+    private func load() async {
+        guard allowed,!loading else { return }; loading=true;source=nil;problem=nil
+        defer { loading=false }
+        do {
+            let result=try await store.messageSource(scope,id:objectID,stillCurrent:{allowed})
+            guard allowed else { return }; source=result
+        } catch { if allowed { problem=error.localizedDescription } }
+    }
+    private func open() {
+        guard allowed,!loading else { return };loading=true
+        Task {
+            defer { loading=false }
+            do { try await workspace.openManagedMessageSource(object:objectID,stillCurrent:{allowed}) }
+            catch { if allowed { source=nil;problem=error.localizedDescription } }
+        }
+    }
+}
+
+/// All normal message surfaces reuse the same controlled D/R/L/row forms.
+struct CrewdMessageRecordSheet:View {
+    typealias Store=CrewdManagedDirectoryStore
+    typealias Wire=CrewdManagedDirectoryWire
+    typealias Directory=CrewdManagedDirectoryView
+    @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject private var store:Store
+    let target:CrewdMessageInspectionTarget
+    let presentationCurrent:@MainActor ()->Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var visible=true
+    @State private var scope:Store.BrowseScope?
+    @State private var objects:[Wire.Object]=[]
+    @State private var next:String?
+    @State private var tables:[Wire.Table]=[]
+    @State private var nextTable:String?
+    @State private var pending:[Store.MessagePending]=[]
+    @State private var editor:FormTarget?
+    @State private var outcome:Store.MessageObservation?
+    @State private var busy=false
+    @State private var problem:String?
+    @State private var checked=false
+    private struct FormTarget:Identifiable {
+        let id=UUID()
+        let mode:Directory.EditorTarget.Mode
+        let title:String
+        var draft:Store.Mutation?=nil
+    }
+    init(workspace:CrewdWorkspace,target:CrewdMessageInspectionTarget,presentationCurrent:@escaping @MainActor ()->Bool) {
+        self.workspace=workspace;self.store=workspace.managedDirectory
+        self.target=target;self.presentationCurrent=presentationCurrent
+    }
+    private var current:Bool { visible && presentationCurrent() && target.isCurrent(workspace) && store.supportsMessageSources }
+    private var frozen:Bool { workspace.crews.first(where:{$0["id"] == .string(target.source.crew)})?["removedAt"].string != nil }
+    var body:some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment:.leading,spacing:14) {
+                    Text("记为组织对象").font(.headline)
+                    Text("保存后，对象内容由组织成员可读；原消息和出处摘录仍按原会话权限提供。请先确认填写内容适合组织公开。")
+                        .foregroundStyle(.secondary)
+                    if let problem { Text(problem).foregroundStyle(.red).textSelection(.enabled) }
+                    if current,let scope {
+                        if !pending.isEmpty { history(scope) }
+                        if frozen { Text("当前机组已归档，只能查看已有记录。") }
+                        HStack {
+                            Button("记录决定 D") { start(.recordDecision,"记录决定") }
+                                .disabled(!workspace.client.capabilities.contains(Wire.decisionsCapability))
+                            Button("登记风险 R") { start(.riskLesson(.registerRisk),"登记风险") }
+                                .disabled(!workspace.client.capabilities.contains(Wire.riskLessonsCapability))
+                            Button("记录教训 L") { start(.riskLesson(.recordLesson),"记录教训") }
+                                .disabled(!workspace.client.capabilities.contains(Wire.riskLessonsCapability))
+                        }.buttonStyle(.bordered).disabled(busy || frozen)
+                        DisclosureGroup("记为组织表记录 O") {
+                            ForEach(tables) { table in
+                                Button(table.id+" · "+table.title) { start(.add(table),"新增记录 · "+table.id) }
+                                    .disabled(frozen || busy || table.frozen || !Wire.exact(table.crewId,target.source.crew))
+                            }
+                            if let nextTable { Button("更多组织表") { loadTables(scope,after:nextTable) }.disabled(busy) }
+                            Text("仅可写入当前机组的未归档组织表。").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let observed=outcome,editor == nil {
+                            Text(observed.historical ? "原请求历史回执（不代表对象当前状态）":"原请求的确切回执")
+                                .font(.headline)
+                            Text(observed.receipt.created ? "原请求曾创建此对象。":"原请求返回已有对象；本次草稿未写入。")
+                            snapshot(observed.receipt.object,scope:scope)
+                        }
+                        Divider()
+                        Text("这条消息已记录的对象").font(.headline)
+                        if checked && objects.isEmpty { Text("本次核对未发现已记录对象。") }
+                        ForEach(objects.indices,id:\.self) { index in snapshot(objects[index],scope:scope) }
+                        if let next { Button("更多已记录对象") { loadObjects(scope,after:next) }.disabled(busy) }
+                        Button("重新核对") { Task { await reload() } }.disabled(busy)
+                    } else { Text(current ? "正在读取原消息的记录…":"原连接或会话已改变，请重新打开消息。") }
+                }.padding()
+            }
+            .toolbar { ToolbarItem(placement:.cancellationAction) { Button("关闭") { visible=false;dismiss() } } }
+        }
+        #if os(macOS)
+        .frame(minWidth:520,minHeight:480)
+        #endif
+        .task { await reload() }
+        .onDisappear { visible=false;objects=[];pending=[];scope=nil }
+        .onChange(of:workspace.client.authorityBinding) { _,_ in clear() }
+        .onChange(of:workspace.client.connectionEpoch) { _,_ in clear() }
+        .sheet(item:$editor) { form in
+            if let scope {
+                VStack(spacing:0) {
+                    Directory.Editor<Store.MessageObservation>(mode:form.mode,scope:scope,heading:form.title,originalDraft:form.draft,
+                        allowRiskReferences:workspace.client.capabilities.contains(Wire.riskLessonsCapability),riskOwners:workspace.sessions,
+                        current:{ current && editor?.id == form.id && !frozen },
+                        submit:{ mutation,valid in
+                            try await store.recordFromMessage(mutation,message:target.source.message,scope:scope,stillCurrent:valid)
+                        },complete:{ result in
+                            guard current,editor?.id == form.id else { return }
+                            outcome=result;refreshHistory(scope)
+                            if result.receipt.created { editor=nil;Task { await reload() } }
+                        },refreshPending:{ refreshHistory(scope) })
+                    if let savedResult=outcome {
+                        VStack(alignment:.leading,spacing:8) {
+                            Text(savedResult.receipt.created ? "已记录" : "这条消息已有同类对象；本次填写的草稿已保留在原请求与草稿中。")
+                            snapshot(savedResult.receipt.object,scope:scope)
+                            Button("关闭表单") { editor=nil;outcome=nil }
+                        }.padding()
+                    }
+                }
+            }
+        }
+    }
+    private func clear() { scope=nil;objects=[];pending=[];tables=[];checked=false;next=nil;nextTable=nil;outcome=nil }
+    private func start(_ mode:Directory.EditorTarget.Mode,_ title:String,draft:Store.Mutation?=nil) {
+        guard current,!busy,!frozen else { return };outcome=nil;editor = .init(mode:mode,title:title,draft:draft)
+    }
+    private func refreshHistory(_ scope:Store.BrowseScope) {
+        guard current else { return }
+        do { pending=try store.messagePending(scope,message:target.source.message) }
+        catch { pending=[];problem=error.localizedDescription }
+    }
+    private func reload() async {
+        guard current,!busy else { return };busy=true;problem=nil
+        defer { busy=false }
+        do {
+            let active=try await store.scope(stillCurrent:{current})
+            let page=try await store.messageObjects(active,message:target.source.message,after:nil,stillCurrent:{current})
+            let tablePage=try await store.tables(active,after:nil,stillCurrent:{current})
+            guard current else { return }
+            scope=active;objects=page.items;next=page.nextAfter;checked=true
+            tables=tablePage.items;nextTable=tablePage.nextAfter;refreshHistory(active)
+        } catch { if current { clear();problem=error.localizedDescription } }
+    }
+    private func loadObjects(_ scope:Store.BrowseScope,after:String) {
+        guard current,!busy else { return };busy=true
+        Task {
+            defer { busy=false }
+            do {
+                let page=try await store.messageObjects(scope,message:target.source.message,after:after,stillCurrent:{current})
+                guard current else { return }
+                guard Set(objects.compactMap(\.id)).isDisjoint(with:page.items.compactMap(\.id)) else { throw Wire.Problem.invalid }
+                objects+=page.items;next=page.nextAfter
+            } catch { if current { objects=[];next=nil;checked=false;problem=error.localizedDescription } }
+        }
+    }
+    private func loadTables(_ scope:Store.BrowseScope,after:String) {
+        guard current,!busy else { return };busy=true
+        Task {
+            defer { busy=false }
+            do {
+                let page=try await store.tables(scope,after:after,stillCurrent:{current})
+                guard current else { return };tables+=page.items;nextTable=page.nextAfter
+            } catch { if current { problem=error.localizedDescription } }
+        }
+    }
+    private func history(_ scope:Store.BrowseScope)->some View {
+        DisclosureGroup("原请求与草稿（\(pending.count)）") {
+            Text("仅查询原请求结果；不会重发。已有对象与新草稿分别保留。")
+            ForEach(pending) { item in
+                VStack(alignment:.leading,spacing:6) {
+                    Text(item.witness.original.kind+" · "+item.witness.original.requestId).font(.caption).textSelection(.enabled)
+                    Button("核对原请求") { recover(item,scope:scope) }.disabled(busy)
+                    DisclosureGroup("本次填写的草稿") { draftText(item) }
+                }
+            }
+        }
+    }
+    @ViewBuilder private func draftText(_ item:Store.MessagePending)->some View {
+        if let draft=try? store.messageDraft(item) {
+            switch draft {
+            case .recordDecision(let value):Text(value.question);Text(value.choice);Text(value.rationale)
+            case .riskLesson(.recordRisk(let value,_)):Text(value.summary);if let mitigation=value.mitigation { Text(mitigation) }
+            case .riskLesson(.recordLesson(let value)):Text(value.happened);Text(value.lesson)
+            case .add(let table,let values):ForEach(values.indices,id:\.self) { index in Text(table.fields[index].name+": "+values[index].display) }
+            default:Text("草稿暂不可显示。")
+            }
+        }
+    }
+    private func recover(_ item:Store.MessagePending,scope:Store.BrowseScope) {
+        guard current,!busy else { return };busy=true;problem=nil
+        Task {
+            defer { busy=false }
+            do {
+                let result=try await store.lookupMessage(item,scope:scope,stillCurrent:{current})
+                guard current else { return }
+                if let result {
+                    outcome=result
+                    problem=result.receipt.created ? "已核对原请求的确切记录。" : "原请求返回已有对象；本次填写草稿仍保留。"
+                } else { problem="尚未找到可确认的原请求结果；原请求保留，不会重发。" }
+                refreshHistory(scope)
+            } catch { if current { problem=error.localizedDescription } }
+        }
+    }
+    @ViewBuilder private func snapshot(_ object:Wire.Object,scope:Store.BrowseScope)->some View {
+        VStack(alignment:.leading,spacing:6) {
+            if let item=object.decision { Text(item.id+" · "+item.draft.question).font(.headline);Text(item.status.label);Text(item.draft.choice);Text(item.draft.rationale) }
+            if let item=object.risk { Text(item.id+" · "+item.draft.summary).font(.headline);Text(item.status.label);if let mitigation=item.draft.mitigation { Text(mitigation) } }
+            if let item=object.lesson { Text(item.id+" · "+item.draft.lesson).font(.headline);Text(item.draft.happened);Text(item.status.label) }
+            if let item=object.row { Text(item.id+" · "+item.tableId).font(.headline);ForEach(item.values.indices,id:\.self) { index in Text("字段 \(index+1)："+item.values[index].display) } }
+            if let id=object.id { CrewdManagedMessageSourceView(workspace:workspace,store:store,scope:scope,objectID:id,current:{current}) }
+        }.padding(10).frame(maxWidth:.infinity,alignment:.leading).background(.quaternary,in:RoundedRectangle(cornerRadius:8))
+    }
+}
+
+/// Available from the ordinary library even when the source message has moved
+/// out of the current timeline. Recovery is always the original read-only lookup.
+private struct CrewdManagedMessageHistoryView:View {
+    typealias Store=CrewdManagedDirectoryStore
+    typealias Directory=CrewdManagedDirectoryView
+    @ObservedObject var workspace:CrewdWorkspace
+    @ObservedObject var store:Store
+    let scope:Store.BrowseScope
+    let current:@MainActor ()->Bool
+    @State private var items:[Store.MessagePending]=[]
+    @State private var shown=16
+    @State private var busy=false
+    @State private var problem:String?
+    @State private var result:Store.MessageObservation?
+    @State private var draft:DraftTarget?
+    private struct DraftTarget:Identifiable {
+        let id=UUID()
+        let mode:Directory.EditorTarget.Mode
+        let mutation:Store.Mutation
+    }
+    var body:some View {
+        DisclosureGroup("消息记录的原请求与草稿（\(items.count)）") {
+            Text("记录过的原请求与本次填写内容保留在此。核对只读原回执，不重发；返回已有对象不表示本次草稿已写入。")
+                .font(.caption).foregroundStyle(.secondary)
+            if let problem { Text(problem).foregroundStyle(.secondary).textSelection(.enabled) }
+            ForEach(Array(items.prefix(shown))) { item in
+                HStack {
+                    Text(item.witness.original.kind+" · "+String(item.witness.original.requestId.prefix(8))).font(.caption)
+                    Button("核对原回执") { lookup(item) }.disabled(busy || !current())
+                    Button("查看填写内容") { showDraft(item) }.disabled(!current())
+                }
+            }
+            if shown < items.count { Button("更多原请求") { shown+=16 } }
+            Button("重新读取原请求") { reload() }.disabled(busy || !current())
+            if let result,current(),let id=result.receipt.object.id {
+                Text((result.receipt.created ? "原请求已记录：":"原请求返回已有对象：")+id+(result.historical ? "（历史回执）":""))
+                CrewdManagedMessageSourceView(workspace:workspace,store:store,scope:scope,objectID:id,current:current)
+            }
+        }
+        .task(id:scope.authority.restoreEpoch) { reload() }
+        .onChange(of:store.invalidation) { _,_ in reload() }
+        .onChange(of:workspace.client.authorityBinding) { _,_ in items=[];result=nil;draft=nil }
+        .onChange(of:workspace.client.connectionEpoch) { _,_ in items=[];result=nil;draft=nil }
+        .sheet(item:$draft) { selected in
+            Directory.Editor<Void>(mode:selected.mode,scope:scope,heading:"原请求填写内容",originalDraft:selected.mutation,
+                readOnly:true,allowRiskReferences:workspace.client.capabilities.contains(CrewdManagedDirectoryWire.riskLessonsCapability),
+                riskOwners:workspace.sessions,current:{current() && draft?.id == selected.id},
+                submit:{_,_ in throw CrewdManagedDirectoryWire.Problem.stale},complete:{_ in},refreshPending:{})
+        }
+    }
+    private func reload() {
+        guard current() else {items=[];result=nil;return}
+        do {items=try store.messagePending(scope)} catch {items=[];problem=error.localizedDescription}
+    }
+    private func showDraft(_ item:Store.MessagePending) {
+        guard current() else {return}
+        do {
+            let mutation=try store.messageDraft(item)
+            let mode:Directory.EditorTarget.Mode
+            switch mutation {
+            case .recordDecision:mode = .recordDecision
+            case .riskLesson(.recordRisk):mode = .riskLesson(.registerRisk)
+            case .riskLesson(.recordLesson):mode = .riskLesson(.recordLesson)
+            case .add(let table,_):mode = .add(table)
+            default:throw CrewdManagedDirectoryWire.Problem.invalid
+            }
+            draft = .init(mode:mode,mutation:mutation)
+        } catch {problem=error.localizedDescription}
+    }
+    private func lookup(_ item:Store.MessagePending) {
+        guard current(),!busy else {return};busy=true;problem=nil;result=nil
+        Task {
+            defer {busy=false}
+            do {
+                let observed=try await store.lookupMessage(item,scope:scope,stillCurrent:current)
+                guard current() else {return};result=observed
+                if observed == nil {problem="尚无可确认的原请求结果。原请求保留，不会重发。"}
+                reload()
+            } catch {if current(){problem=error.localizedDescription}}
         }
     }
 }

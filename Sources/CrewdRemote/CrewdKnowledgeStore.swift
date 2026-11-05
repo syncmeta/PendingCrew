@@ -1985,7 +1985,7 @@ struct CrewdPendingKnowledgeLink: Identifiable {
                 guard let prefix = id.first, "TODRL".contains(prefix) else { return false }
                 return Wire.objectNumber(id,prefix:prefix) != nil
             }) else { return }
-        case "events.lagged", "crew.changed", "crew.purged": break
+        case "events.lagged", "crew.changed", "crew.purged", "channel.changed", "channel.purged": break
         default: return
         }
         invalidation = .init(origin:active)
@@ -2101,17 +2101,20 @@ struct CrewdPendingKnowledgeLink: Identifiable {
     private let decisionsAvailable: () -> Bool
     private let riskLessonsAvailable: () -> Bool
     private let structuredDecisionsAvailable: () -> Bool
+    private let messageSourcesAvailable: () -> Bool
 
     init(origin: @escaping () -> Origin?, rpc: @escaping RPC, journal: @escaping () throws -> CrewdPresentationJournal,
          decisionsAvailable: @escaping () -> Bool = { false },
          riskLessonsAvailable: @escaping () -> Bool = { false },
-         structuredDecisionsAvailable: @escaping () -> Bool = { false }) {
+         structuredDecisionsAvailable: @escaping () -> Bool = { false },
+         messageSourcesAvailable: @escaping () -> Bool = { false }) {
         self.origin = origin
         self.rpc = rpc
         self.journal = journal
         self.decisionsAvailable = decisionsAvailable
         self.riskLessonsAvailable = riskLessonsAvailable
         self.structuredDecisionsAvailable = structuredDecisionsAvailable
+        self.messageSourcesAvailable = messageSourcesAvailable
     }
 
     func scope(stillCurrent: @MainActor () -> Bool) async throws -> BrowseScope {
@@ -2537,6 +2540,181 @@ extension CrewdManagedDirectoryStore {
                 } else if receipt.occurrence != nil { throw Wire.Problem.invalid }
             default: throw Wire.Problem.invalid
             }
+        }
+    }
+}
+
+
+extension CrewdManagedDirectoryStore {
+    typealias MessageWire = CrewdManagedMessageWire
+    struct MessageWitness: Codable {
+        let original: Witness
+        let sourceMessageId: String
+        let key: String
+        let draft: CrewdValue
+        let table: Wire.Table?
+    }
+    struct MessagePending: Identifiable {
+        let record: CrewdPresentationJournal.Prepared
+        let witness: MessageWitness
+        var id: UUID { record.id }
+    }
+    struct MessageObservation {
+        let receipt: MessageWire.Receipt
+        let historical: Bool
+    }
+    var supportsMessageSources: Bool { messageSourcesAvailable() }
+
+    func messageSource(_ scope: BrowseScope, id: String,
+                       stillCurrent: @MainActor () -> Bool) async throws -> MessageWire.Source {
+        guard supportsMessageSources else { throw Wire.Problem.unavailable }
+        guard valid(scope.origin,stillCurrent) else { throw Wire.Problem.stale }
+        let raw = try await rpc(MessageWire.source,.object(["id":.string(id)]))
+        try await check(scope,stillCurrent)
+        return try .init(raw)
+    }
+
+    func messageObjects(_ scope: BrowseScope, message: String, after: String?,
+                        stillCurrent: @MainActor () -> Bool) async throws -> MessageWire.Page {
+        guard supportsMessageSources, !message.isEmpty else { throw Wire.Problem.unavailable }
+        var params: [String:CrewdValue] = ["messageId":.string(message)]
+        if let after { params["after"] = .string(after) }
+        let page: MessageWire.Page = try await call(MessageWire.objects,.object(params),scope.origin,stillCurrent)
+        let ids = page.items.compactMap(\.id)
+        guard page.items.count <= 16, ids.count == page.items.count, Set(ids).count == ids.count,
+              page.items.allSatisfy(\.valid), page.nextAfter != after || after == nil,
+              page.nextAfter == nil || (!page.items.isEmpty && page.nextAfter?.isEmpty == false)
+        else { throw Wire.Problem.invalid }
+        try await check(scope,stillCurrent)
+        return page
+    }
+
+    func messagePending(_ scope: BrowseScope, message: String? = nil) throws -> [MessagePending] {
+        let ledger = try journal()
+        guard ledger.scope == scope.origin.scope, valid(scope.origin,{ true }) else { throw Wire.Problem.stale }
+        return try ledger.messageSourceHistory().filter {
+            $0.method == MessageWire.observation && $0.scope == ledger.scope &&
+                Wire.exact($0.crew,scope.origin.crew)
+        }.map { record in
+            let witness = try CrewdKnowledgeStore.decode(record.params,MessageWitness.self)
+            guard witness.original.scope.dbId == scope.authority.dbId,
+                  Wire.exact(witness.original.crewId,record.crew),
+                  ["recordDecision","recordRisk","recordLesson","addRow"].contains(witness.original.kind),
+                  UUID(uuidString:witness.original.requestId)?.uuidString.lowercased() == witness.original.requestId,
+                  !witness.sourceMessageId.isEmpty
+            else { throw Wire.Problem.invalid }
+            return .init(record:record,witness:witness)
+        }.filter { item in
+            guard let message else { return true }
+            return Wire.exact(item.witness.sourceMessageId,message)
+        }
+    }
+
+    func recordFromMessage(_ mutation: Mutation, message: String, scope: BrowseScope,
+                           stillCurrent: @MainActor () -> Bool) async throws -> MessageObservation {
+        guard supportsMessageSources, !message.isEmpty else { throw Wire.Problem.unavailable }
+        try await check(scope,stillCurrent)
+        let request = UUID().uuidString.lowercased()
+        let change: Wire.Change
+        let original: Witness
+        var table: Wire.Table?
+        switch mutation {
+        case .recordDecision, .add:
+            let encoded = try mutation.encode(crew:scope.origin.crew,risksAvailable:riskLessonsAvailable())
+            change = encoded.0
+            original = .init(scope:scope.authority,crewId:scope.origin.crew,requestId:request,kind:change.kind,
+                             target:encoded.1,tableId:encoded.2,expectedRevision:encoded.3,digest:encoded.4)
+            if case .add(let selected,_) = mutation { table = selected }
+        case .riskLesson(let operation):
+            switch operation {
+            case .recordRisk, .recordLesson: break
+            default: throw Wire.Problem.invalid
+            }
+            (change,original) = try operation.prepare(scope:scope,request:request)
+        default: throw Wire.Problem.invalid
+        }
+        let witness = MessageWitness(original:original,sourceMessageId:message,
+            key:change.kind + ":" + (original.tableId ?? ""),
+            draft:try CrewdKnowledgeStore.encode(change),table:table)
+        let params = try CrewdKnowledgeStore.encode(MessageWire.Record(scope:scope.authority,crewId:original.crewId,
+            requestId:request,sourceMessageId:message,change:change))
+        let ledger = try journal()
+        guard ledger.scope == scope.origin.scope, valid(scope.origin,stillCurrent) else { throw Wire.Problem.stale }
+        let prepared = try ledger.prepareMessageSource(CrewdKnowledgeStore.encode(witness),crew:original.crewId)
+        do {
+            let receipt: MessageWire.Receipt = try await call(MessageWire.record,params,scope.origin,stillCurrent)
+            try verifyMessageReceipt(receipt,witness:witness)
+            try await check(scope,stillCurrent)
+            try ledger.finish(prepared,state:"replyObserved")
+            return .init(receipt:receipt,historical:false)
+        } catch {
+            let failed = error as? CrewdClientError
+            let refused = failed?.kind == .notSubmitted || Self.decisionInputRefused(error) ||
+                (failed?.code == -32009 && failed?.refusal == "resource.frozen")
+            try? ledger.finish(prepared,state:refused ? "refused":"unknown")
+            throw error
+        }
+    }
+
+    func lookupMessage(_ pending: MessagePending, scope: BrowseScope,
+                       stillCurrent: @MainActor () -> Bool) async throws -> MessageObservation? {
+        guard supportsMessageSources else { throw Wire.Problem.unavailable }
+        let ledger = try journal(), original = pending.witness.original
+        guard ledger.scope == scope.origin.scope, pending.record.scope == ledger.scope,
+              try messagePending(scope).contains(where:{ $0.id == pending.id })
+        else { throw Wire.Problem.stale }
+        let result: MessageWire.Lookup = try await call(MessageWire.lookup,
+            CrewdKnowledgeStore.encode(LookupParams(scope:original.scope,crewId:original.crewId,requestId:original.requestId)),
+            scope.origin,stillCurrent)
+        try await check(scope,stillCurrent)
+        switch (result.status,result.receipt) {
+        case ("known",.some(let receipt)), ("historical",.some(let receipt)):
+            guard (result.status == "known") == (original.scope == scope.authority) else { throw Wire.Problem.invalid }
+            try verifyMessageReceipt(receipt,witness:pending.witness)
+            try await check(scope,stillCurrent)
+            try ledger.acknowledge(pending.record,detail:"已核对消息记录的原请求，未重新提交。")
+            return .init(receipt:receipt,historical:result.status == "historical")
+        case ("notFound",nil) where original.scope == scope.authority: return nil
+        case ("historical",nil) where original.scope != scope.authority: return nil
+        default: throw Wire.Problem.invalid
+        }
+    }
+
+    private func verifyMessageReceipt(_ receipt: MessageWire.Receipt, witness: MessageWitness) throws {
+        let original = witness.original
+        guard receipt.scope == original.scope, Wire.exact(receipt.crewId,original.crewId),
+              receipt.requestId == original.requestId, Wire.exact(receipt.sourceMessageId,witness.sourceMessageId),
+              !receipt.recordedAt.isEmpty, receipt.object.valid else { throw Wire.Problem.invalid }
+        let expected: String
+        switch original.kind {
+        case "recordDecision": expected = "decision"
+        case "recordRisk": expected = "risk"
+        case "recordLesson": expected = "lesson"
+        case "addRow": expected = "row"
+        default: throw Wire.Problem.invalid
+        }
+        guard receipt.object.kind == expected,
+              original.kind != "addRow" || receipt.object.row?.tableId == original.tableId else { throw Wire.Problem.invalid }
+        if receipt.created {
+            try verify(.init(scope:receipt.scope,crewId:receipt.crewId,requestId:receipt.requestId,
+                recordedAt:receipt.recordedAt,object:receipt.object,occurrence:nil),original)
+        }
+    }
+
+    func messageDraft(_ pending: MessagePending) throws -> Mutation {
+        let draft = pending.witness.draft
+        switch pending.witness.original.kind {
+        case "recordDecision":
+            return .recordDecision(try CrewdKnowledgeStore.decode(draft["draft"],Wire.DecisionDraft.self))
+        case "recordRisk":
+            return .riskLesson(.recordRisk(try CrewdKnowledgeStore.decode(draft["draft"],Wire.RiskDraft.self),
+                try CrewdKnowledgeStore.decode(draft["owner"],Wire.DecisionAuthor.self)))
+        case "recordLesson":
+            return .riskLesson(.recordLesson(try CrewdKnowledgeStore.decode(draft["draft"],Wire.LessonDraft.self)))
+        case "addRow":
+            guard let table = pending.witness.table else { throw Wire.Problem.invalid }
+            return .add(table,try CrewdKnowledgeStore.decode(draft["values"],[Wire.Cell].self))
+        default: throw Wire.Problem.invalid
         }
     }
 }

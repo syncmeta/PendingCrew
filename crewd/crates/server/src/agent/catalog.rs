@@ -33,6 +33,7 @@ pub enum Ty {
     CoordinationChildren,
     ManagedObjectScope,
     ManagedObjectChange,
+    ManagedMessageChange,
     DecisionAskDraft,
     /// `[{text, category?}]`
     Messages,
@@ -705,6 +706,19 @@ pub const CATALOG: &[ToolSpec] = &[
     ToolSpec {
         destructive: true,
         idempotent: true,
+        ..crew_member("managed_object_from_message", &[
+            p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true),
+            p("sourceMessageId",Str,true),p("change",ManagedMessageChange,true),
+        ])
+    },
+    ro(crew_member("managed_message_request_get", &[
+        p("scope",ManagedObjectScope,true),p("crewId",Str,true),p("requestId",Str,true),
+    ])),
+    ro(crew_member("managed_object_source_get", &[p("id",Str,true)])),
+    ro(crew_member("managed_objects_from_message", &[p("messageId",Str,true),p("after",Str,false)])),
+    ToolSpec {
+        destructive: true,
+        idempotent: true,
         ..crew_member(
             "managed_object_submit",
             &[
@@ -1020,6 +1034,14 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
                 "dbId":{"type":"string"},"restoreEpoch":{"type":"string"}
             },"required":["dbId","restoreEpoch"],"additionalProperties":false}),
             ManagedObjectChange => managed_change_schema(),
+            ManagedMessageChange => {
+                let mut schema=managed_change_schema();
+                schema["oneOf"].as_array_mut().unwrap().retain(|change| {
+                    matches!(change["properties"]["kind"]["const"].as_str(),
+                        Some("recordDecision"|"recordRisk"|"recordLesson"|"addRow"))
+                });
+                schema
+            },
             DecisionAskDraft => decision_ask_draft_schema(),
             CoordinationChildren => json!({"type":"array","minItems":2,"maxItems":8,"items":{
                 "type":"object",
@@ -1231,6 +1253,9 @@ mod tests {
                 "managed_decisions_list",
                 "managed_risks_list",
                 "managed_lessons_list",
+                "managed_message_request_get",
+                "managed_object_source_get",
+                "managed_objects_from_message",
                 "managed_object_request_get",
             ]
         );
@@ -1246,6 +1271,7 @@ mod tests {
                 "stop_session",
                 "handoff_captain",
                 "crew_structure",
+                "managed_object_from_message",
                 "managed_object_submit",
             ]
         );
@@ -1283,6 +1309,7 @@ mod tests {
                 "change_workdir",
                 "set_crew_status",
                 "delegation_policy",
+                "managed_object_from_message",
                 "managed_object_submit",
             ]
         );
@@ -1321,6 +1348,9 @@ mod tests {
                 "managed_decisions_list",
                 "managed_risks_list",
                 "managed_lessons_list",
+                "managed_message_request_get",
+                "managed_object_source_get",
+                "managed_objects_from_message",
                 "managed_object_request_get",
             ]
         );

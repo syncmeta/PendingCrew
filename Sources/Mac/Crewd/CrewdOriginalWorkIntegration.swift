@@ -27,6 +27,7 @@ struct CrewdMessageFolderPresentation {
     var clear:(()->Void)? = nil
     var classify:((String)->Void)? = nil
     var inspectJudgment:((String)->Void)? = nil
+    var recordObject:((String)->Void)? = nil
     #if os(macOS)
     var control:AnyView? = nil
     #endif
@@ -199,6 +200,7 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
     private struct Target:Identifiable {let id:String;let crew:String;let channel:String}
     @State private var target:Target?
     @State private var judgmentTarget:CrewdMessageInspectionTarget?
+    @State private var recordTarget:CrewdMessageInspectionTarget?
     init(workspace:CrewdWorkspace,@ViewBuilder content:@escaping ()->Content){self.workspace=workspace;self.resources=workspace.channelResources;self.content=content}
     private var selection:Binding<String>{Binding(get:{workspace.resourceDrafts.selection(resources.crew,.messages,channel:resources.channel)},set:{workspace.resourceDrafts.select(resources.crew,.messages,$0,channel:resources.channel)})}
     private var classification:CrewdMessageFolderPresentation {
@@ -213,6 +215,11 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
         var presentation = CrewdMessageFolderPresentation(filter:filter,clear:{selection.wrappedValue="all"},classify:{id in target = .init(id:id,crew:resources.crew,channel:resources.channel)})
         let crew = resources.crew, channel = resources.channel
         if CrewdMessageInspectionTarget.canOpen(workspace,crew:crew,channel:channel) {
+            if workspace.client.capabilities.contains(CrewdManagedMessageWire.capability) {
+                presentation.recordObject = { id in
+                    recordTarget = .init(workspace:workspace,crew:crew,channel:channel,message:id)
+                }
+            }
             presentation.inspectJudgment = { id in
                 judgmentTarget = .init(workspace:workspace,crew:crew,channel:channel,message:id)
             }
@@ -238,7 +245,13 @@ private struct CrewdOriginalMessageSurface<Content:View>:View {
                     workspace.originalSection == "消息"
             })
         }
-        .onChange(of:resources.crew+resources.channel){_,_ in target=nil; judgmentTarget=nil}
+        .sheet(item:$recordTarget) { target in
+            CrewdMessageRecordSheet(workspace:workspace,target:target,presentationCurrent:{
+                recordTarget?.id == target.id && resources.crew == target.source.crew && resources.channel == target.source.channel &&
+                    workspace.originalSection == "消息"
+            })
+        }
+        .onChange(of:resources.crew+resources.channel){_,_ in target=nil; judgmentTarget=nil; recordTarget=nil}
     }
 }
 

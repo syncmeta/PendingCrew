@@ -222,7 +222,7 @@ final class CrewdWorkspace: ObservableObject {
     }, rpc: { [weak self] method, params in
         guard let self, !self.retired, self.client.readyForWork, self.originalJournalReady,
               self.client.capabilities.contains(CrewdManagedDirectoryWire.capability),
-              method != "managedObject.submit" || !self.stopping else {
+              !["managedObject.submit",CrewdManagedMessageWire.record].contains(method) || !self.stopping else {
             throw CrewdClientError(message:"原组织目录连接已变更，未提交。", kind:.notSubmitted)
         }
         return try await self.client.call(method, params)
@@ -236,6 +236,8 @@ final class CrewdWorkspace: ObservableObject {
         self?.client.capabilities.contains(CrewdManagedDirectoryWire.riskLessonsCapability) == true
     }, structuredDecisionsAvailable: { [weak self] in
         self?.client.capabilities.contains(CrewdStructuredAskWire.capability) == true
+    }, messageSourcesAvailable: { [weak self] in
+        self?.client.capabilities.contains(CrewdManagedMessageWire.capability) == true
     })
     lazy var knowledge: CrewdKnowledgeStore = CrewdKnowledgeStore(origin: { [weak self] in
         guard let self, self.client.capabilities.contains("data"), self.originalJournalReady,
@@ -573,7 +575,7 @@ final class CrewdWorkspace: ObservableObject {
                     self.managedDirectory.handleEvent(name,data,connection:self.client.connectionEpoch)
                 }
                 return
-            case "events.lagged", "crew.changed", "crew.purged":
+            case "events.lagged", "crew.changed", "crew.purged", "channel.changed", "channel.purged":
                 self.managedDirectory.handleEvent(name,data,connection:self.client.connectionEpoch)
             default: break
             }
@@ -1234,6 +1236,8 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     private func isReadOnly(_ method: String) -> Bool {
+        if [CrewdManagedMessageWire.source,CrewdManagedMessageWire.objects,CrewdManagedMessageWire.lookup].contains(method) { return true }
+
         if ["adminCase.legacyList", "adminCase.legacyGet", "adminCase.legacyPreview", "adminCase.legacyReceipt", "adminCase.similarRequirements", "adminCase.requirementReviews",
             "adminCase.workDuplicates", "adminCase.workDuplicateHistory", "ask.resolveCheck", CrewdStructuredAskWire.method, "work.coordinationStatus",
             "todo.rulingCheck", "todo.rulingResult", CrewdRequirementCreateWire.lookupMethod,
@@ -1912,6 +1916,26 @@ final class CrewdWorkspace: ObservableObject {
     /// cannot prove current presence; verify both current crew/channel before
     /// changing only presentation selection. Never submit the command again.
     /// Explicit search navigation rechecks current ACL/ownership before selecting.
+    /// Re-read source ACL before selecting an actual accessible conversation.
+    /// This does not claim that a historical message is in the current timeline page.
+    func openManagedMessageSource(object:String, stillCurrent:()->Bool) async throws {
+        let epoch=observationGeneration,route=selection,connection=client.connectionEpoch,origin=presentationScope
+        func valid()->Bool { stillCurrent() && acceptsObservation(epoch) && selection==route &&
+            client.connectionEpoch==connection && presentationScope==origin && !Task.isCancelled }
+        guard valid(),client.capabilities.contains(CrewdManagedMessageWire.capability) else { throw CrewdPublicWire.invalid() }
+        let source=try CrewdManagedMessageWire.Source(await readValue(CrewdManagedMessageWire.source,.object(["id":.string(object)])))
+        guard valid(),case .available(let crew,_,let channel,_) = source else { throw CrewdPublicWire.invalid() }
+        let crews=try await readValue("crew.list")
+        guard valid(),try CrewSearchWire.rows(crews,id:{$0["id"].string}).contains(where:{$0["id"].string?.utf8.elementsEqual(crew.utf8)==true}) else { throw CrewdPublicWire.invalid() }
+        let channels=try await readValue("channel.list",.object(["crewId":.string(crew)]))
+        guard valid(),try CrewSearchWire.rows(channels,id:{$0["channel"]["id"].string}).contains(where:{
+            $0["channel"]["id"].string?.utf8.elementsEqual(channel.utf8)==true && $0["channel"]["crewId"].string?.utf8.elementsEqual(crew.utf8)==true
+        }) else { throw CrewdPublicWire.invalid() }
+        // Permission can change during navigation reads. Recheck the exact source once more.
+        let verified=try CrewdManagedMessageWire.Source(await readValue(CrewdManagedMessageWire.source,.object(["id":.string(object)])))
+        guard valid(),verified==source else { throw CrewdPublicWire.invalid() }
+        selectCrew(crew);selectChannel(channel);originalSection="消息"
+    }
     func openSearchMessage(crew:String,channel:String,message:String,stillCurrent:()->Bool)async throws {
         let epoch=observationGeneration,route=selection,connection=client.connectionEpoch,origin=presentationScope
         func valid()->Bool{stillCurrent() && acceptsObservation(epoch) && selection==route && client.connectionEpoch==connection && presentationScope==origin && !Task.isCancelled}

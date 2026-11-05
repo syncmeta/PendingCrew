@@ -28,7 +28,7 @@ pub enum Actor<'a> {
     Session(&'a str),
 }
 impl Actor<'_> {
-    fn principal(self, c: &Connection) -> Result<String> {
+    pub(crate) fn principal(self, c: &Connection) -> Result<String> {
         let (tag, id) = match self {
             Self::Human(principal) => ("human", principal),
             Self::Session(id) => {
@@ -43,7 +43,7 @@ impl Actor<'_> {
         Ok(format!("{tag}:{id}"))
     }
 
-    fn owner(self, c: &Connection, crew: &str, write: bool) -> Result<String> {
+    pub(crate) fn owner(self, c: &Connection, crew: &str, write: bool) -> Result<String> {
         let principal = self.principal(c)?;
         let sender = match self {
             Self::Human(_) => Sender::Human,
@@ -901,22 +901,8 @@ mod tests {
     fn v22_upgrade_keeps_original_work_alias_and_global_number_space() {
         use crewd_store::object_refs::{self, ObjectKind};
         let dir = tempfile::tempdir().unwrap();
-        let s = Store::open_data_dir(dir.path()).unwrap();
-        s.conn()
-            .execute_batch(
-                "DROP TABLE public_command_purge_tombstones;
-             DROP TABLE decision_ask_open_receipts;
-             DROP TABLE decision_asks;
-             DROP TABLE managed_lessons;
-             DROP TABLE managed_risks;
-             DROP TABLE managed_decisions;
-             DROP TABLE managed_object_receipts;
-             DROP TABLE managed_rows;
-             DROP TABLE managed_tables;
-             PRAGMA user_version=22;
-             INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew-a','A','t','t');",
-            )
-            .unwrap();
+        let s = crewd_store::testing::open_legacy_store(22).unwrap();
+        s.conn().execute_batch("INSERT INTO crews(id,title,created_at,updated_at) VALUES('crew-a','A','t','t');").unwrap();
         let prior = object_refs::bind(
             s.conn(),
             ObjectKind::Plan,
@@ -925,13 +911,14 @@ mod tests {
             "original",
         )
         .unwrap();
+        s.conn().execute("VACUUM INTO ?1", [dir.path().join(crewd_store::DB_FILE).to_str().unwrap()]).unwrap();
         drop(s);
         let mut s = Store::open_data_dir(dir.path()).unwrap();
         let version: i64 = s
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 26);
+        assert_eq!(version, crewd_store::schema::SCHEMA_VERSION);
         assert_eq!(
             object_refs::get(s.conn(), ObjectKind::Plan, prior.number).unwrap(),
             Some(prior.clone())

@@ -2,7 +2,7 @@
 //! enter through the separately authenticated Agent tools.
 use crate::{AppState, dispatch, public_commands::Actor};
 use crewd_collab::managed_objects as domain;
-use crewd_proto::{Request, Response, RpcError, decision_asks, managed_objects_api::*};
+use crewd_proto::{Request, Response, RpcError, decision_asks, managed_message_sources as sources, managed_objects_api::*};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -54,6 +54,14 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
     let owner = state.clone();
     let actor = actor.clone();
     let params = request.params;
+    if method == sources::RECORD {
+        let request = crewd_proto::parse_params(params)?;
+        let receipt = state.collab(move |tx| {
+            actor.authorize_tx(&owner,tx.conn(),sources::RECORD)?;
+            crewd_collab::managed_message_sources::record(tx,domain::Actor::Human(&principal),request)
+        }).await.map_err(dispatch::collab_err)?;
+        return value(receipt);
+    }
     if method == SUBMIT {
         let request = crewd_proto::parse_params(params)?;
         let receipt = state
@@ -75,6 +83,18 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
                 .map_err(dispatch::collab_err)?;
             let human = domain::Actor::Human(&principal);
             match method.as_str() {
+                sources::GET => {
+                    let params: sources::GetParams = crewd_proto::parse_params(params)?;
+                    value(crewd_collab::managed_message_sources::source(conn,human,&params.id).map_err(dispatch::collab_err)?)
+                }
+                sources::MESSAGE_OBJECTS => {
+                    let params: sources::MessageObjectsParams = crewd_proto::parse_params(params)?;
+                    value(crewd_collab::managed_message_sources::objects_from_message(conn,human,&params.message_id,params.after.as_deref()).map_err(dispatch::collab_err)?)
+                }
+                sources::REQUEST_GET => {
+                    let params: RequestParams = crewd_proto::parse_params(params)?;
+                    value(crewd_collab::managed_message_sources::lookup(conn,human,&params.scope,&params.crew_id,&params.request_id).map_err(dispatch::collab_err)?)
+                }
                 SCOPE => {
                     crewd_proto::parse_no_params(params)?;
                     value(domain::scope(conn).map_err(dispatch::collab_err)?)

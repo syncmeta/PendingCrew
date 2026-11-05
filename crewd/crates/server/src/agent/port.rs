@@ -966,6 +966,34 @@ pub(crate) async fn managed_submit(
     .await
 }
 
+pub(crate) async fn managed_record_from_message(
+    st: &AppState,
+    by: &Identity,
+    request: crewd_proto::managed_message_sources::RecordParams,
+) -> PortResult<crewd_proto::managed_message_sources::RecordReceipt> {
+    let scoped = scoped_actor(st, by)?;
+    let by = by.clone();
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        let actor = crewd_collab::managed_objects::Actor::Session(&by.session_id);
+        let receipt = crewd_collab::managed_message_sources::record(tx, actor, request)?;
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        Ok(receipt)
+    }).await
+}
+
+pub(crate) async fn managed_message_request_get(
+    st: &AppState,
+    by: &Identity,
+    request: crewd_proto::managed_objects_api::RequestParams,
+) -> PortResult<crewd_proto::managed_message_sources::Lookup> {
+    managed_read(st,by,move |c,by| {
+        crewd_collab::managed_message_sources::lookup(c,
+            crewd_collab::managed_objects::Actor::Session(&by.session_id),
+            &request.scope,&request.crew_id,&request.request_id)
+    }).await
+}
+
 pub(crate) async fn open_decision_ask(
     st: &AppState,
     by: &Identity,

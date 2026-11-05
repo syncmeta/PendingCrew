@@ -11043,6 +11043,18 @@
       ],
       "type": "object"
     },
+    "GetParams3": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
     "HealthKindView": {
       "enum": [
         "auth_required",
@@ -12518,6 +12530,63 @@
         }
       ]
     },
+    "Lookup2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/RecordReceipt"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RecordReceipt"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "LoopRecoverParams": {
       "additionalProperties": false,
       "properties": {
@@ -13193,6 +13262,45 @@
       },
       "required": [
         "channelId"
+      ],
+      "type": "object"
+    },
+    "MessageObjectsPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Object"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "MessageObjectsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "messageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "messageId"
       ],
       "type": "object"
     },
@@ -16173,6 +16281,70 @@
         }
       ]
     },
+    "RecordParams": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/Change"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "sourceMessageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "sourceMessageId",
+        "change"
+      ],
+      "type": "object"
+    },
+    "RecordReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "created": {
+          "type": "boolean"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "object": {
+          "$ref": "#/$defs/Object"
+        },
+        "recordedAt": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "sourceMessageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "recordedAt",
+        "sourceMessageId",
+        "created",
+        "object"
+      ],
+      "type": "object"
+    },
     "RemoteAcceptParams": {
       "additionalProperties": false,
       "properties": {
@@ -18659,6 +18831,82 @@
         "systemDefault"
       ],
       "type": "string"
+    },
+    "Source2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "none",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "restricted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "channelId": {
+              "type": "string"
+            },
+            "crewId": {
+              "type": "string"
+            },
+            "excerpt": {
+              "type": "string"
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "status": {
+              "const": "available",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "crewId",
+            "messageId",
+            "channelId",
+            "excerpt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "excerpt": {
+              "type": "string"
+            },
+            "status": {
+              "const": "deleted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "excerpt"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Submit": {
       "additionalProperties": false,
@@ -22582,6 +22830,30 @@
         "$ref": "#/$defs/LessonPage"
       }
     },
+    "managedObject.messageObjects": {
+      "params": {
+        "$ref": "#/$defs/MessageObjectsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/MessageObjectsPage"
+      }
+    },
+    "managedObject.messageRequest.get": {
+      "params": {
+        "$ref": "#/$defs/RequestParams"
+      },
+      "result": {
+        "$ref": "#/$defs/Lookup2"
+      }
+    },
+    "managedObject.recordFromMessage": {
+      "params": {
+        "$ref": "#/$defs/RecordParams"
+      },
+      "result": {
+        "$ref": "#/$defs/RecordReceipt"
+      }
+    },
     "managedObject.request.get": {
       "params": {
         "$ref": "#/$defs/RequestParams"
@@ -22626,6 +22898,14 @@
       },
       "result": {
         "$ref": "#/$defs/Scope"
+      }
+    },
+    "managedObject.source": {
+      "params": {
+        "$ref": "#/$defs/GetParams3"
+      },
+      "result": {
+        "$ref": "#/$defs/Source2"
       }
     },
     "managedObject.submit": {

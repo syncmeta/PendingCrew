@@ -89,6 +89,23 @@ final class CrewdPresentationJournal {
         }
     }
 
+    func prepareMessageSource(_ params: CrewdValue, crew: String) throws -> Prepared {
+        let method = "managedObject.message.observation"
+        guard params["original"]["crewId"].string?.utf8.elementsEqual(crew.utf8) == true,
+              let source = params["sourceMessageId"].string, !source.isEmpty,
+              let key = params["key"].string, !key.isEmpty else { throw CrewdPublicWire.invalid() }
+        return try withPrivateLock("managed-message-source.lock", message:"消息原请求正在核对或锁不可用。") {
+            guard try !unknownRecords().contains(where: {
+                $0.method == method && $0.scope == scope &&
+                $0.params["sourceMessageId"].string?.utf8.elementsEqual(source.utf8) == true &&
+                $0.params["key"].string?.utf8.elementsEqual(key.utf8) == true
+            }) else {
+                throw CrewdClientError(message:"这条消息已有同类原请求待核对。",kind:.notSubmitted)
+            }
+            return try prepare(method:method,params:params,crew:crew)
+        }
+    }
+
     func observeLegacyWorkClose(_ record: Prepared, result: CrewdValue, expectedCrew: String?) throws {
         guard record.method == "work.close", record.scope == scope else { throw CrewdPublicWire.invalid() }
         try CrewdLegacyWorkClose.validate(result,params:record.params,expectedCrew:expectedCrew)
@@ -492,6 +509,11 @@ final class CrewdPresentationJournal {
     /// APNs token or provider key. Reading history does not confirm a mutation.
     func personalDraftHistory()throws->[Prepared]{try records(includeObservedFirstMessages:false,includePersonalDrafts:true).filter{$0.method=="command.submit" && $0.params["command"]["operation"].string?.hasPrefix("personalDraft.")==true}.sorted{$0.preparedAt < $1.preparedAt}}
     func notificationHistory()throws->[Prepared]{try records(includeObservedFirstMessages:false,includeNotifications:true).filter{["notification.installationRegister","notification.installationRevoke"].contains($0.method)}.sorted{$0.preparedAt < $1.preparedAt}}
+    func messageSourceHistory() throws -> [Prepared] {
+        try records(includeObservedFirstMessages:false,includeMessageSources:true)
+            .filter { $0.method == "managedObject.message.observation" }
+            .sorted { $0.preparedAt > $1.preparedAt }
+    }
     func unknownRecords() throws -> [Prepared] { try records(includeObservedFirstMessages: false) }
     /// Original successful-observation snapshots remain available for lookup;
     /// their existence is not a durable server success or a replay permission.
@@ -575,7 +597,7 @@ final class CrewdPresentationJournal {
             }else if record.method=="session.codex.inputDiscard",let id=record.params["input"]["inputId"].string,wanted.contains(id){throw CrewdClientError(message:"原输入已请求丢弃；请只读核对原请求。",kind:.notSubmitted)}
         }
     }
-    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false,includeCodexInputs:Bool=false,includePersonalDrafts:Bool=false,includeRequirementCreateAttempts:Bool=false) throws -> [Prepared] {
+    private func records(includeObservedFirstMessages: Bool, includeNotifications:Bool=false,includeCodexInputs:Bool=false,includePersonalDrafts:Bool=false,includeRequirementCreateAttempts:Bool=false,includeMessageSources:Bool=false) throws -> [Prepared] {
         var rows: [Prepared] = []
         for file in try FileManager.default.contentsOfDirectory(at: directory.appendingPathComponent("prepared"), includingPropertiesForKeys: nil).sorted(by: { $0.path < $1.path }) {
             guard file.pathExtension == "json" else { throw StorageError.refused("前端历史目录包含未知对象；保留原资料。") }
@@ -600,7 +622,8 @@ final class CrewdPresentationJournal {
                 observed = observation
             }
             guard let outcome = observed else { rows.append(record); continue }
-            if includePersonalDrafts,record.method=="command.submit",record.params["command"]["operation"].string?.hasPrefix("personalDraft.")==true{rows.append(record)}
+            if includeMessageSources, record.method == "managedObject.message.observation" { rows.append(record) }
+            else if includePersonalDrafts,record.method=="command.submit",record.params["command"]["operation"].string?.hasPrefix("personalDraft.")==true{rows.append(record)}
             else if includeCodexInputs, record.method.hasPrefix("session.codex.input") || record.method == "command.submit" {rows.append(record)}
             else if includeNotifications, ["notification.installationRegister","notification.installationRevoke"].contains(record.method) {rows.append(record)}
             else if outcome.state == "unknown" { rows.append(record) }

@@ -23,6 +23,7 @@ pub mod commands;
 pub mod host;
 pub mod judgments;
 pub mod managed_objects;
+pub mod managed_message_sources;
 pub mod decision_asks;
 pub mod managed_objects_api;
 mod managed_risks_lessons;
@@ -211,6 +212,10 @@ pub mod methods {
         crate::managed_objects_api::REQUEST_GET,
         crate::decision_asks::GET,
         crate::decision_asks::DECISION_ORIGIN,
+        crate::managed_message_sources::RECORD,
+        crate::managed_message_sources::GET,
+        crate::managed_message_sources::MESSAGE_OBJECTS,
+        crate::managed_message_sources::REQUEST_GET,
         crate::commands::LOCAL_CLIENT_TRUST_STATUS,
         crate::commands::COMMAND_SUBMIT,
         crate::commands::COMMAND_LOOKUP,
@@ -781,6 +786,22 @@ pub fn api_schema() -> Value {
         (
             decision_asks::DECISION_ORIGIN,
             m(sub::<decision_asks::OriginParams>(g), nullable(sub::<decision_asks::View>(g))),
+        ),
+        (
+            managed_message_sources::RECORD,
+            m(sub::<managed_message_sources::RecordParams>(g),sub::<managed_message_sources::RecordReceipt>(g)),
+        ),
+        (
+            managed_message_sources::GET,
+            m(sub::<managed_message_sources::GetParams>(g),sub::<managed_message_sources::Source>(g)),
+        ),
+        (
+            managed_message_sources::MESSAGE_OBJECTS,
+            m(sub::<managed_message_sources::MessageObjectsParams>(g),sub::<managed_message_sources::MessageObjectsPage>(g)),
+        ),
+        (
+            managed_message_sources::REQUEST_GET,
+            m(sub::<managed::RequestParams>(g),sub::<managed_message_sources::Lookup>(g)),
         ),
         (
             "notification.status",

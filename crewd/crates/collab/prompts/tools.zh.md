@@ -1630,3 +1630,49 @@ managed_tables_list 或 managed_object_get 返回的准确 T 编号。
 
 ## managed_object_request_get.requestId
 准确的原始请求 UUID。
+
+
+## managed_object_from_message
+将一条当前可读的原消息明确记为组织决定、风险、教训或表行。对象内容由组织成员可读，出处仍按原会话权限过滤。Core读取真实摘录。每条消息每种类型仅建一次，表行按组织表区分；created=false表示已有对象，本次草稿没有写入，请保留。原请求不确定时仅用managed_message_request_get查询，不改用普通提交重建。
+
+## managed_object_from_message.scope
+准确复制managed_object_scope_get返回的当前dbId和restoreEpoch。
+
+## managed_object_from_message.crewId
+使用当前附着会话的归属机组编号。
+
+## managed_object_from_message.requestId
+为确切消息与草稿保留一个原始UUID。
+
+## managed_object_from_message.sourceMessageId
+当前有权读取的真实原消息ID；不要传入自行编写的摘录。
+
+## managed_object_from_message.change
+仅允许recordDecision、recordRisk、recordLesson或addRow。新内容必须适合组织公开；表行使用当前机组未归档T的完整类型化值。
+
+## managed_message_request_get
+只读查询消息记录的原始回执。与普通managed_object_request_get独立。逐次重验原消息权限；known/historical并不授权重发，notFound也不证明未提交。
+
+## managed_message_request_get.scope
+原消息记录请求的准确dbId与restoreEpoch。
+
+## managed_message_request_get.crewId
+原消息记录请求的机组编号。
+
+## managed_message_request_get.requestId
+原消息记录请求UUID，不另建请求号。
+
+## managed_object_source_get
+读取对象的消息出处。none为未记录，restricted不含消息编号或摘录，deleted只在权限允许时保留摘录；available提供实际机组、会话、消息和摘录。不要从对象组织可读推断原消息可读。
+
+## managed_object_source_get.id
+准确的D/R/L/O对象编号。
+
+## managed_objects_from_message
+只读分页列出当前有权读取的原消息已经记录的组织对象；不创建，不发送通知。
+
+## managed_objects_from_message.messageId
+实际原消息ID。
+
+## managed_objects_from_message.after
+上一页返回的准确nextAfter；省略以从第一页开始。

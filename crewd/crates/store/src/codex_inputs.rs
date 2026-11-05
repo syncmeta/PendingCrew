@@ -976,16 +976,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
-        let s = crate::Store::open_data_dir(&data).unwrap();
-        s.conn().execute_batch(
-            "INSERT INTO crews(id,title,created_at,updated_at)VALUES('crew','Original19 business row','t','t');
-             DROP TABLE codex_native_inputs;
-             DROP TABLE codex_input_requests;
-             DELETE FROM meta WHERE key='personalDraft.restoreStamp.v1';
-             DROP INDEX messages_stop_escalations_seq;
-             PRAGMA user_version=19;",
+        let conn = rusqlite::Connection::open(data.join(crate::DB_FILE)).unwrap();
+        crate::testing::historical_fixture(&conn, 19).unwrap();
+        conn.execute_batch(
+            "INSERT INTO crews(id,title,created_at,updated_at)VALUES('crew','Original19 business row','t','t');",
         ).unwrap();
-        drop(s);
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+        drop(conn);
         let s = crate::Store::open_data_dir(&data).unwrap();
         assert_eq!(
             s.conn()

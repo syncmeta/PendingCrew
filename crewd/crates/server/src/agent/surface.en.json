@@ -3145,6 +3145,598 @@
         "openWorldHint": false,
         "readOnlyHint": false
       },
+      "description": "Explicitly record a currently readable message as an organization decision, risk, lesson or table row. Object content is organization-readable; source visibility still follows channel permissions. Core captures the real excerpt. One object per message and kind (rows per table); created=false means an existing object was returned and this draft was not saved. Retain the draft. Recover uncertainty only through managed_message_request_get, never resubmit through ordinary object creation.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "Only recordDecision, recordRisk, recordLesson or addRow. New content must be suitable for organization-wide reading. Rows require full typed values for a current unfrozen table owned by your crew.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "addRow"
+                  },
+                  "tableId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tableId",
+                  "values"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement",
+                                "row",
+                                "risk"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "alternatives": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "choice": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "question": {
+                        "maxLength": 60,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "rationale": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reversibility": {
+                        "enum": [
+                          "reversible",
+                          "hardToReverse",
+                          "irreversible",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "question",
+                      "choice",
+                      "rationale",
+                      "about"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordDecision"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "impact": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "likelihood": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "mitigatedBy": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "decision"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "mitigation": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "summary": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "impact",
+                      "about",
+                      "mitigatedBy"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordRisk"
+                  },
+                  "owner": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "human"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "session"
+                          },
+                          "sessionId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sessionId"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliesTo": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "table"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "detection": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "items": {
+                          "maxLength": 1500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "happened": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "learnedFrom": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "ask"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "lesson": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "happened",
+                      "lesson",
+                      "learnedFrom",
+                      "evidence",
+                      "appliesTo"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordLesson"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "crewId": {
+            "description": "Use the owning crew of the currently attached session.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one original UUID for this exact message and draft.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy the current dbId and restoreEpoch from managed_object_scope_get exactly.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          },
+          "sourceMessageId": {
+            "description": "The exact currently readable source message ID; never provide a fabricated excerpt.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "sourceMessageId",
+          "change"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_from_message"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the original message-recording receipt only. This is separate from managed_object_request_get. Source access is rechecked. known/historical never authorize replay, and notFound does not prove the write was not submitted.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The crew ID of the original message-recording request.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "The original message-recording UUID, never a replacement request ID.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "The exact original message-recording dbId and restoreEpoch.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_message_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read an object source. none means no recorded source; restricted contains no IDs or excerpt. deleted retains only an authorized excerpt. available identifies the actual crew, channel, message and excerpt. Organization-readable objects do not grant access to their source messages.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The exact D/R/L/O object ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_source_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a bounded page of organization objects already recorded from a currently readable message. Does not create objects or notify anyone.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The exact nextAfter returned by the previous page; omit for the first page.",
+            "type": "string"
+          },
+          "messageId": {
+            "description": "The exact source message ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_objects_from_message"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
       "description": "Create a managed table, add or edit a row, or record a decision, risk, or lesson for your own active crew. A decision's author or the owning crew's current captain can replace or withdraw it using the latest D revision. Use the current scope, one original UUID, and the full typed intent. Row edits require the latest row revision and replace the full row. Risk and lesson changes require the latest object revision. You may confirm an active lesson you can read, including one from another crew. After an uncertain response, look up the original request using its UUID and scope.",
       "inputSchema": {
         "additionalProperties": false,
@@ -6913,6 +7505,598 @@
         "type": "object"
       },
       "name": "managed_lessons_list"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Explicitly record a currently readable message as an organization decision, risk, lesson or table row. Object content is organization-readable; source visibility still follows channel permissions. Core captures the real excerpt. One object per message and kind (rows per table); created=false means an existing object was returned and this draft was not saved. Retain the draft. Recover uncertainty only through managed_message_request_get, never resubmit through ordinary object creation.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "Only recordDecision, recordRisk, recordLesson or addRow. New content must be suitable for organization-wide reading. Rows require full typed values for a current unfrozen table owned by your crew.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "addRow"
+                  },
+                  "tableId": {
+                    "type": "string"
+                  },
+                  "values": {
+                    "items": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "null"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "text"
+                            },
+                            "value": {
+                              "maxLength": 65536,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "integer"
+                            },
+                            "value": {
+                              "pattern": "^(0|-?[1-9][0-9]*)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "const": "real"
+                            },
+                            "value": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "value"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "tableId",
+                  "values"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement",
+                                "row",
+                                "risk"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "alternatives": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "choice": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "question": {
+                        "maxLength": 60,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "rationale": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "reversibility": {
+                        "enum": [
+                          "reversible",
+                          "hardToReverse",
+                          "irreversible",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "question",
+                      "choice",
+                      "rationale",
+                      "about"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordDecision"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "about": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "requirement"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 1,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "impact": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ],
+                        "type": "string"
+                      },
+                      "likelihood": {
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          null
+                        ],
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "mitigatedBy": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "decision"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "mitigation": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "summary": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "summary",
+                      "impact",
+                      "about",
+                      "mitigatedBy"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordRisk"
+                  },
+                  "owner": {
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "human"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "session"
+                          },
+                          "sessionId": {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "sessionId"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "draft": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appliesTo": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "crew",
+                                "work",
+                                "table"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "detection": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "items": {
+                          "maxLength": 1500,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 8,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "happened": {
+                        "maxLength": 1500,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "learnedFrom": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "kind": {
+                              "enum": [
+                                "work",
+                                "ask"
+                              ],
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "id"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 8,
+                        "minItems": 0,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "lesson": {
+                        "maxLength": 120,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "happened",
+                      "lesson",
+                      "learnedFrom",
+                      "evidence",
+                      "appliesTo"
+                    ],
+                    "type": "object"
+                  },
+                  "kind": {
+                    "const": "recordLesson"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "draft"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "crewId": {
+            "description": "Use the owning crew of the currently attached session.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Retain one original UUID for this exact message and draft.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "Copy the current dbId and restoreEpoch from managed_object_scope_get exactly.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          },
+          "sourceMessageId": {
+            "description": "The exact currently readable source message ID; never provide a fabricated excerpt.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId",
+          "sourceMessageId",
+          "change"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_from_message"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read the original message-recording receipt only. This is separate from managed_object_request_get. Source access is rechecked. known/historical never authorize replay, and notFound does not prove the write was not submitted.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "crewId": {
+            "description": "The crew ID of the original message-recording request.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "The original message-recording UUID, never a replacement request ID.",
+            "type": "string"
+          },
+          "scope": {
+            "additionalProperties": false,
+            "description": "The exact original message-recording dbId and restoreEpoch.",
+            "properties": {
+              "dbId": {
+                "type": "string"
+              },
+              "restoreEpoch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dbId",
+              "restoreEpoch"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "scope",
+          "crewId",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_message_request_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read an object source. none means no recorded source; restricted contains no IDs or excerpt. deleted retains only an authorized excerpt. available identifies the actual crew, channel, message and excerpt. Organization-readable objects do not grant access to their source messages.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The exact D/R/L/O object ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "managed_object_source_get"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read a bounded page of organization objects already recorded from a currently readable message. Does not create objects or notify anyone.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "description": "The exact nextAfter returned by the previous page; omit for the first page.",
+            "type": "string"
+          },
+          "messageId": {
+            "description": "The exact source message ID.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "type": "object"
+      },
+      "name": "managed_objects_from_message"
     },
     {
       "annotations": {

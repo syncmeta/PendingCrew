@@ -1478,3 +1478,65 @@ extension CrewdManagedDirectoryWire.Risk {
         openForReview && !frozen && (CrewdManagedDirectoryWire.managedTime(nextReviewAt).map { $0 <= now } ?? false)
     }
 }
+
+
+// Message provenance is projected separately from organization object contents.
+enum CrewdManagedMessageWire {
+    static let capability = "managedMessageSources.v1"
+    static let record = "managedObject.recordFromMessage"
+    static let source = "managedObject.source"
+    static let objects = "managedObject.messageObjects"
+    static let lookup = "managedObject.messageRequest.get"
+    static let observation = "managedObject.message.observation"
+    typealias Directory = CrewdManagedDirectoryWire
+
+    enum Source: Equatable {
+        case none, restricted
+        case available(crew: String, message: String, channel: String, excerpt: String)
+        case deleted(excerpt: String)
+
+        init(_ value: CrewdValue) throws {
+            guard case .object(let fields) = value else { throw Directory.Problem.invalid }
+            switch fields["status"]?.string {
+            case "none" where Set(fields.keys) == ["status"]: self = .none
+            case "restricted" where Set(fields.keys) == ["status"]: self = .restricted
+            case "available" where Set(fields.keys) == ["status","crewId","messageId","channelId","excerpt"]:
+                guard let crew = fields["crewId"]?.string, !crew.isEmpty,
+                      let message = fields["messageId"]?.string, !message.isEmpty,
+                      let channel = fields["channelId"]?.string, !channel.isEmpty,
+                      let excerpt = fields["excerpt"]?.string, excerpt.unicodeScalars.count <= 280
+                else { throw Directory.Problem.invalid }
+                self = .available(crew:crew,message:message,channel:channel,excerpt:excerpt)
+            case "deleted" where Set(fields.keys) == ["status","excerpt"]:
+                guard let excerpt = fields["excerpt"]?.string, excerpt.unicodeScalars.count <= 280
+                else { throw Directory.Problem.invalid }
+                self = .deleted(excerpt:excerpt)
+            default: throw Directory.Problem.invalid
+            }
+        }
+    }
+    struct Record: Encodable {
+        let scope: Directory.Scope
+        let crewId: String
+        let requestId: String
+        let sourceMessageId: String
+        let change: Directory.Change
+    }
+    struct Receipt: Decodable {
+        let scope: Directory.Scope
+        let crewId: String
+        let requestId: String
+        let recordedAt: String
+        let sourceMessageId: String
+        let created: Bool
+        let object: Directory.Object
+    }
+    struct Lookup: Decodable {
+        let status: String
+        let receipt: Receipt?
+    }
+    struct Page: Decodable {
+        let items: [Directory.Object]
+        let nextAfter: String?
+    }
+}

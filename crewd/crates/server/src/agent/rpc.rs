@@ -644,6 +644,120 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_message_tools_recheck_attached_scope_and_keep_private_sources() {
+        use serde_json::Value;
+
+        async fn tool(peer: &mut RpcClient, name: &str, args: Value) -> Value {
+            peer.call(methods::CALL, json!({"tool":name,"args":args}))
+                .await.unwrap()
+        }
+        fn decoded(result: Value) -> Value {
+            assert_eq!(result["isError"], false, "{result}");
+            serde_json::from_str(result["text"].as_str().unwrap()).unwrap()
+        }
+
+        let f = Fixture::new().await;
+        let foreign = f.add_crew("Foreign source reader", None).await;
+        let other = "foreign-source-worker";
+        f.add_session(&foreign, other, Role::Worker, "Foreign reader").await;
+        let channel = crewd_store::channels::lobby_id(&f.crew);
+        let message = f.human_post(&channel, "Synthetic source e\u{301} kept private", vec![]).await;
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let server = f.spawn_owned_socket(stopping).await;
+        let socket = f.data_dir().join("crewd.sock");
+        let mut writer = RpcClient::connect(&socket).await;
+        let mut reader = RpcClient::connect(&socket).await;
+        for (peer, session) in [(&mut writer, f.worker.as_str()), (&mut reader, other)] {
+            peer.call(methods::ATTACH, json!({"sessionId":session,"token":f.token(session)}))
+                .await.unwrap();
+        }
+        let captured = decoded(tool(&mut writer, "managed_object_scope_get", json!({})).await);
+        let scope = captured["scope"].clone();
+        let packet = json!({
+            "scope":scope,"crewId":f.crew,"requestId":uuid::Uuid::new_v4().to_string(),
+            "sourceMessageId":message.id,"change":{"kind":"recordDecision","draft":{
+                "question":"How to retain the result?","choice":"Keep the original",
+                "rationale":"Synthetic attached capture","about":[{"kind":"crew","id":f.crew}]
+            }}
+        });
+        let mut changes = f.state.hub.subscribe_collab();
+        let receipt = decoded(tool(&mut writer, "managed_object_from_message", packet.clone()).await);
+        assert_eq!(receipt["created"], true);
+        assert_eq!(receipt["sourceMessageId"], message.id);
+        assert_eq!(receipt["requestId"], packet["requestId"]);
+        assert_eq!(receipt["object"]["decision"]["author"],
+                   json!({"kind":"session","sessionId":f.worker}));
+        let id = receipt["object"]["decision"]["id"].clone();
+        assert_eq!(decoded(tool(&mut writer, "managed_object_from_message", packet.clone()).await), receipt);
+        let lookup = json!({"scope":scope,"crewId":f.crew,"requestId":packet["requestId"]});
+        assert_eq!(decoded(tool(&mut writer, "managed_message_request_get", lookup.clone()).await),
+                   json!({"status":"known","receipt":receipt}));
+        let mut duplicate = packet.clone();
+        duplicate["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        let second = decoded(tool(&mut writer, "managed_object_from_message", duplicate.clone()).await);
+        assert_eq!(second["created"], false);
+        assert_eq!(second["object"], receipt["object"]);
+        assert_eq!(decoded(tool(&mut writer, "managed_object_from_message", duplicate.clone()).await), second);
+        let progress: Vec<_> = std::iter::from_fn(|| changes.try_recv().ok())
+            .filter(|change| matches!(change, Change::Progress { session_id, .. } if session_id == &f.worker))
+            .collect();
+        assert_eq!(progress.len(), 1, "only the new object may count as actual progress");
+        assert_eq!(decoded(tool(&mut writer, "managed_object_source_get", json!({"id":id})).await),
+                   json!({"status":"available","crewId":f.crew,"messageId":message.id,
+                          "channelId":channel,"excerpt":message.text}));
+        assert_eq!(decoded(tool(&mut writer, "managed_objects_from_message", json!({"messageId":message.id})).await),
+                   json!({"items":[receipt["object"]],"nextAfter":null}));
+
+        assert_eq!(decoded(tool(&mut reader, "managed_object_get", json!({"id":id})).await), receipt["object"]);
+        assert_eq!(decoded(tool(&mut reader, "managed_object_source_get", json!({"id":id})).await),
+                   json!({"status":"restricted"}), "object visibility must not expose source IDs or excerpt");
+        let mut foreign_record = packet.clone();
+        foreign_record["crewId"] = json!(foreign);
+        foreign_record["requestId"] = json!(uuid::Uuid::new_v4().to_string());
+        foreign_record["change"]["draft"]["about"] = json!([{"kind":"crew","id":foreign}]);
+        for (name, args) in [
+            ("managed_object_from_message", foreign_record.clone()),
+            ("managed_objects_from_message", json!({"messageId":message.id})),
+            ("managed_message_request_get", lookup.clone()),
+        ] {
+            assert_eq!(tool(&mut reader, name, args).await["isError"], true, "{name}");
+        }
+
+        // Keep this exact attachment and token, but change its authoritative crew row.
+        f.add_session(&foreign, &f.worker, Role::Worker, "Moved worker").await;
+        assert_eq!(decoded(tool(&mut writer, "managed_object_get", json!({"id":id})).await), receipt["object"]);
+        assert_eq!(decoded(tool(&mut writer, "managed_object_source_get", json!({"id":id})).await),
+                   json!({"status":"restricted"}));
+        for (name, args) in [
+            ("managed_object_from_message", packet.clone()),
+            ("managed_object_from_message", foreign_record.clone()),
+            ("managed_objects_from_message", json!({"messageId":message.id})),
+            ("managed_message_request_get", lookup.clone()),
+        ] {
+            assert_eq!(tool(&mut writer, name, args).await["isError"], true,
+                       "current crew must be read again for {name}");
+        }
+        f.state.tokens.revoke(&f.worker);
+        for (name, args) in [
+            ("managed_object_from_message", foreign_record),
+            ("managed_object_source_get", json!({"id":id})),
+            ("managed_objects_from_message", json!({"messageId":message.id})),
+            ("managed_message_request_get", lookup),
+        ] {
+            assert_eq!(tool(&mut writer, name, args).await["isError"], true,
+                       "invalidated attachment must not use {name}");
+        }
+        let objects = decoded(tool(&mut reader, "managed_decisions_list", json!({})).await);
+        assert_eq!(objects["items"], json!([receipt["object"]["decision"]]));
+        assert!(!std::iter::from_fn(|| changes.try_recv().ok())
+            .any(|change| matches!(change, Change::Progress { session_id, .. } if session_id == f.worker)),
+            "refused or read-only calls cannot extend progress");
+        drop((writer, reader));
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), server).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn managed_decision_tools_keep_attached_authority_and_original_receipts() {
         use serde_json::Value;
 

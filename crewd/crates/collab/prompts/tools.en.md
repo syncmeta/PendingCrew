@@ -1630,3 +1630,49 @@ The original owner crew ID of this request.
 
 ## managed_object_request_get.requestId
 The exact original request UUID.
+
+
+## managed_object_from_message
+Explicitly record a currently readable message as an organization decision, risk, lesson or table row. Object content is organization-readable; source visibility still follows channel permissions. Core captures the real excerpt. One object per message and kind (rows per table); created=false means an existing object was returned and this draft was not saved. Retain the draft. Recover uncertainty only through managed_message_request_get, never resubmit through ordinary object creation.
+
+## managed_object_from_message.scope
+Copy the current dbId and restoreEpoch from managed_object_scope_get exactly.
+
+## managed_object_from_message.crewId
+Use the owning crew of the currently attached session.
+
+## managed_object_from_message.requestId
+Retain one original UUID for this exact message and draft.
+
+## managed_object_from_message.sourceMessageId
+The exact currently readable source message ID; never provide a fabricated excerpt.
+
+## managed_object_from_message.change
+Only recordDecision, recordRisk, recordLesson or addRow. New content must be suitable for organization-wide reading. Rows require full typed values for a current unfrozen table owned by your crew.
+
+## managed_message_request_get
+Read the original message-recording receipt only. This is separate from managed_object_request_get. Source access is rechecked. known/historical never authorize replay, and notFound does not prove the write was not submitted.
+
+## managed_message_request_get.scope
+The exact original message-recording dbId and restoreEpoch.
+
+## managed_message_request_get.crewId
+The crew ID of the original message-recording request.
+
+## managed_message_request_get.requestId
+The original message-recording UUID, never a replacement request ID.
+
+## managed_object_source_get
+Read an object source. none means no recorded source; restricted contains no IDs or excerpt. deleted retains only an authorized excerpt. available identifies the actual crew, channel, message and excerpt. Organization-readable objects do not grant access to their source messages.
+
+## managed_object_source_get.id
+The exact D/R/L/O object ID.
+
+## managed_objects_from_message
+Read a bounded page of organization objects already recorded from a currently readable message. Does not create objects or notify anyone.
+
+## managed_objects_from_message.messageId
+The exact source message ID.
+
+## managed_objects_from_message.after
+The exact nextAfter returned by the previous page; omit for the first page.

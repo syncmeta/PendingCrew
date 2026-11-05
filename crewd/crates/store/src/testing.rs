@@ -90,17 +90,23 @@ pub fn open_v8_store() -> crate::Result<crate::Store> {
     open_legacy_store(8)
 }
 
-/// Empty caller-owned historical v4–v8 store; never a downgrade of an existing
-/// database. Use only for old-schema migration samples, not live product tests.
+/// Empty caller-owned historical v4–v26 store, excluding reserved Core16.
+/// Runs the historical chain without downgrading an existing database.
 pub fn open_legacy_store(version: i64) -> crate::Result<crate::Store> {
     let conn = rusqlite::Connection::open_in_memory()?;
-    crate::pin_pragmas(&conn)?;
-    crate::schema::initialize_legacy_fixture(&conn, version)?;
-    crate::mark_identity(&conn)?;
+    historical_fixture(&conn, version)?;
     Ok(crate::Store {
         conn,
         backups: None,
     })
+}
+
+/// Initialize only an empty synthetic connection, then install its original identity.
+/// File-backed and in-memory migration fixtures share this historical chain.
+pub fn historical_fixture(conn: &rusqlite::Connection, version: i64) -> crate::Result<()> {
+    crate::pin_pragmas(conn)?;
+    crate::schema::initialize_legacy_fixture(conn, version)?;
+    crate::mark_identity(conn)
 }
 
 #[cfg(test)]
@@ -142,7 +148,7 @@ mod historical_fixture_tests {
     }
     #[test]
     fn historical_versions_stop_at_their_actual_tables_without_fake_downgrades() {
-        for version in 4..=9 {
+        for version in (4..=26).filter(|version| *version != 16) {
             let store = super::open_legacy_store(version).unwrap();
             let actual: i64 = store
                 .conn()
@@ -157,18 +163,30 @@ mod historical_fixture_tests {
                 ("organization_work_book", 9),
                 ("documents", 10),
                 ("channel_work_scopes", 10),
+                ("remote_authority", 11),
+                ("codex_native_inputs", 20),
+                ("messages_stop_escalations_seq", 22),
+                ("managed_tables", 23),
+                ("managed_decisions", 24),
+                ("managed_risks", 25),
+                ("decision_asks", 26),
+                ("managed_message_sources", 27),
             ] {
                 let exists: i64 = store
                     .conn()
                     .query_row(
-                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                        "SELECT COUNT(*) FROM sqlite_master WHERE name=?1",
                         [table],
                         |r| r.get(0),
                     )
                     .unwrap();
                 assert_eq!(exists, i64::from(version >= introduced));
             }
+            let draft = crate::meta_get(store.conn(), "personalDraft.restoreStamp.v1").unwrap();
+            assert_eq!(draft.is_some(), version >= 21);
+            assert!(crate::schema::initialize_legacy_fixture(store.conn(), version).is_err());
         }
-        assert!(super::open_legacy_store(10).is_err());
+        assert!(super::open_legacy_store(16).is_err());
+        assert!(super::open_legacy_store(27).is_err());
     }
 }
