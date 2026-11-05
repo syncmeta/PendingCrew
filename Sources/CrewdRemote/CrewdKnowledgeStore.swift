@@ -2921,6 +2921,8 @@ extension CrewdArtifactStore {
             guard actual.valid,actual.crewId.utf8.elementsEqual(crew.utf8),actual.scope.dbId==scope.authority.dbId,
                   job==nil || actual.id==job else {throw Problem.invalid}
         }
+        let continuable=status.job.map{Wire.exact($0.scope,scope.authority) && $0.cursor.phase != .complete} ?? false
+        guard status.canContinue==continuable else {throw Problem.invalid}
         try await check(scope,stillCurrent);return status
     }
     func historyPending(_ scope:Scope,crew:String?=nil)throws->[HistoryPending] {
@@ -2990,15 +2992,20 @@ extension CrewdArtifactStore {
         let effect=r.effect
         if w.operation.kind=="begin" {
             guard effect.kind=="begun",effect.created != nil,effect.beforeRevision==nil,effect.beforeCursor==nil,effect.delta==nil,w.before==nil else {throw Problem.invalid}
-            if effect.created==true {guard r.job.revision=="1",r.job.counts.zero else {throw Problem.invalid}}
+            if effect.created==true {
+                guard r.job.revision=="1",r.job.counts.zero,r.job.cursor == .init(phase:.legacyEvents,after:"0"),
+                      r.job.lastRequestId==r.requestId else {throw Problem.invalid}
+            } else {guard r.job.cursor.phase != .complete else {throw Problem.invalid}}
         } else {
-            guard let before=w.before,let revision=w.operation.expectedRevision.flatMap(History.number),revision<UInt64.max,
+            guard let before=w.before,before.valid,before.cursor.phase != .complete,let revision=w.operation.expectedRevision.flatMap(History.number),revision<UInt64.max,
                   r.job.id==w.operation.jobId,before.id==r.job.id,before.revision==w.operation.expectedRevision,r.job.lastRequestId==r.requestId,
                   effect.kind=="advanced",effect.created==nil,effect.beforeRevision==w.operation.expectedRevision,
                   effect.beforeCursor==w.operation.expectedCursor,before.cursor==w.operation.expectedCursor,
                   let delta=effect.delta,delta.valid,History.number(delta.scanned)!<=UInt64(w.operation.limit!),
                   let total=before.counts.adding(delta),Wire.exact(total,r.job.counts),r.job.revision==String(revision+1),
-                  Wire.exact(before.cut,r.job.cut),before.createdAt.utf8.elementsEqual(r.job.createdAt.utf8) else {throw Problem.invalid}
+                  Wire.exact(before.cut,r.job.cut),before.createdAt.utf8.elementsEqual(r.job.createdAt.utf8),
+                  r.job.cursor.phase.rank>=before.cursor.phase.rank,
+                  r.job.cursor.phase != before.cursor.phase || History.number(r.job.cursor.after)!>History.number(before.cursor.after)! else {throw Problem.invalid}
         }
     }
 }

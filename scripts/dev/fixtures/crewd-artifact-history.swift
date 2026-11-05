@@ -26,6 +26,10 @@ import Foundation
         var begins=0,steps=0,lookups=0,methods:[String]=[]
         var saved:[String:CrewdValue]=[:]
         var lose=false,corrupt=false,dismiss=false,lookupMissing=false
+        var mutateReply:((CrewdValue)->CrewdValue)?
+        var mutateStatus:((CrewdValue)->CrewdValue)?
+        var stepCursor:Wire.Cursor?
+        var stepDelta:Wire.Counts?
         var fail:CrewdClientError?
         let foreignLast=UUID().uuidString.lowercased()
         func value<T:Encodable>(_ x:T)throws->CrewdValue {try CrewdKnowledgeStore.encode(x)}
@@ -43,7 +47,8 @@ import Foundation
                     return .array([.object(["id":.string(target),"title":.string("Archived target"),"removedAt":.string(at)]),.object(["id":.string(presentation),"title":.string("Current crew")])])
                 case Wire.status:
                     precondition(p["crewId"] == .string(target))
-                    return .object(["scope":try value(authority),"crewId":.string(target),"job":try job.map(value) ?? .null,"canContinue":.bool(job.map{$0.scope==authority && $0.cursor.phase != .complete} ?? false)])
+                    let raw:CrewdValue = .object(["scope":try value(authority),"crewId":.string(target),"job":try job.map(value) ?? .null,"canContinue":.bool(job.map{$0.scope==authority && $0.cursor.phase != .complete} ?? false)])
+                    return mutateStatus?(raw) ?? raw
                 case Wire.begin:
                     begins+=1
                     if let fail {throw fail}
@@ -52,18 +57,18 @@ import Foundation
                     else {job=copy(job!,last:foreignLast)} // reused Begin's recent request belongs to someone else.
                     let receipt=Wire.Receipt(scope:authority,crewId:target,requestId:p["requestId"].string!,recordedAt:at,operation:.init(kind:"begin"),job:job!,effect:.init(kind:"begun",created:created,beforeRevision:nil,beforeCursor:nil,delta:nil))
                     let raw=try value(receipt);saved[receipt.requestId]=raw
-                    if lose {throw CrewdClientError(message:"reply observed then interrupted")};return raw
+                    if lose {throw CrewdClientError(message:"reply observed then interrupted")};return mutateReply?(raw) ?? raw
                 case Wire.step:
                     steps+=1
                     if let fail {throw fail}
                     let before=job!,expected=try CrewdKnowledgeStore.decode(p["expectedCursor"],Wire.Cursor.self)
                     precondition(before.revision==p["expectedRevision"].string && before.cursor==expected)
-                    let revision=String(UInt64(before.revision)!+1)
-                    job=copy(before,revision:revision,cursor:.init(phase:.legacyEvents,after:revision),counts:before.counts.adding(delta)!,last:p["requestId"].string!)
+                    let revision=String(UInt64(before.revision)!+1),delta=stepDelta ?? delta
+                    job=copy(before,revision:revision,cursor:stepCursor ?? .init(phase:before.cursor.phase,after:revision),counts:before.counts.adding(delta)!,last:p["requestId"].string!)
                     let operation=Wire.Operation(kind:"step",jobId:before.id,expectedRevision:before.revision,expectedCursor:before.cursor,limit:p["limit"].int)
                     let receipt=Wire.Receipt(scope:authority,crewId:target,requestId:p["requestId"].string!,recordedAt:at,operation:operation,job:job!,effect:.init(kind:"advanced",created:nil,beforeRevision:before.revision,beforeCursor:before.cursor,delta:delta))
                     let raw=try value(receipt);saved[receipt.requestId]=raw
-                    if lose {throw CrewdClientError(message:"reply observed then interrupted")};return raw
+                    if lose {throw CrewdClientError(message:"reply observed then interrupted")};return mutateReply?(raw) ?? raw
                 case Wire.lookup:
                     lookups+=1
                     if dismiss {current=false}
@@ -74,7 +79,7 @@ import Foundation
                         guard case .object(var r)=raw,case .object(var e)=r["effect"] else {fatalError()}
                         e["beforeRevision"] = .string("99");r["effect"] = .object(e);raw = .object(r)
                     }
-                    return .object(["status":.string(state),"receipt":raw])
+                    return .object(["status":.string(state),"receipt":mutateReply?(raw) ?? raw])
                 case Artifact.subject:
                     if !historyCap {precondition(p["includeLegacySources"] == .null);return .object(["items":.array([]),"nextAfter":.null])}
                     precondition(p["includeLegacySources"] == .bool(true))
@@ -90,11 +95,66 @@ import Foundation
             },journal:{journal},available:{true},historyAvailable:{historyCap})
         }
         var store=make(),scope=try await make().scope(stillCurrent:{current})
+        // Every contradictory direct reply must stay unknown, and an equally malformed
+        // original lookup must not clear it. Only the unmodified original receipt settles it.
+        func rejectReceipt(_ name:String,_ mutation:@escaping (CrewdValue)->CrewdValue,step:Bool=false,reuse:Bool=false,beforePhase:Wire.Phase?=nil) async throws {
+            job=nil
+            if step || reuse {_=try await store.beginHistory(target,scope:scope,stillCurrent:{current})}
+            if let beforePhase {job=copy(job!,cursor:.init(phase:beforePhase,after:"0"))}
+            mutateReply=mutation
+            do {
+                if step {_=try await store.stepHistory(job!,limit:1,scope:scope,stillCurrent:{current})}
+                else {_=try await store.beginHistory(target,scope:scope,stillCurrent:{current})}
+                fatalError("malformed direct receipt accepted: "+name)
+            } catch {}
+            let pending=try store.historyPending(scope,crew:target).only()
+            do {_=try await store.lookupHistory(pending,scope:scope,stillCurrent:{current});fatalError("malformed lookup accepted: "+name)}catch{}
+            try require(journal.unknownRecords().count==1)
+            mutateReply=nil
+            let observed=try await store.lookupHistory(pending,scope:scope,stillCurrent:{current})
+            precondition(observed != nil)
+            try require(journal.unknownRecords().isEmpty)
+        }
+        for invalid in ["garbage","01","18446744073709551616","15"] {
+            try await rejectReceipt("cursor "+invalid,{replace($0,["job","cursor","after"],.string(invalid))},step:true)
+        }
+        try await rejectReceipt("created cursor",{replace($0,["job","cursor","after"],.string("1"))})
+        try await rejectReceipt("created phase",{replace($0,["job","cursor","phase"],.string("events"))})
+        try await rejectReceipt("created last UUID",{replace($0,["job","lastRequestId"],.string(foreignLast))})
+        try await rejectReceipt("reused complete",{replace(replace($0,["job","cursor","phase"],.string("complete")),["job","cursor","after"],.string("0"))},reuse:true)
+        try await rejectReceipt("same phase no progress",{replace($0,["job","cursor","after"],.string("0"))},step:true)
+        try await rejectReceipt("phase regression",{replace($0,["job","cursor","phase"],.string("legacyEvents"))},step:true,beforePhase:.events)
+        try await rejectReceipt("complete cursor nonzero",{replace($0,["job","cursor","phase"],.string("complete"))},step:true)
+        try await rejectReceipt("nil snapshot but nonzero bounds",{replace($0,["job","cut","legacySnapshotDigest"],.null)},step:true)
+        try await rejectReceipt("retained beyond cut",{replace($0,["job","cut","legacyRetainedEvents"],.string("15"))},step:true)
+        try await rejectReceipt("count sources exceed scanned",{replace($0,["job","counts","lessons"],.string("1"))},step:true)
+        try await rejectReceipt("missing exceeds sources",{replace($0,["job","counts","missingTargets"],.string("2"))},step:true)
+        try await rejectReceipt("delta source exceeds scanned",{replace($0,["effect","delta","lessons"],.string("1"))},step:true)
+        job=nil
+        mutateStatus={replace($0,["canContinue"],.bool(true))}
+        do {_=try await store.historyStatus(target,scope:scope,stillCurrent:{current});fatalError("missing job canContinue")}catch{}
+        mutateStatus=nil
+        _=try await store.beginHistory(target,scope:scope,stillCurrent:{current})
+        mutateStatus={replace($0,["canContinue"],.bool(false))}
+        do {_=try await store.historyStatus(target,scope:scope,stillCurrent:{current});fatalError("current active job cannot continue")}catch{}
+        mutateStatus={replace($0,["job","cursor","after"],.string("99"))}
+        do {_=try await store.historyStatus(target,scope:scope,stillCurrent:{current});fatalError("status out of bound cursor")}catch{}
+        mutateStatus=nil;job=nil
+        // Empty phases may legitimately jump to Complete with zero scanned delta.
+        let emptyCut=Wire.Cut(legacyEventSeq:"0",legacyItem:"0",legacySnapshotSeq:"0",legacySnapshotDigest:nil,legacyRetainedEvents:"0",eventSeq:"0",lessonNumber:"0")
+        precondition(emptyCut.valid && Wire.Cursor(phase:.complete,after:"0").valid(for:emptyCut))
+        precondition(!Wire.Cursor(phase:.complete,after:"1").valid(for:emptyCut))
+        _=try await store.beginHistory(target,scope:scope,stillCurrent:{current})
+        stepCursor = .init(phase:.complete,after:"0");stepDelta=zero
+        let completed=try await store.stepHistory(job!,limit:1,scope:scope,stillCurrent:{current})
+        precondition(completed.receipt.job.cursor.phase == .complete && completed.receipt.effect.delta!.zero)
+        stepCursor=nil;stepDelta=nil;job=nil
+        let initialSteps=steps
         let roster=try await store.historyCrews(scope,stillCurrent:{current});precondition(roster.count==2 && roster[0]["removedAt"].string != nil)
         let start=try await store.beginHistory(target,scope:scope,stillCurrent:{current})
-        precondition(start.receipt.effect.created==true && start.receipt.job.counts.zero && steps==0)
+        precondition(start.receipt.effect.created==true && start.receipt.job.counts.zero && steps==initialSteps)
         let reused=try await store.beginHistory(target,scope:scope,stillCurrent:{current})
-        precondition(reused.receipt.effect.created==false && reused.receipt.job.lastRequestId==foreignLast && reused.receipt.requestId != foreignLast && steps==0)
+        precondition(reused.receipt.effect.created==false && reused.receipt.job.lastRequestId==foreignLast && reused.receipt.requestId != foreignLast && steps==initialSteps)
         lose=true
         do {_=try await store.stepHistory(job!,limit:1,scope:scope,stillCurrent:{current});fatalError("lost Step acknowledged")}catch{}
         let original=try store.historyPending(scope,crew:target).only(),request=try store.historyPending(scope,crew:target).only().witness.requestId
@@ -154,9 +214,15 @@ import Foundation
         for child in children {child.executableURL=URL(fileURLWithPath:CommandLine.arguments[0]);child.arguments=["--prepare",raceRoot.path,raceNamespace.uuidString];try child.run()}
         for child in children {child.waitUntilExit()};precondition(children.map(\.terminationStatus).sorted()==[0,23])
         precondition(!methods.contains(Artifact.submit) && !methods.contains(Artifact.lookup))
-        print("PASS history Begin reuse foreign lastRequest UUID; explicit Step only; cross-crew archived roster; status never confirms UUID; actual journal reopen; missing/closed/corrupt retains; exact counters/revision/cursor; epoch history and explicit new cut; typed CAS vs generic SQL; capability/legacy origin opt-in; event is read hint; two real process prepare winner")
+        print("PASS malformed direct/lookup receipts retain original UUID; canonical bounded cursor/phase/counts/Begin/status coherence; history Begin reuse foreign lastRequest UUID; explicit Step only; cross-crew archived roster; status never confirms UUID; actual journal reopen; missing/closed/corrupt retains; exact counters/revision/cursor; epoch history and explicit new cut; typed CAS vs generic SQL; capability/legacy origin opt-in; event is read hint; two real process prepare winner")
         print("begins=\(begins) steps=\(steps) lookups=\(lookups)")
     }
 }
 private func require(_ value:@autoclosure ()throws->Bool)rethrows {let result=try value();precondition(result)}
 private extension Array {func only()throws->Element {precondition(count==1);return self[0]}}
+
+private func replace(_ raw:CrewdValue,_ path:[String],_ value:CrewdValue)->CrewdValue {
+    guard let key=path.first,case .object(var object)=raw else {preconditionFailure("invalid fixture path")}
+    object[key]=path.count==1 ? value:replace(object[key] ?? .null,Array(path.dropFirst()),value)
+    return .object(object)
+}

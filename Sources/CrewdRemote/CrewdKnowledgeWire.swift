@@ -1679,22 +1679,35 @@ enum CrewdArtifactHistoryWire {
     static func uuid(_ value:String)->Bool {UUID(uuidString:value)?.uuidString.lowercased()==value}
     enum Phase:String,Codable,CaseIterable {
         case legacyEvents,legacySnapshots,events,lessons,complete
-        var title:String {switch self {case .legacyEvents:"旧版保留事件";case .legacySnapshots:"旧版冻结快照";case .events:"组织完成事件";case .lessons:"教训原证据";case .complete:"固定范围已处理完毕"}}
+        var rank:Int {Self.allCases.firstIndex(of:self)!}
+        var title:String {switch self {case .legacyEvents:"旧版保留事件";case .legacySnapshots:"旧版冻结快照";case .events:"组织工作事件";case .lessons:"教训原证据";case .complete:"固定范围已处理完毕"}}
     }
-    struct Cursor:Codable,Equatable {let phase:Phase;let after:String;var valid:Bool {after.utf8.count<=4096};static func ==(a:Self,b:Self)->Bool {a.phase==b.phase && a.after.utf8.elementsEqual(b.after.utf8)}}
+    struct Cursor:Codable,Equatable {let phase:Phase;let after:String;var valid:Bool {number(after) != nil};
+        func valid(for cut:Cut)->Bool {
+            let bound:String
+            switch phase {case .legacyEvents:bound=cut.legacyEventSeq;case .legacySnapshots:bound=cut.legacyItem;case .events:bound=cut.eventSeq;case .lessons:bound=cut.lessonNumber;case .complete:bound="0"}
+            guard let value=number(after),let limit=number(bound) else {return false};return value<=limit
+        };static func ==(a:Self,b:Self)->Bool {a.phase==b.phase && a.after.utf8.elementsEqual(b.after.utf8)}}
     struct Cut:Codable {
         let legacyEventSeq:String,legacyItem:String,legacySnapshotSeq:String
         let legacySnapshotDigest:String?
         let legacyRetainedEvents:String,eventSeq:String,lessonNumber:String
         var valid:Bool {
             [legacyEventSeq,legacyItem,legacySnapshotSeq,legacyRetainedEvents,eventSeq,lessonNumber].allSatisfy{number($0) != nil} &&
-                (legacySnapshotDigest.map{$0.utf8.count==64 && $0.utf8.allSatisfy{(48...57).contains($0)||(97...102).contains($0)}} ?? true)
+                (legacySnapshotDigest.map{$0.utf8.count==64 && $0.utf8.allSatisfy{(48...57).contains($0)||(97...102).contains($0)}} ?? true) &&
+                number(legacyRetainedEvents)!<=number(legacyEventSeq)! &&
+                (legacySnapshotDigest != nil || (legacyItem=="0" && legacySnapshotSeq=="0"))
         }
     }
     struct Counts:Codable {
         let scanned:String,doneEvents:String,legacySnapshots:String,lessons:String,missingTargets:String,artifactsAdded:String,edgesAdded:String
         var values:[String] {[scanned,doneEvents,legacySnapshots,lessons,missingTargets,artifactsAdded,edgesAdded]}
-        var valid:Bool {values.allSatisfy{number($0) != nil}}
+        var valid:Bool {
+            guard values.allSatisfy({number($0) != nil}) else {return false}
+            let (events,overflow1)=number(doneEvents)!.addingReportingOverflow(number(legacySnapshots)!)
+            let (described,overflow2)=events.addingReportingOverflow(number(lessons)!)
+            return !overflow1 && !overflow2 && described<=number(scanned)! && number(missingTargets)!<=described
+        }
         var zero:Bool {values.allSatisfy{$0=="0"}}
         func adding(_ delta:Self)->Self? {
             guard valid,delta.valid else {return nil}
@@ -1716,7 +1729,7 @@ enum CrewdArtifactHistoryWire {
         let counts:Counts
         let createdAt:String,updatedAt:String
         let lastRequestId:String?
-        var valid:Bool {uuid(id) && !scope.dbId.isEmpty && uuid(scope.restoreEpoch) && !crewId.isEmpty && cut.valid && cursor.valid &&
+        var valid:Bool {uuid(id) && !scope.dbId.isEmpty && uuid(scope.restoreEpoch) && !crewId.isEmpty && cut.valid && cursor.valid(for:cut) &&
             number(revision).map{$0>0}==true && counts.valid && !createdAt.isEmpty && !updatedAt.isEmpty && (lastRequestId.map(uuid) ?? true)}
     }
     struct Status:Decodable {let scope:Scope;let crewId:String;let job:Job?;let canContinue:Bool}
