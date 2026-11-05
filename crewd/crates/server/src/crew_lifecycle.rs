@@ -108,8 +108,19 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
                     Ok(())
                 })
             })();
-            if let Some(prepared) = &prepared {
-                let committed = prepared.settle(store.conn())?;
+            let settlement = prepared
+                .as_ref()
+                .map(|prepared| prepared.settle(store.conn()))
+                .transpose();
+            // The Core mutation is already visible if filesystem settlement
+            // fails. Notify live clients of that known commit even when the
+            // caller still needs to reconcile the cleanup result.
+            if let Ok(((), changes)) = &mutation
+                && !matches!(&settlement, Ok(Some(false)))
+            {
+                owner.hub.emit(store.conn(), changes);
+            }
+            if let Some(committed) = settlement? {
                 if committed != mutation.is_ok() {
                     // An ambiguous SQLite return cannot justify a second purge.
                     return Err(crewd_store::StoreError::Invalid(
@@ -118,8 +129,7 @@ async fn route(state: &Arc<AppState>, actor: &Actor, request: Request) -> Result
                     .into());
                 }
             }
-            let ((), changes) = mutation?;
-            owner.hub.emit(store.conn(), &changes);
+            mutation?;
             Ok::<_, collab::CollabError>(())
         })
         .await
