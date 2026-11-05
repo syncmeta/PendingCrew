@@ -43,7 +43,7 @@ import Foundation
                 switch method {
                 case "managedObject.scope":return try value(authority)
                 case "crew.list":
-                    precondition(p["all"] == .bool(true))
+                    precondition(p["includeRemoved"] == .bool(true) && p["all"] == .null)
                     return .array([.object(["id":.string(target),"title":.string("Archived target"),"removedAt":.string(at)]),.object(["id":.string(presentation),"title":.string("Current crew")])])
                 case Wire.status:
                     precondition(p["crewId"] == .string(target))

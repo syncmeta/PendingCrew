@@ -2905,7 +2905,7 @@ extension CrewdArtifactStore {
     struct HistoryObservation {let receipt:History.Receipt;let historical:Bool}
     func historyCrews(_ scope:Scope,stillCurrent:@MainActor ()->Bool) async throws->[CrewdValue] {
         guard historySupported,valid(scope.origin,stillCurrent) else {throw Problem.unavailable}
-        let raw=try await rpc("crew.list",.object(["all":.bool(true)]));try await check(scope,stillCurrent)
+        let raw=try await rpc("crew.list",.object(["includeRemoved":.bool(true)]));try await check(scope,stillCurrent)
         guard case .array(let rows)=raw else {throw Problem.invalid}
         let ids=rows.compactMap{$0["id"].string}
         guard ids.count==rows.count,ids.allSatisfy({!$0.isEmpty}),Set(ids.map{Data($0.utf8)}).count==ids.count else {throw Problem.invalid}
