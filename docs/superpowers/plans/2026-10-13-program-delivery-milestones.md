@@ -17,6 +17,10 @@
 
 暂缓的显示和刷新仅对当前有权限的人类连接开放。实际配对测试通过原回执、重启、提前恢复和撤权。附着连接拒绝暂缓提交且收不到暂缓字段或刷新事件。时钟回拨、正式恢复、远程和 Jev 设置变更、机组永久删除回归通过。普通后台打印的协议与仓库定义一致。Mac Debug 私有预览和 iPhoneOS arm64 Debug 完整构建通过，见 `/private/tmp/pcw-ask-inbox-integration.Axl87BDQ/mac-debug-preview/candidate.json` 和 `/private/tmp/pcw-ask-inbox-integration.Axl87BDQ/ios-debug-proof.json`。
 
+`d277ff08` 为凭据性工作关闭增加原请求回执，机组工作详情与群内关联工作共用。已完成、重复、被取代沿用原账本规则，原 UUID、关闭主事件、变更前后版本和依赖效果在同一事务提交。普通 Core 实测原提交连接未读取答复，实际重启后按原 UUID 查回，账本只有一次关闭、一次依赖解除和一次唤醒。另一次内容相同的旧版关闭及另一 UUID 的关闭均不会确认原请求。见 `/private/tmp/pcw-work-close.t9x2oeyx/result.json`。
+
+8 项本机验收和配对重启、撤权通过。注入回执写入失败后，原工作和依赖变更一起回退。Swift 回归覆盖旧版返回值的三种关闭类型、未知结果保留、恢复后跨机组同号隔离和已知群链接失效。Mac Debug 私有预览通过严格签名和动态库核验，iPhoneOS arm64 Debug 完整编译通过。见 `/private/tmp/pcw-work-close-integration.UiUIeDos/mac-debug-preview/candidate.json` 和 `/private/tmp/pcw-work-close-integration.UiUIeDos/ios-debug-proof.json`。
+
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
 早先 `2ef0998d` 的隔离升级及回滚也通过，Apple 回执为 `09351a3b-b20d-40e9-91fe-00c5a40eeff2`。`945cd2c6`（0.2.3，构建 `20761.65326`）通过 Apple 公证、票据及 Gatekeeper 检查，回执为 `59254362-f660-49e3-ba3c-61f331ddfddc`。首条回复的后续修正在 `9a5a6a08`。
