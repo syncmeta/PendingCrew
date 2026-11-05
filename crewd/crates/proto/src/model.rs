@@ -521,6 +521,46 @@ pub struct Ask {
 pub struct AskResolutionCheck {
     pub ask: Ask,
     pub resolution_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox: Option<AskInboxCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AskInboxCheck {
+    pub revision: String,
+    pub max_until_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_until_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AskInboxScheduleParams {
+    pub crew_id: String,
+    pub ask: String,
+    pub expected_resolution_revision: String,
+    pub expected_inbox_revision: String,
+    /// Explicit null returns the Ask to the current inbox.
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    #[schemars(schema_with = "nullable_inbox_deadline")]
+    pub until_ms: Option<i64>,
+}
+
+fn nullable_inbox_deadline(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    Option::<i64>::json_schema(generator)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AskInboxScheduleReceipt {
+    pub crew_id: String,
+    pub ask: String,
+    pub original_inbox_revision: String,
+    pub inbox_revision: String,
+    pub accepted_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_until_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -562,6 +602,8 @@ pub struct HumanWait {
     pub tier: WaitTierView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_due_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_until_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

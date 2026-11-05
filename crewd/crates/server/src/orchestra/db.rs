@@ -1416,6 +1416,9 @@ impl Port for DbPort {
             .await
     }
     async fn advance_human_waits(&self) -> Result<()> {
+        if let Err(error) = self.write(collab::ask_inbox::settle_due).await {
+            eprintln!("crewd: Human inbox expiry failed closed: {error}");
+        }
         let due = self.write(collab::asks::due_escalation_page).await?;
         for ask in due {
             if let Err(error) = self

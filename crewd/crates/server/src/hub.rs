@@ -188,6 +188,10 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
                 id: id.clone(),
             },
         )?],
+        Change::AskInboxChanged { crew_id } => vec![ev(
+            events::ASK_INBOX_CHANGED,
+            &CrewRef { crew_id: crew_id.clone() },
+        )?],
         Change::AskChanged { crew_id, ask } => gone(asks::get(conn, crew_id, ask))?
             .map(|a| ev(events::ASK_CHANGED, &a))
             .transpose()?

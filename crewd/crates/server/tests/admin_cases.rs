@@ -139,6 +139,7 @@ async fn list_is_passive_and_attached_agents_cannot_borrow_human_case_access() {
 async fn external_human_lineage_socket_cannot_use_raw_ask_after_agent_attach() {
     use crewd_collab::asks;
     let f = Fixture::new().await;
+    f.enable_public_command_identity().await;
     let captain = f.captain.clone();
     let worker = f.worker.clone();
     let (other_question, own_question) = f
@@ -203,8 +204,28 @@ async fn external_human_lineage_socket_cannot_use_raw_ask_after_agent_attach() {
     .await
     .unwrap();
     assert_eq!(agent["role"], "worker");
+    let hello = call(&mut human, "system.hello", json!({})).await.unwrap();
+    let checked = call(&mut human, "ask.resolveCheck", json!({
+        "crewId": f.crew, "ask": other_question.ask,
+    })).await.unwrap();
+    let until = crewd_store::now_ms() + 10 * 60_000;
+    let schedule = json!({
+        "requestId": uuid::Uuid::new_v4().to_string(),
+        "dbId": hello["runtimeIdentity"]["dbId"],
+        "runtimeBindingId": hello["runtimeIdentity"]["runtimeBindingId"],
+        "command": {
+            "operation": "ask.inboxSchedule",
+            "params": {
+                "crewId": f.crew, "ask": other_question.ask,
+                "expectedResolutionRevision": checked["resolutionRevision"],
+                "expectedInboxRevision": checked["inbox"]["revision"],
+                "untilMs": until,
+            }
+        }
+    });
     let before = f.state.db.call(|s| s.conn().total_changes()).await.unwrap();
     for (method, params) in [
+        ("command.submit", schedule.clone()),
         ("ask.answer", answer.clone()),
         ("ask.withdraw", withdraw.clone()),
         (
@@ -245,6 +266,21 @@ async fn external_human_lineage_socket_cannot_use_raw_ask_after_agent_attach() {
         .unwrap()["state"],
         "open"
     );
+
+    for client in [&mut human, &mut attached] {
+        call(client, "events.subscribe", json!({"topics":["ask"]})).await.unwrap();
+    }
+    let receipt = call(&mut human, "command.submit", schedule).await.unwrap();
+    let event = human.next_event(Duration::from_secs(5)).await.unwrap();
+    assert_eq!(event.event, "ask.inboxChanged");
+    assert_eq!(event.data, json!({"crewId":f.crew}));
+    assert!(attached.next_event(Duration::from_millis(250)).await.is_none());
+
+    assert_eq!(receipt["result"]["deferredUntilMs"], until);
+    let full = call(&mut human, "ask.list", json!({})).await.unwrap();
+    assert!(full.as_array().unwrap().iter().any(|row| row["deferredUntilMs"] == until));
+    let attached_read = call(&mut attached, "ask.list", json!({})).await.unwrap();
+    assert!(attached_read.as_array().unwrap().iter().all(|row| row.get("deferredUntilMs").is_none()));
 
     let denied_tool = call(&mut attached, "agent.call", json!({
         "tool":"withdraw_ask","args":{"ask":other_question.ask,"reason":"fixture foreign withdrawal"}

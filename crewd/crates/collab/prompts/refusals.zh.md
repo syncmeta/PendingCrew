@@ -549,3 +549,7 @@ expectedStatus 必须是原始需求状态。
 
 ## ask.resolution_changed
 原问题或其状态已有变化。请重新读取问题，再决定答复或撤回。
+
+## ask.inbox_changed
+
+待处理事项或稍后时间已经变化，请重新打开事项后再操作。

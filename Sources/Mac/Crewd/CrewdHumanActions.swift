@@ -186,11 +186,12 @@ struct CrewdHumanActions:View {
     let target: CrewdHumanTarget
     var readExactly = false
     var workspace: CrewdWorkspace? = nil
+    var inboxIsCurrent: (@MainActor () -> Bool)? = nil
 
     var body: some View {
-        if store.offersAskResolution || workspace?.originalAskResolutionRecords(crew:target.key.crew,ask:target.key.ask).isEmpty == false {
+        if store.offersAskResolution || workspace?.originalAskRecords(crew:target.key.crew,ask:target.key.ask).isEmpty == false {
             if let workspace {
-                CrewdTypedHumanActions(workspace:workspace,store:store,drafts:$drafts,target:target)
+                CrewdTypedHumanActions(workspace:workspace,store:store,drafts:$drafts,target:target,inboxIsCurrent:inboxIsCurrent)
             } else {
                 Text("当前入口尚未具备原问题的提交与回执作用域。").padding()
             }
@@ -205,13 +206,28 @@ private struct CrewdTypedHumanActions: View {
     @ObservedObject var store: CrewdWorkStore
     @Binding var drafts: CrewdHumanDrafts
     let target: CrewdHumanTarget
+    let inboxIsCurrent: (@MainActor () -> Bool)?
     @Environment(\.dismiss) private var dismiss
     @State private var scope: UUID?
     @State private var readID = UUID()
     @State private var review: CrewdAskResolutionWire.Review?
+    @State private var reviewOrigin: InboxOrigin?
     @State private var reading = false
+    @State private var scheduling = false
     @State private var active = false
     @State private var failure: String?
+
+    private struct InboxOrigin: Equatable {
+        let observation: UUID
+        let connection: UUID
+        let selection: UUID
+        let channel: String
+    }
+
+    private var inboxOrigin: InboxOrigin {
+        .init(observation:workspace.observationGeneration,connection:workspace.client.connectionEpoch,
+              selection:workspace.humanInboxSelection,channel:workspace.channelID)
+    }
 
     private var key: CrewdHumanDrafts.Key { target.key }
     private var id: CrewdWorkID? { CrewdWorkID(key.ask,kind:.human) }
@@ -219,10 +235,15 @@ private struct CrewdTypedHumanActions: View {
     private var current: Bool {
         active && store.readScope == scope && store.selectedCrew == key.scope && workspace.crewID == key.scope
     }
+    private var busy: Bool { drafts.busy(key) || scheduling }
+    private var hasOriginal: Bool { !workspace.originalAskRecords(crew:key.crew,ask:key.ask).isEmpty }
     private var canSubmit: Bool {
         current && workspace.originalJournalReady && store.supportsAskResolution && review?.revision != nil &&
-            !reading && !drafts.busy(key) && workspace.originalAskResolutionRecords(crew:key.crew,ask:key.ask).isEmpty &&
-            CrewdAskResolutionWire.validInput(fields.text)
+            !reading && !busy && !hasOriginal && CrewdAskResolutionWire.validInput(fields.text)
+    }
+    private var canSchedule: Bool {
+        current && reviewOrigin == inboxOrigin && inboxIsCurrent?() == true && workspace.originalJournalReady &&
+            store.supportsAskInboxSchedule && !reading && !busy && !hasOriginal
     }
     private func input<T>(_ path: WritableKeyPath<CrewdHumanDrafts.Fields,T>) -> Binding<T> {
         .init(get:{drafts.fields(key)[keyPath:path]},set:{
@@ -234,7 +255,9 @@ private struct CrewdTypedHumanActions: View {
 
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
-            CrewdPanelHeader(title:"处理人工待办",detail:"核对原问题后答复或撤回。",symbol:"person.crop.circle.badge.questionmark")
+            CrewdPanelHeader(title:"处理人工待办",
+                detail:inboxIsCurrent?() == true && store.supportsAskInboxSchedule ? "核对原问题后答复、稍后处理或撤回。" : "核对原问题后答复或撤回。",
+                symbol:"person.crop.circle.badge.questionmark")
             Text(key.ask + " · " + (target.crewTitle ?? key.crew)).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             if let review, current {
                 Text(verbatim:review.ask["question"].string ?? "").textSelection(.enabled)
@@ -256,13 +279,16 @@ private struct CrewdTypedHumanActions: View {
             if !workspace.originalJournalReady || !store.supportsAskResolution {
                 Text("当前连接尚未具备完整的原问题复核和提交回执。").font(.caption).foregroundStyle(.secondary)
             }
+            if inboxIsCurrent?() == true, store.supportsAskInboxSchedule, let inbox = review?.inbox {
+                inboxActions(inbox)
+            }
             if review?.revision != nil {
                 Picker("操作",selection:input(\.action)) {
                     ForEach(CrewdHumanDrafts.Action.allCases,id:\.self) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented).disabled(drafts.busy(key))
+                }.pickerStyle(.segmented).disabled(busy)
                 CrewdFormField(title:fields.action == .answer ? "你的答复" : "撤回理由") {
                     TextField(fields.action == .answer ? "写下处理意见" : "说明撤回的原因",text:input(\.text),axis:.vertical)
-                        .lineLimit(4...10).disabled(drafts.busy(key))
+                        .lineLimit(4...10).disabled(busy)
                 }
                 if fields.action == .withdraw {
                     Text("仍阻塞活跃计划的问题需要负责人先调整计划。").font(.caption).foregroundStyle(.secondary)
@@ -270,16 +296,16 @@ private struct CrewdTypedHumanActions: View {
             }
             if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled) }
             HStack {
-                Button("关闭") { dismiss() }.disabled(drafts.busy(key))
+                Button("关闭") { dismiss() }.disabled(busy)
                 Button("重新核对当前问题") { Task { await refresh() } }
-                    .disabled(!current || !store.supportsAskResolution || reading || drafts.busy(key))
+                    .disabled(!current || !store.supportsAskResolution || reading || busy)
                 Spacer()
                 Button(drafts.busy(key) ? "提交中" : "提交") { submit() }
                     .buttonStyle(CrewdPrimaryButtonStyle()).disabled(!canSubmit)
             }
         }
         .padding(20).font(CrewdType.body).modifier(CrewdAdaptiveFormFrame(width:540,height:580))
-        .interactiveDismissDisabled(drafts.busy(key))
+        .interactiveDismissDisabled(busy)
         .task(id:target.id) {
             scope = store.readScope; active = true
             await refresh()
@@ -288,15 +314,70 @@ private struct CrewdTypedHumanActions: View {
         .onDisappear { active = false; readID = UUID(); reading = false }
     }
 
+    private func inboxActions(_ inbox: CrewdAskInboxWire.Review) -> some View {
+        let now = CrewdAskInboxWire.nowMs()
+        let proposed = min(now + 3_600_000,inbox.maxUntilMs)
+        let dates = inbox.deferredUntilMs == nil && proposed > now ? [Date(),CrewdAskInboxWire.date(proposed)] : [Date()]
+        return TimelineView(.explicit(dates)) { context in
+            let observed = max(CrewdAskInboxWire.nowMs(context.date),CrewdAskInboxWire.nowMs())
+            HStack {
+                if let until = inbox.deferredUntilMs {
+                    Text("稍后至 " + CrewdAskInboxWire.date(until).formatted(date:.abbreviated,time:.shortened))
+                    Spacer()
+                    Button("立即恢复") { schedule(untilMs:nil) }.disabled(!canSchedule)
+                } else if proposed > observed {
+                    Text("稍后至 " + CrewdAskInboxWire.date(proposed).formatted(date:.abbreviated,time:.shortened))
+                    Spacer()
+                    Button("稍后处理") { schedule(untilMs:proposed) }.disabled(!canSchedule)
+                }
+            }.font(.caption)
+        }
+    }
+
+    private func schedule(untilMs: Int?) {
+        guard canSchedule, let shown = review, let scope, let reviewOrigin else { return }
+        scheduling = true; failure = nil
+        Task { @MainActor in
+            @MainActor func stillCurrent() -> Bool {
+                current && inboxIsCurrent?() == true && inboxOrigin == reviewOrigin &&
+                    workspace.acceptsObservation(reviewOrigin.observation)
+            }
+            defer { scheduling = false }
+            do {
+                let receipt = try await workspace.submitAskInboxSchedule(shown,untilMs:untilMs,
+                    selectedCrew:key.scope,scope:scope,stillCurrent:stillCurrent)
+                guard stillCurrent() else { return }
+                switch receipt?.phase {
+                case .committed where receipt?.historical == false:
+                    dismiss()
+                case nil, .rejected, .suppressed:
+                    await refresh()
+                    if stillCurrent() { failure = "稍后状态已变化或本次被拒绝。请核对当前状态后再决定。" }
+                default:
+                    failure = "结果待确认。请查询原请求。"
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard stillCurrent() else { return }
+                if let refusal = (error as? CrewdClientError)?.refusal,
+                   ["ask.inbox_changed","resource.invalid"].contains(refusal) { await refresh() }
+                if stillCurrent() { failure = error.localizedDescription }
+            }
+        }
+    }
+
     private func refresh() async {
         guard let id, current, !reading, store.supportsAskResolution else { return }
         let token = UUID(); readID = token; reading = true; failure = nil
-        review = nil
+        let origin = inboxOrigin
+        review = nil; reviewOrigin = nil
         defer { if readID == token { reading = false } }
         do {
             let fresh = try await store.humanResolutionCheck(id,crew:key.crew)
             guard current && readID == token else { return }
             review = fresh
+            if inboxOrigin == origin { reviewOrigin = origin }
         } catch {
             if current && readID == token { failure = error.localizedDescription }
         }
@@ -315,7 +396,7 @@ private struct CrewdTypedHumanActions: View {
             do {
                 let fresh = try await store.humanResolutionCheck(id,crew:key.crew)
                 guard current, !Task.isCancelled, review == shown else { throw CancellationError() }
-                guard fresh == shown else {
+                guard fresh.sameResolution(as:shown) else {
                     review = fresh
                     failure = "原问题已变化。请核对当前内容后重新决定。"
                     return
@@ -349,17 +430,23 @@ struct CrewdHumanResolutionRecovery: View {
     @State private var lookupID = UUID()
 
     var body: some View {
-        let originals = workspace.originalAskResolutionRecords(crew:crew,ask:ask)
+        let originals = workspace.originalAskRecords(crew:crew,ask:ask)
         if !originals.isEmpty || feedback != nil {
             VStack(alignment:.leading,spacing:6) {
                 ForEach(originals) { record in
-                    let params = record.params["command"]["params"]
-                    let action = params["disposition"] == .string("answer") ? "答复" : "撤回"
+                    let command = record.params["command"], params = command["params"]
+                    let schedule = command["operation"] == .string(CrewdPublicOperation.askInboxSchedule.rawValue)
+                    let action = schedule ? (params["untilMs"] == .null ? "立即恢复" : "稍后处理") :
+                        (params["disposition"] == .string("answer") ? "答复" : "撤回")
                     VStack(alignment:.leading,spacing:3) {
                         Text((params["ask"].string ?? "") + " · 原" + action + "待核对")
                         Text(record.params["requestId"].string ?? "").textSelection(.enabled)
-                        Text(verbatim:params["text"].string ?? "").textSelection(.enabled)
-                        Button("查询原请求") { recover(record.id) }
+                        if schedule, let until = CrewdAskInboxWire.milliseconds(params["untilMs"]) {
+                            Text(CrewdAskInboxWire.date(until),format:.dateTime.month().day().hour().minute())
+                        } else if let text = params["text"].string {
+                            Text(verbatim:text).textSelection(.enabled)
+                        }
+                        Button("查询原请求") { recover(record.id,schedule:schedule) }
                             .disabled(checking || !workspace.client.readyForWork || !workspace.client.capabilities.contains("command.receipts"))
                     }
                 }
@@ -367,13 +454,15 @@ struct CrewdHumanResolutionRecovery: View {
             }.font(.caption)
                 .onChange(of:workspace.workStore.readScope) { _,_ in resetLookup() }
                 .onChange(of:workspace.channelID) { _,_ in resetLookup() }
+                .onChange(of:crew) { _,_ in resetLookup() }
+                .onChange(of:ask) { _,_ in resetLookup() }
                 .onDisappear { resetLookup() }
         }
     }
 
     private func resetLookup() { lookupID = UUID(); checking = false; feedback = nil }
 
-    private func recover(_ id: UUID) {
+    private func recover(_ id: UUID, schedule: Bool) {
         guard !checking else { return }
         let scope = workspace.presentationScope, epoch = workspace.observationGeneration
         let route = workspace.workStore.readScope, channel = workspace.channelID, lookup = UUID()
@@ -387,7 +476,11 @@ struct CrewdHumanResolutionRecovery: View {
             }
             defer { if lookupID == lookup { checking = false } }
             do {
-                let receipt = try await workspace.recoverAskResolution(id)
+                let receipt = if schedule {
+                    try await workspace.recoverAskInboxSchedule(id,stillCurrent:current)
+                } else {
+                    try await workspace.recoverAskResolution(id)
+                }
                 guard current() else { return }
                 switch receipt?.phase {
                 case .committed:

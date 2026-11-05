@@ -1154,6 +1154,7 @@ fn allowed_method(method: &str) -> bool {
             | "ask.withdraw"
             | crewd_proto::methods::ASK_RESOLVE_CHECK
             | crewd_proto::commands::ASK_RESOLVE
+            | crewd_proto::commands::ASK_INBOX_SCHEDULE
             | "restart.pending"
             | "restart.answer"
             | "directory.list"

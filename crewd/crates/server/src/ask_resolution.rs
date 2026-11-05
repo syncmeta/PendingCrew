@@ -2,8 +2,8 @@
 use crate::{AppState, dispatch, public_commands::Actor};
 use crewd_collab::{Sender, asks, messages};
 use crewd_proto::{
-    AskAnswerParams, AskGetParams, AskWithdrawParams, Message, MessagePostParams, Request,
-    Response, RpcError, methods,
+    AskAnswerParams, AskGetParams, AskListParams, AskWithdrawParams, Message, MessagePostParams,
+    Request, Response, RpcError, methods,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -21,13 +21,35 @@ async fn route(state: &Arc<AppState>, actor: &Actor, req: Request) -> Result<Val
     let actor = actor.clone();
     let owner = state.clone();
     match req.method.as_str() {
+        methods::ASK_LIST => {
+            let p: AskListParams = crewd_proto::parse_params_or_default(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    actor.authorize_tx(&owner, store.conn(), methods::ASK_LIST)?;
+                    asks::inbox_waits(
+                        store.conn(),
+                        crewd_store::now_ms(),
+                        p.home_crew_id.as_deref(),
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
         methods::ASK_RESOLVE_CHECK => {
             let p: AskGetParams = crewd_proto::parse_params(req.params)?;
             let view = state
                 .db
                 .call_result(move |store| {
                     actor.authorize_tx(&owner, store.conn(), methods::ASK_RESOLVE_CHECK)?;
-                    crewd_collab::ask_resolution::check(store.conn(), &p.crew_id, &p.ask)
+                    crewd_collab::ask_resolution::check(
+                        store.conn(),
+                        &p.crew_id,
+                        &p.ask,
+                        crewd_store::now_ms(),
+                    )
                 })
                 .await
                 .map_err(dispatch::internal)?

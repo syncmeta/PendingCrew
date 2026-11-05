@@ -16,9 +16,11 @@ fn invalid() -> CollabError {
     StoreError::Invalid("invalid authoritative Human Ask resolution receipt".into()).into()
 }
 
-pub fn check(c: &Connection, crew: &str, ask: &str) -> Result<AskResolutionCheck> {
-    let subject = asks::resolution_subject(c, crew, ask)?;
+pub fn check(c: &Connection, crew: &str, ask: &str, now: i64) -> Result<AskResolutionCheck> {
+    let subject = asks::resolution_subject(c, crew, ask, Some(now))?;
+    let inbox = crate::ask_inbox::check(c, &subject)?;
     Ok(AskResolutionCheck {
+        inbox,
         ask: subject.view,
         resolution_revision: subject.revision,
     })
@@ -37,7 +39,7 @@ pub fn resolve(tx: &mut Tx<'_>, p: AskResolutionParams) -> Result<AskResolutionR
     if value.is_empty() || p.text.len() > 65_536 {
         return Err(resource_acl::invalid("text"));
     }
-    let original = asks::resolution_subject(tx.conn(), &p.crew_id, &p.ask)?;
+    let original = asks::resolution_subject(tx.conn(), &p.crew_id, &p.ask, None)?;
     if original.revision.as_deref() != Some(revision.as_str()) {
         return Err(CollabError::Conflict(Refusal::new(
             Code::AskResolutionChanged,
@@ -126,7 +128,7 @@ mod tests {
         original: &Ask,
         disposition: AskResolutionDisposition,
     ) -> AskResolutionParams {
-        let witness = check(s.conn(), &original.crew_id, &original.ask).unwrap();
+        let witness = check(s.conn(), &original.crew_id, &original.ask, NOW).unwrap();
         assert_eq!(&witness.ask, original);
         AskResolutionParams {
             crew_id: original.crew_id.clone(),
@@ -145,8 +147,16 @@ mod tests {
             let before = s.conn().total_changes();
             let p = request(&s, &original, AskResolutionDisposition::Answer);
             assert_eq!(s.conn().total_changes(), before);
-            assert!(check(s.conn(), "crew-b", &original.ask).is_err());
-            assert!(check(s.conn(), &original.crew_id, &original.ask.to_lowercase()).is_err());
+            assert!(check(s.conn(), "crew-b", &original.ask, NOW).is_err());
+            assert!(
+                check(
+                    s.conn(),
+                    &original.crew_id,
+                    &original.ask.to_lowercase(),
+                    NOW
+                )
+                .is_err()
+            );
             let at = NOW + 2 * MIN;
             if human_first {
                 // The deadline alone never applies a default. The already
@@ -175,7 +185,7 @@ mod tests {
                     [original.ask.clone()]
                 );
             }
-            let result = check(s.conn(), "crew-a", &original.ask).unwrap();
+            let result = check(s.conn(), "crew-a", &original.ask, NOW).unwrap();
             assert_eq!(
                 result.ask.state,
                 if human_first {
@@ -205,7 +215,7 @@ mod tests {
         let mut s = store();
         let original = question(&mut s, false);
         let old = request(&s, &original, AskResolutionDisposition::Withdraw);
-        let id = asks::resolution_subject(s.conn(), "crew-a", &original.ask)
+        let id = asks::resolution_subject(s.conn(), "crew-a", &original.ask, None)
             .unwrap()
             .id;
         ok_at(&mut s, NOW + 30 * 60 * MIN, |tx| {
@@ -214,7 +224,7 @@ mod tests {
             })
         });
         assert_eq!(
-            check(s.conn(), "crew-a", &original.ask)
+            check(s.conn(), "crew-a", &original.ask, NOW)
                 .unwrap()
                 .resolution_revision
                 .as_deref(),
@@ -243,7 +253,7 @@ mod tests {
                 },
             )
         });
-        let manual = check(s.conn(), "crew-a", &authored.ask.ask).unwrap();
+        let manual = check(s.conn(), "crew-a", &authored.ask.ask, NOW).unwrap();
         assert_eq!(manual.ask.state, AskStateView::Open);
         assert!(manual.resolution_revision.is_none());
     }

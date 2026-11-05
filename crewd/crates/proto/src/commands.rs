@@ -15,6 +15,7 @@ pub struct RuntimeIdentity {
 
 pub const LOCAL_CLIENT_TRUST_STATUS: &str = "local.clientTrust.status";
 pub const ASK_RESOLVE: &str = "ask.resolve";
+pub const ASK_INBOX_SCHEDULE: &str = "ask.inboxSchedule";
 pub const TODO_RULE_CLOSE: &str = "todo.ruleClose";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -155,6 +156,8 @@ pub enum PublicCommand {
     WorkDuplicateClose(crate::WorkDuplicateCloseParams),
     #[serde(rename = "ask.resolve")]
     AskResolve(crate::AskResolutionParams),
+    #[serde(rename = "ask.inboxSchedule")]
+    AskInboxSchedule(crate::AskInboxScheduleParams),
     #[serde(rename = "todo.ruleClose")]
     RequirementRuleClose(crate::RequirementRuleCloseParams),
     #[serde(rename = "session.start")]
@@ -243,6 +246,7 @@ impl PublicCommand {
             Self::RequirementReview(_) => &[crate::admin_cases::REQUIREMENT_REVIEW],
             Self::WorkDuplicateClose(_) => &[crate::admin_cases::WORK_DUPLICATE_CLOSE],
             Self::AskResolve(_) => &[ASK_RESOLVE],
+            Self::AskInboxSchedule(_) => &[ASK_INBOX_SCHEDULE],
             Self::RequirementRuleClose(_) => &[TODO_RULE_CLOSE],
             Self::SessionStart(_) => &["session.start"],
             Self::CodexConfigure(_) => &["session.codex.configure"],
@@ -284,6 +288,7 @@ impl PublicCommand {
             Self::RequirementReview(_) => crate::admin_cases::REQUIREMENT_REVIEW,
             Self::WorkDuplicateClose(_) => crate::admin_cases::WORK_DUPLICATE_CLOSE,
             Self::AskResolve(_) => ASK_RESOLVE,
+            Self::AskInboxSchedule(_) => ASK_INBOX_SCHEDULE,
             Self::RequirementRuleClose(_) => TODO_RULE_CLOSE,
             Self::SessionStart(_) => "session.start",
             Self::CodexConfigure(_) => "session.codex.configure",

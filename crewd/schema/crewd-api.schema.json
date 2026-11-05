@@ -2075,6 +2075,99 @@
       ],
       "type": "object"
     },
+    "AskInboxCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "deferredUntilMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxUntilMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision",
+        "maxUntilMs"
+      ],
+      "type": "object"
+    },
+    "AskInboxScheduleParams": {
+      "additionalProperties": false,
+      "properties": {
+        "ask": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "expectedInboxRevision": {
+          "type": "string"
+        },
+        "expectedResolutionRevision": {
+          "type": "string"
+        },
+        "untilMs": {
+          "description": "Explicit null returns the Ask to the current inbox.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId",
+        "ask",
+        "expectedResolutionRevision",
+        "expectedInboxRevision",
+        "untilMs"
+      ],
+      "type": "object"
+    },
+    "AskInboxScheduleReceipt": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "ask": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "deferredUntilMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "inboxRevision": {
+          "type": "string"
+        },
+        "originalInboxRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "ask",
+        "originalInboxRevision",
+        "inboxRevision",
+        "acceptedAtMs"
+      ],
+      "type": "object"
+    },
     "AskListParams": {
       "additionalProperties": false,
       "description": "全可选：`null` 当 `{}`。",
@@ -2097,6 +2190,16 @@
       "properties": {
         "ask": {
           "$ref": "#/$defs/Ask"
+        },
+        "inbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AskInboxCheck"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "resolutionRevision": {
           "type": [
@@ -9414,6 +9517,22 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/CrewRef"
+            },
+            "event": {
+              "const": "ask.inboxChanged",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/WorkChanged"
             },
             "event": {
@@ -10487,6 +10606,13 @@
         "defaultDueAt": {
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "deferredUntilMs": {
+          "format": "int64",
+          "type": [
+            "integer",
             "null"
           ]
         },
@@ -13928,6 +14054,23 @@
             },
             "params": {
               "$ref": "#/$defs/AskResolutionParams"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
+              "const": "ask.inboxSchedule",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/AskInboxScheduleParams"
             }
           },
           "required": [
@@ -19485,6 +19628,9 @@
   "events": {
     "ask.changed": {
       "$ref": "#/$defs/Ask"
+    },
+    "ask.inboxChanged": {
+      "$ref": "#/$defs/CrewRef"
     },
     "badge.changed": {
       "$ref": "#/$defs/Badge"

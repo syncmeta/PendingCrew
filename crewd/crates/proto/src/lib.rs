@@ -381,6 +381,7 @@ pub mod events {
     pub const DOCUMENT_CHANGED: &str = "document.changed";
     pub const FOLDER_CHANGED: &str = "viewFolder.changed";
     pub const ASK_CHANGED: &str = "ask.changed";
+    pub const ASK_INBOX_CHANGED: &str = "ask.inboxChanged";
     /// `SessionLive`，M3c 发。
     pub const SESSION_CHANGED: &str = "session.changed";
     pub const RESTART_CHANGED: &str = "restart.changed";
@@ -583,6 +584,7 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
             sub::<TodoAttributesChanged>(g),
         ),
         (events::ASK_CHANGED, sub::<Ask>(g)),
+        (events::ASK_INBOX_CHANGED, sub::<CrewRef>(g)),
         (events::WORK_CHANGED, sub::<WorkChanged>(g)),
         (events::CHANNEL_WORK_CHANGED, sub::<ChannelWorkChanged>(g)),
         (events::DATA_CHANGED, sub::<CrewRef>(g)),
@@ -701,6 +703,7 @@ pub fn api_schema() -> Value {
     let g = &mut generator;
     let _ = sub::<notifications::NotificationOpenContext>(g);
     let _ = sub::<AskResolutionReceipt>(g);
+    let _ = sub::<AskInboxScheduleReceipt>(g);
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
         (

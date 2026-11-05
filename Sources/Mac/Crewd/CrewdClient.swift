@@ -465,16 +465,24 @@ enum CrewdAskResolutionWire {
     struct Review: Equatable {
         let ask: CrewdValue
         let revision: String?
+        let inbox: CrewdAskInboxWire.Review?
         var crewID: String { ask["crewId"].string ?? "" }
         var askID: String { ask["ask"].string ?? "" }
 
         init(_ value: CrewdValue, crew: String, id: String) throws {
-            guard case .object(let fields) = value, Set(fields.keys) == ["ask","resolutionRevision"],
+            guard case .object(let fields) = value,
+                  ["ask","resolutionRevision"].allSatisfy({ fields[$0] != nil }),
+                  Set(fields.keys).isSubset(of:["ask","resolutionRevision","inbox"]),
                   validAsk(value["ask"],crew:.string(crew),id:.string(id)),
                   value["resolutionRevision"] == .null || (digest(value["resolutionRevision"]) &&
                       value["ask"]["state"] == .string("open")) else { throw invalid() }
             ask = value["ask"]; revision = value["resolutionRevision"].string
+            // Scheduling is an optional independent action. A missing or
+            // malformed scheduling witness cannot disable the existing resolution.
+            inbox = revision == nil ? nil : try? .init(value["inbox"])
         }
+
+        func sameResolution(as other: Self) -> Bool { ask == other.ask && revision == other.revision }
 
         func parameters(_ disposition: Disposition, text: String) throws -> CrewdValue {
             guard let revision else { throw invalid() }
@@ -529,11 +537,11 @@ enum CrewdAskResolutionWire {
             value["askedAt"].string?.isEmpty == false &&
             ["open","answered","withdrawn","defaulted"].contains(value["state"].string ?? "")
     }
-    private static func canonicalID(_ value: CrewdValue) -> Bool {
+    fileprivate static func canonicalID(_ value: CrewdValue) -> Bool {
         guard let id = value.string, id.first == "H", let number = Int64(id.dropFirst()), number > 0 else { return false }
         return id == "H\(number)"
     }
-    private static func digest(_ value: CrewdValue) -> Bool {
+    fileprivate static func digest(_ value: CrewdValue) -> Bool {
         guard let text = value.string, text.utf8.count == 64 else { return false }
         return text.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
@@ -553,6 +561,78 @@ enum CrewdAskResolutionWire {
     static func invalid() -> CrewdClientError {
         .init(message:"原问题、版本或处理回执不符。请核对原请求。")
     }
+}
+
+enum CrewdAskInboxWire {
+    struct Review: Equatable {
+        let revision: String
+        let maxUntilMs: Int
+        let deferredUntilMs: Int?
+
+        init(_ value: CrewdValue) throws {
+            guard case .object(let fields) = value,
+                  Set(fields.keys).isSubset(of:["revision","maxUntilMs","deferredUntilMs"]),
+                  CrewdAskResolutionWire.digest(value["revision"]),
+                  let revision = value["revision"].string,
+                  let maxUntilMs = milliseconds(value["maxUntilMs"]),
+                  value["deferredUntilMs"] == .null || milliseconds(value["deferredUntilMs"]) != nil else { throw invalid() }
+            self.revision = revision
+            self.maxUntilMs = maxUntilMs
+            deferredUntilMs = milliseconds(value["deferredUntilMs"])
+        }
+
+        func sameState(as other: Self) -> Bool {
+            revision == other.revision && deferredUntilMs == other.deferredUntilMs
+        }
+    }
+
+    static func parameters(_ review: CrewdAskResolutionWire.Review, untilMs: Int?, nowMs: Int) throws -> CrewdValue {
+        guard let inbox = review.inbox, let revision = review.revision else { throw invalid() }
+        if let untilMs {
+            guard untilMs > nowMs, untilMs <= inbox.maxUntilMs, untilMs != inbox.deferredUntilMs else { throw invalid() }
+        } else {
+            guard inbox.deferredUntilMs != nil else { throw invalid() }
+        }
+        return try canonical(.object(["crewId":.string(review.crewID),"ask":.string(review.askID),
+            "expectedResolutionRevision":.string(revision),"expectedInboxRevision":.string(inbox.revision),
+            "untilMs":untilMs.map { .integer(Int64($0)) } ?? .null]))
+    }
+
+    static func canonical(_ params: CrewdValue) throws -> CrewdValue {
+        guard case .object(let fields) = params,
+              Set(fields.keys) == ["crewId","ask","expectedResolutionRevision","expectedInboxRevision","untilMs"],
+              let crew = params["crewId"].string, !crew.isEmpty, crew.utf8.count <= 4_096,
+              CrewdAskResolutionWire.canonicalID(params["ask"]),
+              CrewdAskResolutionWire.digest(params["expectedResolutionRevision"]),
+              CrewdAskResolutionWire.digest(params["expectedInboxRevision"]),
+              params["untilMs"] == .null || milliseconds(params["untilMs"]) != nil else { throw invalid() }
+        return params
+    }
+
+    static func validateResult(_ value: CrewdValue, params: CrewdValue) throws {
+        _ = try canonical(params)
+        let required: Set<String> = ["crewId","ask","originalInboxRevision","inboxRevision","acceptedAtMs"]
+        guard case .object(let fields) = value, required.isSubset(of:fields.keys),
+              Set(fields.keys).isSubset(of:required.union(["deferredUntilMs"])),
+              let crew = params["crewId"].string, value["crewId"].string?.utf8.elementsEqual(crew.utf8) == true,
+              value["ask"] == params["ask"], value["originalInboxRevision"] == params["expectedInboxRevision"],
+              CrewdAskResolutionWire.digest(value["inboxRevision"]), value["inboxRevision"] != value["originalInboxRevision"],
+              let acceptedAtMs = milliseconds(value["acceptedAtMs"]) else { throw invalid() }
+        if let untilMs = milliseconds(params["untilMs"]) {
+            guard untilMs > acceptedAtMs, milliseconds(value["deferredUntilMs"]) == untilMs else { throw invalid() }
+        } else {
+            guard fields["deferredUntilMs"] == nil else { throw invalid() }
+        }
+    }
+
+    static func milliseconds(_ value: CrewdValue) -> Int? {
+        guard case .integer(let time) = value, time > 0 else { return nil }
+        return Int(exactly:time)
+    }
+
+    static func nowMs(_ date: Date = Date()) -> Int { Int(date.timeIntervalSince1970 * 1_000) }
+    static func date(_ milliseconds: Int) -> Date { Date(timeIntervalSince1970:Double(milliseconds) / 1_000) }
+    static func invalid() -> CrewdClientError { .init(message:"原待人事项、稍后版本或回执不符。请核对原请求。") }
 }
 
 enum CrewdRequirementCreateWire {

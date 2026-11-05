@@ -324,6 +324,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                     admin_cases::WORK_DUPLICATE_HISTORY,
                     methods::ASK_RESOLVE_CHECK,
                     crewd_proto::commands::ASK_RESOLVE,
+                    crewd_proto::commands::ASK_INBOX_SCHEDULE,
                     methods::TODO_RULING_CHECK,
                     methods::TODO_CREATE_LOOKUP,
                     methods::WORK_CHANNEL_RESPONSIBILITY,

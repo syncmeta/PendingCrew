@@ -166,6 +166,21 @@ struct CrewdWorkspaceView: View {
         Task { _ = await workspace.perform("restart.answer", .object(["id": prompt["id"], "answer": .string(answer)])) }
     }
 
+    @ViewBuilder
+    private func waitingDisclosure(_ rows: [CrewdValue]) -> some View {
+        if !rows.isEmpty {
+            DisclosureGroup("全组织等待你的答复（\(rows.count)）") {
+                ScrollView {
+                    ForEach(rows.indices,id:\.self) { i in
+                        let row = rows[i], ask = row["ask"]
+                        CrewdCrewQuestionView(workspace:workspace,row:row)
+                            .id((ask["crewId"].string ?? "") + "/" + (ask["ask"].string ?? ""))
+                    }
+                }.frame(maxHeight:180)
+            }
+        }
+    }
+
     private var conversation: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -173,16 +188,10 @@ struct CrewdWorkspaceView: View {
                 Spacer();if !workspace.channelID.isEmpty{CrewdFolderAssignmentButton(store:workspace.resources,drafts:$workspace.resourceDrafts,view:.messages,object:CrewdFolderFilter.object("channel",workspace.channelID))}
             }
             CrewdHumanResolutionRecovery(workspace:workspace)
-            if !workspace.pendingAsks.isEmpty {
-                DisclosureGroup("全组织等待你的答复（\(workspace.pendingAsks.count)）") {
-                    ScrollView {
-                        ForEach(workspace.pendingAsks.indices, id: \.self) { i in
-                            let row = workspace.pendingAsks[i]
-                            let ask = row["ask"]
-                            CrewdCrewQuestionView(workspace: workspace, row: row).id((ask["crewId"].string ?? "") + "/" + (ask["ask"].string ?? ""))
-                        }
-                    }.frame(maxHeight: 180)
-                }
+            if workspace.workStore.supportsAskInboxSchedule {
+                waitingDisclosure(workspace.pendingAsks.filter { CrewdHumanWaitPresentation.deferredUntil($0) == nil })
+            } else {
+                waitingDisclosure(workspace.pendingAsks)
             }
             ScrollViewReader { proxy in
                 ScrollView {

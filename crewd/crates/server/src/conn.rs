@@ -886,6 +886,11 @@ async fn request_step(
                 ServerFrame::Response(crate::requirement_ruling::handle(state, &peer.command_actor(), req).await)
             }
         }
+        Ok(req) if req.method == methods::ASK_LIST && !agent.is_attached() => {
+            ServerFrame::Response(
+                crate::ask_resolution::handle(state, &peer.command_actor(), req).await,
+            )
+        }
         Ok(req)
             if matches!(
                 req.method.as_str(),
@@ -1096,6 +1101,25 @@ async fn data_event_allowed(
         .unwrap_or(false)
 }
 
+async fn ask_inbox_event_allowed(
+    state: &Arc<AppState>,
+    actor: &crate::public_commands::Actor,
+    data: &serde_json::Value,
+) -> bool {
+    let Some(crew) = data.as_object().filter(|object| object.len() == 1)
+        .and_then(|object| object.get("crewId")).and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let crew = crew.to_owned();
+    let actor = actor.clone();
+    let owned_state = state.clone();
+    state.db.call(move |store| {
+        actor.authorize_tx(&owned_state, store.conn(), methods::ASK_LIST).is_ok()
+            && crewd_collab::crews::get(store.conn(), &crew)
+                .is_ok_and(|crew| crew.removed_at.is_none())
+    }).await.unwrap_or(false)
+}
+
 fn spawn_forwarder(
     mut rx: broadcast::Receiver<Event>,
     topics: Vec<String>,
@@ -1132,6 +1156,7 @@ fn spawn_forwarder(
                         && matches!(
                             e.event.as_str(),
                             "personalDraft.changed"
+                                | events::ASK_INBOX_CHANGED
                                 | events::TODO_ATTRIBUTES_CHANGED
                                 | events::DATA_CHANGED
                                 | events::DOCUMENT_CHANGED
@@ -1149,6 +1174,12 @@ fn spawn_forwarder(
                     }
                     if e.event == events::DATA_CHANGED
                         && !data_event_allowed(&state, &actor, &e.data).await
+                    {
+                        continue;
+                    }
+                    if e.event == events::ASK_INBOX_CHANGED
+                        && (!ask_inbox_event_allowed(&state, &actor, &e.data).await
+                            || attached.load(std::sync::atomic::Ordering::Acquire))
                     {
                         continue;
                     }

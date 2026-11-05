@@ -69,6 +69,7 @@ refusal_codes! {
     AskReasonEmpty = "ask.reason_empty" [],
     AskNotOpen = "ask.not_open" ["ask"],
     AskResolutionChanged = "ask.resolution_changed" [],
+    AskInboxChanged = "ask.inbox_changed" [],
     AskInUse = "ask.in_use" ["ask"],
     AskQuestionEmpty = "ask.question_empty" [],
     // channel

@@ -327,6 +327,7 @@ fn sql_effect(
         PublicCommand::RequirementReview(p) => serde_json::to_value(collab::requirement_review::apply(tx, p)?),
         PublicCommand::WorkDuplicateClose(p) => serde_json::to_value(collab::work_duplicate_review::close(tx, p)?),
         PublicCommand::AskResolve(p) => serde_json::to_value(collab::ask_resolution::resolve(tx, p)?),
+        PublicCommand::AskInboxSchedule(p) => serde_json::to_value(collab::ask_inbox::schedule(tx, p)?),
         PublicCommand::RequirementRuleClose(p) => serde_json::to_value(
             collab::requirement_ruling::close(tx, &Sender::Human, request_id, p)?,
         ),
@@ -362,6 +363,7 @@ async fn submit(
         | PublicCommand::RequirementReview(_)
         | PublicCommand::WorkDuplicateClose(_)
         | PublicCommand::AskResolve(_)
+        | PublicCommand::AskInboxSchedule(_)
         | PublicCommand::RequirementRuleClose(_)
         | PublicCommand::MessagePost(_) => submit_sql(state, actor, p).await,
         PublicCommand::CodexConfigure(_)
@@ -444,6 +446,7 @@ async fn submit_sql_with_home(
             | PublicCommand::RequirementReview(_)
             | PublicCommand::WorkDuplicateClose(_)
             | PublicCommand::AskResolve(_)
+            | PublicCommand::AskInboxSchedule(_)
             | PublicCommand::RequirementRuleClose(_)
             | PublicCommand::MessagePost(_)
     ) {

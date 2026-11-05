@@ -187,6 +187,7 @@ struct CrewdWorkPanels: View {
     @State private var failure:String?
     @State private var actionTarget: CrewdPlanTarget?
     @State private var humanTarget:CrewdHumanTarget?
+    @State private var humanPresentationScope = UUID()
     @State private var documentTarget: CrewdWorkDocumentTarget?
     @State private var rulingTarget: CrewdRequirementRulingTarget?
     @State private var selectedRequirement: CrewdWorkID?
@@ -272,23 +273,27 @@ struct CrewdWorkPanels: View {
                         if let workspace = patrolWorkspace {
                             CrewdHumanResolutionRecovery(workspace:workspace,crew:humanCrewOnly ? store.selectedCrew : nil)
                         }
-                        ForEach(visibleHumanIDs,id:\.self) { id in humanRow(id) }
-                        if visibleHumanIDs.isEmpty && !store.loading {
-                            Text("暂无待人处理事项").font(CrewdType.label).foregroundStyle(.secondary).padding(.vertical,12)
-                        }
+                        humanInbox
                     }
                 }.frame(maxWidth:.infinity,alignment:.leading)
             }
             }
         }.padding(compact ? 8:16).foregroundStyle(CrewdChatStyle.ink(colorScheme)).background(pageBackground)
-        .onDisappear { requirementRecoveryScope = UUID() }
+        .onDisappear {
+            requirementRecoveryScope = UUID()
+            humanPresentationScope = UUID()
+        }
+        .onChange(of:showsGlobalInbox) { _,_ in
+            humanPresentationScope = UUID()
+            humanTarget = nil
+        }
         .task(id:store.readScope.uuidString+store.capabilities.sorted().joined(separator:",")) { await store.ensureLoaded() }
         .sheet(isPresented: $patrolPresented) { CrewdPatrolView(store: store, workspace: patrolWorkspace) }
         .sheet(isPresented: $humanBriefPresented) {
             CrewdHumanBriefView(store: store, drafts: $humanDrafts,
                 crewTitle: crews.first { $0["id"] == .string(store.selectedCrew) }?["title"].string,workspace:patrolWorkspace)
         }
-        .sheet(item:$humanTarget){target in CrewdHumanActions(store:store,drafts:$humanDrafts,target:target,workspace:patrolWorkspace)}
+        .sheet(item:$humanTarget) { humanActions($0) }
         .sheet(item:$actionTarget) {target in CrewdPlanActions(store:store,drafts:$planDrafts,target:target,members:members,crews:crews)}
         .sheet(item: $documentTarget) { target in
             if let workspace = patrolWorkspace { CrewdWorkDocumentSheet(workspace: workspace, work: store, target: target) }
@@ -297,6 +302,17 @@ struct CrewdWorkPanels: View {
             if let workspace = patrolWorkspace { CrewdRequirementRulingView(store:store,workspace:workspace,target:target) }
         }
     }
+    private func humanActions(_ target: CrewdHumanTarget) -> some View {
+        let presentation = humanPresentationScope
+        let check: (@MainActor () -> Bool)?
+        if showsGlobalInbox {
+            check = { humanPresentationScope == presentation && humanTarget?.id == target.id }
+        } else {
+            check = nil
+        }
+        return CrewdHumanActions(store:store,drafts:$humanDrafts,target:target,workspace:patrolWorkspace,inboxIsCurrent:check)
+    }
+
     private var pageBackground:Color {
         #if os(macOS)
         return Theme.Palette.canvas
@@ -308,6 +324,33 @@ struct CrewdWorkPanels: View {
         store.humanTaskIDs.filter { id in
             (!humanCrewOnly || store.humanTasks[id]?["ask"]["crewId"].string == store.selectedCrew) &&
             (store.humanTasks[id]?["ask"]["crewId"].string != resources.crew || includes("humanTask",id.raw))
+        }
+    }
+    private var showsGlobalInbox: Bool {
+        !humanCrewOnly && !progressOnly && !compact && domain != .requirements
+    }
+    @ViewBuilder
+    private var humanInbox: some View {
+        let ids = visibleHumanIDs
+        if showsGlobalInbox && store.supportsAskInboxSchedule {
+            let all = CrewdHumanWaitPresentation.inbox(store.humanTaskIDs,rows:store.humanTasks)
+            let visible = Set(ids)
+            VStack(alignment:.leading,spacing:8) {
+                Text("待处理（\(all.activeOpenCount)）").font(CrewdType.label.weight(.semibold))
+                ForEach(all.active.filter(visible.contains),id:\.self) { id in humanRow(id) }
+                let later = all.later.filter(visible.contains)
+                if !later.isEmpty {
+                    Text("稍后").font(CrewdType.label.weight(.semibold))
+                    ForEach(later,id:\.self) { id in
+                        humanRow(id,deferredUntilMs:CrewdHumanWaitPresentation.deferredUntil(store.humanTasks[id] ?? .null))
+                    }
+                }
+            }
+        } else {
+            ForEach(ids,id:\.self) { id in humanRow(id) }
+        }
+        if ids.isEmpty && !store.loading {
+            Text("暂无待人处理事项").font(CrewdType.label).foregroundStyle(.secondary).padding(.vertical,12)
         }
     }
     private func statusMark(_ status:String,human:Bool=false)->some View {
@@ -362,7 +405,7 @@ struct CrewdWorkPanels: View {
             }
         }
     }
-    private func humanRow(_ id:CrewdWorkID)->some View {
+    private func humanRow(_ id:CrewdWorkID,deferredUntilMs:Int? = nil)->some View {
         let row=store.humanTasks[id] ?? .null
         let ask=row["ask"]
         let state=ask["state"].string ?? ""
@@ -372,10 +415,18 @@ struct CrewdWorkPanels: View {
                 Text(id.raw).font(CrewdType.label.weight(.semibold).monospacedDigit()).foregroundStyle(.secondary)
                 Spacer(minLength:8)
                 if let crew=ask["crewId"].string {
-                    Button("答复 / 撤回") {humanTarget=CrewdHumanTarget(key:.init(scope:store.selectedCrew,crew:crew,ask:id.raw),crewTitle:crews.first(where:{$0["id"].string == crew})?["title"].string)}
+                    Button(showsGlobalInbox && store.supportsAskInboxSchedule ? "处理" : "答复 / 撤回") {
+                        humanPresentationScope = UUID()
+                        humanTarget = CrewdHumanTarget(key:.init(scope:store.selectedCrew,crew:crew,ask:id.raw),
+                            crewTitle:crews.first(where:{$0["id"].string == crew})?["title"].string)
+                    }
                     if crew == resources.crew {CrewdFolderAssignmentButton(store:resources,drafts:$resourceDrafts,view:.todo,object:CrewdFolderFilter.object("humanTask",id.raw))}
                 }
             }.font(CrewdType.caption).buttonStyle(.plain)
+            if let deferredUntilMs {
+                Text("稍后至 " + CrewdAskInboxWire.date(deferredUntilMs).formatted(date:.abbreviated,time:.shortened))
+                    .font(CrewdType.caption).foregroundStyle(.secondary).padding(.leading,22)
+            }
             if let summary = CrewdHumanWaitPresentation.summary(row) {
                 Text(summary).font(CrewdType.caption).foregroundStyle(.secondary).padding(.leading,22)
             }

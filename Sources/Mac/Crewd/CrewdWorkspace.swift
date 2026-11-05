@@ -1221,7 +1221,7 @@ final class CrewdWorkspace: ObservableObject {
         if method == "todo.create" { return try await submitRequirementCreate(params) }
         if ["ask.answer","ask.withdraw"].contains(method) {
             guard !workStore.offersAskResolution,
-                  originalAskResolutionRecords(crew:params["crewId"].string,ask:params["ask"].string).isEmpty else {
+                  originalAskRecords(crew:params["crewId"].string,ask:params["ask"].string).isEmpty else {
                 throw CrewdClientError(message:"请在原问题复核界面处理，或核对已有原请求。",kind:.notSubmitted)
             }
         }
@@ -1460,17 +1460,18 @@ final class CrewdWorkspace: ObservableObject {
                 throw CrewdClientError(message: "当前机组无法" + action + "，或已有原请求待核对。", kind: .notSubmitted)
             }
         }
-        if operation == .askResolve {
-            guard workStore.supportsAskResolution, originalJournalReady, let journal = originalJournal else {
+        if operation == .askResolve || operation == .askInboxSchedule {
+            let supported = operation == .askResolve ? workStore.supportsAskResolution : workStore.supportsAskInboxSchedule
+            guard supported, originalJournalReady, let journal = originalJournal else {
                 throw CrewdClientError(message:"当前连接尚未具备问题处理的原请求回执资格。",kind:.notSubmitted)
             }
             do { durableUnknown = try journal.unknownRecords() }
             catch { throw CrewdClientError(message:"无法核对原问题提交历史，本次尚未发送。",kind:.notSubmitted) }
             guard
                   let ask = params["ask"].string, !crew.isEmpty, params["crewId"] == .string(crew),
-                  originalAskResolutionRecords(crew:crew,ask:ask).isEmpty,
+                  originalAskRecords(crew:crew,ask:ask).isEmpty,
                   !publicCommands.observations.values.contains(where:{
-                      publicCommands.pending.contains($0.id) && $0.envelope.operation == .askResolve &&
+                      publicCommands.pending.contains($0.id) && [.askResolve,.askInboxSchedule].contains($0.envelope.operation) &&
                           $0.envelope.params["crewId"] == .string(crew) && $0.envelope.params["ask"] == .string(ask)
                   }) else { throw CrewdClientError(message:"此问题已有原请求待核对，或当前连接尚未具备回执资格。",kind:.notSubmitted) }
         }
@@ -1526,10 +1527,15 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     func originalAskResolutionRecords(crew: String? = nil, ask: String? = nil) -> [CrewdPresentationJournal.Prepared] {
+        originalAskRecords(crew:crew,ask:ask,operations:[.askResolve])
+    }
+
+    func originalAskRecords(crew: String? = nil, ask: String? = nil,
+                            operations: Set<CrewdPublicOperation> = [.askResolve,.askInboxSchedule]) -> [CrewdPresentationJournal.Prepared] {
         durableUnknown.filter { record in
             let command = record.params["command"], params = command["params"]
             return isCurrentOriginalObservation(record) && record.method == "command.submit" &&
-                command["operation"] == .string(CrewdPublicOperation.askResolve.rawValue) &&
+                command["operation"].string.flatMap(CrewdPublicOperation.init(rawValue:)).map(operations.contains) == true &&
                 (crew == nil || params["crewId"].string == crew) && (ask == nil || params["ask"].string == ask)
         }
     }
@@ -1544,6 +1550,48 @@ final class CrewdWorkspace: ObservableObject {
         if receipt.phase == .committed { workDirty = true; scheduleSync() }
         return receipt
     }
+    var humanInboxSelection: UUID { selection }
+
+    func submitAskInboxSchedule(_ shown: CrewdAskResolutionWire.Review, untilMs: Int?,
+                                selectedCrew: String, scope: UUID, stillCurrent: @escaping @MainActor () -> Bool) async throws -> CrewdPublicReceipt? {
+        let epoch = observationGeneration, connection = client.connectionEpoch, route = selection, origin = presentationScope
+        func current() -> Bool {
+            stillCurrent() && !Task.isCancelled && !stopping && acceptsObservation(epoch) && selection == route &&
+                client.connectionEpoch == connection && presentationScope == origin && originalJournalReady &&
+                workStore.supportsAskInboxSchedule && workStore.readScope == scope &&
+                !selectedCrew.isEmpty && crewID == selectedCrew && workStore.selectedCrew == selectedCrew
+        }
+        guard current(), let id = CrewdWorkID(shown.askID,kind:.human), let inbox = shown.inbox else { throw CancellationError() }
+        let fresh = try await workStore.humanResolutionCheck(id,crew:shown.crewID)
+        guard current() else { throw CancellationError() }
+        guard fresh.sameResolution(as:shown), fresh.inbox?.sameState(as:inbox) == true else { return nil }
+        let params = try CrewdAskInboxWire.parameters(fresh,untilMs:untilMs,nowMs:CrewdAskInboxWire.nowMs())
+        let receipt = try await submitPublicCommand(.askInboxSchedule,params:params,crew:fresh.crewID) { _ in
+            guard current() else { throw CancellationError() }
+        }
+        if receipt.phase == .committed { workDirty = true; scheduleSync() }
+        return receipt
+    }
+
+    func recoverAskInboxSchedule(_ id: UUID, stillCurrent: () -> Bool) async throws -> CrewdPublicReceipt? {
+        let epoch = observationGeneration, route = selection, origin = presentationScope
+        let connection = client.connectionEpoch, readScope = workStore.readScope
+        func current() -> Bool {
+            stillCurrent() && !Task.isCancelled && acceptsObservation(epoch) && selection == route &&
+                client.connectionEpoch == connection && presentationScope == origin && workStore.readScope == readScope
+        }
+        guard current(), let record = originalAskRecords(operations:[.askInboxSchedule]).first(where:{ $0.id == id }) else {
+            throw CancellationError()
+        }
+        let receipt = try await lookupOriginalCommand(record)
+        guard current() else { throw CancellationError() }
+        if let receipt, [.committed,.rejected,.suppressed].contains(receipt.phase) {
+            try acknowledgeOriginalCommand(record,receipt:receipt)
+            if receipt.phase == .committed { workDirty = true; scheduleSync() }
+        }
+        return receipt
+    }
+
     func recoverAskResolution(_ id: UUID) async throws -> CrewdPublicReceipt? {
         guard let record = originalAskResolutionRecords().first(where:{ $0.id == id }) else { throw CrewdPublicWire.invalid() }
         let receipt = try await lookupOriginalCommand(record)
@@ -1775,7 +1823,7 @@ final class CrewdWorkspace: ObservableObject {
         let historicalRecordedRequest = receipt.historical &&
             [CrewdPublicOperation.patrolStart.rawValue, CrewdPublicOperation.requirementReview.rawValue,
              CrewdPublicOperation.workDuplicateClose.rawValue,CrewdPublicOperation.askResolve.rawValue,
-             CrewdPublicOperation.requirementRuleClose.rawValue].contains(operation ?? "") &&
+             CrewdPublicOperation.askInboxSchedule.rawValue,CrewdPublicOperation.requirementRuleClose.rawValue].contains(operation ?? "") &&
             [.committed, .rejected, .suppressed].contains(receipt.phase)
         guard record.scope == presentationScope, !receipt.historical || historicalRecordedRequest,
               record.params["requestId"].string.flatMap(UUID.init(uuidString:)) == receipt.requestID,

@@ -441,7 +441,22 @@ async fn approved(
 #[tokio::test]
 async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() {
     use crewd_collab::{asks, sessions};
-    use crewd_proto::{Role, commands::ASK_RESOLVE, methods::ASK_RESOLVE_CHECK};
+    use crewd_proto::{
+        Role, commands::{ASK_INBOX_SCHEDULE, ASK_RESOLVE}, methods::ASK_RESOLVE_CHECK,
+    };
+
+    fn schedule_packet(hello: &Value, checked: &Value, until: Option<i64>) -> Value {
+        draft_packet(
+            hello,
+            ASK_INBOX_SCHEDULE,
+            json!({
+                "crewId": checked["ask"]["crewId"], "ask": checked["ask"]["ask"],
+                "expectedResolutionRevision": checked["resolutionRevision"],
+                "expectedInboxRevision": checked["inbox"]["revision"],
+                "untilMs": until,
+            }),
+        )
+    }
 
     fn resolve_packet(hello: &Value, checked: &Value, disposition: &str, text: &str) -> Value {
         draft_packet(
@@ -518,7 +533,7 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let hello = remote.call("system.hello", json!({})).await;
     assert_eq!(hello["remoteBinding"]["grantId"], accepted.grant.id);
-    for method in [ASK_RESOLVE_CHECK, ASK_RESOLVE] {
+    for method in [ASK_RESOLVE_CHECK, ASK_RESOLVE, ASK_INBOX_SCHEDULE] {
         assert!(
             hello["capabilities"]
                 .as_array()
@@ -536,6 +551,25 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
         assert_eq!(checked["resolutionRevision"].as_str().unwrap().len(), 64);
         checks.push(checked);
     }
+    let until = crewd_store::now_ms() + 10 * 60_000;
+    let defer = schedule_packet(&hello, &checks[2], Some(until));
+    remote.call("events.subscribe", json!({"topics":["ask"]})).await;
+    let saved = remote.call("command.submit", defer.clone()).await;
+    let event = match remote.events.pop() {
+        Some(event) => event,
+        None => remote.event().await,
+    };
+    assert_eq!(event["event"], "ask.inboxChanged");
+    assert_eq!(event["data"], json!({"crewId":crew}));
+    assert_eq!(saved["phase"], "committed");
+    assert_eq!(saved["result"]["deferredUntilMs"], until);
+    assert_eq!(remote.call("command.submit", defer.clone()).await, saved);
+    let rows = remote.call("ask.list", json!({})).await;
+    let row = rows.as_array().unwrap().iter()
+        .find(|row| row["ask"]["ask"] == questions[2].ask).unwrap();
+    assert_eq!(row["ask"], serde_json::to_value(&questions[2]).unwrap());
+    assert_eq!(row["deferredUntilMs"], until);
+
     let wrong = resolve_packet(&hello, &checks[0], "answer", "must not apply");
     let mut wrong_target = wrong.clone();
     wrong_target["command"]["params"]["ask"] = json!(questions[1].ask);
@@ -576,12 +610,35 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
         .unwrap();
     assert_eq!(refused["error"]["code"], crewd_proto::RpcError::CONFLICT);
     drop(remote);
+    stopped(running).await;
+    let mut running = service(dir.path()).await;
+    assert_eq!(local(&mut running.owner, "remote.status", json!({})).await["listening"], true);
     let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
     let hello = remote.call("system.hello", json!({})).await;
+    let mut prior_answer = receipt.clone();
+    prior_answer["historical"] = json!(true);
+    let mut prior_schedule = saved.clone();
+    prior_schedule["historical"] = json!(true);
     assert_eq!(
         remote.call("command.lookup", lookup(&answer)).await,
-        receipt
+        prior_answer
     );
+    assert_eq!(remote.call("command.lookup", lookup(&defer)).await, prior_schedule);
+    let scheduled = remote.call(
+        ASK_RESOLVE_CHECK, json!({"crewId":crew,"ask":questions[2].ask}),
+    ).await;
+    assert_eq!(scheduled["inbox"]["deferredUntilMs"], until);
+    let clear = schedule_packet(&hello, &scheduled, None);
+    let cleared = remote.call("command.submit", clear.clone()).await;
+    assert_eq!(cleared["phase"], "committed");
+    assert!(cleared["result"].get("deferredUntilMs").is_none());
+    assert_eq!(cleared["result"]["originalInboxRevision"], saved["result"]["inboxRevision"]);
+    assert_eq!(remote.call("command.lookup", lookup(&defer)).await, prior_schedule);
+    let current = remote.call(
+        ASK_RESOLVE_CHECK, json!({"crewId":crew,"ask":questions[2].ask}),
+    ).await;
+    assert!(current["inbox"].get("deferredUntilMs").is_none());
+    let revoked_defer = schedule_packet(&hello, &current, Some(until));
     let resolved_check = remote
         .call(
             ASK_RESOLVE_CHECK,
@@ -626,11 +683,15 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
         "must remain open after revoke",
     );
     let revoked_id = revoked["requestId"].as_str().unwrap().to_owned();
+    let revoked_defer_id = revoked_defer["requestId"].as_str().unwrap().to_owned();
     local(&mut running.owner, "remote.revoke", json!({
         "grantId":accepted.grant.id,"expectedRevision":accepted.grant.revision,"note":"revoke Ask fixture"
     })).await;
     for (method, params) in [
         ("command.submit", revoked),
+        ("command.submit", revoked_defer),
+        ("command.lookup", lookup(&defer)),
+        ("ask.list", json!({})),
         (
             ASK_RESOLVE_CHECK,
             json!({"crewId":crew,"ask":questions[2].ask}),
@@ -675,8 +736,8 @@ async fn paired_human_ask_resolves_once_and_revoked_connection_cannot_resolve() 
     let receipts: i64 = store
         .conn()
         .query_row(
-            "SELECT count(*) FROM public_command_receipts WHERE request_id=?1",
-            [revoked_id],
+            "SELECT count(*) FROM public_command_receipts WHERE request_id IN (?1, ?2)",
+            [revoked_id, revoked_defer_id],
             |r| r.get(0),
         )
         .unwrap();

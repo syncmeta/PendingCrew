@@ -549,3 +549,7 @@ The work items or their evidence changed. Reload both plans and verify which one
 
 ## ask.resolution_changed
 The original question or its state changed. Reload the question before answering or withdrawing it.
+
+## ask.inbox_changed
+
+The question or its inbox schedule changed. Open it again before making changes.

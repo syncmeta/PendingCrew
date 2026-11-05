@@ -842,6 +842,11 @@ pub fn purge(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     // 级联之前：它的 session 退出别的机组的群、交出群主（终审 I4）。
     let cascaded = crate::channels::release_sessions_of_doomed_crew(tx, id)?;
     crate::message_delivery::purge_source_crew(tx, id)?;
+    for ask in before.state().asks.keys().copied() {
+        if before.state().ask_crew(ask).is_some_and(|crew| crew.as_str() == id) {
+            crate::ask_inbox::purge(tx, ask)?;
+        }
+    }
     tx.conn().execute("DELETE FROM crews WHERE id=?1", [id])?;
     crewd_store::work_organization::purge_crew_in_tx(tx.conn(), id)?;
     let after = crate::asks::load_org(tx.conn())?;

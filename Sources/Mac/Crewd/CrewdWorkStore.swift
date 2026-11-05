@@ -212,6 +212,34 @@ struct CrewdMessageDeliveryExplanation: Equatable {
 
 /// Present the server's wait tiers without inferring them from the local clock.
 enum CrewdHumanWaitPresentation {
+    struct Inbox {
+        var active: [CrewdWorkID] = []
+        var later: [CrewdWorkID] = []
+        var activeOpenCount = 0
+    }
+
+    static func inbox(_ ids: [CrewdWorkID], rows: [CrewdWorkID:CrewdValue]) -> Inbox {
+        var result = Inbox()
+        for id in ids {
+            let row = rows[id] ?? .null
+            let open = row["ask"]["state"] == .string("open")
+            if deferredUntil(row) != nil {
+                result.later.append(id)
+            } else {
+                result.active.append(id)
+                if open { result.activeOpenCount += 1 }
+            }
+        }
+        return result
+    }
+
+    // The Core durably settles expiry before omitting this hint. Device time
+    // cannot change the grouping or resurrect a previously expired deferral.
+    static func deferredUntil(_ row: CrewdValue) -> Int? {
+        guard row["ask"]["state"] == .string("open") else { return nil }
+        return CrewdAskInboxWire.milliseconds(row["deferredUntilMs"])
+    }
+
     static func summary(_ row: CrewdValue) -> String? {
         let elapsed = row["waitedMs"].int.flatMap { $0 >= 0 ? elapsedLabel(minutes: $0 / 60_000) : nil }
         let tier: String?
@@ -1513,6 +1541,8 @@ final class CrewdWorkStore: ObservableObject {
     var supportsAskResolution: Bool {
         ["ask.resolve","ask.resolveCheck","command.receipts"].allSatisfy(capabilities.contains)
     }
+    var supportsAskInboxSchedule: Bool { supportsAskResolution && capabilities.contains("ask.inboxSchedule") }
+
     func humanResolutionCheck(_ id:CrewdWorkID,crew:String) async throws -> CrewdAskResolutionWire.Review {
         guard id.kind == .human, !crew.isEmpty, supportsAskResolution else {
             throw CrewdClientError(message:"当前后台未具备完整的问题复核与原请求回执。",kind:.notSubmitted)

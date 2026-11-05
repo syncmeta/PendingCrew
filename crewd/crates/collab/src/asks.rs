@@ -342,12 +342,14 @@ pub(crate) struct ResolutionSubject {
     pub before_seq: u64,
     pub view: Ask,
     pub revision: Option<String>,
+    pub inbox: Option<crate::ask_inbox::Bounds>,
 }
 
 pub(crate) fn resolution_subject(
     conn: &Connection,
     crew: &str,
     ask: &str,
+    inbox_at: Option<i64>,
 ) -> Result<ResolutionSubject> {
     let id = resolve_ask(conn, crew, ask)?;
     let reference = public_ask(conn, id)?;
@@ -385,7 +387,22 @@ pub(crate) fn resolution_subject(
     } else {
         None
     };
+    let inbox = match (inbox_at, &revision) {
+        (Some(now), Some(_)) if crew.removed_at.is_none() => book
+            .human_waits(Ts(now))
+            .into_iter()
+            .find(|row| row.ask == id)
+            .map(|row| {
+                crate::ask_inbox::Bounds::new(
+                    now.max(book.state().clock.0),
+                    book.config().pin_after_ms,
+                    row.default_due_at.map(|time| time.0),
+                )
+            }),
+        _ => None,
+    };
     Ok(ResolutionSubject {
+        inbox,
         id,
         before_seq: book.state().last_seq,
         view,
@@ -842,8 +859,22 @@ fn apply_defaults(tx: &mut Tx<'_>, only: Option<&str>) -> Result<Vec<String>> {
 
 /// 人的待确认清单（`ask.list`）：`home` 给了就只看 home 是它的机组（它的人类群里的问）。等得久的在前。
 pub fn waits(conn: &Connection, now_ms: i64, home: Option<&str>) -> Result<Vec<HumanWait>> {
+    list_waits(conn, now_ms, home, false)
+}
+
+pub fn inbox_waits(conn: &Connection, now_ms: i64, home: Option<&str>) -> Result<Vec<HumanWait>> {
+    list_waits(conn, now_ms, home, true)
+}
+
+fn list_waits(
+    conn: &Connection,
+    now_ms: i64,
+    home: Option<&str>,
+    include_inbox: bool,
+) -> Result<Vec<HumanWait>> {
     let book = load_org(conn)?;
     let mut out = Vec::new();
+    let epoch = include_inbox.then(|| crate::ask_inbox::epoch(conn)).transpose()?;
     for w in book.human_waits(Ts(now_ms)) {
         let crew = book
             .state()
@@ -880,6 +911,11 @@ pub fn waits(conn: &Connection, now_ms: i64, home: Option<&str>) -> Result<Vec<H
                 WaitTier::StillWanted => WaitTierView::StillWanted,
             },
             default_due_at: w.default_due_at.map(ts),
+            deferred_until_ms: if let Some(epoch) = &epoch {
+                crate::ask_inbox::deferred_until(conn, epoch, crew, w.ask)?
+            } else {
+                None
+            },
         });
     }
     out.sort_by(|a, b| {

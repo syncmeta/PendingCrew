@@ -73,6 +73,9 @@ struct CrewdPublicReceipt {
                   value["command"]["params"]["text"].string?.utf8.elementsEqual(text.utf8) == true else { throw CrewdPublicWire.invalid() }
             try CrewdAskResolutionWire.validateResult(value["result"],params:originalCommand["params"])
         }
+        if originalCommand["operation"] == .string(CrewdPublicOperation.askInboxSchedule.rawValue), phase == .committed {
+            try CrewdAskInboxWire.validateResult(value["result"],params:originalCommand["params"])
+        }
         if originalCommand["operation"] == .string(CrewdPublicOperation.requirementRuleClose.rawValue) {
             guard let note = originalCommand["params"]["note"].string,
                   value["command"]["params"]["note"].string?.utf8.elementsEqual(note.utf8) == true else {
@@ -226,6 +229,7 @@ enum CrewdPublicOperation: String, Codable {
     case requirementReview = "adminCase.requirementReview"
     case workDuplicateClose = "adminCase.workDuplicateClose"
     case askResolve = "ask.resolve"
+    case askInboxSchedule = "ask.inboxSchedule"
     case requirementRuleClose = "todo.ruleClose"
     case messagePost = "message.post"
     case sessionStart = "session.start"
@@ -333,6 +337,8 @@ private enum CrewdPublicParameters {
             return try CrewdWorkDuplicateWire.canonical(value)
         case .askResolve:
             return try CrewdAskResolutionWire.canonical(value)
+        case .askInboxSchedule:
+            return try CrewdAskInboxWire.canonical(value)
         case .requirementRuleClose:
             return try CrewdRequirementRulingWire.canonical(value)
         case .firstMessage:

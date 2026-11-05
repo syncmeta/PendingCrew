@@ -13,6 +13,7 @@ pub mod admin_case_handoff;
 pub mod admin_case_custody;
 pub mod admin_case_outcome;
 pub mod asks;
+pub mod ask_inbox;
 pub mod ask_resolution;
 pub mod causal;
 pub mod channel_archive;
@@ -137,6 +138,9 @@ pub enum Change {
     AskChanged {
         crew_id: String,
         ask: String,
+    },
+    AskInboxChanged {
+        crew_id: String,
     },
     /// 人回答了一条问（裁定 17）：`cleared` = 卡点被清的 (工作项, 负责人)，M4b 据此叫醒负责人。
     AskAnswered {
