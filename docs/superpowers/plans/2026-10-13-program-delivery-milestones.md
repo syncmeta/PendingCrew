@@ -37,9 +37,15 @@
 
 在同一 Core 的空知识目录实际离线备份、重开、分配再删除 `T3` 和 `O4`，然后恢复旧备份并再次重开。新编号为 `T5` 和 `O6`，旧作用域拒写，保留的原回执仅作为历史返回，缺失的新回执保持历史未知。创建真实私库数据后，普通单库恢复被拒，原数据摘要保持一致。见 `/private/tmp/pcw-mrestore.j3j4fzpx/result.json`。11 项备份、9 项编号、6 项组织对象、7 项拒绝文案和两份 Agent 工具目录检查通过。
 
-实际 Swift 数据层与同源普通 Core 实测跨机组只读、保存答复未读、两进程实际退出重开，以及一次查询读回原编辑的第 2 版，同时当前记录保留第 3 版。公开协议与普通后台输出逐字节一致。Mac 私有 Debug 预览通过嵌入后台、严格签名和动态库核验，iPhoneOS arm64 Debug 验证了 iPhone、iPad 目标和实际 Swift 调试动态库。记录见 `/private/tmp/pcw-managed-native-wire-db1622-fgF0EiNx/result.json`、`/private/tmp/pcw-managed-integration.fgF0EiNx/mac-managed-debug-preview/candidate.json` 和 `/private/tmp/pcw-managed-integration.fgF0EiNx/ios-managed-debug-proof.json`。窗口和真机操作待验收。D/L/R 与通用对象链接仍待实现。
+实际 Swift 数据层与同源普通 Core 实测跨机组只读、保存答复未读、两进程实际退出重开，以及一次查询读回原编辑的第 2 版，同时当前记录保留第 3 版。公开协议与普通后台输出逐字节一致。Mac 私有 Debug 预览通过嵌入后台、严格签名和动态库核验，iPhoneOS arm64 Debug 验证了 iPhone、iPad 目标和实际 Swift 调试动态库。记录见 `/private/tmp/pcw-managed-native-wire-db1622-fgF0EiNx/result.json`、`/private/tmp/pcw-managed-integration.fgF0EiNx/mac-managed-debug-preview/candidate.json` 和 `/private/tmp/pcw-managed-integration.fgF0EiNx/ios-managed-debug-proof.json`。窗口和真机操作待验收。
 
 用 `0f0c8146` 普通 Core 写入 v22 原工作和私有 SQLite 表，再干净退出，由 `db1622bf` 重开同一数据目录。实际迁移到 v23，数据库身份、原 `W2` 的来源和完整读取结果、私有表的内容及文件摘要一致。新 `T3` 和 `O4` 接续旧全局编号，原写入回执可查。实际附着的外机组 Agent 可读 `O4`，对原机组私有 SQL 的读取被拒。见 `/private/tmp/pcw-22-23.kkplr0ce/result.json`。冻结提交重跑 Agent、工具目录、配对组织对象和既有私库权限四项回归通过，见 `/private/tmp/pcw-managed-integration.fgF0EiNx/managed-exact-tests.log`。
+
+`ba9851d0` 接通 §24.1 的显式 D 决定日志。组织成员可读，Human 和所属机组可记录决定。取代采用现有机长授权和作者权限，并核对当前版本。新决定与原决定相互可查，原文、作者和理由保留。撤销当前决定需要理由，恢复旧结论要显式记录新决定。归档后可读且冻结，永久删除级联清理所属决定和原回执。可关联机组、工作、需求和受管行。风险关联随正式 R 对象验收，结构化 H 自动采集、L/R 和通用链接仍是后续交付。
+
+`db1622bf` 普通 Core 实际写入 v23 原工作，`ba9851d0` 重开同一数据到 v24 并读回原工作。外机组 Agent 能读，越权取代被拒，获授权的机长实际取代 Human 的决定。撤销答复未读，普通 Core 干净退出并重开后按原 UUID 查回。原决定维持已取代，相邻机组不变。Swift 与普通 Core 分别退出重开，恢复阶段只查询一次原取代回执，原回执为现行而当前后继为已撤销。见 `/private/tmp/pcw-decisions-run.wr054ls2/result.json` 和 `/private/tmp/pcw-native-d-wire-ba9851-NlqhOO7P/result.json`。
+
+11 项组织对象、9 项编号、7 项拒绝文案、真实配对撤权与 Agent 权限回归通过。普通后台公开协议与仓库定义逐字节一致，工具目录核对通过。Mac 私有 Debug 预览通过嵌入后台、严格签名和动态库验证，iPhoneOS arm64 Debug 验证 iPhone、iPad 目标和实际 Swift 调试动态库。见 `/private/tmp/pcw-decisions-integration.NlqhOO7P/exact-decisions-agent-wire.log`、`/private/tmp/pcw-decisions-integration.NlqhOO7P/mac-decisions-debug-preview/candidate.json` 和 `/private/tmp/pcw-decisions-integration.NlqhOO7P/ios-decisions-debug-proof.json`。
 
 公证、隔离安装、正常日用和公开发布分别记账。`2cb8f0b3`（0.2.4，构建 `20761.71404`）的 Apple 回执 `f8e872c6-c526-4aa6-9448-17091c40279e` 为 Accepted。附票 ZIP 的 SHA-256 为 `2cd2f09e71c3db5f024fbe9caff30fbe9d3673fee17dd6cb9c2fd7acf0ad5445`。实测用正式整包和隔离的 Core 21 数据副本升级到 22，再恢复原整包和原数据库。两个版本均读回原回执、待办、工作项和文档。最终 ZIP 重新解包后通过签名、公证票据和 Gatekeeper 验证。验收记录见 `/private/tmp/pcw-2cb8f0b3-official-upgrade.hfwimq6g/result.json`。本次签名构建移除了 Sparkle，自动更新、正常日用和公开发布仍待各自验收。
 
