@@ -9,6 +9,14 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     let workspace: CrewdWorkspace
     let sessionID: String
     private let observedCrew: String
+    // Display provenance is immutable even if this workspace reconnects in place.
+    private let source:CrewdSessionDisplayWitness
+    func matchesCurrentSource(crew:String,session:String)->Bool {
+        !retired && !workspace.isRetired && workspace.client.readyForWork &&
+        source.matches(authority:workspace.authorityRecordID,connection:workspace.client.connectionEpoch,observation:workspace.observationGeneration,scope:CrewdSessionDisplayWitness.scopeBytes(workspace.presentationScope)) &&
+        observedCrew.utf8.elementsEqual(crew.utf8) && sessionID.utf8.elementsEqual(session.utf8) &&
+        workspace.crewID.utf8.elementsEqual(crew.utf8) && workspace.sessionID.utf8.elementsEqual(session.utf8)
+    }
     let kind: LocalCodingAgentKind
     let terminalView: TerminalMirrorView?
     let transcript: CodexTranscript?
@@ -29,6 +37,7 @@ final class CrewdOriginalSessionBackend: SessionBackend, ObservableObject {
     private(set) var hasObservedLive = false
     init(workspace: CrewdWorkspace, crewID: String, sessionID: String, kind: LocalCodingAgentKind) {
         self.workspace = workspace; self.sessionID = sessionID; self.kind = kind; observedCrew = crewID
+        source = .init(authority:workspace.authorityRecordID,connection:workspace.client.connectionEpoch,observation:workspace.observationGeneration,scope:CrewdSessionDisplayWitness.scopeBytes(workspace.presentationScope))
         terminalView = kind != .codex && workspace.profileForSession(sessionID)?.manualTerminal == true ? TerminalMirrorView(frame: .zero) : nil
         transcript = kind == .codex ? CodexTranscript() : nil
         publicTerminal = kind != .codex && workspace.profileForSession(sessionID)?.manualTerminal == true && workspace.client.capabilities.contains("session.terminal")

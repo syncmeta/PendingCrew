@@ -482,9 +482,9 @@ pub(crate) struct AdapterPosition {
     after: String,
 }
 pub(crate) struct AdapterChunk {
-    items: Vec<(AdapterPosition, EdgeView)>,
-    next: Option<AdapterPosition>,
-    raw_rows: usize,
+    pub(crate) items: Vec<(AdapterPosition, EdgeView)>,
+    pub(crate) next: Option<AdapterPosition>,
+    pub(crate) raw_rows: usize,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

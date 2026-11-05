@@ -226,6 +226,7 @@ fn snapshot_steps_with_floors(
             // after rename. Transform only this private staging copy, not the backup.
             let mut copy =
                 Connection::open_with_flags(&tmp, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+            crate::search_context::ensure_registered(&copy)?;
             let mode: String = copy.query_row("PRAGMA journal_mode=DELETE", [], |r| r.get(0))?;
             if !mode.eq_ignore_ascii_case("delete") {
                 return Err(StoreError::Invalid(
@@ -251,6 +252,7 @@ fn snapshot_steps_with_floors(
                 crate::local_clients::restored(&tx)?;
                 crate::judgment_state::restored(&tx)?;
                 crate::personal_drafts::restored(&tx)?;
+                crate::organization_search::restore(&tx)?;
                 crate::notifications::restored(&tx)?;
                 crate::codex_inputs::restored(&tx)?;
                 crate::codex_controls::restored(&tx)?;
@@ -300,6 +302,7 @@ pub fn open_read_only(db: &Path) -> Result<Connection> {
         db,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    crate::search_context::ensure_registered(&c)?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
     Ok(c)
 }
@@ -314,6 +317,7 @@ pub fn open_for_check(db: &Path) -> Result<Connection> {
         db,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    crate::search_context::ensure_registered(&c)?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
     durable(&c)?;
     c.execute_batch("PRAGMA query_only=ON")?;
@@ -324,6 +328,7 @@ pub fn open_for_check(db: &Path) -> Result<Connection> {
 pub(crate) fn open_for_checkpoint(db: &Path) -> Result<Connection> {
     require_file(db)?;
     let c = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    crate::search_context::ensure_registered(&c)?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
     durable(&c)?;
     Ok(c)

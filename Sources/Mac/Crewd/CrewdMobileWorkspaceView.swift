@@ -7,6 +7,7 @@ struct CrewdMobileWorkspaceView: View {
     @ObservedObject var workspace: CrewdWorkspace
     @Environment(\.colorScheme) private var scheme
     @State private var creatingCrew = false
+    @State private var showingSearch = false
     @State private var conversationPath: [String] = []
     @State private var sidebar = CrewdNavigation.Sidebar.contacts
     @State private var collapsed: Set<String> = []
@@ -40,7 +41,8 @@ struct CrewdMobileWorkspaceView: View {
                 .navigationDestination(for: String.self) { crew in
                     CrewdSidebarConversations(workspace: workspace, crewID: crew, showContent: { compactColumn = .detail }, filtersChannelFolders: true)
                 }
-                .toolbar { Button("新建机组", systemImage: "plus") { creatingCrew = true }.disabled(!workspace.client.connected || workspace.busy) }
+                .toolbar { Button("搜索当前电脑",systemImage:"magnifyingglass"){showingSearch=true}.disabled(!workspace.client.readyForWork)
+                    Button("新建机组", systemImage: "plus") { creatingCrew = true }.disabled(!workspace.client.connected || workspace.busy) }
             }
         } detail: {
             if !workspace.crewID.isEmpty {
@@ -50,6 +52,7 @@ struct CrewdMobileWorkspaceView: View {
         .onChange(of: workspace.crewID) { _, crew in
             if let current = conversationPath.last, current != crew { conversationPath = [] }
         }.sheet(isPresented: $creatingCrew) { CrewdCrewCreationView(workspace: workspace).id(workspace.authorityRecordID) }
+        .sheet(isPresented:$showingSearch){CrewdOrganizationSearchSheet(workspace:workspace,selected:{compactColumn = .detail}).id(workspace.authorityRecordID)}
     }
     private func crewButton(_ crew: CrewdValue) -> some View {
         let id = crew["id"].string ?? ""
@@ -78,12 +81,15 @@ struct CrewdMobileWorkspaceView: View {
 private struct CrewdMobileCrewPane: View {
     @ObservedObject var workspace: CrewdWorkspace
     @State private var tab = CrewdNavigation.Tab.messages
+    @State private var selectedSessionRoute:CrewdObservedSessionRoute?
+    @State private var sessionNavigationFailure:String?
     private var title: String { workspace.crews.first(where: { $0["id"].string == workspace.crewID })?["title"].string ?? "机组" }
     var body: some View {
         VStack(spacing: 0) {
             Picker("机组视图", selection: $tab) {
                 ForEach(CrewdNavigation.Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).padding()
+            if let sessionNavigationFailure {Text(sessionNavigationFailure).font(.caption).foregroundStyle(.orange).padding(.horizontal)}
             if let error = workspace.error { Text(error).font(.caption).foregroundStyle(.orange).textSelection(.enabled).padding(.horizontal) }
             ZStack {
                 VStack(spacing: 0) {
@@ -107,11 +113,22 @@ private struct CrewdMobileCrewPane: View {
         .onChange(of:workspace.knowledgeNavigation) { _,_ in tab = .messages }
         .task(id:workspace.currentManagedBusinessNavigation?.id) {
             guard let navigation=workspace.currentManagedBusinessNavigation else {return}
+            selectedSessionRoute=nil;sessionNavigationFailure=nil
             switch navigation.target.kind {
             case .work:tab = .progress
             case .requirement,.ask,.human:tab = .todo
             case .table,.row,.decision,.risk,.lesson,.artifact,.document,.knowledge:tab = .documents
+            case .session:
+                tab = .messages;selectedSessionRoute=CrewdObservedSessionRoute(workspace:workspace)
+                if selectedSessionRoute?.id==nil {sessionNavigationFailure="成员详情的来源已变化，请重新打开。"}
+                workspace.consumeManagedBusinessNavigation(navigation.id)
             default:tab = .messages
+            }
+        }
+        .sheet(item:$selectedSessionRoute){route in
+            NavigationStack {
+                CrewdObservedIOSSessionDetail(workspace:workspace,route:route).navigationTitle("成员详情")
+                    .toolbar{ToolbarItem(placement:.cancellationAction){Button("关闭"){selectedSessionRoute=nil}}}
             }
         }
         .toolbar { Button("刷新", systemImage: "arrow.clockwise") { workspace.scheduleSync(recoverHistory: true) }.disabled(!workspace.client.connected) }

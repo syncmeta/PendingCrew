@@ -320,6 +320,8 @@ pub struct Tx<'a> {
     now_ms: i64,
     changes: Vec<Change>,
     context: TxContext,
+    organization_search_budget: usize,
+    organization_search_maintenance: bool,
 }
 
 impl<'a> Tx<'a> {
@@ -366,6 +368,7 @@ pub fn run_with_context<T>(
     context: TxContext,
     f: impl FnOnce(&mut Tx<'_>) -> Result<T>,
 ) -> Result<(T, Vec<Change>)> {
+    let _source_context = store.search_write_context(now_ms)?;
     let t = store.conn().unchecked_transaction()?;
     let graph_enabled = crewd_store::managed_tables_v2::enabled(&t)?;
     if graph_enabled {
@@ -377,11 +380,14 @@ pub fn run_with_context<T>(
             now_ms,
             changes: Vec::new(),
             context,
+            organization_search_budget: 64,
+            organization_search_maintenance: false,
         };
         let v = f(&mut tx)?;
         if graph_enabled {
             managed_links::settle_target_deletions(&mut tx)?;
         }
+        organization_search::flush(&mut tx)?;
         (v, tx.changes)
     };
     t.commit()?;
@@ -465,3 +471,5 @@ mod tests {
 }
 
 pub mod team_data;
+
+pub mod organization_search;

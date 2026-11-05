@@ -278,7 +278,10 @@ async fn route(
             if catalog::requires_managed_scope(&p.tool)
                 || matches!(
                     p.tool.as_str(),
-                    "channel_archive_check"
+                    // Search keeps its existing All-role tool visibility, but
+                    // its unified read needs the original connection and token.
+                    "search"
+                        | "channel_archive_check"
                         | "channel_archive_verified"
                         | "channel_restore_verified"
                         | crewd_collab::work_coordination::SPLIT_TOOL

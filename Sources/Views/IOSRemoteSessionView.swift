@@ -20,7 +20,7 @@ struct IOSRemoteSessionView: View {
     }
 }
 
-private struct IOSRemoteSessionDetail: View {
+struct IOSRemoteSessionDetail: View {
     @ObservedObject var workspace: CrewdWorkspace
     let sessionID: String
     @State private var inspection: CrewdValue = .null

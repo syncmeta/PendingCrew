@@ -90,13 +90,15 @@ pub fn open_v8_store() -> crate::Result<crate::Store> {
     open_legacy_store(8)
 }
 
-/// Empty caller-owned historical v4–v29 store, excluding reserved Core16.
+/// Empty caller-owned historical v4–v30 store, excluding reserved Core16.
 /// Runs the historical chain without downgrading an existing database.
 pub fn open_legacy_store(version: i64) -> crate::Result<crate::Store> {
     let conn = rusqlite::Connection::open_in_memory()?;
     historical_fixture(&conn, version)?;
+    let source_context = crate::search_context::Context::register(&conn)?;
     Ok(crate::Store {
         conn,
+        source_context,
         backups: None,
     })
 }
@@ -148,7 +150,7 @@ mod historical_fixture_tests {
     }
     #[test]
     fn historical_versions_stop_at_their_actual_tables_without_fake_downgrades() {
-        for version in (4..=29).filter(|version| *version != 16) {
+        for version in (4..=30).filter(|version| *version != 16) {
             let store = super::open_legacy_store(version).unwrap();
             let actual: i64 = store
                 .conn()
@@ -173,6 +175,8 @@ mod historical_fixture_tests {
                 ("managed_message_sources", 27),
                 ("managed_artifacts", 28),
                 ("artifact_history_jobs", 29),
+                ("managed_table_attributes", 30),
+                ("organization_search_state", 31),
             ] {
                 let exists: i64 = store
                     .conn()
@@ -189,6 +193,6 @@ mod historical_fixture_tests {
             assert!(crate::schema::initialize_legacy_fixture(store.conn(), version).is_err());
         }
         assert!(super::open_legacy_store(16).is_err());
-        assert!(super::open_legacy_store(30).is_err());
+        assert!(super::open_legacy_store(31).is_err());
     }
 }

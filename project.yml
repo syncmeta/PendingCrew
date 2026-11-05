@@ -220,6 +220,9 @@ targets:
       - path: Sources/CrewdRemote/CrewdKnowledgeViewRuntime.swift
       - path: Sources/CrewdRemote/CrewdManagedTableV2Wire.swift
       - path: Sources/CrewdRemote/CrewdManagedTableV2Store.swift
+      - path: Sources/CrewdRemote/CrewdOrganizationSearchWire.swift
+      - path: Sources/CrewdRemote/CrewdOrganizationSearchStore.swift
+      - path: Sources/CrewdRemote/CrewdOrganizationSearchViews.swift
       # Shared table/link entries are used by the existing Work/H detail files.
       # Their read-only document surface uses the same native renderer dependencies.
       - path: Sources/CrewdRemote/CrewdManagedTableV2Views.swift

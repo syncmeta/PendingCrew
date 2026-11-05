@@ -36,6 +36,7 @@ mod model;
 pub mod notifications;
 /// M3c（编排）的方法、事件与类型。
 pub mod orchestra;
+pub mod organization_search;
 mod params;
 pub mod work;
 pub use work::*;
@@ -368,6 +369,7 @@ pub mod methods {
             .chain(crate::managed_artifacts::METHODS.iter().copied())
             .chain(crate::artifact_history::METHODS.iter().copied())
             .chain(crate::managed_tables_v2::METHODS.iter().copied())
+            .chain(crate::organization_search::METHODS.iter().copied())
             .chain(crate::lifecycle::METHODS.iter().copied())
             .chain(std::iter::once(crate::executors::EXECUTOR_LIST))
             .collect()
@@ -939,6 +941,20 @@ pub fn api_schema() -> Value {
             m(
                 sub::<managed_objects_api::RequestParams>(g),
                 sub::<artifact_history::Lookup>(g),
+            ),
+        ),
+        (
+            organization_search::SEARCH,
+            m(
+                sub::<organization_search::Search>(g),
+                sub::<organization_search::Page>(g),
+            ),
+        ),
+        (
+            organization_search::EXPAND,
+            m(
+                sub::<organization_search::Expand>(g),
+                sub::<organization_search::ExpansionPage>(g),
             ),
         ),
         (

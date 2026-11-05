@@ -148,6 +148,7 @@ pub enum CallerStage {
     HookPrepared,
     ArchivePrepared,
     WakeRendered,
+    ManagedReadCaptured,
 }
 #[cfg(feature = "testkit")]
 #[derive(Clone, Debug)]
@@ -253,6 +254,14 @@ impl Fixture {
             crate::team_data::runtime::Runtime::new(self.data_dir().join("knowledge")).unwrap(),
         );
         assert!(self.state.data_runtime.set(runtime).is_ok());
+    }
+
+    /// Start the real provider-free maintenance loop for this owned fixture.
+    /// Ordinary production builds do not expose this test fixture or a wire flag.
+    pub fn enable_organization_search(&self) {
+        self.state
+            .organization_search_runtime
+            .get_or_init(|| crate::organization_search::Runtime::start(&self.state));
     }
 
     /// Arm once before the observed caller. No global storage or public wire selector.

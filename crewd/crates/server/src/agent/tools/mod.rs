@@ -8,6 +8,7 @@ pub mod crews;
 mod managed_objects;
 mod managed_tables_v2;
 pub mod messaging;
+mod organization_search;
 mod resources;
 pub mod work;
 
@@ -178,6 +179,7 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
+        "organization_search_expand" => organization_search::expand(&cx, args).await,
         "managed_table_v2_get"
         | "managed_tables_v2_list"
         | "managed_row_v2_get"

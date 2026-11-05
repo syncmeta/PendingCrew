@@ -71,8 +71,14 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
     @State private var workScopes:[String:String]=[:]
     @State private var todoQueries: [String: String] = [:]
     @State private var todoTags: [String: String] = [:]
+    @State private var sessionReadback:CrewdObservedSessionRoute?
+    @State private var sessionNavigationFailure:String?
+    #if os(macOS)
+    @EnvironmentObject private var sessionRunner:CrewSessionRunner
+    #endif
     var body: some View {
         VStack(spacing:0){
+            if let sessionNavigationFailure {Text(sessionNavigationFailure).font(.caption).foregroundStyle(.orange).padding(8)}
             #if !os(macOS)
             sectionHeader
             #endif
@@ -87,7 +93,28 @@ private struct CrewdOriginalCrewContent<Content: View>: View {
             if navigation.target.kind == .work {workScopes["progress"]="crew"}
             if navigation.target.kind == .requirement {workScopes["ai"]="crew"}
             if [.ask,.human].contains(navigation.target.kind) {workScopes["human"]="crew"}
+            sessionNavigationFailure=nil;sessionReadback=nil
+            if navigation.target.kind == .session {
+                // A cross-crew global selection may still be replacing the old detail.
+                guard crewStore.crewdWorkspace === workspace,
+                      crewStore.selectedCrewId?.utf8.elementsEqual(workspace.crewID.utf8)==true,
+                      crewStore.selectedDetail?.crew.id.utf8.elementsEqual(workspace.crewID.utf8)==true else{return}
+                if let route=CrewdObservedSessionRoute(workspace:workspace) {
+                    #if os(macOS)
+                    if let run=sessionRunner.runs.first(where:{run in
+                        guard run.crewId.utf8.elementsEqual(route.crewID.utf8),run.sessionId.utf8.elementsEqual(route.sessionID.utf8),let backend=run.backend as? CrewdOriginalSessionBackend else{return false}
+                        return backend.workspace === workspace && backend.matchesCurrentSource(crew:route.crewID,session:route.sessionID)
+                    }) {
+                        sessionRunner.select(run.runID);sessionRunner.viewingTerminal=true
+                    } else {sessionReadback=route}
+                    #else
+                    if let openSession {openSession(route.sessionID)}else{sessionReadback=route}
+                    #endif
+                } else {sessionNavigationFailure="成员详情的来源已变化，请重新打开。"}
+                workspace.consumeManagedBusinessNavigation(navigation.id)
+            }
         }
+        .sheet(item:$sessionReadback){route in CrewdManagedSessionReadback(workspace:workspace,route:route)}
         #if os(macOS)
         .toolbar { workspaceToolbar }
         .modifier(CrewdWorkspaceToolbarTitle())

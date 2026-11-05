@@ -595,3 +595,12 @@ expectedStatus 必须是原始需求状态。
 
 ## artifact.history_changed
 历史索引任务已变化或完成。请先读取当前进度，再决定是否处理下一页。
+
+## organizationSearch.invalid
+搜索条件 {field} 无效或彼此冲突。请检查查询文字、类型和范围后重新搜索。
+
+## organizationSearch.cursor_expired
+这次搜索范围已过期或来源已变化。请重新搜索，勿继续使用旧的翻页凭据。
+
+## organizationSearch.unavailable
+统一对象搜索暂时不可用。请稍后重试；这不表示没有匹配结果。

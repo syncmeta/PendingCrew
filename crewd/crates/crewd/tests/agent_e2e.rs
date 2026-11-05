@@ -43,8 +43,8 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     }
     let wt = wm.tools().await;
     let ct = cm.tools().await;
-    assert_eq!(wt.len(), 89);
-    assert_eq!(ct.len(), 105);
+    assert_eq!(wt.len(), 90);
+    assert_eq!(ct.len(), 106);
     for tools in [&wt, &ct] {
         let get = tools
             .iter()
@@ -52,6 +52,11 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
             .expect("requirement read tool");
         assert_eq!(get["annotations"]["readOnlyHint"], true);
         assert!(tools.iter().any(|tool| tool["name"] == "work_item_block"));
+        let expand = tools
+            .iter()
+            .find(|tool| tool["name"] == "organization_search_expand")
+            .expect("generic organization link expansion tool");
+        assert_eq!(expand["annotations"]["readOnlyHint"], true);
     }
     for t in wt.iter().chain(&ct) {
         assert_eq!(t["annotations"]["openWorldHint"], false);
@@ -70,13 +75,13 @@ async fn captain_and_worker_tables_differ_and_role_change_applies_live() {
     f.set_role(&f.worker, Role::Captain).await;
     wm.changed().await;
     cm.changed().await;
-    assert_eq!(wm.tools().await.len(), 105);
-    assert_eq!(cm.tools().await.len(), 89);
+    assert_eq!(wm.tools().await.len(), 106);
+    assert_eq!(cm.tools().await.len(), 90);
     assert!(!wm.call("list_sessions", json!({})).await.1);
     assert!(cm.call("list_sessions", json!({})).await.1);
     f.set_role(&f.worker, Role::Worker).await;
     wm.changed().await;
-    assert_eq!(wm.tools().await.len(), 89);
+    assert_eq!(wm.tools().await.len(), 90);
     for m in [&mut wm, &mut cm] {
         let (text, failed) = m
             .call("todo_get", json!({"id":requirement["requirementId"]}))

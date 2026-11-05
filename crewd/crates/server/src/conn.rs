@@ -883,6 +883,23 @@ async fn request_step(
                 )
             }
         }
+        Ok(req) if crewd_proto::organization_search::METHODS.contains(&req.method.as_str()) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::organization_search::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
         Ok(req) if crewd_proto::managed_tables_v2::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(

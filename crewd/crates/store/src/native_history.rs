@@ -405,8 +405,10 @@ mod tests {
     #[test]
     fn owning_store_transaction_keeps_nested_failure_and_outer_commit_atomic() {
         let (conn, binding) = fixture();
+        let source_context = crate::search_context::Context::register(&conn).unwrap();
         let mut store = crate::Store {
             conn,
+            source_context,
             backups: None,
         };
         let first = native_row(1);

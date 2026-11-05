@@ -552,22 +552,17 @@ pub async fn read_channel(cx: &Ctx<'_>, args: Value) -> CallResult {
     CallResult::ok(out.join("\n"))
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SearchArgs {
-    query: String,
-    channel: Option<String>,
-    crew: Option<String>,
-    after: Option<String>,
-    before: Option<String>,
-    limit: Option<u32>,
-}
-
 pub async fn search(cx: &Ctx<'_>, args: Value) -> CallResult {
-    let a: SearchArgs = match parse_args(cx, args) {
+    let a: super::organization_search::SearchArgs = match parse_args(cx, args) {
         Ok(a) => a,
         Err(e) => return e,
     };
+    if super::organization_search::use_unified(cx, &a) {
+        return super::organization_search::search(cx, a).await;
+    }
+    if let Err(error) = super::organization_search::validate_legacy(cx, &a) {
+        return error;
+    }
     // Scope: every channel I can read or listen to (archived ones too: they are history);
     // `channel` / `crew` narrow it.
     let mut scope = match port::readable_views(cx.st, cx.me).await {

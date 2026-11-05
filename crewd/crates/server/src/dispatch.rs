@@ -282,6 +282,9 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             if state.judgment_runtime.get().is_some() {
                 capabilities.push("judgment".into());
             }
+            if state.organization_search_runtime.get().is_some() {
+                capabilities.push(crewd_proto::organization_search::CAPABILITY.into());
+            }
             if state.runtime_identity.get().is_some() {
                 capabilities.push("command.receipts".into());
                 capabilities.push(crewd_proto::managed_objects_api::CAPABILITY.into());

@@ -904,6 +904,8 @@ fn rpc_drives_every_client_method() {
         ("message.attribution.history", "[]", Code(-32602)),
         ("message.attribution.set", "[]", Code(-32602)),
         ("message.deliveryExplain", "[]", Code(-32602)),
+        ("organization.search", "[]", Code(-32602)),
+        ("organization.search.expand", "[]", Code(-32602)),
         ("session.retirementStatus", "[]", Code(-32602)),
         ("todo.createLookup", "[]", Code(-32602)),
         ("todo.rulingCheck", "[]", Code(-32602)),

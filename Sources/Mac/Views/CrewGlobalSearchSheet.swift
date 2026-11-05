@@ -24,7 +24,13 @@ struct CrewGlobalSearchResults:View {
     let selected:()->Void
     var body:some View {
         if let workspace=crewStore.crewdWorkspace {
-            CrewCoreSearchResults(workspace:workspace,client:workspace.client,query:query,selected:selected)
+            if workspace.client.capabilities.contains(CrewdOrganizationSearchWire.capability) {
+                CrewdOrganizationSearchView(workspace:workspace,query:query,selected:{crewStore.selectCrew(workspace.crewID);selected()})
+                    .id(workspace.authorityRecordID)
+            } else {
+                CrewCoreSearchResults(workspace:workspace,client:workspace.client,query:query,authorityCurrent:{crewStore.crewdWorkspace === workspace},openResult:{result in crewStore.openChatSearchResult(result,query:query);workspace.originalSection="消息";selected()})
+                    .id(workspace.authorityRecordID)
+            }
         }else if crewStore.usesCrewdAuthority {
             ContentUnavailableView("当前电脑尚未连接",systemImage:"magnifyingglass",description:Text("搜索不会自动连接电脑。"))
         }else {
@@ -32,29 +38,35 @@ struct CrewGlobalSearchResults:View {
         }
     }
 }
-private struct CrewCoreSearchResults:View {
-    @EnvironmentObject private var crewStore:CrewStore
+struct CrewCoreSearchResults:View {
     @ObservedObject var workspace:CrewdWorkspace
     @ObservedObject var client:CrewdClient
     let query:String
-    let selected:()->Void
+    let authorityCurrent:()->Bool
+    let openResult:(CrewMessageSearchResult)->Void
     @State private var documents:[CrewMessageSearchDocument]=[]
     @State private var loading=false
     @State private var failure:String?
     @State private var epoch:UUID?
+    @State private var capturedSource:Data?
+    private var sourceKey:Data {
+        let value:CrewdValue = .object(["authority":.string(workspace.authorityRecordID.uuidString),"connection":.string(client.connectionEpoch.uuidString),"observation":.string(workspace.observationGeneration.uuidString),"scope":(try? workspace.presentationScope.map(CrewdOrganizationSearchWire.encode)) ?? .null])
+        return (try? CrewdOrganizationSearchWire.encoder.encode(value)) ?? Data()
+    }
     @State private var navigationGeneration=UUID()
     @State private var visible=false
     private var results:[CrewMessageSearchResult]{CrewMessageSearch.search(documents,query:query.trimmingCharacters(in:.whitespacesAndNewlines),limit:200,order:.newestFirst)}
     var body:some View {
         VStack(spacing:0){
-            if loading{ProgressView("正在读取当前电脑的可访问消息…").frame(maxWidth:.infinity,maxHeight:.infinity)}
+            if capturedSource != nil && (capturedSource != sourceKey || !authorityCurrent() || !client.readyForWork) {ContentUnavailableView("搜索来源已变化",systemImage:"magnifyingglass",description:Text("原结果已隐藏，请重新打开搜索。"))}
+            else if loading{ProgressView("正在读取当前电脑的可访问消息…").frame(maxWidth:.infinity,maxHeight:.infinity)}
             else if let failure{ContentUnavailableView("搜索尚未完成",systemImage:"magnifyingglass",description:Text(failure))}
             else if query.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{ContentUnavailableView("搜索当前电脑",systemImage:"magnifyingglass",description:Text("输入消息正文、发送者、附件名或时间。"))}
             else if results.isEmpty{ContentUnavailableView.search(text:query)}
             else{List(results){result in
                 CrewSearchResultRow(result:result){Task{await open(result)}}
             }.listStyle(.plain)}
-            Text("范围：当前已验证电脑的可访问机组与会话；每机组最多读取 1000 条，显示最新 200 条匹配。")
+            Text("旧后台仅支持消息搜索：当前已验证电脑的可访问机组与会话；每机组最多读取 1000 条，显示最新 200 条匹配。")
                 .font(.caption).foregroundStyle(.secondary).padding(12)
         }
         .onAppear{visible=true}
@@ -67,8 +79,8 @@ private struct CrewCoreSearchResults:View {
     private func load()async {
         documents=[];failure=nil;loading=true
         let captured=client.connectionEpoch,origin=workspace.presentationScope,generation=workspace.observationGeneration
-        epoch=captured
-        func valid()->Bool{!Task.isCancelled && client.readyForWork && client.connectionEpoch==captured && workspace.presentationScope==origin && workspace.acceptsObservation(generation) && crewStore.crewdWorkspace === workspace}
+        epoch=captured;let source=sourceKey;capturedSource=source
+        func valid()->Bool{!Task.isCancelled && sourceKey==source && client.readyForWork && client.connectionEpoch==captured && workspace.presentationScope==origin && workspace.acceptsObservation(generation) && authorityCurrent()}
         do{
             guard valid() else{throw CancellationError()}
             let crews=try await client.call("crew.list",.null);guard valid() else{throw CancellationError()}
@@ -94,12 +106,12 @@ private struct CrewCoreSearchResults:View {
         }catch{if epoch==captured{documents=[];loading=false;failure=error is CancellationError ? "原搜索连接已变化，请重新搜索。":error.localizedDescription}}
     }
     private func open(_ result:CrewMessageSearchResult)async {
-        guard epoch==client.connectionEpoch,crewStore.crewdWorkspace === workspace,let channel=result.document.channelId else{return}
+        guard epoch==client.connectionEpoch,authorityCurrent(),let channel=result.document.channelId else{return}
         let captured=client.connectionEpoch,request=navigationGeneration
-        func current()->Bool{visible && navigationGeneration==request && captured==client.connectionEpoch && crewStore.crewdWorkspace === workspace}
+        func current()->Bool{visible && navigationGeneration==request && captured==client.connectionEpoch && authorityCurrent()}
         do{try await workspace.openSearchMessage(crew:result.document.crewId,channel:channel,message:result.document.messageId,stillCurrent:current)
             guard current() else{return}
-            crewStore.openChatSearchResult(result,query:query);workspace.originalSection="消息";selected()
+            workspace.originalSection="消息";openResult(result)
         }catch{if current(){failure=error.localizedDescription}}
     }
 }
@@ -111,7 +123,7 @@ private struct CrewLegacySearchResults:View {
     var body:some View {
         List(CrewMessageSearch.search(documents,query:query,limit:200,order:.newestFirst)){result in
             CrewSearchResultRow(result:result){crewStore.openChatSearchResult(result,query:query);selected()}
-        }.task{
+        }.safeAreaInset(edge:.bottom){Text("旧资料仅支持消息搜索。").font(.caption).foregroundStyle(.secondary).padding(8)}.task{
             let crews=crewStore.crews.map{($0.id,$0.title)}
             documents=await Task.detached{crews.flatMap{crew in LocalWhiteboardStore.shared.list(crewId:crew.0).map{CrewMessageSearchAdapters.local($0,crewId:crew.0,crewTitle:crew.1)}}}.value
         }
@@ -126,5 +138,22 @@ private struct CrewSearchResultRow:View {
             Text(result.document.text.isEmpty ? "（仅附件）":result.document.text).lineLimit(3)
             if !result.document.attachmentMetadata.isEmpty{Text(result.document.attachmentMetadata.joined(separator:" · ")).font(.caption).foregroundStyle(.secondary)}
         }.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,5).contentShape(Rectangle())}.buttonStyle(.plain)
+    }
+}
+
+/// The independent remote iPhone shell has no outer system search field.
+struct CrewdOrganizationSearchSheet:View {
+    @ObservedObject var workspace:CrewdWorkspace
+    let selected:()->Void
+    @State private var query=""
+    @State private var visible=false
+    @Environment(\.dismiss) private var dismiss
+    var body:some View {NavigationStack {
+        Group {
+            if workspace.client.capabilities.contains(CrewdOrganizationSearchWire.capability) {CrewdOrganizationSearchView(workspace:workspace,query:query,selected:{selected();dismiss()})}
+            else {CrewCoreSearchResults(workspace:workspace,client:workspace.client,query:query,authorityCurrent:{visible},openResult:{_ in selected();dismiss()})}
+        }.navigationTitle("搜索当前电脑").searchable(text:$query,prompt:workspace.client.capabilities.contains(CrewdOrganizationSearchWire.capability) ? "搜索消息与组织对象":"搜索消息")
+        .toolbar{ToolbarItem(placement:.cancellationAction){Button("关闭"){dismiss()}}}
+        }.onAppear{visible=true}.onDisappear{visible=false}
     }
 }

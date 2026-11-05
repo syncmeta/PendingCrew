@@ -6,7 +6,7 @@
 //! `render::safe_name`（群 / 发言者标签用本文件的 `display_label` / `sender_label`，它们已经过了）。
 //!
 //! 可见性：「读得到哪些群」只有一条规则，在 collab（B15：`channels::readable_by` / `readable_channels`，
-//! 含总机组读全组织）∪ 自己的收听；`readable_channels` / `message` / `messages_as` / `search` /
+//! 含总机组读全组织）；收听不扩大读范围。`readable_channels` / `message` / `messages_as` / `search` /
 //! `watched_channels` 都经本文件的 `can_read`。@ 只决定叫醒谁，不藏消息（§24.2），所以读到的群里每条都看得见。
 //! `messages_raw` 是**不带视角**的原始读（系统 / 测试用，名字里带 `_raw` 就是怕误用）。
 //! `crew_channels` 是结构性列表（`list_for_crew` 的口径，比可读集合宽），不是可读性判定。
@@ -17,6 +17,7 @@
 //! `acts_as_captain_of`；总机组的机长在每个机组都按机长算，C2），工具层不另写一份。
 use std::fmt;
 
+use crewd_collab::refusal::{Code, Refusal};
 use crewd_collab::{Change, CollabError, Locale, Sender, Tx};
 pub use crewd_proto::ChannelKind;
 use crewd_proto::{Mention, Message};
@@ -940,6 +941,15 @@ where
 {
     let scoped = scoped_actor(st, by)?;
     let by = by.clone();
+    #[cfg(feature = "testkit")]
+    super::testkit::pause_caller(
+        st,
+        super::testkit::CallerStage::ManagedReadCaptured,
+        &by.session_id,
+        vec![],
+        String::new(),
+    )
+    .await;
     read(st, move |c| {
         validate_scoped_actor(c, &scoped, &by)?;
         let result = operation(c, &by)?;
@@ -968,6 +978,46 @@ where
             conn,
             crewd_collab::managed_objects::Actor::Session(&by.session_id),
             &crewd_collab::managed_links::DenyExternal,
+        )
+    })
+    .await
+}
+
+pub(crate) async fn organization_search(
+    st: &AppState,
+    by: &Identity,
+    query: crewd_proto::organization_search::Search,
+) -> PortResult<crewd_proto::organization_search::Page> {
+    let owner = st.organization_search_runtime.get().cloned();
+    managed_read(st, by, move |conn, by| {
+        if !owner.as_ref().is_some_and(|runtime| runtime.is_healthy()) {
+            return Err(CollabError::Conflict(Refusal::new(Code::SearchUnavailable)));
+        }
+        crewd_collab::organization_search::search(
+            conn,
+            crewd_collab::managed_objects::Actor::Session(&by.session_id),
+            query,
+            crate::search_clock::read()?,
+        )
+    })
+    .await
+}
+
+pub(crate) async fn organization_search_expand(
+    st: &AppState,
+    by: &Identity,
+    query: crewd_proto::organization_search::Expand,
+) -> PortResult<crewd_proto::organization_search::ExpansionPage> {
+    let owner = st.organization_search_runtime.get().cloned();
+    managed_read(st, by, move |conn, by| {
+        if !owner.as_ref().is_some_and(|runtime| runtime.is_healthy()) {
+            return Err(CollabError::Conflict(Refusal::new(Code::SearchUnavailable)));
+        }
+        crewd_collab::organization_search::expand(
+            conn,
+            crewd_collab::managed_objects::Actor::Session(&by.session_id),
+            query,
+            crate::search_clock::read()?,
         )
     })
     .await
@@ -1424,30 +1474,21 @@ pub async fn messages_raw(
 }
 
 // ---------------------------------------------------------------------------------------------
-// 「读得到」：collab 的 B15 规则 ∪ 自己的收听（spec §24.1 B15、§26.1 Task 6）
+// 「读得到」：collab 的 B15 规则（收听不扩大范围，spec §24.1 B15、§26.1 Task 6）
 // ---------------------------------------------------------------------------------------------
 
 /// session S 读得到群 C ⇔ collab `channels::readable_by`（⓪ 总机组读全组织；① 成员；② 挂在 S 的机组下；
-/// ③ S 的 home 的人类群）或 S 在收听 C（`listens::channels_of` 已只算读得到、没归档的收听行）。
+/// ③ S 的 home 的人类群）。有效收听已是这个集合的子集，不再遍历所有收听来判断一次读取。
 /// `readable_channels` / `message` / `messages_as` / `search` / `watched_channels` 都经这一个函数。
 fn can_read(conn: &Connection, session: &str, channel: &str) -> crewd_collab::Result<bool> {
-    Ok(crewd_collab::listens::channels_of(conn, session, now_ms())?
-        .iter()
-        .any(|c| c == channel)
-        || crewd_collab::channels::readable_by(conn, channel, session)?)
+    crewd_collab::channels::readable_by(conn, channel, session)
 }
 
-/// 这个 session 读得到的全部群 id（含已归档的）：只读，不建任何群。collab 的可读集合在前，收听接在后面。
+/// 这个 session 读得到的全部群 id（含已归档的）：只读，不建任何群。
 pub async fn readable_channels(st: &AppState, me: &Identity) -> PortResult<Vec<String>> {
     let s = me.session_id.clone();
     read(st, move |conn| {
-        let mut out = crewd_collab::channels::readable_channels(conn, &s)?;
-        for id in crewd_collab::listens::channels_of(conn, &s, now_ms())? {
-            if !out.contains(&id) {
-                out.push(id);
-            }
-        }
-        Ok(out)
+        crewd_collab::channels::readable_channels(conn, &s)
     })
     .await
 }
@@ -1455,12 +1496,7 @@ pub async fn readable_channels(st: &AppState, me: &Identity) -> PortResult<Vec<S
 /// `readable_channels` 的视图（`listening` 按此刻的收听行填上）：工具层按名字找群、列群都从这里取。
 fn readable_views_conn(conn: &Connection, s: &str) -> crewd_collab::Result<Vec<ChannelView>> {
     let listening = crewd_collab::listens::channels_of(conn, s, now_ms())?;
-    let mut ids = crewd_collab::channels::readable_channels(conn, s)?;
-    for id in &listening {
-        if !ids.contains(id) {
-            ids.push(id.clone());
-        }
-    }
+    let ids = crewd_collab::channels::readable_channels(conn, s)?;
     ids.iter()
         .map(|id| {
             let mut v = channel_view(conn, id)?;

@@ -10141,6 +10141,13 @@
       ],
       "type": "string"
     },
+    "Direction": {
+      "enum": [
+        "outgoing",
+        "incoming"
+      ],
+      "type": "string"
+    },
     "DirectoryEntry": {
       "properties": {
         "name": {
@@ -10544,6 +10551,14 @@
         "body"
       ],
       "type": "object"
+    },
+    "Domain": {
+      "enum": [
+        "messages",
+        "objects",
+        "all"
+      ],
+      "type": "string"
     },
     "Draft": {
       "additionalProperties": false,
@@ -11633,6 +11648,115 @@
       ],
       "type": "string"
     },
+    "Expand": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "includeSystemDefaults": {
+          "default": false,
+          "type": "boolean"
+        },
+        "limit": {
+          "default": 20,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Scope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/TargetRef"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "Expansion": {
+      "additionalProperties": false,
+      "description": "One real edge, not an invented inverse business action. Different relations\nmay lead to the same neighbor. Self-edges are emitted only once, outgoing.",
+      "properties": {
+        "changedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "edge": {
+          "$ref": "#/$defs/EdgeView"
+        },
+        "neighbor": {
+          "$ref": "#/$defs/ResolvedTarget"
+        },
+        "status": {
+          "$ref": "#/$defs/Status2"
+        }
+      },
+      "required": [
+        "direction",
+        "edge",
+        "neighbor",
+        "status"
+      ],
+      "type": "object"
+    },
+    "ExpansionPage": {
+      "additionalProperties": false,
+      "properties": {
+        "indexState": {
+          "$ref": "#/$defs/IndexState"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Expansion"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Snapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "indexState",
+        "items"
+      ],
+      "type": "object"
+    },
     "Field": {
       "additionalProperties": false,
       "properties": {
@@ -12412,6 +12536,66 @@
       ],
       "type": "object"
     },
+    "Hit": {
+      "additionalProperties": false,
+      "properties": {
+        "changedAt": {
+          "description": "Current, real source change time, absent when it cannot be established.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "excerpt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind2"
+        },
+        "matchedOn": {
+          "$ref": "#/$defs/MatchOn"
+        },
+        "ownerCrewId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/Status2"
+        },
+        "tableId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tableTitle": {
+          "description": "Current table label for row grouping, without extra per-hit RPC calls.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/TargetRef"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "kind",
+        "title",
+        "matchedOn",
+        "status"
+      ],
+      "type": "object"
+    },
     "HookKind": {
       "enum": [
         "post-tool-use",
@@ -12661,6 +12845,13 @@
         "tier"
       ],
       "type": "object"
+    },
+    "IndexState": {
+      "enum": [
+        "building",
+        "ready"
+      ],
+      "type": "string"
     },
     "Input": {
       "additionalProperties": false,
@@ -13196,6 +13387,21 @@
         "file",
         "test",
         "link"
+      ],
+      "type": "string"
+    },
+    "Kind2": {
+      "enum": [
+        "decision",
+        "risk",
+        "lesson",
+        "work",
+        "requirement",
+        "ask",
+        "table",
+        "row",
+        "artifact",
+        "message"
       ],
       "type": "string"
     },
@@ -14381,6 +14587,15 @@
       "enum": [
         "open",
         "done"
+      ],
+      "type": "string"
+    },
+    "MatchOn": {
+      "enum": [
+        "title",
+        "text",
+        "historicalName",
+        "reference"
       ],
       "type": "string"
     },
@@ -16383,6 +16598,46 @@
         }
       },
       "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "Page2": {
+      "additionalProperties": false,
+      "properties": {
+        "indexState": {
+          "$ref": "#/$defs/IndexState"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Hit"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "snapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Snapshot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Building returns no snapshot, items or continuation. It is not an empty\ncompleted search. A fresh read can observe the bounded rebuild progress."
+        }
+      },
+      "required": [
+        "scope",
+        "indexState",
         "items"
       ],
       "type": "object"
@@ -20869,6 +21124,92 @@
       ],
       "type": "object"
     },
+    "Search": {
+      "additionalProperties": false,
+      "properties": {
+        "afterTime": {
+          "description": "Inclusive/exclusive RFC3339 bounds on the source's actual change time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "beforeTime": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "channelId": {
+          "description": "Messages only; incompatible object-only filters must be refused.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "in": {
+          "$ref": "#/$defs/Domain",
+          "default": "all"
+        },
+        "includeSystemDefaults": {
+          "default": false,
+          "type": "boolean"
+        },
+        "kinds": {
+          "items": {
+            "$ref": "#/$defs/Kind2"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": 20,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Scope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional data-version fence, never a caller identity or permission grant."
+        },
+        "tableId": {
+          "description": "Restricts row results to this real table; does not name an arbitrary type.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
     "SenderKind": {
       "enum": [
         "human",
@@ -21512,6 +21853,23 @@
       ],
       "type": "object"
     },
+    "Snapshot": {
+      "additionalProperties": false,
+      "description": "Ordering and source population are fixed at the start of a search. Returned\nlabels, visible fields, existence and permissions are always current. No\nglobally ticking sequence, hidden count or per-reader activity is exposed.",
+      "properties": {
+        "expiresAt": {
+          "type": "string"
+        },
+        "sortedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sortedAt",
+        "expiresAt"
+      ],
+      "type": "object"
+    },
     "Source": {
       "enum": [
         "human",
@@ -21785,6 +22143,14 @@
         "canContinue"
       ],
       "type": "object"
+    },
+    "Status2": {
+      "enum": [
+        "current",
+        "historical",
+        "archived"
+      ],
+      "type": "string"
     },
     "StatusParams": {
       "additionalProperties": false,
@@ -27033,6 +27399,22 @@
       },
       "result": {
         "$ref": "#/$defs/NotificationStatus"
+      }
+    },
+    "organization.search": {
+      "params": {
+        "$ref": "#/$defs/Search"
+      },
+      "result": {
+        "$ref": "#/$defs/Page2"
+      }
+    },
+    "organization.search.expand": {
+      "params": {
+        "$ref": "#/$defs/Expand"
+      },
+      "result": {
+        "$ref": "#/$defs/ExpansionPage"
       }
     },
     "personalDraft.branches": {

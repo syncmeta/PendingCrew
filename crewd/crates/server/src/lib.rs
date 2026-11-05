@@ -32,6 +32,7 @@ pub mod native_helpers;
 pub mod native_receipts;
 mod notifications;
 pub mod orchestra;
+mod organization_search;
 pub(crate) mod peer;
 mod personal_drafts;
 mod public_commands;
@@ -39,6 +40,7 @@ mod public_execution;
 mod public_terminal;
 pub(crate) mod remote;
 mod requirement_ruling;
+mod search_clock;
 mod signed_client;
 pub mod team_data;
 mod terminal_runtime;
@@ -81,6 +83,7 @@ pub struct AppState {
     pub(crate) runtime_binding_id: String,
     pub(crate) data_runtime: std::sync::OnceLock<Arc<team_data::runtime::Runtime>>,
     pub(crate) judgment_runtime: std::sync::OnceLock<Arc<judgments::Runtime>>,
+    pub(crate) organization_search_runtime: std::sync::OnceLock<Arc<organization_search::Runtime>>,
     #[cfg(test)]
     pub(crate) judgment_test_http: std::sync::atomic::AtomicBool,
     pub(crate) judgment_settings_mutation: tokio::sync::Mutex<()>,
@@ -114,6 +117,7 @@ impl AppState {
             admission: Arc::new(lifecycle::Admission::default()),
             management: std::sync::OnceLock::new(),
             judgment_runtime: std::sync::OnceLock::new(),
+            organization_search_runtime: std::sync::OnceLock::new(),
             data_runtime: std::sync::OnceLock::new(),
             #[cfg(test)]
             judgment_test_http: std::sync::atomic::AtomicBool::new(false),
@@ -553,6 +557,10 @@ async fn serve_with_hooks_inner(
     }
     let judgment_runtime =
         judgments::Runtime::start(&state, data_dir.clone(), opts.orchestra.is_some()).await?;
+    let search_runtime = organization_search::Runtime::start(&state);
+    let _ = state
+        .organization_search_runtime
+        .set(search_runtime.clone());
     let mut handle = None;
     let mut actor = None;
     let mut forwarder = None;
@@ -793,6 +801,7 @@ async fn serve_with_hooks_inner(
     if let Some(judgment) = &judgment_runtime {
         judgment.shutdown().await;
     }
+    search_runtime.shutdown().await;
     state.hub.publish(crewd_proto::Event {
         event: crewd_proto::events::SYSTEM_SHUTDOWN.into(),
         data: serde_json::json!({"reason":reason}),

@@ -34,6 +34,7 @@ pub mod personal_drafts;
 pub mod remote;
 pub mod runner_usage;
 pub mod schema;
+pub mod search_context;
 pub mod sessions;
 #[path = "sqlite_knowledge.rs"]
 pub mod team_data;
@@ -248,6 +249,7 @@ pub const FULLFSYNC: bool = true;
 
 pub struct Store {
     conn: Connection,
+    source_context: search_context::Context,
     /// 文件库的备份目录（`<库所在目录>/backups`）；内存库没有。
     backups: Option<std::path::PathBuf>,
 }
@@ -355,9 +357,20 @@ impl Store {
         // 先认人再动手（复审 M1）：别人的回滚日志库不能被 journal_mode=WAL 顺手改掉。
         refuse_foreign(&conn)?;
         pin_pragmas(&conn)?;
+        let source_context = search_context::Context::register(&conn)?;
         schema::migrate_guarded(&conn, backups.as_deref())?;
         mark_identity(&conn)?;
-        Ok(Self { conn, backups })
+        Ok(Self {
+            conn,
+            backups,
+            source_context,
+        })
+    }
+
+    /// Set trusted source-write inputs without changing any SQL row. The owning
+    /// writer holds this guard through commit; error, rollback and panic clear it.
+    pub fn search_write_context(&self, wall_ms: i64) -> Result<search_context::Guard> {
+        self.source_context.enter(wall_ms)
     }
 
     /// serve / import 用：打开数据目录里的库，并核对身份（S24）。
@@ -1088,3 +1101,5 @@ mod recovery_guard_tests;
 
 pub mod codex_controls;
 pub mod codex_inputs;
+
+pub mod organization_search;

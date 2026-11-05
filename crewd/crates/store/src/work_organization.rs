@@ -453,6 +453,7 @@ pub fn save(conn: &Connection, state: &BookState, events: &[Event], now: &str) -
         )?;
         crate::notifications::enqueue_work(conn, &crew, event)?;
         crate::managed_artifacts::capture_done(conn, &crew, event, now)?;
+        crate::organization_search::mark_work_event(conn, state, event)?;
     }
     if conn.execute(
         "UPDATE organization_work_book SET state=?1,updated_at=?2 WHERE singleton=1",

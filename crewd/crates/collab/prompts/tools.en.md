@@ -50,22 +50,22 @@ Number of messages, 1–200, default 50.
 Only messages before this one (number or id). Omitted = newest page.
 
 ## search
-Search messages in the channels you can read, to find something said earlier (your crew's channels, your home human channel, channels you are in or listen to, archived ones included; management crew sessions search the whole organisation). The whole trimmed query is matched as ONE case-insensitive substring (ASCII case folding only), not split into terms; newest first.
+Search organization objects and currently readable messages, grouped by kind and individual table with references. Hosts supporting unified search default to in=all; older hosts retain message search. Objects keep their existing read policy, while H and messages recheck their original scope, B15 and current listens. Match the trimmed query as one literal substring with ASCII case folding, without FTS operators. Current/open items come first, then recent changes. The initial search fixes the ordering scope; new messages do not interrupt pagination, while content and permissions remain current. indexState=building means indexing is incomplete, not that nothing matches. Expand one hop with organization_search_expand; do not generate a model summary or wake anyone.
 
 ## search.query
 The text to find: trimmed, then matched as one substring (ASCII case-insensitive).
 
 ## search.channel
-Search only this channel (id or name).
+Search messages in this channel only (id or name). Conflicting object filters are refused, never widened.
 
 ## search.crew
-Search only that crew's channels you can read (crew number, id or name).
+Search objects owned by this crew and its readable channel messages (crew number, id or name). A shared artifact without an owner is not assigned to a crew based on a reference.
 
 ## search.after
-Only at or after this time (ISO8601).
+Only at or after this time (ISO8601, inclusive): creation time for messages, actual change time within the ordering scope for objects.
 
 ## search.before
-Only strictly before this time (ISO8601, exclusive: created_at < before).
+Only strictly before this time (ISO8601, exclusive): creation time for messages, actual change time within the ordering scope for objects.
 
 ## search.limit
 Maximum results, 1–200, default 50.
@@ -1907,3 +1907,27 @@ Original request crew.
 
 ## managed_link_request_get.requestId
 Original UUID.
+
+## search.in
+messages searches messages, objects searches organization objects, all searches both (the new-host default). This never expands permissions; older hosts do not support objects/all.
+
+## search.type
+Filter decision, risk, lesson, work, requirement, ask, table, row, artifact or message. A real table ID such as T2 searches that table's rows. Empty intersections with other filters are refused, never widened.
+
+## search.cursor
+Pass the previous nextCursor unchanged with the original query and all filters. after/before remain dates. An empty page with nextCursor can continue; after expiry, start a new search.
+
+## organization_search_expand
+Expand real one-hop links of a currently readable target, outgoing where supported and incoming, with current/open and recently changed neighbors first. Return original edges, direction, neighbor references and current summaries. Different relations may reach the same neighbor; a self-edge appears once. This does not create editable copies of business relations. Private Knowledge/Document cross-database targets are not supported yet.
+
+## organization_search_expand.target
+The complete typed target from a search result. Shared artifacts can have outgoing links maintained by different crews; preserve each edge's actual source and owner.
+
+## organization_search_expand.cursor
+The previous nextCursor with the same target and other filters. After expiry, expand again.
+
+## organization_search_expand.limit
+Requested result maximum, 1-200, default 20. A page can be shorter or empty; nextCursor indicates continuation.
+
+## organization_search_expand.include_system_defaults
+Include system-default decisions, default false. Current read permission is still rechecked.

@@ -17,14 +17,17 @@ impl<'a> Projection<'a> {
             book_loads: 0,
         }
     }
-    fn book(&mut self) -> Result<&crewd_work::WorkBook> {
+    pub(crate) fn book(&mut self) -> Result<&crewd_work::WorkBook> {
         if self.book.is_none() {
             self.book = Some(crate::asks::load_org(self.c)?);
             self.book_loads += 1;
         }
         Ok(self.book.as_ref().expect("initialized checked work book"))
     }
-    fn work(&mut self, id: &str) -> Result<(object_refs::ObjectReference, crewd_work::WorkItem)> {
+    pub(crate) fn work(
+        &mut self,
+        id: &str,
+    ) -> Result<(object_refs::ObjectReference, crewd_work::WorkItem)> {
         let r = reference(self.c, id, 'W', ObjectKind::Plan)?;
         let local = crate::work::core_plan(self.c, &r)?;
         let item =
@@ -33,7 +36,10 @@ impl<'a> Projection<'a> {
             })?;
         Ok((r, item))
     }
-    fn ask(&mut self, id: &str) -> Result<(object_refs::ObjectReference, crewd_work::HumanAsk)> {
+    pub(crate) fn ask(
+        &mut self,
+        id: &str,
+    ) -> Result<(object_refs::ObjectReference, crewd_work::HumanAsk)> {
         let r = reference(self.c, id, 'H', ObjectKind::HumanTask)?;
         resource_acl::actor(self.c, &sender(self.actor), &r.crew_id, false)?;
         let core = crewd_store::work_organization::core_for_reference(
@@ -330,6 +336,33 @@ impl<'a> Projection<'a> {
             Err(e) if hidden_error(&e) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+    /// Exact current fact verification; never walk an unbounded artifact child list.
+    pub(crate) fn exact_adapter(&mut self, saved: &EdgeView) -> Result<Option<EdgeView>> {
+        let EdgeOrigin::Adapter { adapter, .. } = &saved.origin else {
+            return Err(invalid("adapter"));
+        };
+        let owner = self.source(&saved.source, false)?;
+        let exists = if let Some(relation) = adapter.strip_prefix("artifact.") {
+            if let TargetRef::Artifact { reference } = &saved.target {
+                if let Some(n) = db::source_number(&saved.source)? {
+                    self.c.query_row("SELECT EXISTS(SELECT 1 FROM managed_artifact_edges WHERE target_number=?1 AND reference=?2 AND relation=?3)",rusqlite::params![n,serde_json::to_string(reference)?,relation],|r|r.get::<_,bool>(0))?
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            self.business_refs(&saved.source)?
+                .1
+                .into_iter()
+                .any(|(name, target)| name == *adapter && target == saved.target)
+        };
+        if !exists {
+            return Ok(None);
+        }
+        self.project_adapter(&saved.source, &owner, adapter.clone(), saved.target.clone())
     }
     /// Real raw rows consumed, including duplicates/hidden targets, count toward
     /// the same request budget. No full legacy artifact child table is loaded.

@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent schema. Core21 remains the personal draft
 /// writer barrier; Core22 adds an indexed historical escalation discovery source.
-pub const SCHEMA_VERSION: i64 = 30;
+pub const SCHEMA_VERSION: i64 = 31;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 #[cfg(test)]
@@ -796,9 +796,9 @@ pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
 }
 
 pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Result<()> {
-    if !(4..=29).contains(&target) || target == 16 {
+    if !(4..=30).contains(&target) || target == 16 {
         return Err(StoreError::Invalid(
-            "historical fixture supports versions 4 through 29 except reserved Core16".into(),
+            "historical fixture supports versions 4 through 30 except reserved Core16".into(),
         ));
     }
     let objects: i64 = conn.query_row(
@@ -911,6 +911,14 @@ pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Resul
     }
     if target >= 29 {
         migrate_v29(conn)?;
+    }
+    if target >= 30 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_tables_v2::DDL)?;
+        tx.execute_batch(crate::managed_links::DDL)?;
+        crate::managed_tables_v2::migrate_v1(&tx)?;
+        tx.execute_batch("PRAGMA user_version=30;")?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -1168,6 +1176,12 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         tx.execute_batch(crate::managed_links::DDL)?;
         crate::managed_tables_v2::migrate_v1(&tx)?;
         tx.execute_batch("PRAGMA user_version=30;")?;
+        tx.commit()?;
+    }
+    if v < 31 {
+        let tx = conn.unchecked_transaction()?;
+        crate::organization_search::install(&tx)?;
+        tx.execute_batch("PRAGMA user_version=31;")?;
         tx.commit()?;
     }
     Ok(())

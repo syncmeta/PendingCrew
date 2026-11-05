@@ -32,6 +32,9 @@ refusal_codes! {
     ManagedTableSchemaChanged = "managedTable.schema_changed" [],
     ManagedLinksChanged = "managedLink.changed" [],
     ManagedV1Unsupported = "managedTable.v1_unsupported" [],
+    SearchInvalid = "organizationSearch.invalid" ["field"],
+    SearchCursorExpired = "organizationSearch.cursor_expired" [],
+    SearchUnavailable = "organizationSearch.unavailable" [],
     ManagedDecisionChanged = "managed_object.decision_changed" [],
     ManagedRiskChanged = "managed_object.risk_changed" [],
     ManagedLessonChanged = "managed_object.lesson_changed" [],
@@ -514,7 +517,6 @@ mod tests {
         ),
         ("refusal.rs", r#""{} 没有占位符 {{{key}}}","#),
         ("refusal.rs", r#""{} 少给了占位符：要 {:?}，给了 {:?}","#),
-        ("channels.rs", r#""群 {id} 的 kind = {kind:?}""#),
     ];
 
     /// 一行（已去注释、去首尾空白）能不能放行：必须与表里该文件的某一条整行相等。

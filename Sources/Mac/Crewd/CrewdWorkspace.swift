@@ -242,6 +242,19 @@ final class CrewdWorkspace: ObservableObject {
         guard let self,self.originalJournalReady,let ledger=self.originalJournal else {throw CrewdManagedDirectoryWire.Problem.unavailable};return ledger
     },tablesAvailable:{[weak self] in self?.client.capabilities.contains(CrewdManagedTableV2Wire.capability)==true},
       linksAvailable:{[weak self] in self?.client.capabilities.contains(CrewdManagedTableV2Wire.linksCapability)==true})
+    /// Each search presentation owns its cursor/tickets; it never owns mutation receipts.
+    func makeOrganizationSearchStore()->CrewdOrganizationSearchStore {
+        CrewdOrganizationSearchStore(origin:{[weak self] in
+            guard let self,!self.retired,self.client.readyForWork,let scope=self.presentationScope,scope.databaseID != nil,
+                  self.client.capabilities.contains(CrewdOrganizationSearchWire.capability) else{return nil}
+            return .init(scope:scope,observation:self.observationGeneration,connection:self.client.connectionEpoch,crew:self.crewID)
+        },rpc:{[weak self] method,params in
+            guard let self,!self.retired,self.client.readyForWork,self.client.capabilities.contains(CrewdOrganizationSearchWire.capability),
+                  [CrewdOrganizationSearchWire.search,CrewdOrganizationSearchWire.expand].contains(method) else{throw CrewdOrganizationSearchWire.Problem.unavailable}
+            return try await self.client.call(method,params)
+        },available:{[weak self] in self?.client.capabilities.contains(CrewdOrganizationSearchWire.capability)==true},
+          knowledgeAvailable:{[weak self] in self?.client.capabilities.contains(CrewdManagedTableV2Wire.knowledgeCapability)==true})
+    }
     struct ManagedBusinessNavigation:Identifiable {
         let id=UUID()
         let target:CrewdManagedTableV2Wire.Target
@@ -254,15 +267,29 @@ final class CrewdWorkspace: ObservableObject {
         guard let value=managedBusinessNavigation,!retired,client.readyForWork,value.connection==client.connectionEpoch,value.authority==authorityRecordID,value.crew==crewID else {return nil};return value
     }
     func consumeManagedBusinessNavigation(_ id:UUID) {if managedBusinessNavigation?.id==id {managedBusinessNavigation=nil}}
-    func openManagedBusinessTarget(_ target:CrewdManagedTableV2Wire.Target,metadataCrewId:String?=nil,current:@MainActor ()->Bool) async throws {
+    func openManagedBusinessTarget(_ target:CrewdManagedTableV2Wire.Target,metadataCrewId:String?=nil,presentationCrewId:String?=nil,current:@MainActor ()->Bool) async throws {
         let scope=try await managedTablesV2.scope(stillCurrent:current)
-        let value=try await managedTablesV2.resolve(target,scope:scope,current:current)
+        var value=try await managedTablesV2.resolve(target,scope:scope,current:current)
         if let metadataCrewId {
             guard target.kind == .artifact,let reference=target.reference else {throw CrewdManagedDirectoryWire.Problem.invalid}
             _=try await managedTablesV2.links(scope,source:.init(kind:"artifact",reference:reference,metadataCrewId:metadataCrewId),includeAdapters:false,limit:1,current:current)
         }
+        if let presentationCrewId {
+            guard crewID.isEmpty,metadataCrewId==nil,[CrewdManagedTableV2Wire.TargetKind.artifact,.human].contains(target.kind) else {throw CrewdManagedDirectoryWire.Problem.invalid}
+            let rows=try await readValue("crew.list",.object(["includeRemoved":.bool(true)]))
+            guard current(),managedTablesV2.owns(scope),case .array(let crews)=rows,
+                  crews.contains(where:{$0["id"].string?.utf8.elementsEqual(presentationCrewId.utf8)==true}) else {throw CrewdManagedDirectoryWire.Problem.stale}
+            // The extra presentation read must not replace the target's current ACL check.
+            value=try await managedTablesV2.resolve(target,scope:scope,current:current)
+        }
         guard current(),managedTablesV2.owns(scope) else {throw CrewdManagedDirectoryWire.Problem.stale}
         if let metadataCrewId {selectCrew(metadataCrewId)}
+        else if let presentationCrewId {selectCrew(presentationCrewId)}
+        if crewID.isEmpty,[CrewdManagedTableV2Wire.TargetKind.table,.row,.decision,.risk,.lesson].contains(target.kind) {
+            guard let owner=value.ownerCrewId,!owner.isEmpty else {throw CrewdManagedDirectoryWire.Problem.invalid}
+            selectCrew(owner)
+        }
+        guard !crewID.isEmpty || ![CrewdManagedTableV2Wire.TargetKind.artifact,.human].contains(target.kind) else {throw CrewdClientError(message:"请选择一个机组作为查看范围。",kind:.notSubmitted)}
         if [.crew,.session,.channel,.message,.work,.requirement,.ask].contains(target.kind) {
             guard let crew=value.ownerCrewId,!crew.isEmpty else {throw CrewdManagedDirectoryWire.Problem.invalid}
             selectCrew(crew)
@@ -1315,6 +1342,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     private func isReadOnly(_ method: String) -> Bool {
+        if [CrewdOrganizationSearchWire.search,CrewdOrganizationSearchWire.expand].contains(method) {return true}
         if [CrewdManagedTableV2Wire.tableGet,CrewdManagedTableV2Wire.tableList,CrewdManagedTableV2Wire.rows,CrewdManagedTableV2Wire.rowGet,CrewdManagedTableV2Wire.lookup,CrewdManagedTableV2Wire.links,CrewdManagedTableV2Wire.linkLookup,CrewdManagedTableV2Wire.resolveTarget].contains(method) {return true}
         if [CrewdArtifactHistoryWire.status,CrewdArtifactHistoryWire.lookup].contains(method) {return true}
         if [CrewdArtifactWire.preview,CrewdArtifactWire.list,CrewdArtifactWire.get,CrewdArtifactWire.backlinks,CrewdArtifactWire.subject,CrewdArtifactWire.lookup].contains(method) {return true}

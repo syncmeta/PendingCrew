@@ -297,6 +297,7 @@ pub(crate) fn preflight(path: &Path) -> Result<Guard> {
             &db,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        crate::search_context::ensure_registered(&conn)?;
         let actual: (u32, u32) = conn.query_row(
             "SELECT * FROM pragma_user_version(), pragma_application_id()",
             [],
@@ -335,6 +336,7 @@ pub(crate) fn with_quiescent_copy<T>(
         &db,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    crate::search_context::ensure_registered(&conn)?;
     let value = operation(&conn)?;
     drop(conn);
     guard.recheck()?;

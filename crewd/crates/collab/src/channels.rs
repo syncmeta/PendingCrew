@@ -215,45 +215,26 @@ pub fn is_watched(conn: &Connection, id: &str) -> Result<bool> {
 }
 
 /// 读规则里「谁在读」的那一半：每个 session 只算一次（`home_of` 不按群重算，progress NOTE Task 6）。
+#[path = "channel_read_plan.rs"]
+mod read_plan;
+pub(crate) use read_plan::ReadPlan;
 struct Reader {
-    crew: String,
-    home: String,
-    /// 总机组的 session（管理层）。
-    manages_org: bool,
+    plan: ReadPlan,
 }
-
 impl Reader {
-    fn of(conn: &Connection, session: &str) -> Result<Self> {
-        let crew = sessions::crew_of(conn, session)?;
+    fn of(c: &Connection, session: &str) -> Result<Self> {
         Ok(Self {
-            manages_org: crews::is_management(conn, &crew)?,
-            home: crews::home_of(conn, &crew)?,
-            crew,
+            plan: ReadPlan::of(c, session, crewd_store::now_ms())?,
         })
     }
-
-    fn can_read(&self, conn: &Connection, id: &str, crew: &str, kind: ChannelKind) -> Result<bool> {
-        // ⓪ 总机组 = 管理层，读全组织（controller N1-R3，PM 2026-10-07）。
-        if self.manages_org {
-            return Ok(true);
-        }
-        // ③ 自己 home 的人类群；② 自己机组的人类群（被收编后归档的旧人类群仍归自己机组）。人类群不看成员行：
-        // 它的有效成员也是从 home 推出的（`homed_here`），陈旧的行不给读权。
-        if kind == ChannelKind::Human {
-            return Ok(crew == self.home || crew == self.crew);
-        }
-        // ② 归属自己的机组（大厅的隐式成员 ① 也在这里）。
-        if crew == self.crew {
-            return Ok(true);
-        }
-        // ① 显式成员 + ② 群里有本机组的在群 session（自己也是本机组的人，所以 ① 包含在这一句里）。
-        let crewmate_inside: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM channel_members cm JOIN sessions s ON cm.member_kind='session' AND cm.member_id=s.id
-              WHERE cm.channel_id=?1 AND cm.left_at IS NULL AND s.crew_id=?2",
-            params![id, self.crew],
+    fn can_read(&self, c: &Connection, id: &str, _crew: &str, _kind: ChannelKind) -> Result<bool> {
+        let (sql, mut args) = self.plan.sql("ch", 1);
+        args.push(id.to_string().into());
+        Ok(c.query_row(
+            &format!("SELECT {sql} FROM channels ch WHERE ch.id=?{}", args.len()),
+            rusqlite::params_from_iter(args),
             |r| r.get(0),
-        )?;
-        Ok(crewmate_inside > 0)
+        )?)
     }
 }
 
@@ -289,29 +270,13 @@ pub(crate) fn has_listen_row(
 /// `readable_by` 为真的全部群（同一条规则；含已归档；按 `created_at, id`；不含收听）。
 /// 候选是全表（M3 的量级可接受；量大再换成按机组 / 成员取候选）；读者的 home 只算一次。
 pub fn readable_channels(conn: &Connection, session: &str) -> Result<Vec<String>> {
-    let reader = Reader::of(conn, session)?;
-    let mut st = conn.prepare("SELECT id, crew_id, kind FROM channels ORDER BY created_at, id")?;
-    let rows = st
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut out = Vec::new();
-    for (id, crew, kind) in rows {
-        let kind = ChannelKind::parse(&kind).ok_or_else(|| {
-            CollabError::Store(crewd_store::StoreError::Invalid(format!(
-                "群 {id} 的 kind = {kind:?}"
-            )))
-        })?;
-        if reader.can_read(conn, &id, &crew, kind)? {
-            out.push(id);
-        }
-    }
-    Ok(out)
+    let reader = ReadPlan::of(conn, session, crewd_store::now_ms())?;
+    let (predicate, args) = reader.sql("ch", 1);
+    let mut q = conn.prepare(&format!(
+        "SELECT ch.id FROM channels ch WHERE {predicate} ORDER BY ch.created_at,ch.id"
+    ))?;
+    Ok(q.query_map(rusqlite::params_from_iter(args), |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
 }
 
 /// dm 里 `of` 的对方（M3b `post.to` / M3c dm 唤醒的缺省对象）。不是 dm、`of` 不在这个 dm 里、或对方已不在

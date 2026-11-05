@@ -595,3 +595,12 @@ This artifact association changed. Read its current associations before removing
 
 ## artifact.history_changed
 This history indexing job changed or finished. Read its current progress before processing another page.
+
+## organizationSearch.invalid
+Search condition {field} is invalid or conflicts with another filter. Check the query, types and scope, then search again.
+
+## organizationSearch.cursor_expired
+This search scope expired or its data source changed. Run a new search instead of continuing with the old cursor.
+
+## organizationSearch.unavailable
+Unified organization search is temporarily unavailable. Try again later; this does not mean there are no matching results.

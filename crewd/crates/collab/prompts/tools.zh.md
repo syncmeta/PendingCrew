@@ -50,22 +50,22 @@ crew 工具是你和机组、人类说话的方式。
 只看这一条之前的（消息序号或 id）。不填 = 最新一页。
 
 ## search
-在你读得到的群里搜消息，找以前说过的某件事时用（本机组名下的群、你的 home 人类群、你在其中或收听的群，已归档的也算；总机组的 session 搜全组织）。整个查询词（去掉首尾空白）当作一个整体，做不区分大小写的子串匹配（只折叠 ASCII 字母的大小写），不是按词拆开再求交；按时间倒序。
+搜索组织对象和当前读得到的消息，按类型及各张表分组返回编号。支持统一搜索的后台默认 in=all；旧后台仍只搜消息。对象保持现有组织读权，H 和消息逐次检查原范围、B15 及有效收听。整个查询词按一个字面子串匹配，只折 ASCII 大小写，不接受全文运算符。结果先现行/开着、再最近变更；排序范围固定于首次查询，后续消息不挤入旧分页，内容及权限仍以当前为准。indexState=building 表示正在整理，不表示没有结果。一跳关联用 organization_search_expand，不生成模型总结或产生唤醒。
 
 ## search.query
 要搜的文字：去掉首尾空白后整体当一个子串匹配（ASCII 不区分大小写）。
 
 ## search.channel
-只搜这一个群（群 id 或群名）。
+只搜这一个群的消息（群 id 或群名）。与对象类型筛选冲突时拒绝，不扩大范围。
 
 ## search.crew
-只搜这个机组名下你读得到的群（机组号、id 或名字）。
+只搜这个机组所属的对象及读得到的群消息（机组号、id 或名字）。共享且无所属机组的产物不凭某条引用猜归属。
 
 ## search.after
-只要这个时刻之后的（ISO8601，含边界）。
+只要这个时刻之后的（ISO8601，含边界）；消息看创建时间，对象看查询排序范围内的真实改动时间。
 
 ## search.before
-只要严格早于这个时刻的（ISO8601，不含边界：created_at < before）。
+只要严格早于这个时刻的（ISO8601，不含边界）；消息看创建时间，对象看查询排序范围内的真实改动时间。
 
 ## search.limit
 条数上限，1–200，默认 50。
@@ -1907,3 +1907,27 @@ link或unlink及精确source/manualLinkRevision；删除须expectedEdgeId，只�
 
 ## managed_link_request_get.requestId
 原请求UUID。
+
+## search.in
+messages 只搜消息，objects 只搜组织对象，all 同时搜索（新版默认）。不扩大原权限；旧后台不支持 objects/all。
+
+## search.type
+进一步筛选 decision、risk、lesson、work、requirement、ask、table、row、artifact 或 message；T2 这样的真实表号只搜索该表的行。与其它筛选的交集为空时拒绝，不放宽范围。
+
+## search.cursor
+上一页 nextCursor 原样传回，并保留原查询和所有条件。after/before 仍是日期。空页带 nextCursor 时可以继续；过期后重新搜索，不续用旧凭据。
+
+## organization_search_expand
+展开一个当前可读目标的真实一跳关联，包含可用的出向和入向边，现行/开着及最近变更优先。返回原边、方向、邻居编号和当前摘要；同一邻居的不同关系可分别出现，自环只出现一次。不会将原业务关系变成可编辑的副本。私有 Knowledge/Document 跨库目标尚不支持。
+
+## organization_search_expand.target
+原搜索结果里的完整 typed target。共享产物可能有不同机组维护的出向关联，保留每条边的真实来源和所属机组。
+
+## organization_search_expand.cursor
+上一页 nextCursor，保持同一 target 和其它条件；过期后重新展开。
+
+## organization_search_expand.limit
+请求的结果上限，1–200，默认 20。实际页可能更短或为空；有 nextCursor 就还有后续页。
+
+## organization_search_expand.include_system_defaults
+是否包含系统默认生成的决定，默认 false；仍逐次核验当前读权。
