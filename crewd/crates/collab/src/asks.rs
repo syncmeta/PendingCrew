@@ -666,7 +666,8 @@ fn withdraw_refused(e: CollabError, ask: &str) -> CollabError {
     }
 }
 
-/// 机组归档（`crews::archive` 同一事务里调，N1 裁定 13）：以人的身份撤回这个机组账本里全部还开着的问，理由取
+/// 机组归档（`crews::archive` 同一事务里调，N1 裁定 13）：以人的身份撤回这个机组账本里还开着的 Agent 问题。
+/// 手工 Human task 保持原业务状态，随机组冻结；恢复不会重开已撤回的 Agent 问题。撤回理由取
 /// render md 的 `notice.ask.crew_removed`（按 meta.locale）。挂在一个 home 人类群里的问只来自它自己和它的下级，
 /// 而下级必须先归档，所以归档到 home 时那里的问都已撤回。解档不重开。还卡着活项的问账本不让撤 →
 /// Conflict（归档整体失败，什么都不变）。每条撤回记 AskChanged。
@@ -677,7 +678,8 @@ pub(crate) fn withdraw_open_for_archive(tx: &mut Tx<'_>, crew: &str) -> Result<(
         .asks
         .iter()
         .filter(|(h, a)| {
-            a.state == AskState::Open
+            !a.human_task
+                && a.state == AskState::Open
                 && book
                     .state()
                     .ask_crew(**h)

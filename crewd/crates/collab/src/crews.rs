@@ -3572,3 +3572,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "crew_archive_human_tasks_tests.rs"]
+mod human_task_archive_tests;
