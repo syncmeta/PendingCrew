@@ -543,3 +543,6 @@ mod purpose;
 
 #[path = "organization_search_scope_tests.rs"]
 mod canonical_scope;
+
+#[path = "organization_search_budget_tests.rs"]
+mod query_budget;

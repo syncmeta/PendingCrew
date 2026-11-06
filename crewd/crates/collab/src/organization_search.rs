@@ -835,9 +835,9 @@ fn qualification(
     let p = bind(text_arg.into());
     let active = "(h.kind!='\"row\"' OR s.slot_kind='\"reference\"' OR EXISTS(SELECT 1 FROM managed_tables t,json_each(t.fields_json) f WHERE t.number=CAST(substr(h.table_id,2) AS INTEGER) AND json_extract(f.value,'$.id')=s.field_id AND json_extract(f.value,'$.hidden')=0))";
     if q.query.chars().count() >= 3 {
-        sql.push(format!("v.source IN(SELECT h.source FROM organization_search_fts f JOIN organization_search_slots s ON s.id=f.rowid JOIN organization_search_versions h ON h.id=s.version_id WHERE organization_search_fts MATCH {p} AND h.id=v.id AND {active} UNION SELECT 'o:'||printf('%020d',a.table_number) FROM organization_search_alias_fts f JOIN organization_search_aliases a ON a.id=f.rowid WHERE organization_search_alias_fts MATCH {p} AND a.visible_from<=?1)"));
+        sql.push(format!("(v.id IN(SELECT h.id FROM organization_search_fts f JOIN organization_search_slots s ON s.id=f.rowid JOIN organization_search_versions h ON h.id=s.version_id WHERE organization_search_fts MATCH {p} AND {active}) OR v.source IN(SELECT 'o:'||printf('%020d',a.table_number) FROM organization_search_alias_fts f JOIN organization_search_aliases a ON a.id=f.rowid WHERE organization_search_alias_fts MATCH {p} AND a.visible_from<=?1))"));
     } else {
-        sql.push(format!("v.source IN(SELECT h.source FROM organization_search_slots s JOIN organization_search_versions h ON h.id=s.version_id WHERE instr(lower(s.body),lower({p}))>0 AND h.id=v.id AND {active} UNION SELECT 'o:'||printf('%020d',a.table_number) FROM organization_search_aliases a WHERE instr(lower(a.label),lower({p}))>0 AND a.visible_from<=?1)"));
+        sql.push(format!("(v.id IN(SELECT h.id FROM organization_search_slots s JOIN organization_search_versions h ON h.id=s.version_id WHERE instr(lower(s.body),lower({p}))>0 AND {active}) OR v.source IN(SELECT 'o:'||printf('%020d',a.table_number) FROM organization_search_aliases a WHERE instr(lower(a.label),lower({p}))>0 AND a.visible_from<=?1))"));
     }
     if let Actor::Session(session) = a {
         let plan = crate::channels::ReadPlan::of(c, session, now)?;
