@@ -505,6 +505,14 @@ The links changed. Read the current links and version before confirming edits.
 
 This table uses an evolved schema. Use a client that supports its current table version to read or edit it.
 
+## managedTable.codec_unsupported
+
+This table or row contains data the current interface cannot represent completely. Read it through an entry point that supports the new table format; the original data remains intact.
+
+## managedTable.definition_review_required
+
+Check the name and purpose through the new table entry point and review similar tables. Submit only after confirming the new table or change is still needed.
+
 ## managed_object.decision_changed
 
 The original decision has changed. Read it and its current successor before submitting again.

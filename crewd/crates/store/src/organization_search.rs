@@ -254,7 +254,7 @@ pub fn state(c: &Connection) -> Result<State> {
         min_cut,
         phase,
         after,
-        building: phase < 8 || pending,
+        building: phase < 8 || pending || crate::managed_tables_v3::search_fanout_pending(c)?,
     })
 }
 fn tick(c: &Connection) -> Result<i64> {
@@ -287,6 +287,17 @@ pub struct Document {
     pub status: Status,
     pub system_default: bool,
     pub slots: Vec<Slot>,
+    /// Derived once per table version, not copied into every referring row.
+    /// Selection row slots retain only stable field/eN identities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selection_labels: Vec<SelectionLabel>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SelectionLabel {
+    pub field_id: String,
+    pub option_id: String,
+    pub label: String,
 }
 pub fn fingerprint(doc: &Document) -> Result<String> {
     Ok(crate::managed_links::hash(&serde_json::to_vec(doc)?))
@@ -863,6 +874,7 @@ pub fn seed_alias(c: &Connection, event: &str) -> Result<()> {
     c.execute("INSERT INTO organization_search_aliases(table_number,event_id,field_id,label,visible_from) SELECT table_number,event_id,'',json_extract(before_json,'$.title'),0 FROM managed_table_schema_events WHERE event_id=?1 AND json_extract(before_json,'$.title')!=json_extract(after_json,'$.title') ON CONFLICT DO NOTHING",[event])?;
     c.execute("INSERT INTO organization_search_aliases(table_number,event_id,field_id,label,visible_from) SELECT table_number,event_id,'@purpose',json_extract(before_json,'$.purpose'),0 FROM managed_table_schema_events WHERE event_id=?1 AND json_extract(before_json,'$.purpose') IS NOT NULL AND json_extract(before_json,'$.purpose') IS NOT json_extract(after_json,'$.purpose') ON CONFLICT DO NOTHING",[event])?;
     c.execute("INSERT INTO organization_search_aliases(table_number,event_id,field_id,label,visible_from) SELECT e.table_number,e.event_id,json_extract(b.value,'$.id'),json_extract(b.value,'$.name'),0 FROM managed_table_schema_events e,json_each(e.before_json,'$.fields') b JOIN json_each(e.after_json,'$.fields') a ON json_extract(a.value,'$.id')=json_extract(b.value,'$.id') WHERE e.event_id=?1 AND json_extract(a.value,'$.name')!=json_extract(b.value,'$.name') ON CONFLICT DO NOTHING",[event])?;
+    c.execute("INSERT INTO organization_search_aliases(table_number,event_id,field_id,label,visible_from) SELECT e.table_number,e.event_id,'@option:'||json_extract(b.value,'$.id')||':'||json_extract(bo.value,'$.id'),json_extract(bo.value,'$.label'),0 FROM managed_table_schema_events e JOIN json_each(e.before_json,'$.fields') b JOIN json_each(e.after_json,'$.fields') a ON json_extract(a.value,'$.id')=json_extract(b.value,'$.id') JOIN json_each(b.value,'$.kind.options') bo JOIN json_each(a.value,'$.kind.options') ao ON json_extract(ao.value,'$.id')=json_extract(bo.value,'$.id') WHERE e.event_id=?1 AND json_extract(bo.value,'$.label') IS NOT json_extract(ao.value,'$.label') ON CONFLICT DO NOTHING",[event])?;
     Ok(())
 }
 pub fn alias_match(c: &Connection, n: i64, query: &str) -> Result<Option<String>> {
@@ -898,7 +910,7 @@ pub fn fanout_step(c: &Connection, limit: u16) -> Result<usize> {
     Ok(keys.len())
 }
 
-fn queue_sql(key: &str, unknown_on_raw: bool) -> String {
+pub(crate) fn queue_sql(key: &str, unknown_on_raw: bool) -> String {
     let unknown = if unknown_on_raw {
         format!(
             "INSERT INTO organization_search_times SELECT {key},NULL,1 FROM organization_search_state WHERE id=1 AND pcw_search_wall() IS NULL ON CONFLICT(source) DO UPDATE SET changed_at=NULL,revision=revision+1;"

@@ -32,6 +32,8 @@ refusal_codes! {
     ManagedTableSchemaChanged = "managedTable.schema_changed" [],
     ManagedLinksChanged = "managedLink.changed" [],
     ManagedV1Unsupported = "managedTable.v1_unsupported" [],
+    ManagedTableCodecUnsupported = "managedTable.codec_unsupported" [],
+    ManagedTableDefinitionReviewRequired = "managedTable.definition_review_required" [],
     SearchInvalid = "organizationSearch.invalid" ["field"],
     SearchCursorExpired = "organizationSearch.cursor_expired" [],
     SearchUnavailable = "organizationSearch.unavailable" [],

@@ -145,10 +145,11 @@ pub fn fast_mode_for_tier(tier: &str) -> Option<bool> {
 /// 要对上的名字）。
 pub const CREW_MCP_SERVER: &str = "crew";
 
-/// Keep our fixed, trusted tool schemas intact in Codex 0.162.1. Its default
-/// compaction must also retain the fully inlined knowledge submit schema.
-/// This bound applies only to `crew`, never another configured MCP server.
-pub const CREW_MCP_INPUT_SCHEMA_MAX_BYTES: usize = 32_768;
+/// Fixed headroom for trusted crew schema normalization and Code Mode's
+/// cumulative render work. Actual table declarations remain at most 32 KiB;
+/// rendering the complete V2/V3 union needs a larger finite work allowance.
+/// This override applies only to crew, never another configured MCP server.
+pub const CREW_MCP_INPUT_SCHEMA_MAX_BYTES: usize = 65_536;
 
 /// `config.mcp_servers`: our helper, arguments, and bounded schema budget.
 pub fn mcp_servers(helper: &Path, args: &[String]) -> Value {

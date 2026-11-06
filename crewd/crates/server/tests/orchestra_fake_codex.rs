@@ -348,6 +348,51 @@ async fn mixed_executors_route_mentions_and_reconnect_without_replaying() {
         fixture.count("MIXED_CLAUDE_BOOT") == 1 && count_codex() == 1
     })
     .await;
+    // The submit log precedes the real PostToolUse/Stop/Notification callbacks.
+    // Wait for that exact bootstrap prompt to finish before testing PTY routing:
+    // otherwise a legitimate hook injection may consume the new wake first.
+    let hook_log = || {
+        std::fs::read_to_string(fixture.log.with_extension("hooks.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .collect::<Vec<_>>()
+    };
+    let mut bootstrap_prompt = None;
+    wait(
+        "mixed Claude actual bootstrap Notification completed",
+        || {
+            let hooks = hook_log();
+            let Some((submitted_at, submitted)) = hooks.iter().enumerate().find(|(_, hook)| {
+                hook["event"] == "UserPromptSubmit" && hook["exit"] == 0 && hook["allowed"] == true
+            }) else {
+                return false;
+            };
+            let Some(prompt) = submitted["prompt_id"].as_str().filter(|id| !id.is_empty()) else {
+                return false;
+            };
+            let completed = hooks.iter().skip(submitted_at + 1).any(|hook| {
+                hook["event"] == "Notification"
+                    && hook["prompt_id"].as_str() == Some(prompt)
+                    && hook["exit"] == 0
+                    && hook["allowed"] == true
+            });
+            if completed {
+                bootstrap_prompt = Some(prompt.to_owned());
+            }
+            completed
+        },
+    )
+    .await;
+    let bootstrap_prompt = bootstrap_prompt.expect("actual bootstrap prompt identity");
+    assert!(
+        hook_log().iter().all(|hook| {
+            let stdout = hook["stdout"].to_string();
+            !stdout.contains("MIXED_TO_CODEX") && !stdout.contains("MIXED_TO_CLAUDE")
+        }),
+        "the tested messages must not predate the bootstrap hook boundary"
+    );
+    eprintln!("mixed bootstrap callback completed: session={claude_id}, prompt={bootstrap_prompt}");
     let channel = format!("{cid}/lobby");
     client.call("message.post", json!({"channelId":channel,"text":"MIXED_TO_CODEX","mentions":[{"kind":"session","targetId":codex_id}]})).await.unwrap();
     wait("Codex recipient", || count_codex() == 2).await;
@@ -357,7 +402,24 @@ async fn mixed_executors_route_mentions_and_reconnect_without_replaying() {
         "unmentioned Claude must not be submitted the Codex wake"
     );
     client.call("message.post", json!({"channelId":channel,"text":"MIXED_TO_CLAUDE","mentions":[{"kind":"session","targetId":claude_id}]})).await.unwrap();
-    wait("Claude recipient", || fixture.count("MIXED_TO_CLAUDE") == 1).await;
+    let until = tokio::time::Instant::now() + Duration::from_secs(15);
+    while fixture.count("MIXED_TO_CLAUDE") != 1 {
+        if tokio::time::Instant::now() >= until {
+            let inspection = client
+                .call("session.inspect", json!({"sessionId":claude_id}))
+                .await;
+            let wakes = client
+                .call("wake.list", json!({"sessionId":claude_id}))
+                .await;
+            panic!(
+                "Claude recipient timed out: count={}; inspect={inspection:?}; wakes={wakes:?}; submissions={:?}; hooks={:?}",
+                fixture.count("MIXED_TO_CLAUDE"),
+                std::fs::read_to_string(&fixture.log),
+                std::fs::read_to_string(fixture.log.with_extension("hooks.jsonl"))
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
     for sid in [claude_id, codex_id] {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {

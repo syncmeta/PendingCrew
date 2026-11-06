@@ -3023,6 +3023,161 @@
       ]
     },
     "Cell2": {
+      "description": "Real equality is by IEEE bits, exactly as V2; no +0/-0 normalization.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "null",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "text",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "integer",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "real",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "decimal",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "singleSelect",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/OptionRef"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "date",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "url",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Cell3": {
       "description": "Distinct from V1: preserve IEEE signed zero and never normalize real bits.",
       "oneOf": [
         {
@@ -3116,6 +3271,66 @@
             },
             "value": {
               "$ref": "#/$defs/Cell2"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "keepHiddenSetToken": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "replaceLinks",
+              "type": "string"
+            },
+            "values": {
+              "items": {
+                "$ref": "#/$defs/LinkWrite"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "values"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CellPatch2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "keep",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "setScalar",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Cell3"
             }
           },
           "required": [
@@ -4768,6 +4983,13 @@
         "tags"
       ],
       "type": "object"
+    },
+    "CheckState": {
+      "enum": [
+        "checking",
+        "complete"
+      ],
+      "type": "string"
     },
     "ClaudeHistoryPage": {
       "additionalProperties": false,
@@ -10134,6 +10356,91 @@
       ],
       "type": "object"
     },
+    "DefineCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "excludingTableId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "purpose": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "title"
+      ],
+      "type": "object"
+    },
+    "DefinitionCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "definitionCheckToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exactNameTaken": {
+          "type": "boolean"
+        },
+        "moreSimilar": {
+          "type": "boolean"
+        },
+        "nearCandidates": {
+          "items": {
+            "$ref": "#/$defs/NearCandidate"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "state": {
+          "$ref": "#/$defs/CheckState"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "state",
+        "exactNameTaken",
+        "nearCandidates",
+        "moreSimilar"
+      ],
+      "type": "object"
+    },
     "Desired": {
       "enum": [
         "running",
@@ -10924,6 +11231,260 @@
       ]
     },
     "Effect3": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "issuedOptions": {
+              "items": {
+                "$ref": "#/$defs/IssuedOption"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "tableCreated",
+              "type": "string"
+            },
+            "schemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            },
+            "titleFieldId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "schemaRevision",
+            "fieldIds",
+            "titleFieldId",
+            "issuedOptions"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "changed": {
+              "type": "boolean"
+            },
+            "changedFieldIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "issuedOptions": {
+              "items": {
+                "$ref": "#/$defs/IssuedOption"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "schemaChanged",
+              "type": "string"
+            },
+            "originalSchemaRevision": {
+              "type": "string"
+            },
+            "resultSchemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "originalSchemaRevision",
+            "resultSchemaRevision",
+            "changedFieldIds",
+            "issuedOptions",
+            "changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edgeIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "rowAdded",
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            },
+            "rowRevision": {
+              "type": "string"
+            },
+            "schemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "rowId",
+            "schemaRevision",
+            "rowRevision",
+            "edgeIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "addedEdgeIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "changedFieldIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "rowPatched",
+              "type": "string"
+            },
+            "originalRowRevision": {
+              "type": "string"
+            },
+            "removedEdgeIds": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "resultRowRevision": {
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            },
+            "schemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "rowId",
+            "schemaRevision",
+            "originalRowRevision",
+            "resultRowRevision",
+            "changedFieldIds",
+            "addedEdgeIds",
+            "removedEdgeIds",
+            "changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "tableLifecycle",
+              "type": "string"
+            },
+            "originalSchemaRevision": {
+              "type": "string"
+            },
+            "resultSchemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "originalSchemaRevision",
+            "resultSchemaRevision",
+            "archived",
+            "changed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "changed": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "rowLifecycle",
+              "type": "string"
+            },
+            "originalRowRevision": {
+              "type": "string"
+            },
+            "resultRowRevision": {
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            },
+            "schemaRevision": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "rowId",
+            "schemaRevision",
+            "originalRowRevision",
+            "resultRowRevision",
+            "archived",
+            "changed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Effect4": {
       "description": "Immutable mutation result. No target payload is echoed here after ACL changes.",
       "oneOf": [
         {
@@ -11805,11 +12366,59 @@
       ],
       "type": "object"
     },
+    "Field3": {
+      "additionalProperties": false,
+      "properties": {
+        "hidden": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/FieldKind2"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nullable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "nullable",
+        "hidden"
+      ],
+      "type": "object"
+    },
     "FieldDraft": {
       "additionalProperties": false,
       "properties": {
         "kind": {
-          "$ref": "#/$defs/FieldKind"
+          "$ref": "#/$defs/KindDraft"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nullable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "nullable"
+      ],
+      "type": "object"
+    },
+    "FieldDraft2": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/FieldKind2"
         },
         "name": {
           "type": "string"
@@ -11826,6 +12435,209 @@
       "type": "object"
     },
     "FieldKind": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bounds": {
+              "$ref": "#/$defs/TextBounds"
+            },
+            "kind": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "bounds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bounds": {
+              "$ref": "#/$defs/TextBounds"
+            },
+            "kind": {
+              "const": "longText",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "bounds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "integer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "real",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "displayScale": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "decimal",
+              "type": "string"
+            },
+            "maxScale": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "precision": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "precision",
+            "maxScale"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "singleSelect",
+              "type": "string"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/OptionDefinition"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "options"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allowHuman": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "person",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "allowHuman"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "link",
+              "type": "string"
+            },
+            "many": {
+              "type": "boolean"
+            },
+            "target": {
+              "$ref": "#/$defs/TargetConstraint"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "many"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FieldKind2": {
       "oneOf": [
         {
           "additionalProperties": false,
@@ -12239,6 +13051,61 @@
       ],
       "type": "string"
     },
+    "FrozenReason": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "crewArchived",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "tableArchived",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "rowArchived",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Get": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
     "GetParams": {
       "additionalProperties": false,
       "properties": {
@@ -12535,6 +13402,337 @@
         "keepToken"
       ],
       "type": "object"
+    },
+    "History": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/HistorySource"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "HistoryAction": {
+      "enum": [
+        "createTable",
+        "alterTable",
+        "addRow",
+        "patchRow",
+        "archiveTable",
+        "restoreTable",
+        "archiveRow",
+        "restoreRow",
+        "legacyRowWrite"
+      ],
+      "type": "string"
+    },
+    "HistoryKey": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "eventId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "event",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "eventId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "codec": {
+              "$ref": "#/$defs/LegacyCodec"
+            },
+            "entryLocator": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "legacyReceipt",
+              "type": "string"
+            },
+            "requestId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "codec",
+            "requestId",
+            "entryLocator"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HistoryPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/HistorySummary"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "source": {
+          "$ref": "#/$defs/HistorySource"
+        }
+      },
+      "required": [
+        "scope",
+        "source",
+        "items"
+      ],
+      "type": "object"
+    },
+    "HistoryPath": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "scalar",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/HistorySide"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "side"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "links",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/HistorySide"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "side"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "schema",
+              "type": "string"
+            },
+            "side": {
+              "$ref": "#/$defs/HistorySide"
+            }
+          },
+          "required": [
+            "kind",
+            "side"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HistorySide": {
+      "enum": [
+        "before",
+        "after"
+      ],
+      "type": "string"
+    },
+    "HistorySource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "table",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "row",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HistorySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/HistoryAction"
+        },
+        "actor": {
+          "$ref": "#/$defs/ResourceActor"
+        },
+        "changedFieldIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "$ref": "#/$defs/HistoryKey"
+        },
+        "legacyDetailsUnavailable": {
+          "type": "boolean"
+        },
+        "originalRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasonAvailable": {
+          "type": "boolean"
+        },
+        "reasonPreview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recordedAt": {
+          "type": "string"
+        },
+        "restrictedDetails": {
+          "type": "boolean"
+        },
+        "resultRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "action",
+        "actor",
+        "recordedAt",
+        "reasonAvailable",
+        "changedFieldIds",
+        "legacyDetailsUnavailable",
+        "restrictedDetails"
+      ],
+      "type": "object"
+    },
+    "HistoryValue": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "key": {
+          "$ref": "#/$defs/HistoryKey"
+        },
+        "path": {
+          "$ref": "#/$defs/HistoryPath"
+        },
+        "source": {
+          "$ref": "#/$defs/HistorySource"
+        }
+      },
+      "required": [
+        "source",
+        "key",
+        "path"
+      ],
+      "type": "object"
+    },
+    "HistoryValueType": {
+      "enum": [
+        "null",
+        "text",
+        "integer",
+        "real",
+        "decimal",
+        "singleSelect",
+        "date",
+        "boolean",
+        "url",
+        "reason",
+        "schema"
+      ],
+      "type": "string"
     },
     "Hit": {
       "additionalProperties": false,
@@ -12872,6 +14070,22 @@
       "required": [
         "kind",
         "value"
+      ],
+      "type": "object"
+    },
+    "IssuedOption": {
+      "additionalProperties": false,
+      "properties": {
+        "fieldId": {
+          "type": "string"
+        },
+        "optionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fieldId",
+        "optionId"
       ],
       "type": "object"
     },
@@ -13405,6 +14619,188 @@
       ],
       "type": "string"
     },
+    "KindDraft": {
+      "description": "New callers cannot select legacy text bounds or issue their own option IDs.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "longText",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "integer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "real",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "displayScale": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "decimal",
+              "type": "string"
+            },
+            "unit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "singleSelect",
+              "type": "string"
+            },
+            "options": {
+              "items": {
+                "$ref": "#/$defs/OptionDraft2"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "options"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "date",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "boolean",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allowHuman": {
+              "type": "boolean"
+            },
+            "kind": {
+              "const": "person",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "allowHuman"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "link",
+              "type": "string"
+            },
+            "many": {
+              "type": "boolean"
+            },
+            "target": {
+              "$ref": "#/$defs/TargetConstraint"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "many"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Lagged": {
       "description": "`events.lagged`：漏掉的事件条数，客户端应全量重拉。",
       "properties": {
@@ -13482,6 +14878,13 @@
       "enum": [
         "agent",
         "human"
+      ],
+      "type": "string"
+    },
+    "LegacyCodec": {
+      "enum": [
+        "managedObjectsV1",
+        "managedTablesV2"
       ],
       "type": "string"
     },
@@ -13721,6 +15124,34 @@
         "stale"
       ],
       "type": "string"
+    },
+    "Lifecycle": {
+      "additionalProperties": false,
+      "properties": {
+        "archivedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "archivedBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourceActor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "LifecycleEmpty": {
       "additionalProperties": false,
@@ -14244,6 +15675,63 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/Receipt3"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "historical",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "notFound",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Lookup5": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "$ref": "#/$defs/Receipt4"
+            },
+            "status": {
+              "const": "known",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "receipt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "receipt": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Receipt4"
                 },
                 {
                   "type": "null"
@@ -15442,6 +16930,36 @@
         }
       ]
     },
+    "NearCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "type": "boolean"
+        },
+        "purpose": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schemaRevision": {
+          "type": "string"
+        },
+        "tableId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tableId",
+        "schemaRevision",
+        "title",
+        "archived"
+      ],
+      "type": "object"
+    },
     "NewRowWritePolicy": {
       "enum": [
         "authorCaptainHuman",
@@ -16308,6 +17826,12 @@
         {
           "additionalProperties": false,
           "properties": {
+            "confirmNew": {
+              "type": "boolean"
+            },
+            "definitionCheckToken": {
+              "type": "string"
+            },
             "fields": {
               "items": {
                 "$ref": "#/$defs/FieldDraft"
@@ -16340,7 +17864,9 @@
             "purpose",
             "fields",
             "titleFieldIndex",
-            "rowWritePolicy"
+            "rowWritePolicy",
+            "definitionCheckToken",
+            "confirmNew"
           ],
           "type": "object"
         },
@@ -16357,6 +17883,9 @@
               "const": "alterTable",
               "type": "string"
             },
+            "reason": {
+              "type": "string"
+            },
             "tableId": {
               "type": "string"
             }
@@ -16365,6 +17894,7 @@
             "kind",
             "tableId",
             "expectedSchemaRevision",
+            "reason",
             "change"
           ],
           "type": "object"
@@ -16416,6 +17946,246 @@
               },
               "type": "array"
             },
+            "reason": {
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "rowId",
+            "expectedSchemaRevision",
+            "expectedRowRevision",
+            "reason",
+            "patches"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "archiveTable",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "expectedSchemaRevision",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "restoreTable",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "expectedSchemaRevision",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRowRevision": {
+              "type": "string"
+            },
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "archiveRow",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "rowId",
+            "expectedSchemaRevision",
+            "expectedRowRevision",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRowRevision": {
+              "type": "string"
+            },
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "restoreRow",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "rowId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "rowId",
+            "expectedSchemaRevision",
+            "expectedRowRevision",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Operation3": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "items": {
+                "$ref": "#/$defs/FieldDraft2"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "createTable",
+              "type": "string"
+            },
+            "purpose": {
+              "type": "string"
+            },
+            "rowWritePolicy": {
+              "$ref": "#/$defs/NewRowWritePolicy"
+            },
+            "title": {
+              "type": "string"
+            },
+            "titleFieldIndex": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "title",
+            "purpose",
+            "fields",
+            "titleFieldIndex",
+            "rowWritePolicy"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "change": {
+              "$ref": "#/$defs/SchemaChange2"
+            },
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "alterTable",
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "expectedSchemaRevision",
+            "change"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "addRow",
+              "type": "string"
+            },
+            "patches": {
+              "items": {
+                "$ref": "#/$defs/Patch2"
+              },
+              "type": "array"
+            },
+            "tableId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "expectedSchemaRevision",
+            "patches"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRowRevision": {
+              "type": "string"
+            },
+            "expectedSchemaRevision": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "patchRow",
+              "type": "string"
+            },
+            "patches": {
+              "items": {
+                "$ref": "#/$defs/Patch2"
+              },
+              "type": "array"
+            },
             "rowId": {
               "type": "string"
             }
@@ -16436,9 +18206,46 @@
         "createTable",
         "alterTable",
         "addRow",
+        "patchRow",
+        "archiveTable",
+        "restoreTable",
+        "archiveRow",
+        "restoreRow"
+      ],
+      "type": "string"
+    },
+    "OperationKind2": {
+      "enum": [
+        "createTable",
+        "alterTable",
+        "addRow",
         "patchRow"
       ],
       "type": "string"
+    },
+    "OptionDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "tone": {
+          "$ref": "#/$defs/Tone"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "tone",
+        "active"
+      ],
+      "type": "object"
     },
     "OptionDraft": {
       "additionalProperties": false,
@@ -16449,6 +18256,42 @@
       },
       "required": [
         "label"
+      ],
+      "type": "object"
+    },
+    "OptionDraft2": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "tone": {
+          "$ref": "#/$defs/Tone",
+          "default": "neutral"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "type": "object"
+    },
+    "OptionRef": {
+      "additionalProperties": false,
+      "properties": {
+        "fieldId": {
+          "type": "string"
+        },
+        "optionId": {
+          "type": "string"
+        },
+        "tableId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tableId",
+        "fieldId",
+        "optionId"
       ],
       "type": "object"
     },
@@ -16647,6 +18490,22 @@
       "properties": {
         "change": {
           "$ref": "#/$defs/CellPatch"
+        },
+        "fieldId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fieldId",
+        "change"
+      ],
+      "type": "object"
+    },
+    "Patch2": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/CellPatch2"
         },
         "fieldId": {
           "type": "string"
@@ -18764,6 +20623,48 @@
       "type": "object"
     },
     "Receipt5": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect4"
+        },
+        "eventId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intentDigest": {
+          "type": "string"
+        },
+        "operationKind": {
+          "$ref": "#/$defs/OperationKind2"
+        },
+        "recordedAt": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "recordedAt",
+        "operationKind",
+        "intentDigest",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "Receipt6": {
       "description": "`message.receipts` 的一行：一条消息叫醒的一个 session（S54；N2 再加「开始了 / 回复了」）。",
       "properties": {
         "attempts": {
@@ -19276,7 +21177,7 @@
           "additionalProperties": false,
           "properties": {
             "receipt": {
-              "$ref": "#/$defs/Receipt4"
+              "$ref": "#/$defs/Receipt5"
             },
             "status": {
               "const": "known",
@@ -19295,7 +21196,7 @@
             "receipt": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/Receipt4"
+                  "$ref": "#/$defs/Receipt5"
                 },
                 {
                   "type": "null"
@@ -20501,15 +22402,22 @@
         "crewId": {
           "type": "string"
         },
-        "frozen": {
-          "type": "boolean"
+        "frozenReasons": {
+          "items": {
+            "$ref": "#/$defs/FrozenReason"
+          },
+          "type": "array"
         },
         "id": {
           "type": "string"
         },
-        "linkCells": {
+        "lifecycle": {
+          "$ref": "#/$defs/Lifecycle"
+        },
+        "linkFieldIds": {
+          "description": "Field IDs only: unloaded links are never represented as empty values.",
           "items": {
-            "$ref": "#/$defs/LinkCell"
+            "type": "string"
           },
           "type": "array"
         },
@@ -20537,12 +22445,137 @@
         "revision",
         "author",
         "scalarCells",
+        "linkFieldIds",
+        "lifecycle",
+        "frozenReasons"
+      ],
+      "type": "object"
+    },
+    "Row3": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/Author"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "frozen": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "linkCells": {
+          "items": {
+            "$ref": "#/$defs/LinkCell"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "scalarCells": {
+          "items": {
+            "$ref": "#/$defs/ScalarValue2"
+          },
+          "type": "array"
+        },
+        "schemaRevision": {
+          "type": "string"
+        },
+        "tableId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "tableId",
+        "schemaRevision",
+        "revision",
+        "author",
+        "scalarCells",
         "linkCells",
         "frozen"
       ],
       "type": "object"
     },
+    "RowLinkCell": {
+      "additionalProperties": false,
+      "properties": {
+        "cell": {
+          "$ref": "#/$defs/LinkCell"
+        },
+        "rowId": {
+          "type": "string"
+        },
+        "rowRevision": {
+          "type": "string"
+        },
+        "schemaRevision": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "rowId",
+        "schemaRevision",
+        "rowRevision",
+        "cell"
+      ],
+      "type": "object"
+    },
+    "RowLinks": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedRowRevision": {
+          "type": "string"
+        },
+        "expectedSchemaRevision": {
+          "type": "string"
+        },
+        "fieldId": {
+          "type": "string"
+        },
+        "rowId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rowId",
+        "fieldId",
+        "expectedSchemaRevision",
+        "expectedRowRevision"
+      ],
+      "type": "object"
+    },
     "RowList": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "includeArchived": {
+          "default": false,
+          "type": "boolean"
+        },
+        "tableId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tableId"
+      ],
+      "type": "object"
+    },
+    "RowList2": {
       "additionalProperties": false,
       "properties": {
         "after": {
@@ -20602,6 +22635,31 @@
         },
         "table": {
           "$ref": "#/$defs/Table2"
+        }
+      },
+      "required": [
+        "table",
+        "items"
+      ],
+      "type": "object"
+    },
+    "RowPage3": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Row3"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/Table3"
         }
       },
       "required": [
@@ -20964,6 +23022,22 @@
       ],
       "type": "object"
     },
+    "ScalarValue2": {
+      "additionalProperties": false,
+      "properties": {
+        "fieldId": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Cell3"
+        }
+      },
+      "required": [
+        "fieldId",
+        "value"
+      ],
+      "type": "object"
+    },
     "SchemaChange": {
       "oneOf": [
         {
@@ -20971,6 +23045,313 @@
           "properties": {
             "field": {
               "$ref": "#/$defs/FieldDraft"
+            },
+            "kind": {
+              "const": "addField",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "renameField",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "confirmNew": {
+              "type": "boolean"
+            },
+            "definitionCheckToken": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "renameTable",
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "title",
+            "definitionCheckToken",
+            "confirmNew"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "confirmNew": {
+              "type": "boolean"
+            },
+            "definitionCheckToken": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "setPurpose",
+              "type": "string"
+            },
+            "purpose": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "purpose",
+            "definitionCheckToken",
+            "confirmNew"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "hideField",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "restoreField",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "setTitleField",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "widenSingleLink",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "widenText",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "widenNumberToText",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "addOption",
+              "type": "string"
+            },
+            "option": {
+              "$ref": "#/$defs/OptionDraft2"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "option"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "renameOption",
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "option": {
+              "$ref": "#/$defs/OptionRef"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "option",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "deactivateOption",
+              "type": "string"
+            },
+            "option": {
+              "$ref": "#/$defs/OptionRef"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "option"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "restoreOption",
+              "type": "string"
+            },
+            "option": {
+              "$ref": "#/$defs/OptionRef"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "option"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fieldId": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "setOptionTone",
+              "type": "string"
+            },
+            "option": {
+              "$ref": "#/$defs/OptionRef"
+            },
+            "tone": {
+              "$ref": "#/$defs/Tone"
+            }
+          },
+          "required": [
+            "kind",
+            "fieldId",
+            "option",
+            "tone"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SchemaChange2": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "$ref": "#/$defs/FieldDraft2"
             },
             "kind": {
               "const": "addField",
@@ -22426,6 +24807,30 @@
       ],
       "type": "object"
     },
+    "Submit4": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "operation": {
+          "$ref": "#/$defs/Operation3"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "requestId",
+        "operation"
+      ],
+      "type": "object"
+    },
     "SubscribeParams": {
       "additionalProperties": false,
       "properties": {
@@ -22535,6 +24940,90 @@
           },
           "type": "array"
         },
+        "frozenReasons": {
+          "items": {
+            "$ref": "#/$defs/FrozenReason"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/Lifecycle"
+        },
+        "nextFieldNumber": {
+          "type": "string"
+        },
+        "nextOptionNumber": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rowWritePolicy": {
+          "$ref": "#/$defs/RowWritePolicy"
+        },
+        "schemaRevision": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "titleFieldId": {
+          "type": "string"
+        },
+        "v1Readable": {
+          "type": "boolean"
+        },
+        "v1Writable": {
+          "type": "boolean"
+        },
+        "v2Readable": {
+          "type": "boolean"
+        },
+        "v2Writable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "crewId",
+        "schemaRevision",
+        "title",
+        "titleFieldId",
+        "rowWritePolicy",
+        "author",
+        "fields",
+        "nextFieldNumber",
+        "nextOptionNumber",
+        "lifecycle",
+        "frozenReasons",
+        "v1Readable",
+        "v1Writable",
+        "v2Readable",
+        "v2Writable"
+      ],
+      "type": "object"
+    },
+    "Table3": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/Author"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/Field3"
+          },
+          "type": "array"
+        },
         "frozen": {
           "type": "boolean"
         },
@@ -22605,6 +25094,22 @@
             "string",
             "null"
           ]
+        },
+        "includeArchived": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "TableList2": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -22636,6 +25141,27 @@
         "items": {
           "items": {
             "$ref": "#/$defs/Table2"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "TablePage3": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Table3"
           },
           "type": "array"
         },
@@ -23506,6 +26032,28 @@
       ],
       "type": "object"
     },
+    "TextBounds": {
+      "additionalProperties": false,
+      "properties": {
+        "maxUnicodeScalars": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxUtf8Bytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "maxUtf8Bytes"
+      ],
+      "type": "object"
+    },
     "Todo": {
       "properties": {
         "attachments": {
@@ -23947,6 +26495,16 @@
       ],
       "type": "object"
     },
+    "Tone": {
+      "enum": [
+        "neutral",
+        "good",
+        "attention",
+        "bad",
+        "info"
+      ],
+      "type": "string"
+    },
     "ToolDef": {
       "properties": {
         "annotations": {
@@ -24011,6 +26569,125 @@
         "role"
       ],
       "type": "object"
+    },
+    "ValueChunk": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "$ref": "#/$defs/HistoryKey"
+            },
+            "nextCursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "$ref": "#/$defs/HistoryPath"
+            },
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "source": {
+              "$ref": "#/$defs/HistorySource"
+            },
+            "status": {
+              "const": "scalar",
+              "type": "string"
+            },
+            "utf8": {
+              "type": "string"
+            },
+            "valueType": {
+              "$ref": "#/$defs/HistoryValueType"
+            }
+          },
+          "required": [
+            "status",
+            "scope",
+            "source",
+            "key",
+            "path",
+            "valueType",
+            "utf8"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "key": {
+              "$ref": "#/$defs/HistoryKey"
+            },
+            "nextCursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "$ref": "#/$defs/HistoryPath"
+            },
+            "restrictedDetails": {
+              "type": "boolean"
+            },
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "source": {
+              "$ref": "#/$defs/HistorySource"
+            },
+            "status": {
+              "const": "links",
+              "type": "string"
+            },
+            "visible": {
+              "items": {
+                "$ref": "#/$defs/VisibleLink"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "status",
+            "scope",
+            "source",
+            "key",
+            "path",
+            "visible",
+            "restrictedDetails"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "restricted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "unavailable",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Verification": {
       "enum": [
@@ -27207,15 +29884,15 @@
         "$ref": "#/$defs/TableGet"
       },
       "result": {
-        "$ref": "#/$defs/Table2"
+        "$ref": "#/$defs/Table3"
       }
     },
     "managedTable.v2.list": {
       "params": {
-        "$ref": "#/$defs/TableList"
+        "$ref": "#/$defs/TableList2"
       },
       "result": {
-        "$ref": "#/$defs/TablePage2"
+        "$ref": "#/$defs/TablePage3"
       }
     },
     "managedTable.v2.request.get": {
@@ -27231,10 +29908,90 @@
         "$ref": "#/$defs/TableGet"
       },
       "result": {
-        "$ref": "#/$defs/Row2"
+        "$ref": "#/$defs/Row3"
       }
     },
     "managedTable.v2.rows": {
+      "params": {
+        "$ref": "#/$defs/RowList2"
+      },
+      "result": {
+        "$ref": "#/$defs/RowPage3"
+      }
+    },
+    "managedTable.v2.submit": {
+      "params": {
+        "$ref": "#/$defs/Submit4"
+      },
+      "result": {
+        "$ref": "#/$defs/Receipt5"
+      }
+    },
+    "managedTable.v3.defineCheck": {
+      "params": {
+        "$ref": "#/$defs/DefineCheck"
+      },
+      "result": {
+        "$ref": "#/$defs/DefinitionCheck"
+      }
+    },
+    "managedTable.v3.get": {
+      "params": {
+        "$ref": "#/$defs/Get"
+      },
+      "result": {
+        "$ref": "#/$defs/Table2"
+      }
+    },
+    "managedTable.v3.history": {
+      "params": {
+        "$ref": "#/$defs/History"
+      },
+      "result": {
+        "$ref": "#/$defs/HistoryPage"
+      }
+    },
+    "managedTable.v3.history.value": {
+      "params": {
+        "$ref": "#/$defs/HistoryValue"
+      },
+      "result": {
+        "$ref": "#/$defs/ValueChunk"
+      }
+    },
+    "managedTable.v3.list": {
+      "params": {
+        "$ref": "#/$defs/TableList"
+      },
+      "result": {
+        "$ref": "#/$defs/TablePage2"
+      }
+    },
+    "managedTable.v3.request.get": {
+      "params": {
+        "$ref": "#/$defs/RequestGet"
+      },
+      "result": {
+        "$ref": "#/$defs/Lookup5"
+      }
+    },
+    "managedTable.v3.row.get": {
+      "params": {
+        "$ref": "#/$defs/Get"
+      },
+      "result": {
+        "$ref": "#/$defs/Row2"
+      }
+    },
+    "managedTable.v3.row.links": {
+      "params": {
+        "$ref": "#/$defs/RowLinks"
+      },
+      "result": {
+        "$ref": "#/$defs/RowLinkCell"
+      }
+    },
+    "managedTable.v3.rows": {
       "params": {
         "$ref": "#/$defs/RowList"
       },
@@ -27242,7 +29999,7 @@
         "$ref": "#/$defs/RowPage2"
       }
     },
-    "managedTable.v2.submit": {
+    "managedTable.v3.submit": {
       "params": {
         "$ref": "#/$defs/Submit3"
       },
@@ -27307,7 +30064,7 @@
       },
       "result": {
         "items": {
-          "$ref": "#/$defs/Receipt5"
+          "$ref": "#/$defs/Receipt6"
         },
         "type": "array"
       }

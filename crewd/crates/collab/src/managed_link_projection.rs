@@ -102,11 +102,19 @@ impl<'a> Projection<'a> {
                 a.owner(c, &crew, true)?;
             }
             SourceRef::Row { id } => {
+                if crewd_store::managed_tables_v3::enabled(c)? {
+                    crate::managed_tables_v3::write_authority(c, a, id)?;
+                    return Ok(crew);
+                }
                 let (t, _, owner, _) =
                     tables::row_base(c, num(id, 'O')?)?.ok_or_else(|| missing(id))?;
                 crate::managed_tables_v2::row_authority(c, a, &t, &owner)?;
             }
             SourceRef::Table { id } => {
+                if crewd_store::managed_tables_v3::enabled(c)? {
+                    crate::managed_tables_v3::write_authority(c, a, id)?;
+                    return Ok(crew);
+                }
                 let t = tables::table(c, num(id, 'T')?)?.ok_or_else(|| missing(id))?;
                 crate::managed_tables_v2::schema_authority(c, a, &t)?;
             }

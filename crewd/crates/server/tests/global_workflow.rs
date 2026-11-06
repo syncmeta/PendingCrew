@@ -85,17 +85,20 @@ async fn attached_owner_finishes_cross_crew_child_without_losing_other_human_blo
     let source = f
         .state
         .collab(move |tx| {
-            crewd_collab::asks::with_book(tx, &b, |book, now| {
-                book.register_entry(now, crewd_work::EntryNo(1))?;
-                Ok(())
-            })?;
-            Ok(crewd_store::work_organization::reference_for_core(
-                tx.conn(),
-                ObjectKind::Requirement,
-                "#1",
-            )?
-            .unwrap()
-            .id())
+            let source = crewd_collab::requirements::create(
+                tx,
+                &crewd_collab::Sender::Human,
+                crewd_proto::TodoCreateParams {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    crew_id: b,
+                    channel_id: None,
+                    text: "Original cross-crew requirement source".into(),
+                },
+            )?;
+            Ok(source
+                .todo
+                .requirement_id
+                .expect("registered public requirement"))
         })
         .await
         .unwrap();

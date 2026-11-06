@@ -170,7 +170,13 @@ pub fn intent<T: Serialize>(
     operation: &T,
 ) -> Result<String> {
     let node = serde_json::json!({"method":method,"scope":scope,"crewId":crew,"requestId":uuid,"operation":operation});
-    let mut b = b"managed-v2-intent.v1\0".to_vec();
+    // The physical receipt namespace is shared; the codec domain is not.
+    // Dispatch by the recorded method before interpreting either version.
+    let mut b = if method == crewd_proto::managed_tables_v3::SUBMIT {
+        crewd_proto::managed_tables_v3::INTENT_DOMAIN.to_vec()
+    } else {
+        b"managed-v2-intent.v1\0".to_vec()
+    };
     encode(&node, &mut b)?;
     Ok(hash(&b))
 }
@@ -392,8 +398,15 @@ pub struct Saved {
     pub input: serde_json::Value,
     pub result: serde_json::Value,
     pub seal: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
 }
 fn checksum(s: &Saved) -> Result<String> {
+    if let Some(principal) = &s.principal {
+        return Ok(hash(&serde_json::to_vec(&(
+            &s.method, &s.digest, &s.input, &s.result, principal,
+        ))?));
+    }
     Ok(hash(&serde_json::to_vec(&(
         &s.method, &s.digest, &s.input, &s.result,
     ))?))
@@ -401,6 +414,16 @@ fn checksum(s: &Saved) -> Result<String> {
 pub enum ReadReceipt {
     Active(Saved),
     Retired,
+}
+/// The codec discriminator survives payload retirement. Recovery routes must
+/// not interpret another codec's tombstone as their own absent original.
+pub fn receipt_method(
+    c: &Connection,
+    crew: &str,
+    principal: &str,
+    uuid: &str,
+) -> Result<Option<String>> {
+    Ok(c.query_row("SELECT method FROM managed_v2_receipts WHERE owner_crew=?1 AND principal=?2 AND request_id=?3",params![crew,principal,uuid],|r|r.get(0)).optional()?)
 }
 pub fn receipt(
     c: &Connection,
@@ -413,7 +436,10 @@ pub fn receipt(
         if retired {
             return Ok(ReadReceipt::Retired);
         }
-        let saved: Saved = serde_json::from_str(&result.ok_or_else(bad)?)?;
+        let raw=result.ok_or_else(bad)?;
+        let encoded:serde_json::Value=serde_json::from_str(&raw)?;
+        if method!=crewd_proto::managed_tables_v3::SUBMIT&&encoded.get("principal").is_some(){return Err(bad())}
+        let saved: Saved = serde_json::from_value(encoded)?;
         if saved.method != method
             || saved.digest != digest
             || saved.input != serde_json::from_str::<serde_json::Value>(&input.ok_or_else(bad)?)?
@@ -421,6 +447,8 @@ pub fn receipt(
         {
             return Err(bad());
         }
+        let v3=method==crewd_proto::managed_tables_v3::SUBMIT;
+        if (v3&&saved.principal.as_deref()!=Some(principal))||(!v3&&saved.principal.is_some()){return Err(bad())}
         let scope: Scope =
             serde_json::from_value(saved.input.get("scope").cloned().ok_or_else(bad)?)?;
         if saved.input.get("crewId").and_then(|v| v.as_str()) != Some(crew)
@@ -434,6 +462,19 @@ pub fn receipt(
             )? != digest
         {
             return Err(bad());
+        }
+        if v3{
+            let input:crewd_proto::managed_tables_v3::Submit=serde_json::from_value(saved.input.clone())?;
+            let receipt:crewd_proto::managed_tables_v3::Receipt=serde_json::from_value(saved.result.clone())?;
+            crate::managed_tables_v3::validate_receipt(&input,&receipt)?;
+            if let Some(event)=&receipt.event_id{
+                let exact:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM managed_link_events WHERE id=?1 AND owner_crew=?2 AND principal=?3 AND request_id=?4 AND method=?5 AND digest=?6 AND created_at=?7)",params![event,crew,principal,uuid,method,digest,receipt.recorded_at],|r|r.get(0))?;
+                if !exact{return Err(bad())}
+                let (source,before,after)=crate::managed_tables_v3::event_witness(&receipt)?;
+                let action=serde_json::to_value(receipt.operation_kind)?;
+                let audit_exact:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM managed_table_audit WHERE event_id=?1 AND source_number=?2 AND action=?3 AND recorded_at=?4 AND original_revision IS ?5 AND result_revision=?6)",params![event,source,action.as_str().ok_or_else(bad)?,receipt.recorded_at,before,after],|r|r.get(0))?;
+                if !audit_exact{return Err(bad())}
+            }
         }
         Ok(ReadReceipt::Active(saved))
     })
@@ -470,6 +511,7 @@ pub fn record<I: Serialize, R: Serialize>(
         input: serde_json::to_value(input)?,
         result: serde_json::to_value(result)?,
         seal: String::new(),
+        principal: (method == crewd_proto::managed_tables_v3::SUBMIT).then(|| principal.to_owned()),
     };
     s.seal = checksum(&s)?;
     c.execute("INSERT INTO managed_v2_receipts(owner_crew,principal,request_id,method,digest,input_json,result_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![crew,principal,uuid,method,digest,json(&s.input)?,json(&s)?])?;

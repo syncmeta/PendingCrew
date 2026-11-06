@@ -714,18 +714,17 @@ mod tests {
                 .unwrap()
                 .unwrap()
         }
-        fn duplicate(line: &str, alias: bool) -> String {
-            let marker = "\"title\":\"Raw original\"";
-            assert_eq!(line.matches(marker).count(), 1);
-            line.replacen(
-                marker,
-                if alias {
-                    r#""title":"not the accepted intent","t\u0069tle":"Raw original""#
-                } else {
-                    r#""title":"not the accepted intent","title":"Raw original""#
-                },
-                1,
-            )
+        fn duplicate(line: &str, alias: bool, title: &str) -> String {
+            let title = serde_json::to_string(title).unwrap();
+            let marker = format!("\"title\":{title}");
+            assert_eq!(line.matches(marker.as_str()).count(), 1);
+            let key = if alias {
+                r#""t\u0069tle""#
+            } else {
+                r#""title""#
+            };
+            let replacement = format!("\"title\":\"not the accepted intent\",{key}:{title}");
+            line.replacen(marker.as_str(), &replacement, 1)
         }
         let f = Fixture::new().await;
         let (stop, stopping) = tokio::sync::oneshot::channel();
@@ -736,13 +735,18 @@ mod tests {
             .call("managedObject.scope", json!({}))
             .await
             .unwrap();
-        let packet = |uuid: String| {
+        let packet = |uuid: String, title: &str, purpose: &str| {
             json!({"scope":scope,"crewId":f.crew,"requestId":uuid,"operation":{
-            "kind":"createTable","title":"Raw original","purpose":"A scalar may contain {\"x\":1,\"x\":2} without parsing it as JSON", "titleFieldIndex":0,"rowWritePolicy":"ownerCrewWriters",
+            "kind":"createTable","title":title,"purpose":purpose, "titleFieldIndex":0,"rowWritePolicy":"ownerCrewWriters",
             "fields":[{"name":"Name","kind":{"kind":"text"},"nullable":false}]}})
         };
         let human_uuid = uuid::Uuid::new_v4().to_string();
-        let human = packet(human_uuid.clone());
+        let human_title = "Raw original";
+        let human = packet(
+            human_uuid.clone(),
+            human_title,
+            "A scalar may contain {\"x\":1,\"x\":2} without parsing it as JSON",
+        );
         let stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
         let (rd, mut wr) = stream.into_split();
         let mut rd = tokio::io::BufReader::new(rd);
@@ -750,7 +754,7 @@ mod tests {
             serde_json::to_string(&json!({"id":1,"method":TABLE_SUBMIT,"params":human})).unwrap();
         let before = snapshot(&f).await;
         for alias in [false, true] {
-            let bad = frame(&mut rd, &mut wr, 1, &duplicate(&valid, alias)).await;
+            let bad = frame(&mut rd, &mut wr, 1, &duplicate(&valid, alias, human_title)).await;
             assert_eq!(bad["error"]["code"], crewd_proto::RpcError::INVALID_PARAMS);
             assert_eq!(
                 snapshot(&f).await,
@@ -782,7 +786,14 @@ mod tests {
             json!({"status":"known","receipt":accepted["result"]})
         );
         let agent_uuid = uuid::Uuid::new_v4().to_string();
-        let agent = packet(agent_uuid.clone());
+        // This tests raw-frame identity, not an intentional duplicate table definition.
+        // V3 correctly requires explicit review for a legacy same-name/near-purpose create.
+        let agent_title = "Warehouse inventory";
+        let agent = packet(
+            agent_uuid.clone(),
+            agent_title,
+            "Track storage locations and stock balances",
+        );
         let stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
         let (agent_rd, mut agent_wr) = stream.into_split();
         let mut agent_rd = tokio::io::BufReader::new(agent_rd);
@@ -791,7 +802,7 @@ mod tests {
             &mut agent_rd,
             &mut agent_wr,
             3,
-            &duplicate(&agent_line, true),
+            &duplicate(&agent_line, true, agent_title),
         )
         .await;
         assert_eq!(
@@ -811,7 +822,7 @@ mod tests {
             &mut agent_rd,
             &mut agent_wr,
             3,
-            &duplicate(&agent_line, true),
+            &duplicate(&agent_line, true, agent_title),
         )
         .await;
         assert_eq!(bad["error"]["code"], crewd_proto::RpcError::INVALID_PARAMS);
@@ -822,7 +833,7 @@ mod tests {
             &mut agent_rd,
             &mut agent_wr,
             4,
-            &duplicate(&human_on_agent, false),
+            &duplicate(&human_on_agent, false, agent_title),
         )
         .await;
         assert_eq!(

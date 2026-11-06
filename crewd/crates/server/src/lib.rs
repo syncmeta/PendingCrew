@@ -25,6 +25,7 @@ mod legacy_terminal;
 mod managed_artifacts;
 mod managed_objects;
 mod managed_tables_v2;
+mod managed_tables_v3;
 pub mod managed_v2_input;
 mod message_attribution;
 mod message_delivery;

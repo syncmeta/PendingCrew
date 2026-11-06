@@ -39,6 +39,7 @@ pub mod managed_links;
 pub mod managed_message_sources;
 pub mod managed_objects;
 pub mod managed_tables_v2;
+pub mod managed_tables_v3;
 pub mod message_attribution;
 pub mod message_delivery;
 pub mod message_provenance;

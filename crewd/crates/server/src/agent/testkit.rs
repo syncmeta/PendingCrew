@@ -149,6 +149,7 @@ pub enum CallerStage {
     ArchivePrepared,
     WakeRendered,
     ManagedReadCaptured,
+    ManagedWriteCaptured,
 }
 #[cfg(feature = "testkit")]
 #[derive(Clone, Debug)]

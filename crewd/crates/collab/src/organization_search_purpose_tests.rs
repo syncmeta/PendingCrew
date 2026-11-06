@@ -86,7 +86,7 @@ fn protected_thirty_bootstrap_searches_original_and_current_purpose_only_on_tabl
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        31
+        crewd_store::schema::SCHEMA_VERSION
     );
     assert_eq!(managed_objects::scope(migrated.conn()).unwrap(), scope);
     let snapshots = std::fs::read_dir(root.path().join("backups"))

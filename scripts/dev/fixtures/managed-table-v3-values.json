@@ -1,0 +1,232 @@
+{
+  "decimal": [
+    {
+      "input": "0",
+      "valid": true
+    },
+    {
+      "input": "1",
+      "valid": true
+    },
+    {
+      "input": "-1",
+      "valid": true
+    },
+    {
+      "input": "0.000000000000000001",
+      "valid": true
+    },
+    {
+      "input": "-0.000000000000000001",
+      "valid": true
+    },
+    {
+      "input": "99999999999999999999999999999999999999",
+      "valid": true
+    },
+    {
+      "input": "12345678901234567890.123456789012345678",
+      "valid": true
+    },
+    {
+      "input": "-0",
+      "valid": false
+    },
+    {
+      "input": "+1",
+      "valid": false
+    },
+    {
+      "input": "01",
+      "valid": false
+    },
+    {
+      "input": "1.0",
+      "valid": false
+    },
+    {
+      "input": "1.20",
+      "valid": false
+    },
+    {
+      "input": "0.0",
+      "valid": false
+    },
+    {
+      "input": ".1",
+      "valid": false
+    },
+    {
+      "input": "1.",
+      "valid": false
+    },
+    {
+      "input": "1e3",
+      "valid": false
+    },
+    {
+      "input": "1E3",
+      "valid": false
+    },
+    {
+      "input": "999999999999999999999999999999999999999",
+      "valid": false
+    },
+    {
+      "input": "0.0000000000000000001",
+      "valid": false
+    },
+    {
+      "input": "1\n",
+      "valid": false
+    },
+    {
+      "input": "１",
+      "valid": false
+    }
+  ],
+  "date": [
+    {
+      "input": "2000-02-29",
+      "valid": true
+    },
+    {
+      "input": "1900-02-29",
+      "valid": false
+    },
+    {
+      "input": "2026-11-06",
+      "valid": true
+    },
+    {
+      "input": "2100-02-29",
+      "valid": false
+    },
+    {
+      "input": "0001-01-01",
+      "valid": true
+    },
+    {
+      "input": "9999-12-31",
+      "valid": true
+    },
+    {
+      "input": "0000-01-01",
+      "valid": false
+    },
+    {
+      "input": "2026-2-03",
+      "valid": false
+    },
+    {
+      "input": "2026-02-30",
+      "valid": false
+    }
+  ],
+  "textBounds": [
+    {
+      "name": "new text exactly 500 scalars",
+      "repeat": "界",
+      "count": 500,
+      "bounds": {
+        "maxUtf8Bytes": 65536,
+        "maxUnicodeScalars": 500
+      },
+      "valid": true
+    },
+    {
+      "name": "new text rejects scalar 501",
+      "repeat": "界",
+      "count": 501,
+      "bounds": {
+        "maxUtf8Bytes": 65536,
+        "maxUnicodeScalars": 500
+      },
+      "valid": false
+    },
+    {
+      "name": "legacy full 64KiB",
+      "repeat": "💡",
+      "count": 16384,
+      "bounds": {
+        "maxUtf8Bytes": 65536,
+        "maxUnicodeScalars": null
+      },
+      "valid": true
+    },
+    {
+      "name": "legacy widen keeps full domain",
+      "repeat": "💡",
+      "count": 16384,
+      "bounds": {
+        "maxUtf8Bytes": 65536,
+        "maxUnicodeScalars": null
+      },
+      "valid": true
+    },
+    {
+      "name": "legacy byte 65540 refuses",
+      "repeat": "💡",
+      "count": 16385,
+      "bounds": {
+        "maxUtf8Bytes": 65536,
+        "maxUnicodeScalars": null
+      },
+      "valid": false
+    }
+  ],
+  "nearNames": [
+    {
+      "a": "方案对比",
+      "b": "方案比较",
+      "exactNameTaken": false,
+      "titleNear": true,
+      "aNormalized": "方案对比",
+      "bNormalized": "方案比较"
+    },
+    {
+      "a": "Alpha",
+      "b": "alpha",
+      "exactNameTaken": true,
+      "titleNear": true,
+      "aNormalized": "alpha",
+      "bNormalized": "alpha"
+    },
+    {
+      "a": "方案对比",
+      "b": "接口清单",
+      "exactNameTaken": false,
+      "titleNear": false,
+      "aNormalized": "方案对比",
+      "bNormalized": "接口清单"
+    },
+    {
+      "a": "café",
+      "b": "café",
+      "exactNameTaken": false,
+      "titleNear": true,
+      "aNormalized": "café",
+      "bNormalized": "café"
+    }
+  ],
+  "optionRefs": [
+    {
+      "tableId": "T10",
+      "fieldId": "p2",
+      "optionId": "e1",
+      "expected": "valid only if this issued binding exists"
+    },
+    {
+      "tableId": "T11",
+      "fieldId": "p2",
+      "optionId": "e1",
+      "expected": "not a T10/p2/e1 choice"
+    },
+    {
+      "tableId": "T10",
+      "fieldId": "p3",
+      "optionId": "e1",
+      "expected": "reject if e1 belongs to p2"
+    }
+  ]
+}

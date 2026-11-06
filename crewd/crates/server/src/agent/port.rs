@@ -959,7 +959,7 @@ where
     .await
 }
 
-async fn managed_v2_read<T>(
+async fn managed_table_read<T>(
     st: &AppState,
     by: &Identity,
     operation: impl FnOnce(
@@ -1023,12 +1023,147 @@ pub(crate) async fn organization_search_expand(
     .await
 }
 
+pub(crate) async fn managed_table_v3_get(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::Get,
+) -> PortResult<crewd_proto::managed_tables_v3::Table> {
+    managed_table_read(st, by, move |c, a, x| {
+        crewd_collab::managed_tables_v3::get(c, a, &params.id, x)
+    })
+    .await
+}
+
+pub(crate) async fn managed_tables_v3_list(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::TableList,
+) -> PortResult<crewd_proto::managed_tables_v3::TablePage> {
+    managed_table_read(st, by, move |c, a, x| {
+        crewd_collab::managed_tables_v3::tables(c, a, params, x)
+    })
+    .await
+}
+
+pub(crate) async fn managed_row_v3_get(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::Get,
+) -> PortResult<crewd_proto::managed_tables_v3::Row> {
+    managed_table_read(st, by, move |c, a, x| {
+        crewd_collab::managed_tables_v3::row(c, a, &params.id, x)
+    })
+    .await
+}
+
+pub(crate) async fn managed_rows_v3_list(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::RowList,
+) -> PortResult<crewd_proto::managed_tables_v3::RowPage> {
+    managed_table_read(st, by, move |c, a, x| {
+        crewd_collab::managed_tables_v3::rows(c, a, params, x)
+    })
+    .await
+}
+
+pub(crate) async fn managed_row_v3_links(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::RowLinks,
+) -> PortResult<crewd_proto::managed_tables_v3::RowLinkCell> {
+    managed_table_read(st, by, move |c, a, x| {
+        crewd_collab::managed_tables_v3::row_links(c, a, params, x)
+    })
+    .await
+}
+
+pub(crate) async fn managed_table_v3_define_check(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::DefineCheck,
+) -> PortResult<crewd_proto::managed_tables_v3::DefinitionCheck> {
+    managed_table_read(st, by, move |c, a, _| {
+        crewd_collab::managed_tables_v3::define_check(c, a, params)
+    })
+    .await
+}
+
+pub(crate) async fn managed_table_v3_history(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::History,
+) -> PortResult<crewd_proto::managed_tables_v3::HistoryPage> {
+    managed_table_read(st, by, move |c, a, x| {
+        crewd_collab::managed_tables_v3::history(c, a, params, x)
+    })
+    .await
+}
+
+pub(crate) async fn managed_table_v3_history_value(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::HistoryValue,
+) -> PortResult<crewd_proto::managed_tables_v3::ValueChunk> {
+    managed_table_read(st, by, move |c, a, x| {
+        crewd_collab::managed_tables_v3::history_value(c, a, params, x)
+    })
+    .await
+}
+
+pub(crate) async fn managed_table_v3_request_get(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::RequestGet,
+) -> PortResult<crewd_proto::managed_tables_v3::Lookup> {
+    managed_table_read(st, by, move |c, a, _| {
+        crewd_collab::managed_tables_v3::lookup(
+            c,
+            a,
+            &params.scope,
+            &params.crew_id,
+            &params.request_id,
+        )
+    })
+    .await
+}
+
+pub(crate) async fn managed_table_v3_submit(
+    st: &AppState,
+    by: &Identity,
+    params: crewd_proto::managed_tables_v3::Submit,
+) -> PortResult<crewd_proto::managed_tables_v3::Receipt> {
+    let scoped = scoped_actor(st, by)?;
+    let by = by.clone();
+    #[cfg(feature = "testkit")]
+    super::testkit::pause_caller(
+        st,
+        super::testkit::CallerStage::ManagedWriteCaptured,
+        &by.session_id,
+        vec![],
+        String::new(),
+    )
+    .await;
+    write(st, move |tx| {
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        let receipt = crewd_collab::managed_tables_v3::submit(
+            tx,
+            crewd_collab::managed_objects::Actor::Session(&by.session_id),
+            params,
+            &crewd_collab::managed_links::DenyExternal,
+        )?;
+        validate_scoped_actor(tx.conn(), &scoped, &by)?;
+        Ok(receipt)
+    })
+    .await
+}
+
 pub(crate) async fn managed_table_v2_get(
     st: &AppState,
     by: &Identity,
     params: crewd_proto::managed_tables_v2::TableGet,
 ) -> PortResult<crewd_proto::managed_tables_v2::Table> {
-    managed_v2_read(st, by, move |c, a, x| {
+    managed_table_read(st, by, move |c, a, x| {
         crewd_collab::managed_tables_v2::get(c, a, &params.id, x)
     })
     .await
@@ -1038,7 +1173,7 @@ pub(crate) async fn managed_tables_v2_list(
     by: &Identity,
     params: crewd_proto::managed_tables_v2::TableList,
 ) -> PortResult<crewd_proto::managed_tables_v2::TablePage> {
-    managed_v2_read(st, by, move |c, a, x| {
+    managed_table_read(st, by, move |c, a, x| {
         crewd_collab::managed_tables_v2::tables(c, a, params.after.as_deref(), x)
     })
     .await
@@ -1048,7 +1183,7 @@ pub(crate) async fn managed_row_v2_get(
     by: &Identity,
     params: crewd_proto::managed_tables_v2::TableGet,
 ) -> PortResult<crewd_proto::managed_tables_v2::Row> {
-    managed_v2_read(st, by, move |c, a, x| {
+    managed_table_read(st, by, move |c, a, x| {
         crewd_collab::managed_tables_v2::row(c, a, &params.id, x)
     })
     .await
@@ -1058,7 +1193,7 @@ pub(crate) async fn managed_rows_v2_list(
     by: &Identity,
     params: crewd_proto::managed_tables_v2::RowList,
 ) -> PortResult<crewd_proto::managed_tables_v2::RowPage> {
-    managed_v2_read(st, by, move |c, a, x| {
+    managed_table_read(st, by, move |c, a, x| {
         crewd_collab::managed_tables_v2::rows(c, a, &params.table_id, params.after.as_deref(), x)
     })
     .await
@@ -1068,7 +1203,7 @@ pub(crate) async fn managed_table_v2_request_get(
     by: &Identity,
     params: crewd_proto::managed_tables_v2::RequestGet,
 ) -> PortResult<crewd_proto::managed_tables_v2::RequestLookup> {
-    managed_v2_read(st, by, move |c, a, _| {
+    managed_table_read(st, by, move |c, a, _| {
         crewd_collab::managed_tables_v2::lookup(
             c,
             a,
@@ -1084,7 +1219,7 @@ pub(crate) async fn managed_link_resolve_target(
     by: &Identity,
     params: crewd_proto::managed_tables_v2::ResolveTarget,
 ) -> PortResult<crewd_proto::managed_tables_v2::ResolvedTarget> {
-    managed_v2_read(st, by, move |c, a, x| {
+    managed_table_read(st, by, move |c, a, x| {
         crewd_collab::managed_links::resolve(c, a, &params.target, x)
     })
     .await
@@ -1094,7 +1229,7 @@ pub(crate) async fn managed_links_list(
     by: &Identity,
     params: crewd_proto::managed_tables_v2::ListLinks,
 ) -> PortResult<crewd_proto::managed_tables_v2::EdgePage> {
-    managed_v2_read(st, by, move |c, a, x| {
+    managed_table_read(st, by, move |c, a, x| {
         crewd_collab::managed_links::list(c, a, params, x)
     })
     .await
@@ -1104,7 +1239,7 @@ pub(crate) async fn managed_link_request_get(
     by: &Identity,
     params: crewd_proto::managed_tables_v2::RequestGet,
 ) -> PortResult<crewd_proto::managed_tables_v2::ManualLookup> {
-    managed_v2_read(st, by, move |c, a, _| {
+    managed_table_read(st, by, move |c, a, _| {
         crewd_collab::managed_links::lookup(
             c,
             a,

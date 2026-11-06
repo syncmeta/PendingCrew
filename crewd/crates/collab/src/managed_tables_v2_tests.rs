@@ -10,7 +10,9 @@ const A: Actor<'static> = Actor::Session("w-a1");
 const OTHER: Actor<'static> = Actor::Session("w-a2");
 const X: &links::DenyExternal = &links::DenyExternal;
 fn fixture() -> Store {
-    let mut s = crate::testkit::store();
+    prepared_fixture(crate::testkit::store())
+}
+fn prepared_fixture(mut s: Store) -> Store {
     if crewd_store::meta_get(s.conn(), "dbId").unwrap().is_none() {
         crewd_store::meta_set(s.conn(), "dbId", "synthetic-v2-db").unwrap();
     }
@@ -235,8 +237,10 @@ fn stable_fields_evolve_without_rewriting_rows_and_v1_original_survives() {
     assert_eq!(t.schema_revision, "7");
     assert!(!t.v1_readable);
     assert!(!t.v1_writable);
+    let positional_read = objects::get(s.conn(), HUMAN, &table);
     assert!(
-        matches!(objects::get(s.conn(),HUMAN,&table),Err(CollabError::Conflict(ref e))if e.code==Code::ManagedV1Unsupported)
+        matches!(&positional_read, Err(CollabError::Conflict(e)) if e.code == Code::ManagedV1Unsupported),
+        "evolved V2 table must retain the V1 refusal: {positional_read:?}"
     );
     assert_eq!(ok(&mut s, |tx| objects::submit(tx, HUMAN, old)), receipt);
 }
@@ -513,13 +517,17 @@ fn manual(s: &Store, crew: &str, source: SourceRef, expected: &str, target: Valu
 }
 #[test]
 fn manual_relates_exact_replay_cas_pagination_and_column_authority_are_distinct() {
-    let mut s = fixture();
+    let mut s = prepared_fixture(crate::testkit::v31_store());
     let source = create(&mut s, A, "crew-a", None, "authorCaptainHuman");
+    let targets = (0..5)
+        .map(|_| create(&mut s, HUMAN, "crew-b", None, "ownerCrewWriters"))
+        .collect::<Vec<_>>();
+    crewd_store::schema::migrate(s.conn()).unwrap();
+    assert!(crewd_store::managed_tables_v3::enabled(s.conn()).unwrap());
     let source = SourceRef::Table { id: source };
     let mut expected = 0;
     let mut edge_ids = Vec::new();
-    for i in 0..5 {
-        let target = create(&mut s, HUMAN, "crew-b", None, "ownerCrewWriters");
+    for (i, target) in targets.into_iter().enumerate() {
         let req = manual(
             &s,
             "crew-a",
@@ -528,7 +536,9 @@ fn manual_relates_exact_replay_cas_pagination_and_column_authority_are_distinct(
             value(json!({"kind":"table","id":target})),
         );
         let before = count(&s, "SELECT count(*) FROM managed_link_events");
-        let (receipt, changes) = ok_at(&mut s, NOW + i, |tx| links::submit(tx, A, req.clone(), X));
+        let (receipt, changes) = ok_at(&mut s, NOW + i64::try_from(i).unwrap(), |tx| {
+            links::submit(tx, A, req.clone(), X)
+        });
         assert_eq!(receipt.original_manual_link_revision, expected.to_string());
         expected += 1;
         assert_eq!(receipt.result_manual_link_revision, expected.to_string());
@@ -905,10 +915,12 @@ fn hiding_nonnullable_field_refuses_instead_of_stranding_future_row_creation() {
 }
 #[test]
 fn one_real_crew_purge_clears_two_targets_and_advances_surviving_source_once() {
-    let mut s = fixture();
+    let mut s = prepared_fixture(crate::testkit::v31_store());
     let a = create(&mut s, HUMAN, "crew-x", None, "ownerCrewWriters");
     let b = create(&mut s, HUMAN, "crew-x", None, "ownerCrewWriters");
     let table = create(&mut s, A, "crew-a", Some(table_link()), "ownerCrewWriters");
+    crewd_store::schema::migrate(s.conn()).unwrap();
+    assert!(crewd_store::managed_tables_v3::enabled(s.conn()).unwrap());
     let id = add(
         &mut s,
         A,
@@ -1478,8 +1490,10 @@ fn evolved_v2_row_preserves_original_message_source_and_uuid_without_using_legac
         json!({"kind":"alterTable","tableId":table,"expectedSchemaRevision":"1","change":{"kind":"addField","field":{"name":"New link","kind":{"kind":"link","target":{"kind":"human"},"many":false},"nullable":true}}}),
     );
     ok(&mut s, |tx| submit(tx, A, r, X));
+    let positional_read = objects::get(s.conn(), A, &row_id);
     assert!(
-        matches!(objects::get(s.conn(),A,&row_id),Err(CollabError::Conflict(ref r))if r.code==Code::ManagedV1Unsupported)
+        matches!(&positional_read, Err(CollabError::Conflict(r)) if r.code == Code::ManagedV1Unsupported),
+        "evolved V2 row must retain the V1 refusal: {positional_read:?}"
     );
     assert_eq!(
         crate::managed_message_sources::source(s.conn(), A, &row_id).unwrap(),
@@ -1671,8 +1685,11 @@ fn real_positive_and_negative_zero_roundtrip_as_distinct_changes_with_exact_noop
 #[test]
 fn populated_table_required_link_add_refuses_without_schema_rows_edges_receipts_or_progress_change()
 {
-    let mut s = fixture();
+    let mut s = prepared_fixture(crate::testkit::v31_store());
     let table = create(&mut s, A, "crew-a", None, "ownerCrewWriters");
+    let empty = create(&mut s, A, "crew-a", None, "ownerCrewWriters");
+    crewd_store::schema::migrate(s.conn()).unwrap();
+    assert!(crewd_store::managed_tables_v3::enabled(s.conn()).unwrap());
     let id = add(&mut s, A, "crew-a", &table, vec![]);
     let original_table = get(s.conn(), A, &table, X).unwrap();
     let original_row = row(s.conn(), A, &id, X).unwrap();
@@ -1710,7 +1727,6 @@ fn populated_table_required_link_add_refuses_without_schema_rows_edges_receipts_
         lookup(s.conn(), A, &r.scope, "crew-a", &r.request_id).unwrap(),
         RequestLookup::NotFound {}
     ));
-    let empty = create(&mut s, A, "crew-a", None, "ownerCrewWriters");
     let r = request(
         &s,
         "crew-a",

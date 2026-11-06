@@ -29,7 +29,9 @@ pub mod managed_message_sources;
 pub mod managed_objects;
 pub mod managed_objects_api;
 mod managed_risks_lessons;
+pub mod managed_table_tools;
 pub mod managed_tables_v2;
+pub mod managed_tables_v3;
 pub mod message_attribution;
 pub mod message_delivery;
 mod model;
@@ -369,6 +371,7 @@ pub mod methods {
             .chain(crate::managed_artifacts::METHODS.iter().copied())
             .chain(crate::artifact_history::METHODS.iter().copied())
             .chain(crate::managed_tables_v2::METHODS.iter().copied())
+            .chain(crate::managed_tables_v3::METHODS.iter().copied())
             .chain(crate::organization_search::METHODS.iter().copied())
             .chain(crate::lifecycle::METHODS.iter().copied())
             .chain(std::iter::once(crate::executors::EXECUTOR_LIST))
@@ -955,6 +958,76 @@ pub fn api_schema() -> Value {
             m(
                 sub::<organization_search::Expand>(g),
                 sub::<organization_search::ExpansionPage>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::TABLE_GET,
+            m(
+                sub::<managed_tables_v3::Get>(g),
+                sub::<managed_tables_v3::Table>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::TABLE_LIST,
+            m(
+                sub::<managed_tables_v3::TableList>(g),
+                sub::<managed_tables_v3::TablePage>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::ROW_GET,
+            m(
+                sub::<managed_tables_v3::Get>(g),
+                sub::<managed_tables_v3::Row>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::ROW_LIST,
+            m(
+                sub::<managed_tables_v3::RowList>(g),
+                sub::<managed_tables_v3::RowPage>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::ROW_LINKS,
+            m(
+                sub::<managed_tables_v3::RowLinks>(g),
+                sub::<managed_tables_v3::RowLinkCell>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::SUBMIT,
+            m(
+                sub::<managed_tables_v3::Submit>(g),
+                sub::<managed_tables_v3::Receipt>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::REQUEST_GET,
+            m(
+                sub::<managed_tables_v3::RequestGet>(g),
+                sub::<managed_tables_v3::Lookup>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::DEFINE_CHECK,
+            m(
+                sub::<managed_tables_v3::DefineCheck>(g),
+                sub::<managed_tables_v3::DefinitionCheck>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::HISTORY,
+            m(
+                sub::<managed_tables_v3::History>(g),
+                sub::<managed_tables_v3::HistoryPage>(g),
+            ),
+        ),
+        (
+            managed_tables_v3::HISTORY_VALUE,
+            m(
+                sub::<managed_tables_v3::HistoryValue>(g),
+                sub::<managed_tables_v3::ValueChunk>(g),
             ),
         ),
         (

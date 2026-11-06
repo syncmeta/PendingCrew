@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent schema. Core21 remains the personal draft
 /// writer barrier; Core22 adds an indexed historical escalation discovery source.
-pub const SCHEMA_VERSION: i64 = 31;
+pub const SCHEMA_VERSION: i64 = 32;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 #[cfg(test)]
@@ -796,9 +796,9 @@ pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
 }
 
 pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Result<()> {
-    if !(4..=30).contains(&target) || target == 16 {
+    if !(4..=31).contains(&target) || target == 16 {
         return Err(StoreError::Invalid(
-            "historical fixture supports versions 4 through 30 except reserved Core16".into(),
+            "historical fixture supports versions 4 through 31 except reserved Core16".into(),
         ));
     }
     let objects: i64 = conn.query_row(
@@ -918,6 +918,12 @@ pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Resul
         tx.execute_batch(crate::managed_links::DDL)?;
         crate::managed_tables_v2::migrate_v1(&tx)?;
         tx.execute_batch("PRAGMA user_version=30;")?;
+        tx.commit()?;
+    }
+    if target >= 31 {
+        let tx = conn.unchecked_transaction()?;
+        crate::organization_search::install(&tx)?;
+        tx.execute_batch("PRAGMA user_version=31;")?;
         tx.commit()?;
     }
     Ok(())
@@ -1182,6 +1188,13 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         let tx = conn.unchecked_transaction()?;
         crate::organization_search::install(&tx)?;
         tx.execute_batch("PRAGMA user_version=31;")?;
+        tx.commit()?;
+    }
+    if v < 32 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_tables_v3::DDL)?;
+        crate::managed_tables_v3::migrate(&tx)?;
+        tx.execute_batch("PRAGMA user_version=32;")?;
         tx.commit()?;
     }
     Ok(())
@@ -3516,3 +3529,7 @@ mod resource17_tests {
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }
+
+#[cfg(test)]
+#[path = "schema_v32_tests.rs"]
+mod schema_v32_tests;

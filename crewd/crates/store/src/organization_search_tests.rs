@@ -32,6 +32,7 @@ fn document(title: &str) -> search::Document {
             matched_on: MatchOn::Title,
             text: title.into(),
         }],
+        selection_labels: Vec::new(),
     }
 }
 fn matches(c: &rusqlite::Connection, query: &str) -> i64 {
@@ -246,7 +247,10 @@ fn genuine_thirty_migration_starts_building_without_fake_versions_or_business_ef
         .query_row("SELECT count(*) FROM messages", [], |r| r.get(0))
         .unwrap();
     crate::schema::migrate(c).unwrap();
-    assert_eq!(crate::schema::SCHEMA_VERSION, 31);
+    let actual_version: i64 = c
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(actual_version, crate::schema::SCHEMA_VERSION);
     assert!(search::state(c).unwrap().building);
     let versions: i64 = c
         .query_row(

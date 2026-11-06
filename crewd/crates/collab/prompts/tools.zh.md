@@ -1810,25 +1810,25 @@ register显式登记；link原子懒建并关联；unlink只移除精确expected
 
 
 ## managed_table_v2_get
-读取组织表的真实V2定义、稳定字段号、当前schemaRevision及写策略。旧位置式表格接口不能表达V2时不得自行忽略关联列或改为SQL。
+读取组织表的真实V2定义、稳定字段号、当前schemaRevision及写策略。旧位置式表格接口不能表达V2时不得自行忽略关联列或改为SQL。 省略contractVersion或显式2保留原V2读取。显式3必须选择action=table/defineCheck/history/historyValue；先检查当前名称和用途，历史值按原key/path逐块读取，每次仍核当前权限。
 
 ## managed_table_v2_get.id
 实际组织表T编号。
 
 ## managed_tables_v2_list
-按有界页读取当前可读组织表（包括已归档只读表），不推断未读后续页。
+按有界页读取当前可读组织表（包括已归档只读表），不推断未读后续页。 省略版本或显式2保持原V2可表达表目录；显式3读取完整类型，includeArchived控制独立归档表。不能将不支持的表裁掉未知列后当成完整定义。
 
 ## managed_tables_v2_list.after
 上一页nextAfter，首读省略；只原样回传，不猜顺序。
 
 ## managed_row_v2_get
-读取真实O记录及当前字段号映射和有权读取的关联。hiddenSet只表示部分关系当前不可见，不代表隐藏数量或可复制目标。
+读取真实O记录及当前字段号映射和有权读取的关联。hiddenSet只表示部分关系当前不可见，不代表隐藏数量或可复制目标。 省略版本或显式2保留原V2。显式3选择action=row取scalarCells/linkFieldIds；未加载关联不是空值，再用action=links按真实fieldId及原表/行版本读取。
 
 ## managed_row_v2_get.id
 实际O编号。
 
 ## managed_rows_v2_list
-读取指定T的有界V2记录页，表定义与schemaRevision一起返回。
+读取指定T的有界V2记录页，表定义与schemaRevision一起返回。 省略版本或显式2保持原V2；显式3读取完整类型的标量记录页，关联字段需显式按字段加载，不能把unloaded当空关联。
 
 ## managed_rows_v2_list.tableId
 实际T编号。
@@ -1837,7 +1837,7 @@ register显式登记；link原子懒建并关联；unlink只移除精确expected
 上一页nextAfter，首读省略。
 
 ## managed_table_v2_submit
-显式创建组织表、单次安全列演进、新增记录或按稳定字段号局部修改。先读真实schemaRevision/rowRevision；未提及字段原样保留。隐藏关联只能原单元整组Keep，不计数、不复制、不自动清除；有hiddenSet时可见关联不能净增。更名/隐藏/恢复/单变多不改业务对象状态；标题必须active scalar，先改标题列再隐藏。新UUID不可冒充旧结果；失败或回包不明只查原requestId，不自动重发。
+显式创建组织表、单次安全列演进、新增记录或按稳定字段号局部修改。先读真实schemaRevision/rowRevision；未提及字段原样保留。隐藏关联只能原单元整组Keep，不计数、不复制、不自动清除；有hiddenSet时可见关联不能净增。更名/隐藏/恢复/单变多不改业务对象状态；标题必须active scalar，先改标题列再隐藏。新UUID不可冒充旧结果；失败或回包不明只查原requestId，不自动重发。 省略版本或显式2使用原V2；显式3支持完整列类型、选项和独立表/行归档恢复，PatchRow/AlterTable/生命周期必须reason及真实版本。先defineCheck取得当前证明，再按需显式confirmNew；归档保留业务状态。false、Null、Keep严格区分；Decimal传原canonical string，不经浮点。
 
 ## managed_table_v2_submit.scope
 managed_object_scope_get返回的当前Core原样scope；恢复旧epoch仅查历史结果。
@@ -1852,7 +1852,7 @@ managed_object_scope_get返回的当前Core原样scope；恢复旧epoch仅查历
 闭合typed操作。patches只含实际要改的fieldId，原schema/row版本必须匹配；关联目标用resolve_target读当前授权摘要；不支持降窄、单元跨列Keep或改Work/D/R/L/H状态。
 
 ## managed_table_v2_request_get
-只读查询这一个原始V2请求。known为原不可变效果，historical仅历史，notFound不能推出未提交，不用当前行状态代替回执。
+只读查询这一个原始V2请求。known为原不可变效果，historical仅历史，notFound不能推出未提交，不用当前行状态代替回执。 contractVersion必须取原journal版本；缺省为2，显式3只查原V3 codec。错版本明确冲突，不查不到就猜另一版，不把notFound当重发许可。
 
 ## managed_table_v2_request_get.scope
 原请求原样scope，不替换restoreEpoch。
@@ -1931,3 +1931,95 @@ messages 只搜消息，objects 只搜组织对象，all 同时搜索（新版�
 
 ## organization_search_expand.include_system_defaults
 是否包含系统默认生成的决定，默认 false；仍逐次核验当前读权。
+
+## managed_table_v2_get.action
+
+仅显式版本3：table读取定义；defineCheck检查名称和用途；history读有界动作元数据；historyValue按原key和typed path读完整值块。
+
+## managed_table_v2_get.scope
+
+defineCheck使用managed_object_scope_get返回的当前原样scope。
+
+## managed_table_v2_get.crewId
+
+defineCheck对应的实际owner机组；不从标题或路径猜测。
+
+## managed_table_v2_get.excludingTableId
+
+只在检查原表改名或用途时给真实T；创建新表不得排除别表。
+
+## managed_table_v2_get.title
+
+原样拟表名；由Core检查当前同机组唯一及相近名称，不使用历史别名冒当前名字。
+
+## managed_table_v2_get.purpose
+
+原样拟用途。创建/改用途必填非空；只给原无用途旧表改名时可null，不能用空串替代null。
+
+## managed_table_v2_get.cursor
+
+同一次defineCheck/history/historyValue的原续页token；源、权限或证明变化时重新读取，不猜token。
+
+## managed_table_v2_get.source
+
+真实table或row历史来源；能读来源不代表能读历史关联中的所有目标。
+
+## managed_table_v2_get.key
+
+history返回的原事件/旧回执定位键，不构造旧事件UUID或改codec。
+
+## managed_table_v2_get.path
+
+historyValue的typed scalar/links/reason/schema路径及before/after；完整值按原块类型拼接，受限目标只返回整组受限标记。
+
+## managed_row_v2_get.action
+
+仅显式版本3：row读取标量及未加载关联字段ID；links读取指定字段的完整当前授权关联。
+
+## managed_row_v2_get.rowId
+
+action=links的真实O。
+
+## managed_row_v2_get.fieldId
+
+action=links的稳定p字段号，必须属于该O的实际表。
+
+## managed_row_v2_get.expectedSchemaRevision
+
+原表定义的当前schemaRevision，源变后先重新读取。
+
+## managed_row_v2_get.expectedRowRevision
+
+原O的当前revision，不能沿用别行或后来的版本。
+
+## managed_tables_v2_list.includeArchived
+
+仅版本3，是否包括独立归档表；归档对象保持只读。
+
+## managed_rows_v2_list.includeArchived
+
+仅版本3，是否包括独立归档行；父表/机组冻结仍生效。
+
+## managed_table_v2_get.contractVersion
+
+接口版本：省略或整数2走原V2；整数3走新版。null、字符串、带小数的数字和未知版本拒绝，不自动降级。
+
+## managed_tables_v2_list.contractVersion
+
+接口版本：省略或整数2走原V2；整数3走新版。null、字符串、带小数的数字和未知版本拒绝，不自动降级。
+
+## managed_row_v2_get.contractVersion
+
+接口版本：省略或整数2走原V2；整数3走新版。null、字符串、带小数的数字和未知版本拒绝，不自动降级。
+
+## managed_rows_v2_list.contractVersion
+
+接口版本：省略或整数2走原V2；整数3走新版。null、字符串、带小数的数字和未知版本拒绝，不自动降级。
+
+## managed_table_v2_submit.contractVersion
+
+接口版本：省略或整数2走原V2；整数3走新版。null、字符串、带小数的数字和未知版本拒绝，不自动降级。
+
+## managed_table_v2_request_get.contractVersion
+
+接口版本：省略或整数2走原V2；整数3走新版。null、字符串、带小数的数字和未知版本拒绝，不自动降级。

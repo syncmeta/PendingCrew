@@ -38,6 +38,9 @@ pub enum Ty {
     ArtifactHistoryCursor,
     ManagedObjectScope,
     ManagedTableV2Operation,
+    ManagedTableHistorySource,
+    ManagedTableHistoryKey,
+    ManagedTableHistoryPath,
     ManagedLinkV2Operation,
     ManagedLinkQuery,
     ManagedLinkTarget,
@@ -714,15 +717,55 @@ pub const CATALOG: &[ToolSpec] = &[
             c("runner", false, RUNNERS),
         ],
     )),
-    ro(crew_member("managed_table_v2_get", &[p("id", Str, true)])),
+    ro(crew_member(
+        "managed_table_v2_get",
+        &[
+            p("id", Str, true),
+            int("contractVersion", 2, 3),
+            c(
+                "action",
+                false,
+                &["table", "defineCheck", "history", "historyValue"],
+            ),
+            p("scope", ManagedObjectScope, false),
+            p("crewId", Str, false),
+            p("excludingTableId", Str, false),
+            p("title", Str, false),
+            p("purpose", Str, false),
+            p("cursor", Str, false),
+            p("source", ManagedTableHistorySource, false),
+            p("key", ManagedTableHistoryKey, false),
+            p("path", ManagedTableHistoryPath, false),
+        ],
+    )),
     ro(crew_member(
         "managed_tables_v2_list",
-        &[p("after", Str, false)],
+        &[
+            p("after", Str, false),
+            int("contractVersion", 2, 3),
+            p("includeArchived", Bool, false),
+        ],
     )),
-    ro(crew_member("managed_row_v2_get", &[p("id", Str, true)])),
+    ro(crew_member(
+        "managed_row_v2_get",
+        &[
+            p("id", Str, true),
+            int("contractVersion", 2, 3),
+            c("action", false, &["row", "links"]),
+            p("rowId", Str, false),
+            p("fieldId", Str, false),
+            p("expectedSchemaRevision", Str, false),
+            p("expectedRowRevision", Str, false),
+        ],
+    )),
     ro(crew_member(
         "managed_rows_v2_list",
-        &[p("tableId", Str, true), p("after", Str, false)],
+        &[
+            p("tableId", Str, true),
+            p("after", Str, false),
+            int("contractVersion", 2, 3),
+            p("includeArchived", Bool, false),
+        ],
     )),
     ToolSpec {
         destructive: true,
@@ -730,6 +773,7 @@ pub const CATALOG: &[ToolSpec] = &[
         ..crew_member(
             "managed_table_v2_submit",
             &[
+                int("contractVersion", 2, 3),
                 p("scope", ManagedObjectScope, true),
                 p("crewId", Str, true),
                 p("requestId", Str, true),
@@ -740,6 +784,7 @@ pub const CATALOG: &[ToolSpec] = &[
     ro(crew_member(
         "managed_table_v2_request_get",
         &[
+            int("contractVersion", 2, 3),
             p("scope", ManagedObjectScope, true),
             p("crewId", Str, true),
             p("requestId", Str, true),
@@ -1242,8 +1287,8 @@ fn decision_ask_draft_schema() -> Value {
     )
 }
 
-/// V2 closed unions are authored once in proto. Inline its exact schema for MCP tools.
-fn managed_v2_parameter(method: &str, parameter: &str) -> Value {
+/// Closed unions are authored once in proto. Inline their exact schema for MCP tools.
+fn managed_parameter(method: &str, parameter: &str) -> Value {
     static API: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
     let api = API.get_or_init(crewd_proto::api_schema);
     fn inline(value: &Value, api: &Value, depth: u16) -> Value {
@@ -1291,7 +1336,11 @@ fn managed_v2_parameter(method: &str, parameter: &str) -> Value {
 pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
     let mut props = Map::new();
     let mut required = Vec::new();
+    let legacy_fields = crewd_proto::managed_table_tools::legacy_fields(t.name);
     for prm in t.params {
+        if legacy_fields.is_some_and(|fields| !fields.contains(&prm.name)) {
+            continue;
+        }
         let mut s = match prm.ty {
             Str => json!({"type": "string"}),
             Int => json!({"type": "integer"}),
@@ -1325,15 +1374,24 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
             ArtifactSubject => artifact_subject_schema(),
             ArtifactChange => artifact_change_schema(),
             ManagedTableV2Operation => {
-                managed_v2_parameter(crewd_proto::managed_tables_v2::TABLE_SUBMIT, "operation")
+                managed_parameter(crewd_proto::managed_tables_v2::TABLE_SUBMIT, "operation")
+            }
+            ManagedTableHistorySource => {
+                managed_parameter(crewd_proto::managed_tables_v3::HISTORY, "source")
+            }
+            ManagedTableHistoryKey => {
+                managed_parameter(crewd_proto::managed_tables_v3::HISTORY_VALUE, "key")
+            }
+            ManagedTableHistoryPath => {
+                managed_parameter(crewd_proto::managed_tables_v3::HISTORY_VALUE, "path")
             }
             ManagedLinkV2Operation => {
-                managed_v2_parameter(crewd_proto::managed_tables_v2::LINK_SUBMIT, "operation")
+                managed_parameter(crewd_proto::managed_tables_v2::LINK_SUBMIT, "operation")
             }
             ManagedLinkQuery => {
-                managed_v2_parameter(crewd_proto::managed_tables_v2::LINK_LIST, "query")
+                managed_parameter(crewd_proto::managed_tables_v2::LINK_LIST, "query")
             }
-            ManagedLinkTarget => managed_v2_parameter(
+            ManagedLinkTarget => managed_parameter(
                 crewd_proto::managed_tables_v2::MANAGED_LINK_RESOLVE_TARGET,
                 "target",
             ),
@@ -1402,6 +1460,96 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
     if !required.is_empty() {
         schema["required"] = json!(required);
     }
+    if legacy_fields.is_some() {
+        versioned_table_schema(t, loc, schema)
+    } else {
+        schema
+    }
+}
+
+fn versioned_table_schema(t: &ToolSpec, loc: Locale, mut legacy: Value) -> Value {
+    let selector_description = text::get(loc, &format!("{}.contractVersion", t.name));
+    legacy["properties"]["contractVersion"] = json!({
+        "type":"integer", "const":2, "description":selector_description,
+    });
+    let new = crewd_proto::managed_table_tools::version_three_schema(t.name)
+        .expect("versioned tool must have a closed V3 DTO");
+    let mut branches = vec![legacy];
+    let alternatives = new
+        .get("oneOf")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(|| vec![new]);
+    for mut branch in alternatives {
+        assert_eq!(branch["type"], "object");
+        let properties = branch["properties"]
+            .as_object_mut()
+            .expect("typed object properties");
+        for (name, property) in properties.iter_mut() {
+            assert!(
+                t.params.iter().any(|parameter| parameter.name == name),
+                "typed tool field must have catalog metadata"
+            );
+            property["description"] =
+                Value::String(text::get(loc, &format!("{}.{name}", t.name)).into());
+        }
+        properties.insert(
+            "contractVersion".into(),
+            json!({
+                "type":"integer", "const":3, "description":selector_description,
+            }),
+        );
+        let required = branch
+            .as_object_mut()
+            .unwrap()
+            .entry("required")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .expect("typed required fields");
+        required.push(json!("contractVersion"));
+        branches.push(branch);
+    }
+
+    // Keep every distinct parameter explanation once in the rendered union;
+    // top-level properties also retain the complete parameter documentation.
+    let mut documented = std::collections::BTreeSet::new();
+    for branch in &mut branches {
+        for (name, property) in branch["properties"].as_object_mut().unwrap() {
+            if let Some(description) = property.get("description").and_then(Value::as_str)
+                && !documented.insert((name.clone(), description.to_owned()))
+            {
+                property.as_object_mut().unwrap().remove("description");
+            }
+        }
+    }
+
+    // The closed oneOf branches own all types and required keys. The outer
+    // object only permits their known names; repeating every full property
+    // union here adds no constraint and exceeds the pinned SDK's byte budget.
+    let mut properties = Map::new();
+    for branch in &branches {
+        for name in branch["properties"]
+            .as_object()
+            .expect("closed branch")
+            .keys()
+        {
+            properties.entry(name.clone()).or_insert_with(|| {
+                json!({
+                    "description":text::get(loc, &format!("{}.{name}", t.name)),
+                })
+            });
+        }
+    }
+    let schema = crewd_proto::managed_table_tools::coalesce_tagged_schema(
+        json!({"type":"object","properties":properties,"oneOf":branches,"additionalProperties":false}),
+    ).expect("fixed versioned table schema is bounded");
+    assert!(
+        serde_json::to_vec(&schema)
+            .expect("serializable fixed schema")
+            .len()
+            <= crewd_proto::managed_table_tools::TOOL_SCHEMA_MAX_BYTES,
+        "fixed versioned table schemas must fit the table wire budget",
+    );
     schema
 }
 
@@ -1810,6 +1958,36 @@ mod tests {
             for (i, child) in arr.iter().enumerate() {
                 check_schema(&format!("{path}[{i}]"), child);
             }
+        }
+    }
+
+    #[test]
+    fn versioned_table_tools_fit_the_wire_budget() {
+        let mut evidence = Vec::new();
+        for loc in [Locale::Zh, Locale::En] {
+            for t in CATALOG
+                .iter()
+                .filter(|t| crewd_proto::managed_table_tools::legacy_fields(t.name).is_some())
+            {
+                let schema = input_schema(t, loc);
+                let encoded = serde_json::to_vec(&schema).unwrap();
+                println!("{loc:?} {} inputSchema {} bytes", t.name, encoded.len());
+                evidence.push(json!({"locale":format!("{loc:?}"),"tool":t.name,
+                    "bytes":encoded.len(),"inputSchema":schema}));
+            }
+        }
+        if let Some(path) = std::env::var_os("PCW_TABLE_SCHEMA_EVIDENCE_PATH") {
+            std::fs::write(path, serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+        }
+        let budget = crewd_proto::managed_table_tools::TOOL_SCHEMA_MAX_BYTES;
+        assert!(crewd_exec::codex::proto::CREW_MCP_INPUT_SCHEMA_MAX_BYTES >= budget);
+        for item in evidence {
+            assert!(
+                item["bytes"].as_u64().unwrap() <= budget as u64,
+                "{} {} schema exceeds the actual trusted crew budget {budget}",
+                item["locale"],
+                item["tool"]
+            );
         }
     }
 

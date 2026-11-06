@@ -505,6 +505,14 @@ expectedStatus 必须是原始需求状态。
 
 这张表已使用新列结构。请使用支持当前表格版本的客户端查看或编辑。
 
+## managedTable.codec_unsupported
+
+这个表格或行包含当前接口无法完整表达的内容。请使用支持新版表格的入口读取，原数据保持完整。
+
+## managedTable.definition_review_required
+
+请先通过新版表格入口检查名称和用途，查看相近表格；确认仍需新建或修改后再提交。
+
 ## managed_object.decision_changed
 
 原决策的状态或版本已变化。请重新读取它与当前替代决策。

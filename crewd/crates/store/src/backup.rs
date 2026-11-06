@@ -171,6 +171,7 @@ fn snapshot_steps(
         reserve,
         restore_floor,
         None,
+        None,
         qualify_empty_knowledge,
     )
 }
@@ -181,6 +182,7 @@ fn snapshot_steps_with_floors(
     reserve: u64,
     restore_floor: Option<i64>,
     field_floor: Option<i64>,
+    option_floor: Option<i64>,
     qualify_empty_knowledge: bool,
 ) -> Result<()> {
     let dir = dest
@@ -221,7 +223,11 @@ fn snapshot_steps_with_floors(
                 .open(&tmp)?;
         }
         conn.execute("VACUUM INTO ?1", [tmp_str])?;
-        if restore_floor.is_some() || field_floor.is_some() || qualify_empty_knowledge {
+        if restore_floor.is_some()
+            || field_floor.is_some()
+            || option_floor.is_some()
+            || qualify_empty_knowledge
+        {
             // Never install an old active grant even if the process crashes just
             // after rename. Transform only this private staging copy, not the backup.
             let mut copy =
@@ -264,6 +270,9 @@ fn snapshot_steps_with_floors(
             }
             if let Some(floor) = field_floor {
                 crate::managed_field_allocator::preserve_restore_floor(&tx, floor)?;
+            }
+            if let Some(floor) = option_floor {
+                crate::managed_tables_v3::preserve_option_restore_floor(&tx, floor)?;
             }
             tx.commit()?;
         }
@@ -1130,19 +1139,22 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     let source_floor = crate::object_refs::allocator_floor(&src)?;
     let recorded_field_floor = crate::managed_field_allocator::witness_floor(data_dir)?;
     let source_field_floor = crate::managed_field_allocator::allocator_floor(&src)?;
-    let (live_id, live_floor, live_field_floor) = if db.try_exists()? {
+    let recorded_option_floor = crate::managed_tables_v3::option_witness_floor(data_dir)?;
+    let source_option_floor = crate::managed_tables_v3::option_allocator_floor(&src)?;
+    let (live_id, live_floor, live_field_floor, live_option_floor) = if db.try_exists()? {
         crate::version_guard::with_quiescent_copy(&db, |current| {
             Ok((
                 crate::meta_get(current, "dbId")?,
                 crate::object_refs::allocator_floor(current)?,
                 crate::managed_field_allocator::allocator_floor(current)?,
+                crate::managed_tables_v3::option_allocator_floor(current)?,
             ))
         })?
     } else {
         // A failed cut may already have moved the predecessor. Its identity
         // record remains until a replacement has been durably published.
         let recorded = crate::read_id_file(&data_dir.join(crate::ID_FILE))?.map(|id| id.id);
-        (recorded, 0, 0)
+        (recorded, 0, 0, 0)
     };
     if target_has_root && (src_id.is_none() || live_id != src_id) {
         return Err(StoreError::Invalid(
@@ -1153,6 +1165,9 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     let field_floor = recorded_field_floor
         .max(source_field_floor)
         .max(live_field_floor);
+    let option_floor = recorded_option_floor
+        .max(source_option_floor)
+        .max(live_option_floor);
 
     let aside = data_dir.join(format!(
         "{}.replaced-{}",
@@ -1166,15 +1181,24 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     let cut = (|| -> Result<Option<PathBuf>> {
         // Finish and verify the entire replacement before changing any active
         // path. Its allocator floor and restore stamp share one SQLite commit.
-        snapshot_steps_with_floors(&src, &stage, 0, Some(floor), Some(field_floor), false)
-            .map_err(|e| StoreError::Snapshot {
-                dest: db.clone(),
-                source: Box::new(e),
-            })?;
+        snapshot_steps_with_floors(
+            &src,
+            &stage,
+            0,
+            Some(floor),
+            Some(field_floor),
+            Some(option_floor),
+            false,
+        )
+        .map_err(|e| StoreError::Snapshot {
+            dest: db.clone(),
+            source: Box::new(e),
+        })?;
         if floor > recorded {
             fsutil::atomic_write(&floor_witness, format!("{floor}\n").as_bytes(), 0o600)?;
         }
         crate::managed_field_allocator::persist_witness(data_dir, field_floor)?;
+        crate::managed_tables_v3::persist_option_witness(data_dir, option_floor)?;
         let db_present = db.exists();
         if db_present {
             // Preserve the previous physical authority and any committed WAL.
@@ -1776,7 +1800,7 @@ mod managed_field_restore_tests {
         drop(s);
         let src = open_read_only(&source).unwrap();
         let stage = d.path().join("interrupted-stage.db");
-        snapshot_steps_with_floors(&src, &stage, 0, Some(0), Some(41), false).unwrap();
+        snapshot_steps_with_floors(&src, &stage, 0, Some(0), Some(41), None, false).unwrap();
         let staged = open_read_only(&stage).unwrap();
         assert_eq!(
             crate::managed_field_allocator::allocator_floor(&staged).unwrap(),

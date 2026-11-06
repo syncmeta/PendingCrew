@@ -17,6 +17,7 @@ PendingCrew 的跨平台后端（Rust）。设计：`../docs/superpowers/specs/2
 - 调用：`cargo run -p crewd -- rpc crew.list`
 - API 契约：`schema/crewd-api.schema.json`（改了线协议类型后用 `cargo run -p crewd -- schema > schema/crewd-api.schema.json` 重新生成；测试会检查它是否过期）。契约 v3（N1，spec §26.3）：没有审批（`approval.*` 是 -32601）；`Crew.management` 标出总机组（独立的管理机组：不是任何机组的父或子，`crew.list` 排第一，号码 0），其余机组是森林；`crew.remove` = 移除（隐藏并冻结、什么都不删，返回带 `removedAt` 的 `Crew`；库里叫归档，线上一律叫 removed，archived 只用于群），`crew.restore` = 恢复，`crew.purge` = 永久删除（只收已移除的机组，真的删掉它的一切，发 `crew.purged` / `channel.purged`；先拍快照再删，快照 30 天后轮转删掉）；`crew.list` / `session.list` 默认不含已移除的机组（`includeRemoved: true` 才列）；`crew.reorder` 的 `parentId` 可省（省 = 排顶层机组；总机组不在树里：拿它当 `parentId` 是 -32602 `crew.management_not_in_tree`，把它放进 `crewIds` 是 -32602 `crew.reorder_mismatch`）
 - 拒绝码：规则拒绝的 `RpcError` 带 `data.refusal`（稳定码，如 `channel.archived`、`crew.management_not_in_tree`），`message` 只是中文缺省，客户端按码本地化、不解析 `message`。码的全集是 `crates/collab/src/refusal.rs` 的 `Code`，文字在 `crates/collab/prompts/refusals.{zh,en}.md`（每码一节、两种语言占位符一致、每句说下一步怎么办，测试钉住）；collab 源码里不写给人 / agent 看的句子。`work.*` 的拒绝与参数解析错误暂时没有码
+- 受管自由表：`managedTables.v3` 的[列类型、独立归档和动作历史契约](../docs/superpowers/specs/2026-11-06-managed-table-types-lifecycle-history.md)。六个原 MCP 表格工具通过 `contractVersion` 选择原协议或新版，原请求按原版本恢复。
 - 数据目录：`--data-dir` > `CREWD_DATA_DIR` > `~/Library/Application Support/crewd`（目录 0700；`crewd.db`、`-wal`、`-shm`、备份文件 0600）
 
 ## serve 编排接线与恢复（M3c）

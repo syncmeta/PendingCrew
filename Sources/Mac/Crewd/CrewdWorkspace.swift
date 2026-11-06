@@ -242,6 +242,18 @@ final class CrewdWorkspace: ObservableObject {
         guard let self,self.originalJournalReady,let ledger=self.originalJournal else {throw CrewdManagedDirectoryWire.Problem.unavailable};return ledger
     },tablesAvailable:{[weak self] in self?.client.capabilities.contains(CrewdManagedTableV2Wire.capability)==true},
       linksAvailable:{[weak self] in self?.client.capabilities.contains(CrewdManagedTableV2Wire.linksCapability)==true})
+    lazy var managedTablesV3=CrewdManagedTableV3Store(origin:{[weak self] in
+        guard let self,!self.retired,self.client.readyForWork,self.originalJournalReady,
+              self.client.capabilities.contains(CrewdManagedTableV3Wire.capability),let scope=self.presentationScope else{return nil}
+        return .init(scope:scope,observation:self.observationGeneration,connection:self.client.connectionEpoch,crew:self.crewID)
+    },rpc:{[weak self] method,params in
+        guard let self,!self.retired,self.client.readyForWork,self.originalJournalReady,
+              self.client.capabilities.contains(CrewdManagedTableV3Wire.capability),CrewdManagedTableV3Wire.methods.contains(method),
+              method != CrewdManagedTableV3Wire.submit || !self.stopping else{throw CrewdClientError(message:"原表格连接已变化，未提交。",kind:.notSubmitted)}
+        return try await self.client.call(method,params)
+    },journal:{[weak self] in
+        guard let self,self.originalJournalReady,let ledger=self.originalJournal else{throw CrewdManagedDirectoryWire.Problem.unavailable};return ledger
+    },available:{[weak self] in self?.client.capabilities.contains(CrewdManagedTableV3Wire.capability)==true})
     /// Each search presentation owns its cursor/tickets; it never owns mutation receipts.
     func makeOrganizationSearchStore()->CrewdOrganizationSearchStore {
         CrewdOrganizationSearchStore(origin:{[weak self] in
@@ -674,6 +686,7 @@ final class CrewdWorkspace: ObservableObject {
             guard let self, !self.retired else { return }
             self.artifacts.handleEvent(name,data,connection:self.client.connectionEpoch)
             self.managedTablesV2.handleEvent(name,data,connection:self.client.connectionEpoch)
+            self.managedTablesV3.handleEvent(name,data,connection:self.client.connectionEpoch)
             switch name {
             case "artifact.changed","artifact.historyChanged","links.changed":return
             case "onto.changed":
@@ -1342,6 +1355,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     private func isReadOnly(_ method: String) -> Bool {
+        if CrewdManagedTableV3Wire.readMethods.contains(method){return true}
         if [CrewdOrganizationSearchWire.search,CrewdOrganizationSearchWire.expand].contains(method) {return true}
         if [CrewdManagedTableV2Wire.tableGet,CrewdManagedTableV2Wire.tableList,CrewdManagedTableV2Wire.rows,CrewdManagedTableV2Wire.rowGet,CrewdManagedTableV2Wire.lookup,CrewdManagedTableV2Wire.links,CrewdManagedTableV2Wire.linkLookup,CrewdManagedTableV2Wire.resolveTarget].contains(method) {return true}
         if [CrewdArtifactHistoryWire.status,CrewdArtifactHistoryWire.lookup].contains(method) {return true}

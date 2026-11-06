@@ -46,6 +46,15 @@ pub fn row_authority(c: &Connection, a: Actor<'_>, t: &Table, author: &Author) -
 }
 pub fn get(c: &Connection, a: Actor<'_>, id: &str, _: &dyn ExternalTargets) -> Result<Table> {
     a.principal(c)?;
+    if crewd_store::managed_tables_v3::enabled(c)? {
+        let t =
+            crewd_store::managed_tables_v3::table(c, num(id, 'T')?)?.ok_or_else(|| missing(id))?;
+        if !t.v2_readable {
+            return Err(CollabError::Conflict(Refusal::new(
+                Code::ManagedTableCodecUnsupported,
+            )));
+        }
+    }
     db::table(c, num(id, 'T')?)?.ok_or_else(|| missing(id))
 }
 pub fn tables(
@@ -90,9 +99,59 @@ fn hidden(
         ))?,
     )?)
 }
+/// Shared graph projection for V3's separately loaded Person/Link cells. This
+/// preserves the exact existing whole-hidden-set witness and target ACL cut.
+pub(crate) fn link_cell(
+    c: &Connection,
+    a: Actor<'_>,
+    row_id: &str,
+    t: &Table,
+    revision: &str,
+    field: &Field,
+    x: &dyn ExternalTargets,
+) -> Result<LinkCell> {
+    let source = SourceRef::Row { id: row_id.into() };
+    let origin = format!("column:{}", field.id);
+    let edges = graph::outgoing(c, &source)?
+        .into_iter()
+        .filter(|e| e.origin == origin)
+        .collect::<Vec<_>>();
+    let mut projection = links::Projection::new(c, a, x);
+    let mut visible = Vec::new();
+    let mut restricted = Vec::new();
+    for edge in &edges {
+        match projection.resolve(&edge.target, ResolveMode::Read) {
+            Ok(v) => visible.push(VisibleLink {
+                edge_id: edge.id.to_string(),
+                target: v.target,
+                summary: v.summary,
+            }),
+            Err(CollabError::Forbidden(_) | CollabError::NotFound(_)) => {
+                restricted.push(edge.clone())
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(LinkCell {
+        field_id: field.id.clone(),
+        visible,
+        hidden_set: if restricted.is_empty() {
+            None
+        } else {
+            Some(HiddenSet {
+                keep_token: hidden(c, a, row_id, t, revision, field, &restricted)?,
+            })
+        },
+        incomplete_required_link: !field.nullable && edges.is_empty(),
+    })
+}
 pub fn row(c: &Connection, a: Actor<'_>, id: &str, x: &dyn ExternalTargets) -> Result<Row> {
     a.principal(c)?;
     let n = num(id, 'O')?;
+    if crewd_store::managed_tables_v3::enabled(c)? {
+        let r = crewd_store::managed_tables_v3::row_base(c, n)?.ok_or_else(|| missing(id))?;
+        get(c, a, &r.table.id, x)?;
+    }
     let (t, revision, author, values) = db::row_base(c, n)?.ok_or_else(|| missing(id))?;
     get(c, a, &t.id, x)?;
     let source = SourceRef::Row { id: id.into() };
@@ -202,10 +261,13 @@ fn constraint(c: &Connection, t: &TargetRef, k: &TargetConstraint) -> Result<boo
         | (TargetConstraint::KnowledgeView {}, TargetRef::Knowledge { .. }) => true,
         (TargetConstraint::Row { table_id }, TargetRef::Row { id }) => {
             table_id.as_ref().is_none_or(|wanted| {
-                db::row_base(c, db::number(id, 'O').unwrap_or(0))
-                    .ok()
-                    .flatten()
-                    .is_some_and(|(t, _, _, _)| t.id == *wanted)
+                c.query_row(
+                    "SELECT table_number FROM managed_rows WHERE number=?1",
+                    [db::number(id, 'O').unwrap_or(0)],
+                    |r| r.get::<_, i64>(0),
+                )
+                .ok()
+                .is_some_and(|n| format!("T{n}") == *wanted)
             })
         }
         _ => false,
@@ -214,7 +276,7 @@ fn constraint(c: &Connection, t: &TargetRef, k: &TargetConstraint) -> Result<boo
 fn field_valid(f: &FieldDraft) -> bool {
     db::text(&f.name, 120)
 }
-fn field_available(
+pub(crate) fn field_available(
     c: &Connection,
     a: Actor<'_>,
     f: &FieldDraft,
@@ -242,25 +304,25 @@ fn scalar_same(a: &Cell, b: &Cell) -> bool {
         _ => a == b,
     }
 }
-struct Applied {
-    cells: Vec<ScalarValue>,
-    changed: Vec<String>,
-    added: Vec<String>,
-    removed: Vec<String>,
-    deps: Vec<i64>,
+pub(crate) struct Applied {
+    pub(crate) cells: Vec<ScalarValue>,
+    pub(crate) changed: Vec<String>,
+    pub(crate) added: Vec<String>,
+    pub(crate) removed: Vec<String>,
+    pub(crate) deps: Vec<i64>,
 }
-struct ApplyInput<'a> {
-    actor: Actor<'a>,
-    table: &'a Table,
-    row_id: &'a str,
-    revision: &'a str,
-    values: Vec<ScalarValue>,
-    patches: &'a [Patch],
-    new: bool,
-    external: &'a dyn ExternalTargets,
-    now: &'a str,
+pub(crate) struct ApplyInput<'a> {
+    pub(crate) actor: Actor<'a>,
+    pub(crate) table: &'a Table,
+    pub(crate) row_id: &'a str,
+    pub(crate) revision: &'a str,
+    pub(crate) values: Vec<ScalarValue>,
+    pub(crate) patches: &'a [Patch],
+    pub(crate) new: bool,
+    pub(crate) external: &'a dyn ExternalTargets,
+    pub(crate) now: &'a str,
 }
-fn apply(c: &Connection, input: ApplyInput<'_>) -> Result<Applied> {
+pub(crate) fn apply(c: &Connection, input: ApplyInput<'_>) -> Result<Applied> {
     let ApplyInput {
         actor: a,
         table: t,
@@ -411,6 +473,24 @@ fn apply(c: &Connection, input: ApplyInput<'_>) -> Result<Applied> {
                         if !db::scalar_valid(f, value) {
                             return Err(invalid("value"));
                         }
+                        if crewd_store::managed_tables_v3::enabled(c)? {
+                            let logical =
+                                crewd_store::managed_tables_v3::table(c, num(&t.id, 'T')?)?
+                                    .ok_or_else(|| missing(&t.id))?;
+                            let field = logical
+                                .fields
+                                .iter()
+                                .find(|v| v.id == f.id)
+                                .ok_or_else(|| invalid("fieldId"))?;
+                            if !crewd_store::managed_tables_v3::values::scalar_valid(
+                                &t.id,
+                                field,
+                                &crewd_store::managed_tables_v3::values::from_v2_cell(value),
+                                true,
+                            ) {
+                                return Err(invalid("value"));
+                            }
+                        }
                         let different = !scalar_same(
                             current.map(|i| &cells[i].value).unwrap_or(&Cell::Null),
                             value,
@@ -480,7 +560,20 @@ pub fn submit(
     if objects::scope(c)? != r.scope {
         return Err(schema_changed());
     }
+    if crewd_store::managed_tables_v3::enabled(c)?
+        && crate::managed_tables_v3::old_request_exists(c, &r.crew_id, &p, &r.request_id)?
+    {
+        return Err(conflict(&r.request_id));
+    }
+    if crewd_store::managed_tables_v3::enabled(c)? {
+        crate::managed_tables_v3::legacy_definition_gate(c, a, &r.crew_id, &r.operation)?;
+    }
     resource_acl::actor(c, &links::sender(a), &r.crew_id, true)?;
+    let legacy_audit = if crewd_store::managed_tables_v3::enabled(c)? {
+        Some(crate::managed_tables_v3::legacy_v2_before(c, &r.operation)?)
+    } else {
+        None
+    };
     let now = tx.now_ts();
     let mut deps = Vec::new();
     let mut schema_audit: Option<(Table, Table)> = None;
@@ -558,6 +651,9 @@ pub fn submit(
                 return Err(forbidden());
             }
             schema_authority(c, a, &t)?;
+            if t.frozen {
+                return Err(forbidden());
+            }
             if t.schema_revision != *expected_schema_revision {
                 return Err(schema_changed());
             }
@@ -690,6 +786,9 @@ pub fn submit(
                 return Err(forbidden());
             }
             crew_writer(c, a, &t.crew_id)?;
+            if t.frozen {
+                return Err(forbidden());
+            }
             if t.schema_revision != *expected_schema_revision {
                 return Err(schema_changed());
             }
@@ -738,6 +837,16 @@ pub fn submit(
                 return Err(forbidden());
             }
             row_authority(c, a, &t, &author)?;
+            if t.frozen {
+                return Err(forbidden());
+            }
+            if crewd_store::managed_tables_v3::enabled(c)?
+                && crewd_store::managed_tables_v3::lifecycle(c, n, true)?
+                    .archived_at
+                    .is_some()
+            {
+                return Err(forbidden());
+            }
             if t.schema_revision != *expected_schema_revision {
                 return Err(schema_changed());
             }
@@ -830,6 +939,9 @@ pub fn submit(
         )?;
     }
     if mutated {
+        if let Some(before) = legacy_audit {
+            crate::managed_tables_v3::audit_v2(c, a, &r, &receipt, before)?;
+        }
         links::finish(tx, a, &r.crew_id)?;
         managed_artifacts::gc(tx.conn())?;
     }
@@ -843,6 +955,12 @@ pub fn lookup(
     uuid: &str,
 ) -> Result<RequestLookup> {
     let p = links::request(c, a, scope, crew, uuid, false)?;
+    if crewd_store::managed_tables_v3::enabled(c)?
+        && graph::receipt_method(c, crew, &p, uuid)?.as_deref()
+            == Some(crewd_proto::managed_tables_v3::SUBMIT)
+    {
+        return Err(conflict(uuid));
+    }
     let current = objects::scope(c)?;
     let mut retired = false;
     let receipt = match graph::receipt(c, crew, &p, uuid)? {
@@ -854,7 +972,14 @@ pub fn lookup(
             retired = true;
             None
         }
-        None => None,
+        None => {
+            if crewd_store::managed_tables_v3::enabled(c)?
+                && crate::managed_tables_v3::old_request_exists(c, crew, &p, uuid)?
+            {
+                return Err(conflict(uuid));
+            }
+            None
+        }
     };
     let receipt = receipt.filter(|r| r.scope == *scope);
     Ok(if current != *scope || retired {
@@ -873,6 +998,17 @@ pub fn v1_write(c: &Connection, a: Actor<'_>, table: i64, row: Option<i64>) -> R
         return Err(CollabError::Conflict(Refusal::new(
             Code::ManagedV1Unsupported,
         )));
+    }
+    if t.frozen {
+        return Err(forbidden());
+    }
+    if let Some(n) = row
+        && crewd_store::managed_tables_v3::enabled(c)?
+        && crewd_store::managed_tables_v3::lifecycle(c, n, true)?
+            .archived_at
+            .is_some()
+    {
+        return Err(forbidden());
     }
     if let Some(n) = row {
         let (_, _, author, _) = db::row_base(c, n)?.ok_or_else(|| missing("row"))?;

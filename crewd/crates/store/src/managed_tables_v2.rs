@@ -155,6 +155,11 @@ pub fn migrate_v1(c: &Connection) -> Result<()> {
     Ok(())
 }
 pub fn table(c: &Connection, n: i64) -> Result<Option<Table>> {
+    if crate::managed_tables_v3::enabled(c)? {
+        return crate::managed_tables_v3::table(c, n)?
+            .map(|t| crate::managed_tables_v3::legacy_table(&t))
+            .transpose();
+    }
     let record=c.query_row("SELECT r.crew_id,r.source_id,t.title,t.fields_json,a.schema_revision,a.next_field_number,a.purpose,a.title_field_id,a.row_policy,a.author_json,a.v1_layout,c.archived_at IS NOT NULL FROM managed_tables t JOIN managed_table_attributes a ON a.number=t.number JOIN object_refs r ON r.number=t.number AND r.kind='table' JOIN crews c ON c.id=r.crew_id WHERE t.number=?1",[n],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,i64>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?,r.get::<_,String>(8)?,r.get::<_,String>(9)?,r.get::<_,bool>(10)?,r.get::<_,bool>(11)?))).optional()?;
     record
         .map(
@@ -222,6 +227,26 @@ pub fn scalars(c: &Connection, n: i64) -> Result<Vec<ScalarValue>> {
 }
 pub type RowBase = (Table, String, Author, Vec<ScalarValue>);
 pub fn row_base(c: &Connection, n: i64) -> Result<Option<RowBase>> {
+    if crate::managed_tables_v3::enabled(c)? {
+        return crate::managed_tables_v3::row_base(c, n)?
+            .map(|r| {
+                let mut table = crate::managed_tables_v3::legacy_table(&r.table)?;
+                table.frozen |= r.lifecycle.archived_at.is_some();
+                let cells = r
+                    .logical
+                    .into_iter()
+                    .map(|v| {
+                        Ok(ScalarValue {
+                            field_id: v.field_id,
+                            value: crate::managed_tables_v3::values::to_v2_cell(&v.value)
+                                .ok_or_else(bad)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((table, r.revision, r.author, cells))
+            })
+            .transpose();
+    }
     let r=c.query_row("SELECT r.crew_id,r.source_id,v.table_number,v.revision,a.author_json FROM managed_rows v JOIN object_refs r ON r.number=v.number AND r.kind='custom_row' JOIN managed_row_authors a ON a.number=v.number WHERE v.number=?1",[n],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?))).optional()?;
     r.map(|(crew, source, tn, rev, author)| {
         let t = table(c, tn)?.ok_or_else(bad)?;
@@ -307,6 +332,17 @@ pub fn numbers(
     limit: u16,
     v1_only: bool,
 ) -> Result<Vec<i64>> {
+    if crate::managed_tables_v3::enabled(c)? && table.is_none() {
+        let sql = if v1_only {
+            "SELECT t.number FROM managed_tables t WHERE t.number>?1 AND NOT EXISTS(SELECT 1 FROM json_each(t.fields_json) f WHERE json_extract(f.value,'$.hidden')=1 OR json_extract(f.value,'$.kind.kind') NOT IN('text','integer','real')) ORDER BY t.number LIMIT ?2"
+        } else {
+            "SELECT t.number FROM managed_tables t WHERE t.number>?1 AND NOT EXISTS(SELECT 1 FROM json_each(t.fields_json) f WHERE json_extract(f.value,'$.kind.kind') NOT IN('text','integer','real','link')) ORDER BY t.number LIMIT ?2"
+        };
+        let mut q = c.prepare(sql)?;
+        return Ok(q
+            .query_map(params![after, limit], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?);
+    }
     let sql = if table.is_some() {
         "SELECT r.number FROM managed_rows r WHERE r.table_number=?1 AND r.number>?2 ORDER BY r.number LIMIT ?3"
     } else if v1_only {
@@ -360,6 +396,33 @@ pub fn create(c: &Connection, input: NewTable<'_>) -> Result<Table> {
     table(c, r.number)?.ok_or_else(bad)
 }
 pub fn save_table(c: &Connection, t: &Table, expected: i64) -> Result<()> {
+    if crate::managed_tables_v3::enabled(c)? {
+        let mut logical =
+            crate::managed_tables_v3::table(c, number(&t.id, 'T')?)?.ok_or_else(bad)?;
+        logical.schema_revision = t.schema_revision.clone();
+        logical.next_field_number = t.next_field_number.clone();
+        logical.title = t.title.clone();
+        logical.purpose = t.purpose.clone();
+        logical.title_field_id = t.title_field_id.clone();
+        logical.fields = t
+            .fields
+            .iter()
+            .map(|f| {
+                let mut next = crate::managed_tables_v3::values::from_v2_field(f.clone());
+                if let Some(old) = logical.fields.iter().find(|v| v.id == f.id)
+                    && matches!(
+                        old.kind,
+                        crewd_proto::managed_tables_v3::FieldKind::Text { .. }
+                    )
+                    && matches!(f.kind, FieldKind::Text {})
+                {
+                    next.kind = old.kind.clone()
+                }
+                next
+            })
+            .collect();
+        return crate::managed_tables_v3::save_table(c, &logical, expected);
+    }
     v1::transaction(c)?;
     let n = number(&t.id, 'T')?;
     let rev = revision(&t.schema_revision)?;
@@ -391,6 +454,31 @@ pub fn add(
     Ok(r.number)
 }
 pub fn save_row(c: &Connection, n: i64, expected: i64, values: &[ScalarValue]) -> Result<()> {
+    if crate::managed_tables_v3::enabled(c)? {
+        let before = crate::managed_tables_v3::row_base(c, n)?.ok_or_else(bad)?;
+        let mut stored = before.stored;
+        for value in values {
+            let logical = crate::managed_tables_v3::values::from_v2_cell(&value.value);
+            if before
+                .logical
+                .iter()
+                .find(|v| v.field_id == value.field_id)
+                .map(|v| &v.value)
+                == Some(&logical)
+            {
+                continue;
+            }
+            if let Some(old) = stored.iter_mut().find(|v| v.field_id == value.field_id) {
+                old.value = logical
+            } else {
+                stored.push(crewd_proto::managed_tables_v3::ScalarValue {
+                    field_id: value.field_id.clone(),
+                    value: logical,
+                })
+            }
+        }
+        return crate::managed_tables_v3::save_row(c, n, expected, &stored);
+    }
     v1::transaction(c)?;
     let next = expected.checked_add(1).ok_or_else(bad)?;
     if c.execute(

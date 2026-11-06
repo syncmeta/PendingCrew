@@ -2506,7 +2506,9 @@ struct CrewdManagedDirectoryView: View {
 
     var body: some View {
         Group {
-            if client.readyForWork && !client.capabilities.contains(Wire.capability) {
+            if route.section == .tables && client.capabilities.contains(CrewdManagedTableV3Wire.capability) {
+                VStack(alignment:.leading,spacing:12){header.padding(.horizontal,16);CrewdManagedTableV3View(workspace:workspace,store:workspace.managedTablesV3,initialID:initialObjectID)}
+            } else if client.readyForWork && !client.capabilities.contains(Wire.capability) {
                 CrewdEmptySurface(title:"组织目录暂不可用",detail:"当前连接尚未提供组织目录。",symbol:"list.bullet.rectangle")
             } else if route.section == .tables && client.capabilities.contains(CrewdManagedTableV2Wire.capability) {
                 VStack(alignment:.leading,spacing:12) {header.padding(.horizontal,16);CrewdManagedTableV2View(workspace:workspace,store:workspace.managedTablesV2,initialID:initialObjectID)}
@@ -2536,9 +2538,14 @@ struct CrewdManagedDirectoryView: View {
         }
         .task(id:route) {
             let captured = route
-            if captured.section == .tables && client.capabilities.contains(CrewdManagedTableV2Wire.capability) {
+            if captured.section == .tables && (client.capabilities.contains(CrewdManagedTableV3Wire.capability) || client.capabilities.contains(CrewdManagedTableV2Wire.capability)) {
                 presentationRoute=captured.presentation;shownSection=captured.section;busy=false
-                do {let active=try await store.scope(stillCurrent:{route==captured});if route==captured {scope=active}}catch{if route==captured{scope=nil;problem=error.localizedDescription}}
+                do {
+                    let active:Store.BrowseScope
+                    if client.capabilities.contains(CrewdManagedTableV3Wire.capability){active=try await workspace.managedTablesV3.scope(stillCurrent:{route==captured})}
+                    else{active=try await store.scope(stillCurrent:{route==captured})}
+                    if route==captured{scope=active}
+                }catch{if route==captured{scope=nil;problem=error.localizedDescription}}
                 return
             }
             let link = linkedRiskLesson

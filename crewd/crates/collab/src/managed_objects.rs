@@ -127,6 +127,9 @@ pub fn get_with_defaults(
 /// the closed legacy Object codec. T/O remain organization-readable.
 pub(crate) fn read_authority(c: &Connection, actor: Actor<'_>, id: &str) -> Result<String> {
     actor.principal(c)?;
+    if crewd_store::managed_tables_v3::enabled(c)? && (id.starts_with('T') || id.starts_with('O')) {
+        return crate::managed_tables_v3::read_authority(c, actor, id);
+    }
     if crewd_store::managed_tables_v2::enabled(c)? {
         if id.starts_with('T') {
             return crewd_store::managed_tables_v2::table(c, object_number(id, 'T', "id")?)?
@@ -281,6 +284,11 @@ pub(crate) fn artifact_link_authority(
         | Subject::Row { id }
         | Subject::Table { id } => id,
     };
+    if crewd_store::managed_tables_v3::enabled(c)?
+        && matches!(subject, Subject::Row { .. } | Subject::Table { .. })
+    {
+        return crate::managed_tables_v3::write_authority(c, actor, id);
+    }
     if crewd_store::managed_tables_v2::enabled(c)? {
         match subject {
             Subject::Row { id } => {
@@ -349,7 +357,10 @@ pub(crate) fn check_decision_draft(c: &Connection, draft: &DecisionDraft) -> Res
                 crate::requirements::get(c, id).map_err(|error| about_refusal(error, id))?;
             }
             DecisionAbout::Row { id } => {
-                if crewd_store::managed_tables_v2::enabled(c)? {
+                if crewd_store::managed_tables_v3::enabled(c)? {
+                    crewd_store::managed_tables_v3::row_base(c, object_number(id, 'O', "about")?)?
+                        .ok_or_else(|| missing(id))?;
+                } else if crewd_store::managed_tables_v2::enabled(c)? {
                     crewd_store::managed_tables_v2::row_base(c, object_number(id, 'O', "about")?)?
                         .ok_or_else(|| missing(id))?;
                 } else {
@@ -413,6 +424,12 @@ pub fn lookup(
                     ))
         })
         .map(|(_, receipt, _)| receipt);
+    if recorded.is_none()
+        && crewd_store::managed_tables_v3::enabled(c)?
+        && crate::managed_tables_v3::graph_table_request_exists(c, crew, &principal, request)?
+    {
+        return Err(conflict(request));
+    }
     if foreign && !captain && recorded.is_none() {
         return Err(forbidden());
     }
@@ -468,12 +485,47 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         };
     }
     let now = tx.now_ts();
+    if crewd_store::managed_tables_v3::enabled(c)?
+        && matches!(
+            &request.change,
+            Change::CreateTable { .. } | Change::AddRow { .. } | Change::EditRow { .. }
+        )
+        && crate::managed_tables_v3::graph_table_request_exists(
+            c,
+            &request.crew_id,
+            &principal,
+            &request.request_id,
+        )?
+    {
+        return Err(conflict(&request.request_id));
+    }
     let mut occurrence = None;
+    let legacy_audit = if crewd_store::managed_tables_v3::enabled(c)?
+        && matches!(
+            &request.change,
+            Change::CreateTable { .. } | Change::AddRow { .. } | Change::EditRow { .. }
+        ) {
+        Some(crate::managed_tables_v3::legacy_v1_before(
+            c,
+            &request.change,
+        )?)
+    } else {
+        None
+    };
     let mut replaced_decision_id = None;
     let object = match request.change {
         Change::CreateTable { title, fields } => {
             if !db::definition_valid(&title, &fields) {
                 return Err(invalid("fields"));
+            }
+            if crewd_store::managed_tables_v3::enabled(c)? {
+                crate::managed_tables_v3::legacy_definition(
+                    c,
+                    &request.crew_id,
+                    &title,
+                    None,
+                    None,
+                )?;
             }
             Object::Table {
                 table: db::create_table_by(
@@ -622,6 +674,9 @@ pub fn submit(tx: &mut Tx<'_>, actor: Actor<'_>, request: Submit) -> Result<Rece
         occurrence,
     };
     db::record(c, &principal, &digest, &receipt, member_confirmation)?;
+    if let Some(before) = legacy_audit {
+        crate::managed_tables_v3::audit_v1(c, actor, &receipt, before)?;
+    }
     if let Actor::Session(session) = actor {
         sessions::note_progress(tx, session, crate::ProgressKind::Ontology)?;
     }
@@ -1079,6 +1134,119 @@ mod tests {
     }
 
     #[test]
+    fn v1_read_refusals_preserve_the_v2_boundary_and_distinguish_v3_only_values() {
+        use crewd_proto::{managed_tables_v2 as v2, managed_tables_v3 as v3};
+        let mut s = crate::testkit::v31_store();
+        let original_request = request("crew-a", definition());
+        let original = ok(&mut s, |tx| submit(tx, HUMAN, original_request.clone()));
+        let old_table = table(&original).id.clone();
+        let original_row = ok(&mut s, |tx| submit(tx, HUMAN, add("crew-a", &old_table)));
+        let old_row = row(&original_row).id.clone();
+        crewd_store::schema::migrate(s.conn()).unwrap();
+        let scope = scope(s.conn()).unwrap();
+        let evolution: v2::Submit = serde_json::from_value(serde_json::json!({
+            "scope":scope,"crewId":"crew-a","requestId":uuid::Uuid::new_v4().to_string(),
+            "operation":{"kind":"alterTable","tableId":old_table,"expectedSchemaRevision":"1", "change":{"kind":"addField","field":{"name":"Related","kind":{"kind":"link","target":{"kind":"human"},"many":false},"nullable":true}}}
+        })).unwrap();
+        ok(&mut s, |tx| {
+            crate::managed_tables_v2::submit(
+                tx,
+                HUMAN,
+                evolution,
+                &crate::managed_links::DenyExternal,
+            )
+        });
+        let evolved = crewd_store::managed_tables_v3::table(
+            s.conn(),
+            object_number(&old_table, 'T', "id").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(evolved.v2_readable);
+        assert!(!evolved.v1_readable);
+        assert!(!evolved.v1_writable);
+        let old_snapshot = crate::testkit::database_snapshot(&s);
+        let old_physical = s.conn().total_changes();
+        for id in [&old_table, &old_row] {
+            let result = get(s.conn(), HUMAN, id);
+            assert!(
+                matches!(&result, Err(CollabError::Conflict(r)) if r.code == Code::ManagedV1Unsupported),
+                "actual V1 read: {result:?}"
+            );
+        }
+        assert_eq!(crate::testkit::database_snapshot(&s), old_snapshot);
+        assert_eq!(s.conn().total_changes(), old_physical);
+        // Original V1 UUID still returns its original snapshot before fresh layout fences.
+        assert_eq!(
+            ok(&mut s, |tx| submit(tx, HUMAN, original_request)),
+            original
+        );
+        let rejected = err(&mut s, |tx| submit(tx, HUMAN, add("crew-a", &old_table)));
+        assert!(
+            matches!(rejected, CollabError::Conflict(r) if r.code == Code::ManagedV1Unsupported)
+        );
+        let title = "Typed flags";
+        let purpose = "Distinguish new Boolean semantics from the prior V1 positional boundary";
+        let proof = crate::managed_tables_v3::define_check(
+            s.conn(),
+            HUMAN,
+            v3::DefineCheck {
+                scope: scope.clone(),
+                crew_id: "crew-a".into(),
+                excluding_table_id: None,
+                title: title.into(),
+                purpose: Some(purpose.into()),
+                cursor: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(proof.state, v3::CheckState::Complete);
+        let create: v3::Submit = serde_json::from_value(serde_json::json!({
+            "scope":scope,"crewId":"crew-a","requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+            "kind":"createTable","title":title,"purpose":purpose,"fields":[
+            {"name":"Title","kind":{"kind":"text"},"nullable":false},
+            {"name":"Flag","kind":{"kind":"boolean"},"nullable":true}],"titleFieldIndex":0,
+            "rowWritePolicy":"ownerCrewWriters","definitionCheckToken":proof.definition_check_token.unwrap(),"confirmNew":true}
+        })).unwrap();
+        let created = ok(&mut s, |tx| {
+            crate::managed_tables_v3::submit(tx, HUMAN, create, &crate::managed_links::DenyExternal)
+        });
+        let v3::Effect::TableCreated { table_id, .. } = created.effect else {
+            panic!("table receipt")
+        };
+        let insert: v3::Submit = serde_json::from_value(serde_json::json!({
+            "scope":scope,"crewId":"crew-a","requestId":uuid::Uuid::new_v4().to_string(),"operation":{
+            "kind":"addRow","tableId":table_id,"expectedSchemaRevision":"1","patches":[
+            {"fieldId":"p1","change":{"kind":"setScalar","value":{"type":"text","value":"Fresh row"}}},
+            {"fieldId":"p2","change":{"kind":"setScalar","value":{"type":"boolean","value":false}}}]}
+        })).unwrap();
+        let added = ok(&mut s, |tx| {
+            crate::managed_tables_v3::submit(tx, HUMAN, insert, &crate::managed_links::DenyExternal)
+        });
+        let v3::Effect::RowAdded { row_id, .. } = added.effect else {
+            panic!("row receipt")
+        };
+        let current = crewd_store::managed_tables_v3::table(
+            s.conn(),
+            object_number(&table_id, 'T', "id").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!current.v2_readable);
+        let before = crate::testkit::database_snapshot(&s);
+        let physical = s.conn().total_changes();
+        for id in [&table_id, &row_id] {
+            let result = get(s.conn(), HUMAN, id);
+            assert!(
+                matches!(&result,Err(CollabError::Conflict(r)) if r.code==Code::ManagedTableCodecUnsupported),
+                "actual new-codec V1 read: {result:?}"
+            );
+        }
+        assert_eq!(crate::testkit::database_snapshot(&s), before);
+        assert_eq!(s.conn().total_changes(), physical);
+    }
+
+    #[test]
     fn official_old_snapshot_keeps_purged_number_floor_and_historicizes_original_scope() {
         use crewd_store::backup;
         let dir = tempfile::tempdir().unwrap();
@@ -1169,10 +1337,43 @@ mod tests {
             ))
             .is_err()
         );
+        let replacement_title = "Deployment recovery records";
+        let replacement_purpose = "Verify the issued-number floor after an official restore";
+        let review = crate::managed_tables_v3::define_check(
+            s.conn(),
+            HUMAN,
+            crewd_proto::managed_tables_v3::DefineCheck {
+                scope: current_authority.clone(),
+                crew_id: "crew-a".into(),
+                excluding_table_id: None,
+                title: replacement_title.into(),
+                purpose: Some(replacement_purpose.into()),
+                cursor: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            review.state,
+            crewd_proto::managed_tables_v3::CheckState::Complete
+        );
+        let replacement: crewd_proto::managed_tables_v3::Submit = serde_json::from_value(
+            serde_json::json!({"scope":current_authority,"crewId":"crew-a","requestId":uuid::Uuid::new_v4().to_string(),"operation":{"kind":"createTable","title":replacement_title,"purpose":replacement_purpose,"fields":[{"name":"Version","kind":{"kind":"text"},"nullable":false},{"name":"Bytes","kind":{"kind":"integer"},"nullable":true}],"titleFieldIndex":0,"rowWritePolicy":"ownerCrewWriters","definitionCheckToken":review.definition_check_token.unwrap(),"confirmNew":true}}),
+        )
+        .unwrap();
         let replacement = ok(&mut s, |tx| {
-            submit(tx, HUMAN, request("crew-a", definition()))
+            crate::managed_tables_v3::submit(
+                tx,
+                HUMAN,
+                replacement,
+                &crate::managed_links::DenyExternal,
+            )
         });
-        assert!(object_number(&table(&replacement).id, 'T', "id").unwrap() > issued_number);
+        let crewd_proto::managed_tables_v3::Effect::TableCreated { table_id, .. } =
+            replacement.effect
+        else {
+            panic!("replacement table receipt")
+        };
+        assert!(object_number(&table_id, 'T', "id").unwrap() > issued_number);
     }
 
     #[test]
@@ -1690,6 +1891,23 @@ mod decision_tests {
 }
 
 fn v1_read_guard(c: &Connection, number: i64, is_row: bool) -> Result<()> {
+    if crewd_store::managed_tables_v3::enabled(c)? {
+        let t = if is_row {
+            crewd_store::managed_tables_v3::row_base(c, number)?.map(|r| r.table)
+        } else {
+            crewd_store::managed_tables_v3::table(c, number)?
+        };
+        if let Some(t) = t
+            && !t.v1_readable
+        {
+            return Err(CollabError::Conflict(Refusal::new(if t.v2_readable {
+                Code::ManagedV1Unsupported
+            } else {
+                Code::ManagedTableCodecUnsupported
+            })));
+        }
+        return Ok(());
+    }
     if crewd_store::managed_tables_v2::enabled(c)? {
         let table = if is_row {
             crewd_store::managed_tables_v2::row_base(c, number)?.map(|v| v.0)

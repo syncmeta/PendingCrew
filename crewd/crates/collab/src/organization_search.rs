@@ -122,7 +122,7 @@ fn source_target(s: &SourceRef) -> TargetRef {
 
 struct Views<'a> {
     p: Projection<'a>,
-    tables: HashMap<String, Table>,
+    tables: HashMap<String, crewd_proto::managed_tables_v3::Table>,
     indexing: bool,
 }
 impl<'a> Views<'a> {
@@ -138,15 +138,25 @@ impl<'a> Views<'a> {
         v.indexing = true;
         v
     }
-    fn table(&mut self, id: &str) -> Result<Table> {
+    fn table(&mut self, id: &str) -> Result<crewd_proto::managed_tables_v3::Table> {
         if let Some(t) = self.tables.get(id) {
             return Ok(t.clone());
         }
-        let t = crewd_store::managed_tables_v2::table(
-            self.p.c,
-            crewd_store::managed_tables_v2::number(id, 'T')?,
-        )?
-        .ok_or_else(unavailable)?;
+        let t = if crewd_store::managed_tables_v3::enabled(self.p.c)? {
+            crewd_store::managed_tables_v3::table(
+                self.p.c,
+                crewd_store::managed_tables_v2::number(id, 'T')?,
+            )?
+            .ok_or_else(unavailable)?
+        } else {
+            crewd_store::managed_tables_v3::logical_legacy(
+                crewd_store::managed_tables_v2::table(
+                    self.p.c,
+                    crewd_store::managed_tables_v2::number(id, 'T')?,
+                )?
+                .ok_or_else(unavailable)?,
+            )
+        };
         self.tables.insert(id.into(), t.clone());
         Ok(t)
     }
@@ -166,6 +176,7 @@ impl<'a> Views<'a> {
             status: Status::Current,
             system_default: false,
             slots: Vec::new(),
+            selection_labels: Vec::new(),
         };
         match t {
             TargetRef::Work { id } => {
@@ -309,8 +320,25 @@ impl<'a> Views<'a> {
                 if let Some(v) = table.purpose {
                     d.slots.push(slot("purpose", MatchOn::Text, v))
                 }
-                for f in table.fields.into_iter().filter(|f| !f.hidden) {
-                    d.slots.push(slot(&f.id, MatchOn::Text, f.name))
+                for f in &table.fields {
+                    if !f.hidden {
+                        d.slots.push(slot(&f.id, MatchOn::Text, f.name.clone()));
+                    }
+                    if let crewd_proto::managed_tables_v3::FieldKind::SingleSelect { options } =
+                        &f.kind
+                        && (self.indexing || !f.hidden)
+                    {
+                        for option in options {
+                            d.selection_labels.push(db::SelectionLabel {
+                                field_id: f.id.clone(),
+                                option_id: option.id.clone(),
+                                label: option.label.clone(),
+                            });
+                        }
+                    }
+                }
+                if !table.frozen_reasons.is_empty() {
+                    d.status = Status::Archived;
                 }
                 d.changed_at = source_time(
                     c,
@@ -319,31 +347,127 @@ impl<'a> Views<'a> {
                 )?;
             }
             TargetRef::Row { id } => {
-                let (t, revision, _, cells) = crewd_store::managed_tables_v2::row_base(
-                    c,
-                    crewd_store::managed_tables_v2::number(id, 'O')?,
-                )?
-                .ok_or_else(unavailable)?;
-                self.tables.insert(t.id.clone(), t.clone());
-                title_field = t.title_field_id.clone();
-                d.revision = Some(revision.clone());
-                d.table_id = Some(t.id.clone());
-                d.changed_at =
-                    source_time(c, id, Some(revision.parse().map_err(|_| unavailable())?))?;
-                for cell in cells {
-                    if t.fields
+                if crewd_store::managed_tables_v3::enabled(c)? {
+                    let row = crewd_store::managed_tables_v3::row_base(
+                        c,
+                        crewd_store::managed_tables_v2::number(id, 'O')?,
+                    )?
+                    .ok_or_else(unavailable)?;
+                    let t = &row.table;
+                    self.tables.insert(t.id.clone(), t.clone());
+                    title_field = t.title_field_id.clone();
+                    d.revision = Some(row.revision.clone());
+                    d.table_id = Some(t.id.clone());
+                    d.changed_at = source_time(
+                        c,
+                        id,
+                        Some(row.revision.parse().map_err(|_| unavailable())?),
+                    )?;
+                    if !t.frozen_reasons.is_empty() || row.lifecycle.archived_at.is_some() {
+                        d.status = Status::Archived;
+                    }
+                    d.title = crewd_store::managed_tables_v3::row_title(&row, id)?;
+                    let person_fields = t
+                        .fields
                         .iter()
-                        .any(|f| f.id == cell.field_id && (self.indexing || !f.hidden))
-                    {
-                        let value = match cell.value {
-                            Cell::Text(s) | Cell::Integer(s) => s,
-                            Cell::Real(n) => n.to_string(),
-                            Cell::Null => continue,
-                        };
-                        if cell.field_id == t.title_field_id {
-                            d.title = value.clone()
+                        .filter(|f| {
+                            matches!(
+                                f.kind,
+                                crewd_proto::managed_tables_v3::FieldKind::Person { .. }
+                            ) && (self.indexing || !f.hidden)
+                        })
+                        .collect::<Vec<_>>();
+                    if !person_fields.is_empty() {
+                        let edges = crewd_store::managed_links::outgoing(
+                            c,
+                            &SourceRef::Row { id: id.clone() },
+                        )?;
+                        for field in person_fields {
+                            let origin = format!("column:{}", field.id);
+                            for edge in edges.iter().filter(|e| e.origin == origin) {
+                                if !matches!(
+                                    edge.target,
+                                    TargetRef::Session { .. } | TargetRef::Human {}
+                                ) {
+                                    return Err(unavailable());
+                                }
+                                let text = if self.indexing {
+                                    format!("@person:{}", serde_json::to_string(&edge.target)?)
+                                } else {
+                                    self.p.resolve(&edge.target, ResolveMode::Read)?.summary
+                                };
+                                d.slots.push(slot(&field.id, MatchOn::Text, text));
+                            }
                         }
-                        d.slots.push(slot(&cell.field_id, MatchOn::Text, value))
+                    }
+                    for cell in row.logical {
+                        let field = t
+                            .fields
+                            .iter()
+                            .find(|f| f.id == cell.field_id)
+                            .ok_or_else(unavailable)?;
+                        if !self.indexing && field.hidden {
+                            continue;
+                        }
+                        if let crewd_proto::managed_tables_v3::Cell::SingleSelect(option) =
+                            &cell.value
+                        {
+                            if self.indexing {
+                                d.slots.push(slot(
+                                    &cell.field_id,
+                                    MatchOn::Text,
+                                    format!("@option:{}", option.option_id),
+                                ));
+                                if cell.field_id == t.title_field_id {
+                                    title_field.clear();
+                                }
+                            } else if let Some(text) =
+                                crewd_store::managed_tables_v3::scalar_display(
+                                    t,
+                                    &cell.field_id,
+                                    &cell.value,
+                                )?
+                            {
+                                d.slots.push(slot(&cell.field_id, MatchOn::Text, text));
+                            }
+                        } else if let Some(text) = crewd_store::managed_tables_v3::scalar_display(
+                            t,
+                            &cell.field_id,
+                            &cell.value,
+                        )? {
+                            d.slots.push(slot(&cell.field_id, MatchOn::Text, text));
+                        }
+                    }
+                } else {
+                    let (t, revision, _, cells) = crewd_store::managed_tables_v2::row_base(
+                        c,
+                        crewd_store::managed_tables_v2::number(id, 'O')?,
+                    )?
+                    .ok_or_else(unavailable)?;
+                    self.tables.insert(
+                        t.id.clone(),
+                        crewd_store::managed_tables_v3::logical_legacy(t.clone()),
+                    );
+                    title_field = t.title_field_id.clone();
+                    d.revision = Some(revision.clone());
+                    d.table_id = Some(t.id.clone());
+                    d.changed_at =
+                        source_time(c, id, Some(revision.parse().map_err(|_| unavailable())?))?;
+                    for cell in cells {
+                        if t.fields
+                            .iter()
+                            .any(|f| f.id == cell.field_id && (self.indexing || !f.hidden))
+                        {
+                            let value = match cell.value {
+                                Cell::Text(s) | Cell::Integer(s) => s,
+                                Cell::Real(n) => n.to_string(),
+                                Cell::Null => continue,
+                            };
+                            if cell.field_id == t.title_field_id {
+                                d.title = value.clone()
+                            }
+                            d.slots.push(slot(&cell.field_id, MatchOn::Text, value));
+                        }
                     }
                 }
             }
@@ -406,8 +530,14 @@ impl<'a> Views<'a> {
         {
             d.status = Status::Archived
         }
-        d.slots
-            .insert(0, slot(&title_field, MatchOn::Title, d.title.clone()));
+        let selection_title = self.indexing
+            && matches!(t, TargetRef::Row { .. })
+            && title_field.is_empty()
+            && d.slots.iter().any(|s| s.text.starts_with("@option:"));
+        if !selection_title {
+            d.slots
+                .insert(0, slot(&title_field, MatchOn::Title, d.title.clone()));
+        }
         d.slots.push(slot("reference", MatchOn::Reference, id(t)?));
         Ok(d)
     }
@@ -627,7 +757,13 @@ pub fn maintenance_step(tx: &mut Tx<'_>, limit: usize) -> Result<bool> {
         let n = if db::state(tx.conn())?.phase < 8 {
             db::seed_step(tx.conn(), available as u16)?
         } else {
-            db::fanout_step(tx.conn(), available as u16)?
+            let table_rows =
+                crewd_store::managed_tables_v3::search_fanout_step(tx.conn(), available as u16)?;
+            if table_rows > 0 {
+                table_rows
+            } else {
+                db::fanout_step(tx.conn(), available as u16)?
+            }
         };
         tx.organization_search_budget = available.saturating_sub(n);
     }
@@ -767,11 +903,14 @@ fn validate(c: &Connection, q: &mut Search) -> Result<Vec<Kind>> {
         return Err(invalid());
     }
     if let Some(t) = &q.table_id {
-        crewd_store::managed_tables_v2::table(
-            c,
-            crewd_store::managed_tables_v2::number(t, 'T').map_err(|_| invalid())?,
-        )?
-        .ok_or_else(invalid)?;
+        let n = crewd_store::managed_tables_v2::number(t, 'T').map_err(|_| invalid())?;
+        if !c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM managed_tables WHERE number=?1)",
+            [n],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Err(invalid());
+        }
         kinds.retain(|k| *k == Kind::Row)
     }
     if let Some(ch) = &q.channel_id {
@@ -834,11 +973,31 @@ fn qualification(
     };
     let p = bind(text_arg.into());
     let active = "(h.kind!='\"row\"' OR s.slot_kind='\"reference\"' OR EXISTS(SELECT 1 FROM managed_tables t,json_each(t.fields_json) f WHERE t.number=CAST(substr(h.table_id,2) AS INTEGER) AND json_extract(f.value,'$.id')=s.field_id AND json_extract(f.value,'$.hidden')=0))";
-    if q.query.chars().count() >= 3 {
-        sql.push(format!("(v.id IN(SELECT h.id FROM organization_search_fts f JOIN organization_search_slots s ON s.id=f.rowid JOIN organization_search_versions h ON h.id=s.version_id WHERE organization_search_fts MATCH {p} AND {active}) OR v.source IN(SELECT 'o:'||printf('%020d',a.table_number) FROM organization_search_alias_fts f JOIN organization_search_aliases a ON a.id=f.rowid WHERE organization_search_alias_fts MATCH {p} AND a.visible_from<=?1))"));
+    let literal_slot = format!(
+        "({active} AND (h.kind!='\"row\"' OR NOT EXISTS(SELECT 1 FROM managed_tables t,json_each(t.fields_json) z WHERE t.number=CAST(substr(h.table_id,2) AS INTEGER) AND json_extract(z.value,'$.id')=s.field_id AND json_extract(z.value,'$.kind.kind') IN('singleSelect','person'))))"
+    );
+    let mut text = if q.query.chars().count() >= 3 {
+        format!(
+            "(v.id IN(SELECT h.id FROM organization_search_fts f JOIN organization_search_slots s ON s.id=f.rowid JOIN organization_search_versions h ON h.id=s.version_id WHERE organization_search_fts MATCH {p} AND {literal_slot}) OR v.source IN(SELECT 'o:'||printf('%020d',a.table_number) FROM organization_search_alias_fts f JOIN organization_search_aliases a ON a.id=f.rowid WHERE organization_search_alias_fts MATCH {p} AND a.visible_from<=?1))"
+        )
     } else {
-        sql.push(format!("(v.id IN(SELECT h.id FROM organization_search_slots s JOIN organization_search_versions h ON h.id=s.version_id WHERE instr(lower(s.body),lower({p}))>0 AND {active}) OR v.source IN(SELECT 'o:'||printf('%020d',a.table_number) FROM organization_search_aliases a WHERE instr(lower(a.label),lower({p}))>0 AND a.visible_from<=?1))"));
+        format!(
+            "(v.id IN(SELECT h.id FROM organization_search_slots s JOIN organization_search_versions h ON h.id=s.version_id WHERE instr(lower(s.body),lower({p}))>0 AND {literal_slot}) OR v.source IN(SELECT 'o:'||printf('%020d',a.table_number) FROM organization_search_aliases a WHERE instr(lower(a.label),lower({p}))>0 AND a.visible_from<=?1))"
+        )
+    };
+    if crewd_store::managed_tables_v3::enabled(c)? {
+        let literal = bind(q.query.clone().into());
+        // A row retains only its selected eN. Its label is joined to the one
+        // retained TABLE version at this exact cut, not a current-schema join.
+        // Neither ordinary option renames nor personnel renames fan out business
+        // rows or introduce post-cut matches into an older cursor.
+        let label = "instr(lower(json_extract(l.value,'$.label')),lower(LITERAL))>0"
+            .replace("LITERAL", &literal);
+        text = format!(
+            "({text} OR v.id IN(SELECT h.id FROM organization_search_versions tv JOIN json_each(tv.document,'$.selection_labels') l JOIN organization_search_slots s ON s.field_id=json_extract(l.value,'$.fieldId') AND s.body='@option:'||json_extract(l.value,'$.optionId') JOIN organization_search_versions h ON h.id=s.version_id AND h.table_id=json_extract(tv.document,'$.target.id') WHERE tv.kind='\"table\"' AND tv.valid_from<=?1 AND(tv.valid_to IS NULL OR tv.valid_to>?1) AND h.kind='\"row\"' AND substr(s.body,1,8)='@option:' AND {label} AND {active}) OR v.id IN(SELECT tv.id FROM organization_search_versions tv JOIN json_each(tv.document,'$.selection_labels') l WHERE tv.kind='\"table\"' AND tv.valid_from<=?1 AND(tv.valid_to IS NULL OR tv.valid_to>?1) AND {label}) OR v.id IN(SELECT h.id FROM organization_search_sources ns JOIN organization_search_versions n ON n.source=ns.source JOIN organization_search_slots s ON s.body='@person:'||ns.target JOIN organization_search_versions h ON h.id=s.version_id WHERE substr(s.body,1,8)='@person:' AND h.kind='\"row\"' AND n.valid_from<=?1 AND(n.valid_to IS NULL OR n.valid_to>?1) AND instr(lower(json_extract(n.document,'$.title')),lower({literal}))>0 AND {active}))"
+        );
     }
+    sql.push(text);
     if let Actor::Session(session) = a {
         let plan = crate::channels::ReadPlan::of(c, session, now)?;
         let (expr, args) = plan.sql("ch", values.len() + 7);
@@ -883,6 +1042,14 @@ fn match_current(
         if s.text.to_ascii_lowercase().contains(&needle) {
             return Ok(Some((s.matched_on, clip(&s.text))));
         }
+    }
+    if matches!(&d.target, TargetRef::Table { .. })
+        && let Some(v) = d
+            .selection_labels
+            .iter()
+            .find(|v| v.label.to_ascii_lowercase().contains(&needle))
+    {
+        return Ok(Some((MatchOn::Text, clip(&v.label))));
     }
     if let TargetRef::Table { id } = &d.target
         && let Some(v) =

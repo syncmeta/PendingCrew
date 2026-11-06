@@ -17,7 +17,9 @@ const AUTHOR: Actor<'static> = Actor::Session("w-a1");
 const FOREIGN: Actor<'static> = Actor::Session("w-b1");
 
 fn fixture() -> Store {
-    let s = crate::testkit::store();
+    scoped_fixture(crate::testkit::store())
+}
+fn scoped_fixture(s: Store) -> Store {
     if crewd_store::meta_get(s.conn(), "dbId").unwrap().is_none() {
         crewd_store::meta_set(s.conn(), "dbId", "synthetic-message-source-db").unwrap();
     }
@@ -159,10 +161,13 @@ fn capture_preserves_unicode_snapshot_and_exact_replay_without_more_effects() {
 
 #[test]
 fn source_creation_supports_decision_risk_lesson_and_one_row_per_exact_table() {
-    let mut s = fixture();
+    // Preserve two real V1 tables created under their original namespace policy.
+    let mut s = scoped_fixture(crate::testkit::v31_store());
     let m = post(&mut s, "crew-a/lobby", "Synthetic shared source");
     let t1 = table(&mut s, "crew-a");
     let t2 = table(&mut s, "crew-a");
+    crewd_store::schema::migrate(s.conn()).unwrap();
+    assert!(crewd_store::managed_tables_v3::enabled(s.conn()).unwrap());
     assert_eq!(sources::source(s.conn(), HUMAN, &t1).unwrap(), Source::None);
     let changes = vec![
         decision("crew-a"),
@@ -504,11 +509,13 @@ fn source_and_normal_request_namespaces_do_not_retroactively_capture_or_duplicat
 
 #[test]
 fn bounded_message_backlinks_preserve_every_exact_identity_and_read_without_effects() {
-    let mut s = fixture();
+    let mut s = scoped_fixture(crate::testkit::v31_store());
+    let tables = (0..18).map(|_| table(&mut s, "crew-a")).collect::<Vec<_>>();
+    crewd_store::schema::migrate(s.conn()).unwrap();
+    assert!(crewd_store::managed_tables_v3::enabled(s.conn()).unwrap());
     let m = post(&mut s, "crew-a/lobby", "Bounded backlinks");
     let mut expected = vec![];
-    for n in 0..18 {
-        let table_id = table(&mut s, "crew-a");
+    for (n, table_id) in tables.into_iter().enumerate() {
         let req = request(
             &s,
             "crew-a",

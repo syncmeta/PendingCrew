@@ -296,6 +296,7 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
                 capabilities.push(crewd_proto::managed_artifacts::CAPABILITY.into());
                 capabilities.push(crewd_proto::artifact_history::CAPABILITY.into());
                 capabilities.push(crewd_proto::managed_tables_v2::TABLES_CAPABILITY.into());
+                capabilities.push(crewd_proto::managed_tables_v3::CAPABILITY.into());
                 capabilities.push(crewd_proto::managed_tables_v2::LINKS_CAPABILITY.into());
                 capabilities.push("session.claude.recovery".into());
                 capabilities.push("crew.defaultWorkingDirectory".into());

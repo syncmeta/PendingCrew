@@ -18,6 +18,17 @@ pub(crate) const MIN: i64 = 60_000;
 pub(crate) fn store() -> Store {
     populate(Store::open_in_memory().unwrap())
 }
+/// A genuine pre-V3 fixture; callers seed legacy requests before migrating it.
+pub(crate) fn v31_store() -> Store {
+    let s = populate(crewd_store::testing::open_legacy_store(31).unwrap());
+    assert_eq!(
+        s.conn()
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        31
+    );
+    s
+}
 pub(crate) fn v8_store() -> Store {
     populate(crewd_store::testing::open_v8_store().unwrap())
 }

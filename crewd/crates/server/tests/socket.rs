@@ -1240,8 +1240,11 @@ async fn crew_purge_that_cannot_happen_takes_no_snapshot() {
         Some("crew.removed"),
         "已移除的机组只读"
     );
-    rusqlite::Connection::open(dir.path().join("crewd.db"))
+    // Use the ordinary initialized Store connection so derived search triggers
+    // have their NULL source-context getters. This is still deliberate fixture SQL.
+    crewd_store::Store::open(&dir.path().join("crewd.db"))
         .unwrap()
+        .conn()
         .execute("UPDATE sessions SET desired='running' WHERE id='cap-a'", [])
         .unwrap();
     assert_eq!(

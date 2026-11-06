@@ -3344,6 +3344,28 @@ async fn default_remote_directory_reads_create_no_identity_and_change_no_durable
     let root = tempfile::tempdir().unwrap().keep();
     eprintln!("Remote readonly directory evidence: {}", root.display());
     let mut running = service(&root).await;
+    // system.hello proves accept-loop readiness, not completion of the independent
+    // bounded search bootstrap. Let the real runtime publish its ready state
+    // before taking the unchanged full-database read-only baseline.
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            let page = local(
+                &mut running.owner,
+                "organization.search",
+                json!({"query":"remote-directory-readonly-baseline","limit":1}),
+            )
+            .await;
+            if page["indexState"] == "ready" {
+                break;
+            }
+            assert_eq!(page["indexState"], "building");
+            assert_eq!(page["items"], json!([]));
+            assert!(page["snapshot"].is_null() && page["nextCursor"].is_null());
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("actual search bootstrap must finish before the remote-read baseline");
     let before = snapshot(&root);
     let status = local(&mut running.owner, "remote.status", json!({})).await;
     assert_eq!(status["listening"], false);

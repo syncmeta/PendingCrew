@@ -130,10 +130,31 @@ fn resolve_uncached(
             (h.question, Some(r.crew_id))
         }
         TargetRef::Table { id } => {
+            if crewd_store::managed_tables_v3::enabled(c)? {
+                let t = crewd_store::managed_tables_v3::table(c, num(id, 'T')?)?
+                    .ok_or_else(|| missing(id))?;
+                return Ok(ResolvedTarget {
+                    target: TargetRef::Table { id: id.clone() },
+                    summary: t.title.chars().take(280).collect(),
+                    owner_crew_id: Some(t.crew_id),
+                    message_channel_id: None,
+                });
+            }
             let t = tables::table(c, num(id, 'T')?)?.ok_or_else(|| missing(id))?;
             (t.title, Some(t.crew_id))
         }
         TargetRef::Row { id } => {
+            if crewd_store::managed_tables_v3::enabled(c)? {
+                let r = crewd_store::managed_tables_v3::row_base(c, num(id, 'O')?)?
+                    .ok_or_else(|| missing(id))?;
+                let title = crewd_store::managed_tables_v3::row_title(&r, id)?;
+                return Ok(ResolvedTarget {
+                    target: TargetRef::Row { id: id.clone() },
+                    summary: title.chars().take(280).collect(),
+                    owner_crew_id: Some(r.table.crew_id),
+                    message_channel_id: None,
+                });
+            }
             let (t, _, _, cells) =
                 tables::row_base(c, num(id, 'O')?)?.ok_or_else(|| missing(id))?;
             let title = cells

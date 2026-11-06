@@ -79,21 +79,41 @@ final class CrewdPresentationJournal {
         guard params["crewId"].string?.utf8.elementsEqual(crew.utf8)==true,
               let target=params["target"].string,!target.isEmpty else {throw CrewdPublicWire.invalid()}
         return try withPrivateLock("managed-v2.lock",message:"此对象的原关联或表格请求正在核对。") {
-            guard try !unknownRecords().contains(where:{$0.method==method && $0.scope==scope &&
-                $0.params["target"].string?.utf8.elementsEqual(target.utf8)==true}) else {
+            guard try !unknownRecords().contains(where:{(manual ? $0.method==method && $0.params["target"].string?.utf8.elementsEqual(target.utf8)==true:Self.managedTableTarget(method:$0.method,params:$0.params)?.utf8.elementsEqual(target.utf8)==true) && $0.scope==scope}) else {
                 throw CrewdClientError(message:"此对象在同一恢复范围内有原请求待核对，未重复提交。",kind:.notSubmitted)
             }
             return try prepare(method:method,params:params,crew:crew)
         }
     }
 
+    func prepareManagedV3(_ params:CrewdValue,crew:String)throws->Prepared {
+        guard params["contractVersion"].int==3,params["crewId"].string?.utf8.elementsEqual(crew.utf8)==true,
+              let target=params["target"].string,!target.isEmpty else {throw CrewdPublicWire.invalid()}
+        return try withPrivateLock("managed-v2.lock",message:"此对象的原表格请求正在核对。") {
+            guard try !unknownRecords().contains(where:{Self.managedTableTarget(method:$0.method,params:$0.params)?.utf8.elementsEqual(target.utf8)==true && $0.scope==scope}) else {
+                throw CrewdClientError(message:"此对象在同一恢复范围内有原表格请求待核对，未重复提交。",kind:.notSubmitted)
+            }
+            return try prepare(method:"managedTable.v3.observation",params:params,crew:crew)
+        }
+    }
+
+    private static func managedTableTarget(method:String,params:CrewdValue)->String? {
+        if ["managedTable.v2.observation","managedTable.v3.observation"].contains(method) {return params["target"].string}
+        guard method=="managedObject.submit.observation",["createTable","addRow","editRow"].contains(params["kind"].string ?? ""),
+              let epoch=params["scope"]["restoreEpoch"].string,let crew=params["crewId"].string,let target=params["target"].string else{return nil}
+        return epoch+":"+String(crew.utf8.count)+":"+crew+":"+target
+    }
+
     func prepareManagedDirectory(_ params: CrewdValue, crew: String) throws -> Prepared {
         let method = "managedObject.submit.observation"
         guard params["crewId"].string?.utf8.elementsEqual(crew.utf8) == true,
               let target = params["target"].string, !target.isEmpty else { throw CrewdPublicWire.invalid() }
-        return try withPrivateLock("managed-directory.lock", message:"组织目录原请求正在核对或锁不可用。") {
+        let tableTarget=Self.managedTableTarget(method:method,params:params)
+        return try withPrivateLock(tableTarget==nil ? "managed-directory.lock":"managed-v2.lock", message:"组织目录原请求正在核对或锁不可用。") {
             guard try !unknownRecords().contains(where: {
-                $0.method == method && $0.scope == scope && $0.crew.utf8.elementsEqual(crew.utf8) &&
+                guard $0.scope==scope else{return false}
+                if let tableTarget{return Self.managedTableTarget(method:$0.method,params:$0.params)?.utf8.elementsEqual(tableTarget.utf8)==true}
+                return $0.method == method && $0.crew.utf8.elementsEqual(crew.utf8) &&
                     $0.params["target"].string?.utf8.elementsEqual(target.utf8) == true
             }) else {
                 throw CrewdClientError(message:"该组织对象已有原请求待核对。",kind:.notSubmitted)

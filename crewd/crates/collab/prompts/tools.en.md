@@ -1810,25 +1810,25 @@ Set true to include genuine legacy Done and frozen-snapshot provenance. Never tr
 
 
 ## managed_table_v2_get
-Read a real V2 organization table, stable field IDs, current schemaRevision and write policy. Never omit link columns or substitute SQL when V1 cannot represent it.
+Read a real V2 organization table, stable field IDs, current schemaRevision and write policy. Never omit link columns or substitute SQL when V1 cannot represent it. Omitted contractVersion or explicit 2 preserves V2. Explicit 3 requires action=table/defineCheck/history/historyValue. Check the current name and purpose first; read history values by the original key/path in bounded chunks, with current authority checked every time.
 
 ## managed_table_v2_get.id
 Actual T identity.
 
 ## managed_tables_v2_list
-Read one bounded page of currently readable organization tables, including archived read-only tables; later pages remain unread.
+Read one bounded page of currently readable organization tables, including archived read-only tables; later pages remain unread. Omitted version or explicit 2 preserves the V2-expressible catalog. Explicit 3 reads all supported types; includeArchived controls independently archived tables. Never drop unknown fields and claim a complete definition.
 
 ## managed_tables_v2_list.after
 Return the preceding nextAfter verbatim; omit for the first page.
 
 ## managed_row_v2_get
-Read a real O row with current field IDs and authorized link projections. A hiddenSet never reveals hidden count or a transferable target.
+Read a real O row with current field IDs and authorized link projections. A hiddenSet never reveals hidden count or a transferable target. Omitted version or explicit 2 preserves V2. Explicit 3 uses action=row for scalarCells/linkFieldIds. Unloaded links are not empty; fetch action=links with the real field ID and exact table/row witnesses.
 
 ## managed_row_v2_get.id
 Actual O identity.
 
 ## managed_rows_v2_list
-Read one bounded V2 row page together with the exact T definition and schemaRevision.
+Read one bounded V2 row page together with the exact T definition and schemaRevision. Omitted version or explicit 2 preserves V2. Explicit 3 reads typed scalar row pages; load link fields explicitly rather than treating unloaded fields as empty sets.
 
 ## managed_rows_v2_list.tableId
 Actual T identity.
@@ -1837,7 +1837,7 @@ Actual T identity.
 Previous nextAfter; omit on first read.
 
 ## managed_table_v2_submit
-Explicitly create a table, perform one safe schema change, add a row, or patch stable field IDs. Read real schema/row revisions first; omitted fields remain unchanged. Hidden links can only be kept as the original whole cell set: never count, copy or clear them. With hiddenSet, visible links cannot increase. Rename/hide/restore/single-to-many never change business object state; title field must be active scalar and must be replaced before hiding it. Preserve the original UUID; after uncertainty only look it up, never resubmit automatically.
+Explicitly create a table, perform one safe schema change, add a row, or patch stable field IDs. Read real schema/row revisions first; omitted fields remain unchanged. Hidden links can only be kept as the original whole cell set: never count, copy or clear them. With hiddenSet, visible links cannot increase. Rename/hide/restore/single-to-many never change business object state; title field must be active scalar and must be replaced before hiding it. Preserve the original UUID; after uncertainty only look it up, never resubmit automatically. Omitted version or explicit 2 uses V2. Explicit 3 adds complete field types, options and independent table/row archive/restore. PatchRow/AlterTable/lifecycle require a reason and exact revisions. Obtain a current defineCheck proof and use confirmNew when needed; archiving preserves business state. Distinguish false, Null and Keep. Decimal is a canonical string and never passes through floating point.
 
 ## managed_table_v2_submit.scope
 Exact current Core scope from managed_object_scope_get; an old restore epoch is historical lookup only.
@@ -1852,7 +1852,7 @@ Original UUID persisted before submission; resolve uncertainty with managed_tabl
 Closed typed operation. Patch only edited field IDs against exact schema/row revisions; resolve targets through the live read API. No narrowing, cross-cell hidden Keep, or Work/D/R/L/H state mutation.
 
 ## managed_table_v2_request_get
-Read only this original V2 request. known is its immutable effect; historical is historical; notFound does not prove no submission. Current rows never substitute for a receipt.
+Read only this original V2 request. known is its immutable effect; historical is historical; notFound does not prove no submission. Current rows never substitute for a receipt. Use the original journal version: omission means 2; explicit 3 reads only the original V3 codec. A wrong version conflicts; never guess another version or treat notFound as permission to resubmit.
 
 ## managed_table_v2_request_get.scope
 Original exact scope; never replace restoreEpoch.
@@ -1931,3 +1931,95 @@ Requested result maximum, 1-200, default 20. A page can be shorter or empty; nex
 
 ## organization_search_expand.include_system_defaults
 Include system-default decisions, default false. Current read permission is still rechecked.
+
+## managed_table_v2_get.action
+
+Explicit version 3 only: table reads a definition; defineCheck checks name/purpose; history reads bounded action metadata; historyValue reads complete value chunks by original key and typed path.
+
+## managed_table_v2_get.scope
+
+For defineCheck, preserve the exact current scope returned by managed_object_scope_get.
+
+## managed_table_v2_get.crewId
+
+Actual owner crew for defineCheck; never infer it from a name or path.
+
+## managed_table_v2_get.excludingTableId
+
+Real T only when checking that table for rename/purpose changes. A new table may not exclude another table.
+
+## managed_table_v2_get.title
+
+Unmodified proposed title. Core checks current crew-local uniqueness and near names; historical aliases do not stand in for current names.
+
+## managed_table_v2_get.purpose
+
+Unmodified proposed purpose. Creation/purpose changes require nonempty text. Only renaming a legacy table with no purpose may use null; empty text is not null.
+
+## managed_table_v2_get.cursor
+
+Original continuation token for this defineCheck/history/historyValue read. Re-read after source/authority/proof changes; never invent a token.
+
+## managed_table_v2_get.source
+
+Real table or row history source. Source readability does not grant access to every historical link target.
+
+## managed_table_v2_get.key
+
+Original event/legacy receipt locator returned by history; never invent an old event UUID or change its codec.
+
+## managed_table_v2_get.path
+
+Typed scalar/links/reason/schema path and before/after side. Reassemble complete values using their returned type; restricted links expose only an aggregate restriction marker.
+
+## managed_row_v2_get.action
+
+Explicit version 3 only: row reads scalars and unloaded link field IDs; links reads one field through current target authority.
+
+## managed_row_v2_get.rowId
+
+Actual O for action=links.
+
+## managed_row_v2_get.fieldId
+
+Stable p field ID belonging to the actual table of that O.
+
+## managed_row_v2_get.expectedSchemaRevision
+
+Current schemaRevision of the original table; re-read after source changes.
+
+## managed_row_v2_get.expectedRowRevision
+
+Current revision of the original O, never a witness from another row or a later result.
+
+## managed_tables_v2_list.includeArchived
+
+Version 3 only: include independently archived tables. Archived objects remain read-only.
+
+## managed_rows_v2_list.includeArchived
+
+Version 3 only: include independently archived rows. Parent table/crew freeze still applies.
+
+## managed_table_v2_get.contractVersion
+
+Contract selector: omitted or integer 2 uses V2; integer 3 uses the new contract. Null, strings, fractional-number representations and unknown versions are rejected without fallback.
+
+## managed_tables_v2_list.contractVersion
+
+Contract selector: omitted or integer 2 uses V2; integer 3 uses the new contract. Null, strings, fractional-number representations and unknown versions are rejected without fallback.
+
+## managed_row_v2_get.contractVersion
+
+Contract selector: omitted or integer 2 uses V2; integer 3 uses the new contract. Null, strings, fractional-number representations and unknown versions are rejected without fallback.
+
+## managed_rows_v2_list.contractVersion
+
+Contract selector: omitted or integer 2 uses V2; integer 3 uses the new contract. Null, strings, fractional-number representations and unknown versions are rejected without fallback.
+
+## managed_table_v2_submit.contractVersion
+
+Contract selector: omitted or integer 2 uses V2; integer 3 uses the new contract. Null, strings, fractional-number representations and unknown versions are rejected without fallback.
+
+## managed_table_v2_request_get.contractVersion
+
+Contract selector: omitted or integer 2 uses V2; integer 3 uses the new contract. Null, strings, fractional-number representations and unknown versions are rejected without fallback.
