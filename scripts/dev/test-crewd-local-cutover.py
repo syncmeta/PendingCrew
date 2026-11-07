@@ -55,11 +55,13 @@ def fault_child():
     module.main()
 
 
-def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False):
+def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False,
+             old_version=21, new_source=None):
     root.mkdir()
     mode = ('--isolated-fixture', root.parent)
-    old = fixture.ordinary(root / 'Current.app', refs[21])
-    incoming = fixture.ordinary(root / 'New.app', refs[new_version])
+    new_source = new_source or refs[new_version]
+    old = fixture.ordinary(root / 'Current.app', refs[old_version])
+    incoming = fixture.ordinary(root / 'New.app', new_source)
     probe = old / 'Contents/Helpers/activity-probe'
     if fail_at == 0:
         for app in (old, incoming):
@@ -76,7 +78,8 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False
     data.mkdir(mode=0o700)
     (data / 'crewd.lock').touch()
     (data / 'crewd.db.id').write_text('fixture-generation-id\n')
-    fixture.sqlite(data / 'crewd.db', 'PRAGMA application_id=0x43525744', 'PRAGMA user_version=21',
+    fixture.sqlite(data / 'crewd.db', 'PRAGMA application_id=0x43525744',
+                   'PRAGMA user_version=' + str(old_version),
                    'CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)',
                    "INSERT INTO meta VALUES('dbId','fixture-generation-id'),('lifecycle.clean','true')")
     (data / 'attachments').mkdir()
@@ -85,10 +88,21 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False
     app_before = fixture.contents(old)
     app_after = fixture.contents(incoming)
     setup = root / 'prepared'
-    fixture.run('prepare', '--authority', data, '--old-app', old, '--new-app', incoming,
-                '--old-source', old_package['source'], '--new-source', new_package['source'],
-                '--old-digest', old_package['bundleDigest'], '--new-digest', new_package['bundleDigest'],
-                '--requirement', fixture.REQUIREMENT, '--out', setup, *mode)
+    prepare_args = ('prepare', '--authority', data, '--old-app', old, '--new-app', incoming,
+                    '--old-source', old_package['source'], '--new-source', new_package['source'],
+                    '--old-digest', old_package['bundleDigest'], '--new-digest', new_package['bundleDigest'],
+                    '--requirement', fixture.REQUIREMENT, '--out', setup, *mode)
+    if old_version == new_version and fail_at == 0:
+        for label, ref, expected in [('same-source', refs[old_version], 'distinct source generations required'),
+                                     ('downgrade', refs[22], 'target source must not downgrade the Core generation')]:
+            refused_app = fixture.ordinary(root / (label + '.app'), ref)
+            package = json.loads(fixture.run('inspect-package', '--app', refused_app,
+                                             '--requirement', fixture.REQUIREMENT))
+            output = root / (label + '-preparation')
+            fixture.run(*prepare_args, '--new-app', refused_app, '--new-source', ref,
+                        '--new-digest', package['bundleDigest'], '--out', output, refusal=expected)
+            assert not output.exists() and fixture.contents(data) == before
+    fixture.run(*prepare_args)
     plan = setup / 'plan.json'
     if legacy:
         # Materialize the exact original format-1 receipt layout as a separate
@@ -121,9 +135,20 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False
         expected_format = 3 if unmigrated and operation == 'rollback' else (1 if legacy else 2)
         assert record['format'] == expected_format
         if expected_format == 3:
-            assert record['rollbackState'] == 'unmigrated' and record['coreVersions'] == [21, 21]
+            assert record['rollbackState'] == 'unmigrated' and record['coreVersions'] == [old_version, old_version]
+        if old_version == new_version and operation == 'rollback':
+            original_record = intent.read_bytes()
+            altered = json.loads(original_record)
+            altered['format'] = 3
+            altered['rollbackState'] = 'unmigrated'
+            intent.write_text(json.dumps(altered))
+            locations = (old.stat().st_ino, data.stat().st_ino)
+            run('resume', '--transaction', output, '--intent-sha', fixture.sha(intent), *mode,
+                fail='unmigrated rollback requires distinct schema generations')
+            assert (old.stat().st_ino, data.stat().st_ino) == locations
+            intent.write_bytes(original_record)
         if not legacy:
-            assert record['schemaEvidence']['new']['source'] == refs[new_version]
+            assert record['schemaEvidence']['new']['source'] == new_source
             assert record['schemaEvidence']['new']['schemaVersion'] == new_version
             # A freshly hashed but internally inconsistent intent must still
             # fail closed before either generation moves.
@@ -194,6 +219,12 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False
         '--intent-sha', fixture.sha(upgrade / 'intent.json'), *mode).stdout
     assert fixture.contents(data) == upgraded
     rollback_stage = root / 'rollback-stage'
+    if old_version == new_version:
+        fixture.run('stage-rollback', '--authority', data, '--upgraded-app', old,
+                    '--plan', plan, '--plan-sha', fixture.sha(plan), '--out', rollback_stage,
+                    '--unmigrated', *mode,
+                    refusal='unmigrated rollback requires distinct schema generations')
+        assert not rollback_stage.exists() and fixture.contents(data) == upgraded
     if unmigrated:
         # The original migrated-only verb still refuses actual old-schema
         # data. The new branch is explicit, never guessed from the new App.
@@ -252,6 +283,17 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False
     rollback_record = rollback_stage / 'rollback.json'
     rollback = root / 'rollback'
     if fail_at == 0:
+        if old_version == new_version:
+            original_record = rollback_record.read_bytes()
+            altered = json.loads(original_record)
+            altered['format'] = 3
+            altered['rollbackState'] = 'unmigrated'
+            rollback_record.write_text(json.dumps(altered))
+            run('start', 'rollback', *common, '--rollback', rollback_record,
+                '--rollback-sha', fixture.sha(rollback_record), '--out', rollback,
+                fail='unmigrated rollback requires distinct schema generations')
+            assert not rollback.exists() and fixture.contents(data) == upgraded
+            rollback_record.write_bytes(original_record)
         refuse_wrong_app_path('rollback', '--rollback', rollback_record, '--rollback-sha', fixture.sha(rollback_record))
         process = subprocess.Popen([str(probe), '30'])
         try:
@@ -267,8 +309,21 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False
     assert fixture.contents(old) == app_before
     assert fixture.contents(rollback / 'staged-data') == upgraded
     assert fixture.contents(rollback / 'staged.app') == app_after
-    print(f'PASS format{1 if legacy else 2} Core21→{new_version} upgrade and '
+    print(f'PASS format{1 if legacy else 2} Core{old_version}→{new_version} upgrade and '
           f'{"unmigrated21" if unmigrated else "migrated"} rollback recover after {fail_at} exchanges')
+
+
+def same_schema_source(root, refs):
+    repo = root / 'source-evidence'
+    tree = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', refs[33] + '^{tree}'],
+                                   text=True).strip()
+    env = dict(os.environ, GIT_AUTHOR_NAME='PendingCrew fixture',
+               GIT_AUTHOR_EMAIL='fixture@example.invalid', GIT_COMMITTER_NAME='PendingCrew fixture',
+               GIT_COMMITTER_EMAIL='fixture@example.invalid')
+    return subprocess.check_output(['git', '-c', 'commit.gpgsign=false', '-C', str(repo),
+                                    'commit-tree', tree, '-p', refs[33], '-m',
+                                    'synthetic UI successor with unchanged schema33'],
+                                   env=env, text=True).strip()
 
 
 if __name__ == '__main__':
@@ -277,7 +332,14 @@ if __name__ == '__main__':
     else:
         with tempfile.TemporaryDirectory(prefix='pcw-cutover-', dir='/private/tmp') as temporary:
             refs = fixture.source_evidence(Path(temporary))
+            same_source = same_schema_source(Path(temporary), refs)
+            if len(sys.argv) > 1 and sys.argv[1] == '--red-same-schema':
+                exercise(Path(temporary) / 'same-schema-red', 0, refs,
+                         old_version=33, new_source=same_source)
+                sys.exit(0)
             for fail_at in range(3):
                 exercise(Path(temporary) / ('current-' + str(fail_at)), fail_at, refs)
                 exercise(Path(temporary) / ('legacy-' + str(fail_at)), fail_at, refs, 22, legacy=True)
                 exercise(Path(temporary) / ('unmigrated-' + str(fail_at)), fail_at, refs, unmigrated=True)
+                exercise(Path(temporary) / ('same-schema-' + str(fail_at)), fail_at, refs,
+                         old_version=33, new_source=same_source)

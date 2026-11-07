@@ -140,10 +140,11 @@ def source_generation(source, fixture):
 
 
 def schema_evidence(old, new, fixture):
+    require(old['source'] != new['source'], 'distinct source generations required')
     evidence = {'old': source_generation(old['source'], fixture),
                 'new': source_generation(new['source'], fixture)}
-    require(evidence['old']['schemaVersion'] < evidence['new']['schemaVersion'],
-            'target source must declare a newer Core generation')
+    require(evidence['old']['schemaVersion'] <= evidence['new']['schemaVersion'],
+            'target source must not downgrade the Core generation')
     return evidence
 
 
@@ -180,6 +181,8 @@ def rollback_contract(record, plan):
                 'rollback source/schema evidence differs from preparation')
     if unmigrated:
         require(record['rollbackState'] == 'unmigrated', 'explicit unmigrated rollback state required')
+        require(layout['old'] < layout['new'],
+                'unmigrated rollback requires distinct schema generations')
     layout['outgoing'] = layout['old'] if unmigrated else layout['new']
     return layout
 
@@ -206,6 +209,9 @@ def intent_contract(intent):
     old, new = apps if intent['operation'] == 'upgrade' else reversed(apps)
     actual = schema_evidence(old, new, intent['fixtureRoot'])
     old_version, new_version = actual['old']['schemaVersion'], actual['new']['schemaVersion']
+    if intent['format'] == 3:
+        require(old_version < new_version,
+                'unmigrated rollback requires distinct schema generations')
     expected = ([old_version, old_version] if intent['operation'] == 'upgrade' or intent['format'] == 3
                 else [new_version, old_version])
     require(intent['schemaEvidence'] == actual and intent['coreVersions'] == expected,
@@ -390,6 +396,8 @@ def stage_rollback(args):
     unmigrated = args.unmigrated
     require(not unmigrated or plan['format'] == 2,
             'unmigrated rollback requires a source-bound preparation')
+    require(not unmigrated or layout['old'] < layout['new'],
+            'unmigrated rollback requires distinct schema generations')
     outgoing_version = layout['old'] if unmigrated else layout['new']
     data = directory(args.authority)
     require(str(data) == plan['authority'], 'rollback authority differs from preparation')
