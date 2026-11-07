@@ -239,6 +239,7 @@ targets:
       - path: Sources/CrewdRemote/CrewdManagedLinksViews.swift
       - path: Sources/CrewdRemote/CrewdKnowledgeViews.swift
       - path: Sources/CrewdRemote/CrewdKnowledgeCanvas.swift
+      - path: Sources/CrewdRemote/CrewdKnowledgeWebDocument.swift
       - path: Sources/Mac/Services/CrewLocalMentionWaker.swift
       - path: Sources/Mac/Services/ModelCatalogCenter.swift
       - path: Sources/Mac/Services/QuotaCenter.swift
