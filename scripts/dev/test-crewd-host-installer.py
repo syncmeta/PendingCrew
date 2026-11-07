@@ -4,6 +4,7 @@ import argparse, hashlib, importlib.util, io, json, os, pathlib, shutil, subproc
 from unittest import mock
 sys.dont_write_bytecode = True
 repo = pathlib.Path(__file__).resolve().parents[2]
+TEMP_ROOT = '/private/tmp' if sys.platform == 'darwin' else None
 # Source path is explicit for private author runs, otherwise this lives in scripts/dev.
 source = pathlib.Path(os.environ.get('PCW_HOST_INSTALLER_SOURCE', repo / 'deploy/linux/pendingcrew-host.py'))
 spec = importlib.util.spec_from_file_location('pendingcrew_host', source)
@@ -192,7 +193,7 @@ class InstallerControls(unittest.TestCase):
                 write.assert_not_called()
 
     def test_install_record_and_resume_keep_original_provider_and_status(self):
-        with tempfile.TemporaryDirectory(prefix='pcwh-',dir='/private/tmp') as temporary:
+        with tempfile.TemporaryDirectory(prefix='pcwh-',dir=TEMP_ROOT) as temporary:
             home=pathlib.Path(temporary);data=home/'data';data.mkdir(mode=0o700);(data/'crewd.db').touch(mode=0o600)
             account=types.SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid(),pw_dir=str(home),pw_name='ordinary')
             status=self.original_status()
@@ -305,9 +306,10 @@ class InstallerControls(unittest.TestCase):
             # Synthetic header is package-shape input only, never executable/runtime proof.
             header = bytearray(64); header[:6] = b'\x7fELF\x02\x01'; header[18:20] = (62).to_bytes(2,'little'); binary.write_bytes(header)
             commit = 'a'*40
-            proof.write_text(json.dumps({'sourceCommit':commit,'binarySha256':host.sha(header),'sourceClean':True,'defaultFeatures':True,'features':[],'test':False}))
+            schema={'sourceCommit':commit,'storeVersion':33,'schemaSourceSHA256':'c'*64}
+            proof.write_text(json.dumps({'schemaEvidence':schema,'sourceCommit':commit,'binarySha256':host.sha(header),'sourceClean':True,'defaultFeatures':True,'features':[],'test':False}))
             args = types.SimpleNamespace(source=commit,architecture='x86_64',artifact_url='https://example.invalid/'+commit+'/host.tar.gz',manifest_url='https://example.invalid/'+commit+'/manifest.json',core=str(binary),proof=str(proof),output=str(root/'package'))
-            with mock.patch.object(package_module,'verify_component_sources') as verify, mock.patch('sys.stdout', new_callable=io.StringIO):
+            with mock.patch.object(package_module,'verify_component_sources') as verify, mock.patch.object(package_module,'source_schema',return_value=schema), mock.patch('sys.stdout', new_callable=io.StringIO):
                 package_module.package(args)
                 verify.assert_called_once()
             output = root/'package'; manifest = json.loads((output/'manifest.json').read_bytes()); payload = (output/'host.tar.gz').read_bytes()
@@ -324,15 +326,18 @@ class InstallerControls(unittest.TestCase):
             self.assertEqual(((unpacked/'bin').stat().st_mode & 0o777),0o755)
             self.assertEqual(((unpacked/'bin/crewd').stat().st_mode & 0o777),0o555)
             self.assertNotIn('coreSourceCommit',release)
-            self.assertEqual(release['storeVersion'],21)
+            self.assertEqual(release['storeVersion'],33)
+            self.assertEqual(release['format'],2)
+            self.assertEqual(release['schemaEvidence'],schema)
             self.assertEqual(release['files']['bin/crewd'],host.sha(header))
             self.assertIn(repr(host.sha((output/'manifest.json').read_bytes())),(output/'install.py').read_text())
     def mixed_package_fixture(self):
-        temporary=tempfile.TemporaryDirectory(prefix='pcw-components-',dir='/private/tmp');self.addCleanup(temporary.cleanup)
+        temporary=tempfile.TemporaryDirectory(prefix='pcw-components-',dir=TEMP_ROOT);self.addCleanup(temporary.cleanup)
         root=pathlib.Path(temporary.name);here=root/'deploy/linux';here.mkdir(parents=True)
         for name in ['package-host-release.py','pendingcrew-host.py','managed-host.py','install.sh']:
             (here/name).write_bytes((source.parent/name).read_bytes())
         (root/'crewd').mkdir();(root/'crewd/Cargo.toml').write_text('# synthetic source tree; never compiled\n')
+        schema_path=root/'crewd/crates/store/src/schema.rs';schema_path.parent.mkdir(parents=True);schema_path.write_text('pub const SCHEMA_VERSION: i64 = 33;\n')
         def git(*args):return subprocess.check_output(['git','-C',str(root),*args],stderr=subprocess.PIPE).decode().strip()
         git('init','-q');git('add','.');git('-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','original component')
         core_source=git('rev-parse','HEAD')
@@ -340,7 +345,7 @@ class InstallerControls(unittest.TestCase):
         git('add','.');git('-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','new Python component')
         package_source=git('rev-parse','HEAD')
         binary=root/'synthetic-elf';header=bytearray(64);header[:6]=b'\x7fELF\x02\x01';header[18:20]=(62).to_bytes(2,'little');binary.write_bytes(header)
-        proof=root/'proof.json';proof.write_text(json.dumps({'sourceCommit':core_source,'binarySha256':host.sha(header),'sourceClean':True,'defaultFeatures':True,'features':[],'test':False}))
+        proof=root/'proof.json';proof.write_text(json.dumps({'schemaEvidence':{'sourceCommit':core_source,'storeVersion':33,'schemaSourceSHA256':host.sha(schema_path.read_bytes())},'sourceCommit':core_source,'binarySha256':host.sha(header),'sourceClean':True,'defaultFeatures':True,'features':[],'test':False}))
         spec=importlib.util.spec_from_file_location('mixed_package',here/'package-host-release.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         args=types.SimpleNamespace(source=package_source,core_source=core_source,architecture='x86_64',artifact_url='https://example.invalid/'+package_source+'/host.tar.gz',manifest_url='https://example.invalid/'+package_source+'/manifest.json',core=str(binary),proof=str(proof),output=str(root/'package'))
         return root,git,module,args
@@ -410,6 +415,79 @@ class InstallerControls(unittest.TestCase):
                         member=tarfile.TarInfo(name);member.size=len(data);archive.addfile(member,io.BytesIO(data))
                 extraction=root/failure;extraction.mkdir()
                 with self.assertRaises(host.Refused):host.extract_release(stream.getvalue(),extraction,expected)
+
+
+    def test_package_generation_comes_from_frozen_core_source_and_cannot_be_relabelled(self):
+        for failure in ['missing-proof','wrong-proof-version','wrong-proof-blob','missing-declaration','ambiguous-declaration','future-schema']:
+            with self.subTest(failure=failure):
+                root,git,module,args=self.mixed_package_fixture()
+                proof_path=pathlib.Path(args.proof);proof=json.loads(proof_path.read_text())
+                if failure=='missing-proof':proof.pop('schemaEvidence')
+                elif failure=='wrong-proof-version':proof['schemaEvidence']['storeVersion']=21
+                elif failure=='wrong-proof-blob':proof['schemaEvidence']['schemaSourceSHA256']='0'*64
+                else:
+                    path=root/'crewd/crates/store/src/schema.rs'
+                    path.write_text({'missing-declaration':'// no version declaration\n','ambiguous-declaration':'pub const SCHEMA_VERSION: i64 = 33;\npub const SCHEMA_VERSION: i64 = 21;\n','future-schema':'pub const SCHEMA_VERSION: i64 = 34;\n'}[failure])
+                    git('add','crewd');git('-c','user.name=Offline fixture','-c','user.email=fixture@invalid','commit','-qm','invalid original schema')
+                    args.source=args.core_source=git('rev-parse','HEAD')
+                    args.artifact_url='https://example.invalid/'+args.source+'/host.tar.gz';args.manifest_url='https://example.invalid/'+args.source+'/manifest.json'
+                    proof['sourceCommit']=args.core_source;proof['schemaEvidence']['sourceCommit']=args.core_source
+                proof_path.write_text(json.dumps(proof))
+                with self.assertRaises(ValueError),mock.patch('sys.stdout',new_callable=io.StringIO):module.package(args)
+                self.assertFalse(pathlib.Path(args.output).exists())
+
+    def test_release_extract_new_generation_negatives_and_unchanged_legacy21(self):
+        root,git,module,args=self.mixed_package_fixture()
+        with mock.patch('sys.stdout',new_callable=io.StringIO):module.package(args)
+        output=pathlib.Path(args.output);expected=json.loads((output/'manifest.json').read_bytes())['artifact']
+        with tarfile.open(output/'host.tar.gz') as archive:
+            original={m.name:archive.extractfile(m).read() for m in archive.getmembers()}
+        for failure in ['format1-new33','unknown-version','boolean-version','missing-schema','wrong-schema-source','wrong-proof-schema','legacy21']:
+            with self.subTest(failure=failure):
+                files=dict(original);release=json.loads(files['release.json']);proof=json.loads(files['build-proof.json'])
+                if failure=='format1-new33':release['format']=1
+                elif failure=='unknown-version':release['storeVersion']=34
+                elif failure=='boolean-version':release['storeVersion']=True
+                elif failure=='missing-schema':release.pop('schemaEvidence')
+                elif failure=='wrong-schema-source':release['schemaEvidence']['sourceCommit']='e'*40
+                elif failure=='wrong-proof-schema':proof['schemaEvidence']['schemaSourceSHA256']='f'*64
+                else:
+                    # Historical format shape only; this synthetic ELF is never a runtime claim.
+                    release['format']=1;release['storeVersion']=21;release.pop('schemaEvidence');proof.pop('schemaEvidence')
+                files['build-proof.json']=json.dumps(proof).encode();release['files']['build-proof.json']=host.sha(files['build-proof.json'])
+                files['release.json']=json.dumps(release).encode();stream=io.BytesIO()
+                with tarfile.open(fileobj=stream,mode='w:gz') as archive:
+                    for name,data in files.items():
+                        member=tarfile.TarInfo(name);member.size=len(data);archive.addfile(member,io.BytesIO(data))
+                target=root/failure;target.mkdir()
+                if failure=='legacy21':
+                    _,result=host.extract_release(stream.getvalue(),target,expected);self.assertEqual(result['storeVersion'],21)
+                else:
+                    with self.assertRaises(host.Refused):host.extract_release(stream.getvalue(),target,expected)
+
+    def test_real_header_install_and_rollback_generation_gate_never_recovers_or_downgrades(self):
+        source='a'*40;new={'format':2,'storeVersion':33,'sourceCommit':source,'schemaEvidence':{'sourceCommit':source,'storeVersion':33,'schemaSourceSHA256':'b'*64}}
+        old={'format':1,'storeVersion':21,'sourceCommit':source}
+        with tempfile.TemporaryDirectory() as temporary:
+            data=pathlib.Path(temporary);db=data/'crewd.db'
+            for current in [None,21,33,34]:
+                if current is None:
+                    if db.exists():db.unlink()
+                else:
+                    raw=bytearray(100);raw[:16]=b'SQLite format 3\0';raw[60:64]=current.to_bytes(4,'big');raw[68:72]=(0x43525744).to_bytes(4,'big');db.write_bytes(raw)
+                before=db.read_bytes() if db.exists() else None
+                for release in [old,new]:
+                    target=release['storeVersion']
+                    for operation,allowed in [(host.require_install_generation,current is None or current<=target),(host.require_rollback_generation,current is None or current==target)]:
+                        if allowed:operation(data,release)
+                        else:
+                            with self.assertRaises(host.Refused):operation(data,release)
+                        self.assertEqual(db.read_bytes() if db.exists() else None,before)
+            wal=data/'crewd.db-wal';wal.write_bytes(b'actual pending recovery marker')
+            before=db.read_bytes()
+            for operation in [host.require_install_generation,host.require_rollback_generation]:
+                with self.assertRaises(host.Refused):operation(data,new)
+            self.assertEqual(db.read_bytes(),before);self.assertEqual(wal.read_bytes(),b'actual pending recovery marker')
 
     def test_activation_pointer_is_bounded_and_never_follows_arbitrary_path(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -561,6 +639,13 @@ class ReviewedBuildBindingControls(unittest.TestCase):
                 with mock.patch.dict(os.environ,environment,clear=True):
                     with self.assertRaises((AssertionError,KeyError)):
                         self.build.binding(self.root,self.root,self.ref,self.ref)
+
+    def test_same_method_count_cannot_hide_changed_current_schema_shape(self):
+        original=json.loads((repo/'crewd/schema/crewd-api.schema.json').read_bytes())
+        changed=json.loads(json.dumps(original));changed['methods']['organization.search']['params']={'type':'string'}
+        self.assertEqual(len(changed['methods']),235)
+        with self.assertRaises(AssertionError):self.build.qualify_schema(changed)
+        self.build.qualify_schema(original)
 
     def test_changed_source_bytes_cannot_pass_matching_reviewed_ids(self):
         (self.root/'crewd/schema/crewd-api.schema.json').write_text('{}')

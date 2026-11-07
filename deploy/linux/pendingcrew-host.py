@@ -200,6 +200,34 @@ def download(url, expected, limit):
     if len(data) > limit or sha(data) != expected: raise Refused('release input digest or bound mismatch')
     return data
 
+def release_generation(release):
+    """Closed package formats; legacy21 assets stay exact and cannot become33."""
+    version = release.get('storeVersion')
+    format_ = release.get('format')
+    if type(version) is not int or type(format_) is not int:
+        raise Refused('integer release generation required')
+    if format_ == 1 and version == 21 and 'schemaEvidence' not in release:
+        return version
+    core_source = release.get('coreSourceCommit', release.get('sourceCommit'))
+    evidence = release.get('schemaEvidence')
+    if (format_ != 2 or version != 33 or not isinstance(evidence, dict)
+            or set(evidence) != {'sourceCommit', 'storeVersion', 'schemaSourceSHA256'}
+            or not isinstance(core_source, str) or not re.fullmatch('[0-9a-f]{40}', core_source)
+            or evidence.get('sourceCommit') != core_source
+            or type(evidence.get('storeVersion')) is not int or evidence['storeVersion'] != version
+            or not isinstance(evidence.get('schemaSourceSHA256'), str)
+            or not re.fullmatch('[0-9a-f]{64}', evidence['schemaSourceSHA256'])):
+        raise Refused('unsupported or unbound release generation')
+    return version
+
+
+def require_install_generation(data, release):
+    target = release_generation(release)
+    current = stopped_database_version(data)
+    if current is not None and current > target:
+        raise Refused('installation would downgrade the stopped Core database')
+
+
 def extract_release(payload, root, expected):
     archive = root / 'release.tar'; archive.write_bytes(payload)
     unpacked = root / 'unpacked'; unpacked.mkdir(mode=0o755); unpacked.chmod(0o755)
@@ -218,7 +246,8 @@ def extract_release(payload, root, expected):
     for directory in unpacked.rglob('*'):
         if directory.is_dir(): directory.chmod(0o755)
     release = json.loads((unpacked / 'release.json').read_bytes())
-    if release.get('format') != 1 or release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('storeVersion') != 21 or release.get('apiVersion') != 3:
+    release_generation(release)
+    if release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('apiVersion') != 3:
         raise Refused('wrong release source/architecture/schema')
     files = release.get('files', {})
     actual = {str(p.relative_to(unpacked)) for p in unpacked.rglob('*') if p.is_file()}
@@ -232,6 +261,8 @@ def extract_release(payload, root, expected):
         raise Refused('Core component source mismatch')
     if proof.get('sourceCommit') != core_source or proof.get('sourceClean') is not True or proof.get('defaultFeatures') is not True or proof.get('features') != [] or proof.get('test') is not False or proof.get('binarySha256') != files['bin/crewd']:
         raise Refused('ordinary binary build proof mismatch')
+    if release['format'] == 2 and proof.get('schemaEvidence') != release['schemaEvidence']:
+        raise Refused('ordinary build schema proof mismatch')
     header = (unpacked / 'bin/crewd').read_bytes()[:20]
     machine = {'x86_64': 62, 'aarch64': 183}.get(release['architecture'])
     if len(header) < 20 or header[:6] != b'\x7fELF\x02\x01' or int.from_bytes(header[18:20], 'little') != machine:
@@ -470,6 +501,7 @@ def install(args):
             if active() or pointer(PREFIX) != prior: raise Refused('installation CAS or active-runtime conflict; inspect original installation, never replay blindly')
             create_user_data(data, account)
             leases.callback(os.close, data_lease(data, account.pw_uid, account.pw_gid))
+            require_install_generation(data, release)
             destination = PREFIX / 'releases' / release['sourceCommit']
             if destination.exists() or destination.is_symlink():
                 root_code_directory(destination)
@@ -488,7 +520,7 @@ def install(args):
             (activation / 'release').symlink_to('../../releases/' + release['sourceCommit'])
             (activation / 'bin').symlink_to('release/bin')
             # Transaction file is public provenance only; all secret operations live in STATE.
-            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': 21}).encode(), 0o444)
+            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': release['storeVersion']}).encode(), 0o444)
             syncdir(activation); syncdir(activation.parent)
             pending = PREFIX / ('.current-' + installation); pending.symlink_to('activations/' + installation); os.replace(pending, PREFIX / 'current'); syncdir(PREFIX)
             if pointer(PREFIX) != 'activations/' + installation: raise Refused('activation result unknown; inspect original request only')
@@ -602,6 +634,13 @@ def stopped_database_version(data):
     if int.from_bytes(header[68:72], 'big') != 0x43525744: raise Refused('database belongs to another application')
     return int.from_bytes(header[60:64], 'big')
 
+def require_rollback_generation(data, release):
+    target = release_generation(release)
+    version = stopped_database_version(data)
+    if version not in (None, target):
+        raise Refused('rollback target is not qualified for the stopped database')
+    return version
+
 def rollback(args):
     selected = canonical_uuid(args.request_id)
     expected = 'activations/' + canonical_uuid(args.expected_current)
@@ -633,11 +672,13 @@ def rollback(args):
             if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or sha(member.read_bytes()) != digest:
                 raise Refused('rollback immutable release changed')
         leases.callback(os.close, data_lease(pathlib.Path(binding['dataDir']), binding['uid'], binding['gid']))
-        version = stopped_database_version(pathlib.Path(binding['dataDir']))
+        version = require_rollback_generation(pathlib.Path(binding['dataDir']), release)
         # This candidate has exactly one writer qualification. No guessed ranges
         # or downgrade migrations; the old writer must match the stopped format.
-        if release.get('storeVersion') != 21 or version not in (None, 21):
-            raise Refused('rollback target is not qualified for the stopped database')
+        if release['format'] == 2:
+            proof = json.loads((release_dir / 'build-proof.json').read_bytes())
+            if proof.get('schemaEvidence') != release['schemaEvidence']:
+                raise Refused('rollback original schema proof mismatch')
         new_record(STATE / ('rollback-' + operation + '.json'), {'format':1, 'kind':'rollback', 'requestId':operation, 'expectedCurrent':expected, 'target':'activations/' + selected, 'databaseVersion':version})
         pending = PREFIX / ('.current-' + operation)
         pending.symlink_to('activations/' + selected)

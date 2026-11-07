@@ -5,8 +5,9 @@ sys.dont_write_bytecode = True
 
 # Exact manual review inputs avoid a self-referential committed source SHA.
 # Independent source acceptance and dispatch authorization remain separate gates.
-QUALIFIED_METHOD_COUNT = 152
-QUALIFIED_STORE_VERSION = 21
+QUALIFIED_METHOD_COUNT = 235
+QUALIFIED_STORE_VERSION = 33
+QUALIFIED_SCHEMA_SHA256 = 'c8c0de2f17870c7a931105a4d0dd9bbd3fb0eb36a26079d800282a34213f93d5'
 COMPILER_ENVIRONMENT = ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER',
                         'RUSTC_WORKSPACE_WRAPPER', 'CARGO_INCREMENTAL', 'CC', 'CFLAGS']
 SOURCE_RECIPES = [
@@ -15,13 +16,14 @@ SOURCE_RECIPES = [
     'deploy/linux/package-host-release.py',
     'deploy/linux/pendingcrew-host.py',
     'deploy/linux/managed-host.py',
+    'scripts/dev/smoke-crewd-host-package.py',
 ]
 CONTROLLER_RECIPES = ['.github/workflows/crewd-linux-current.yml',
                       'scripts/dev/build-crewd-host-release.py']
 
 
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
-def git(root, *args): return subprocess.check_output(['git', '-C', str(root), *args])
+def git(root, *args): return subprocess.check_output(['git', '--no-replace-objects', '-C', str(root), *args])
 def save(path, value): path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
 
@@ -69,7 +71,7 @@ def binding(controller, source, controller_sha, source_sha):
         assert (source / path).read_bytes() == (controller / path).read_bytes(), 'reviewed source recipe changed: ' + path
     qualify_schema(json.loads((source/'crewd/schema/crewd-api.schema.json').read_bytes()))
     version_source = (source/'crewd/crates/store/src/schema.rs').read_text()
-    assert re.search(r'pub const SCHEMA_VERSION: i64 = ([0-9]+);', version_source).group(1) == str(QUALIFIED_STORE_VERSION)
+    assert re.findall(r'^pub const SCHEMA_VERSION: i64 = ([0-9]+);$', version_source, re.MULTILINE) == [str(QUALIFIED_STORE_VERSION)]
     for key in ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER',
                 'CARGO_BUILD_TARGET', 'CREWD_GIT_SHA', 'CREWD_GIT_DIRTY', 'CC', 'CFLAGS']:
         assert not os.environ.get(key), 'undeclared compiler override: ' + key
@@ -90,6 +92,9 @@ def command(argv, cwd, log):
 
 
 def qualify_schema(schema):
+    # The complete reviewed235-method contract includes every nested DTO and
+    # typed operation; a matching count alone never qualifies an altered API.
+    assert hashlib.sha256(json.dumps(schema, sort_keys=True, separators=(',', ':')).encode()).hexdigest() == QUALIFIED_SCHEMA_SHA256, 'complete reviewed API schema changed'
     assert len(schema['methods']) == QUALIFIED_METHOD_COUNT and all(p in schema['methods'] for p in ['remote.enrollmentCreate', 'remote.enrollmentLookup',
         'notification.deliveryGet', 'session.codex.inputPrepare', 'session.codex.inputLookup',
         'session.codex.inputDiscard', 'session.codex.permissionProfiles', 'command.submit', 'command.lookup'])
@@ -207,12 +212,22 @@ def main():
     # Project only after original graph/fresh-source verification; keep original witness.
     save(out/'build-proof.json', {'sourceCommit':s, 'sourceClean':True, 'defaultFeatures':True,
                                  'features':[], 'test':False, 'binarySha256':digest,
+                                 'schemaEvidence':{'sourceCommit':s, 'storeVersion':QUALIFIED_STORE_VERSION,
+                                     'schemaSourceSHA256':sha(source/'crewd/crates/store/src/schema.rs')},
                                  'originalWitnessSha256':sha(witness), 'controllerCommit':c})
     base = 'https://github.com/syncmeta/PendingCrew/releases/download/host-' + s
     command([sys.executable, '-I', str(source/SOURCE_RECIPES[2]), '--core', str(binary),
              '--proof', str(out/'build-proof.json'), '--source', s, '--architecture', 'x86_64',
              '--artifact-url', base+'/host.tar.gz', '--manifest-url', base+'/manifest.json',
              '--output', str(out/'install')], source, out/'package.log')
+    command([sys.executable, '-I', str(source/'scripts/dev/smoke-crewd-host-package.py'),
+             '--package', str(out/'install'), '--source', s, '--output', str(out/'runtime')], source, out/'runtime.log')
+    runtime = json.loads((out/'runtime/result.json').read_bytes())
+    assert runtime['passed'] is True and runtime['source'] == s and runtime['schemaVersion'] == QUALIFIED_STORE_VERSION
+    assert runtime['real21ProtectedMigration'] is True and runtime['normalBackupRestore'] is True
+    assert runtime['providersExecuted'] is False and runtime['installedSystemd'] is False
+    assert [p['phase'] for p in runtime['phases']] == ['old21-seed','new33-migrated','new33-reopen','new33-restored']
+    assert all(p['confirmed'] and p['exit'] == 0 and p['socketGone'] for p in runtime['phases'])
     after = binding(controller, source, c, s)
     assert current == after
     save(out/'source-after.json', after)
@@ -222,7 +237,7 @@ def main():
                             'affectedDefaultDirectoryTests':6,
                             'storeVersion':QUALIFIED_STORE_VERSION,
                             'sourceBeforeAfterEqual':True, 'published':False, 'installed':False,
-                            'providerExecuted':False, 'runtimeQualified':False,
+                            'providerExecuted':False, 'runtimeQualified':True, 'runtimeScope':'ordinary pinned21->33 protected migration/tables/docs/search/reopen/original UUID/official backup restore; no installed systemd',
                             'plannedReleaseBase':base,
                             'packageFiles':{p.name:sha(p) for p in sorted((out/'install').iterdir())}})
     # The normal witness already retains the exact ELF; no second standalone ELF.
