@@ -478,6 +478,7 @@ mod tests {
                 choice_min: 0.8,
                 wake_yes: 0.8,
                 similar_requirements: None,
+                similar_asks: None,
                 credential_source: "file".into(),
             }),
         };
@@ -508,6 +509,7 @@ mod tests {
                         choice_min: 0.8,
                         wake_yes: 0.8,
                         similar_requirements: None,
+                        similar_asks: None,
                         credential_source: "file".into(),
                     }),
                 },

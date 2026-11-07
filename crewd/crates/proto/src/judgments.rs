@@ -14,6 +14,9 @@ pub struct JudgmentConfig {
     /// Explicit opt-in for comparing current same-channel Human requirements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub similar_requirements: Option<bool>,
+    /// Explicit opt-in for advisory grouping of same-crew pending AgentAsk questions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub similar_asks: Option<bool>,
     /// Storage implementation, scoped to this database and an explicitly written secret slot.
     #[serde(default = "platform")]
     pub credential_source: String,

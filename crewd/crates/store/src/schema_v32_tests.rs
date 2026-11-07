@@ -73,7 +73,7 @@ fn core32_real31_protected_migration_keeps_legacy_bytes_authors_revisions_and_ze
     c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
     drop(c);
     let migrated = Store::open(&path).unwrap();
-    assert_eq!(version(migrated.conn()), 32);
+    assert_eq!(version(migrated.conn()), schema::SCHEMA_VERSION);
     assert_eq!(original(migrated.conn(), table, row), before);
     let t = new::table(migrated.conn(), table).unwrap().unwrap();
     assert_eq!(t.schema_revision, "17");

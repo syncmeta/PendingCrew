@@ -1096,9 +1096,16 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     {
         return Err(StoreError::Invalid("不能用在用的库恢复它自己".into()));
     }
+    // Qualify the supported H33 format on a private cold/WAL copy before a
+    // read-only SQLite open can create sidecars or any target path is touched.
+    crate::version_guard::preflight(from)?.recheck()?;
     let src = open_read_only(from)?;
     let app: i32 = src.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let version: i64 = src.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version == 33 {
+        src.pragma_update(None, "foreign_keys", true)?;
+        crate::admin_ask_groups::validate_schema(&src)?;
+    }
     if (app != 0 && app != crate::APPLICATION_ID)
         || version == 16
         || !(1..=crate::schema::SUPPORTED_SCHEMA_VERSION).contains(&version)

@@ -842,6 +842,7 @@ mod tests {
                         wake_yes: 0.5,
                         credential_source: "file".into(),
                         similar_requirements,
+                        similar_asks: None,
                     }),
                 },
             )

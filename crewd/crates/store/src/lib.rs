@@ -1,4 +1,5 @@
 //! crewd 的持久化层。crewd 是数据库的唯一写者；其他进程一律经 crewd 的 API。
+pub mod admin_ask_groups;
 pub mod archive;
 pub mod artifact_history;
 pub mod backup;

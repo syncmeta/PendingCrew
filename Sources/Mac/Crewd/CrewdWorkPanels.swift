@@ -231,6 +231,10 @@ struct CrewdWorkPanels: View {
     private func includes(_ kind:String,_ id:String)->Bool {managedSelection==id || compact || CrewdFolderFilter.includes(CrewdFolderFilter.object(kind,id),selection:folderSelection.wrappedValue,snapshot:resources.folders[folderView])}
     var body: some View {
         VStack(alignment:.leading,spacing:12) {
+            if !progressOnly, domain != .requirements, !store.selectedCrew.isEmpty, let workspace = patrolWorkspace {
+                CrewdAdminAskGroupsEntry(workspace: workspace, workStore: store, drafts: $humanDrafts,
+                    crew: store.selectedCrew, current: { workspace.workStore === store && workspace.client.readyForWork })
+            }
             if !compact {
                 HStack(spacing:10) {
                     CrewdFolderControls(store:resources,drafts:$resourceDrafts,selection:folderSelection,view:folderView,compact:true).fixedSize(horizontal:true,vertical:false)

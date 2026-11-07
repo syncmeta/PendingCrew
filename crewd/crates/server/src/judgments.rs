@@ -1,5 +1,6 @@
 //! Decision planning is separate from effects. All public/model names are opaque
 //! request-local aliases; only a current authority snapshot can resolve them.
+mod admin_ask_groups;
 mod admin_cases;
 mod configuration;
 mod coordination;
@@ -196,6 +197,8 @@ pub(crate) struct Runtime {
     admin_launch_pending: Mutex<std::collections::VecDeque<crewd_collab::admin_cases::CaseRef>>,
     admin_launch_inflight: Mutex<std::collections::BTreeSet<String>>,
     similarity_slot: Arc<Semaphore>,
+    ask_groups_slot: Arc<Semaphore>,
+    ask_groups_ready: AtomicBool,
 }
 fn provider_config(c: &JudgmentConfig) -> DecisionConfig {
     DecisionConfig {
@@ -208,6 +211,14 @@ fn provider_config(c: &JudgmentConfig) -> DecisionConfig {
     }
 }
 impl Runtime {
+    pub(crate) fn ask_groups_healthy(&self) -> bool {
+        !self.closed.load(Ordering::Acquire)
+            && self.ask_groups_ready.load(Ordering::Acquire)
+            && self
+                .pump
+                .try_lock()
+                .is_ok_and(|p| p.as_ref().is_some_and(|h| !h.is_finished()))
+    }
     pub(crate) async fn start(
         state: &Arc<AppState>,
         data: PathBuf,
@@ -254,6 +265,8 @@ impl Runtime {
             admin_launch_pending: Mutex::new(Default::default()),
             admin_launch_inflight: Mutex::new(Default::default()),
             similarity_slot: Arc::new(Semaphore::new(1)),
+            ask_groups_slot: Arc::new(Semaphore::new(1)),
+            ask_groups_ready: AtomicBool::new(false),
         });
         // Settle old pending attempts without invoking a provider. A restored DB
         // has a different dbId and is historical instead of a new dispatch.
@@ -268,6 +281,12 @@ impl Runtime {
         this.recover_admin_cases().await?;
         if let Err(error) = this.recover_similarity().await {
             eprintln!("crewd: requirement similarity recovery failed closed: {error}");
+        }
+        match this.recover_ask_groups().await {
+            Ok(()) => this.ask_groups_ready.store(true, Ordering::Release),
+            Err(error) => {
+                eprintln!("crewd: pending-question grouping recovery failed closed: {error}")
+            }
         }
         // Import failures are visible discovery failures, not a reason to stop
         // the daemon or restart unknown administrative dispatches.
@@ -285,6 +304,7 @@ impl Runtime {
                     _ = pending_tick.tick() => {
                         let Some(runtime) = weak.upgrade() else { break };
                         runtime.schedule_similarity().await;
+                        runtime.schedule_ask_groups().await;
                         if let Err(e) = runtime.resume_pending_coordination().await {
                             eprintln!("crewd: coordination pending scan failed: {e}");
                         }

@@ -2564,6 +2564,15 @@
         }
       ]
     },
+    "Availability": {
+      "enum": [
+        "disabled",
+        "unconfigured",
+        "ready",
+        "archived"
+      ],
+      "type": "string"
+    },
     "BacklinksParams": {
       "additionalProperties": false,
       "properties": {
@@ -3846,6 +3855,18 @@
       "properties": {
         "crewId": {
           "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "Changed3": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
         },
         "jobId": {
           "type": "string"
@@ -3857,7 +3878,7 @@
       ],
       "type": "object"
     },
-    "Changed3": {
+    "Changed4": {
       "additionalProperties": false,
       "properties": {
         "crewId": {
@@ -11854,6 +11875,38 @@
         {
           "properties": {
             "data": {
+              "$ref": "#/$defs/Invalidated"
+            },
+            "event": {
+              "const": "adminAskGroups.invalidated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
+              "$ref": "#/$defs/Changed"
+            },
+            "event": {
+              "const": "adminAskGroups.changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "data"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "data": {
               "$ref": "#/$defs/OntologyChanged"
             },
             "event": {
@@ -11870,7 +11923,7 @@
         {
           "properties": {
             "data": {
-              "$ref": "#/$defs/Changed"
+              "$ref": "#/$defs/Changed2"
             },
             "event": {
               "const": "artifact.changed",
@@ -11886,7 +11939,7 @@
         {
           "properties": {
             "data": {
-              "$ref": "#/$defs/Changed2"
+              "$ref": "#/$defs/Changed3"
             },
             "event": {
               "const": "artifact.historyChanged",
@@ -11902,7 +11955,7 @@
         {
           "properties": {
             "data": {
-              "$ref": "#/$defs/Changed3"
+              "$ref": "#/$defs/Changed4"
             },
             "event": {
               "const": "links.changed",
@@ -14073,6 +14126,11 @@
       ],
       "type": "object"
     },
+    "Invalidated": {
+      "additionalProperties": false,
+      "description": "Global advisory qualification changed, without identifying a private crew/H.",
+      "type": "object"
+    },
     "IssuedOption": {
       "additionalProperties": false,
       "properties": {
@@ -14168,6 +14226,13 @@
         },
         "provider": {
           "type": "string"
+        },
+        "similarAsks": {
+          "description": "Explicit opt-in for advisory grouping of same-crew pending AgentAsk questions.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "similarRequirements": {
           "description": "Explicit opt-in for comparing current same-channel Human requirements.",
@@ -15350,6 +15415,33 @@
           "type": "object"
         }
       ]
+    },
+    "List": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
     },
     "ListLinks": {
       "additionalProperties": false,
@@ -18485,6 +18577,97 @@
       ],
       "type": "object"
     },
+    "Page3": {
+      "additionalProperties": false,
+      "properties": {
+        "availability": {
+          "$ref": "#/$defs/Availability"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "historicalBaseline": {
+          "description": "Old restored work is not automatically enrolled into a fresh model round.",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Pair"
+          },
+          "type": "array"
+        },
+        "nextAfter": {
+          "description": "Advances over retained observations, including currently stale rows.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "partialCoverage": {
+          "description": "Incomplete discovery, missing current sources, or an unresolved judgment.",
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        }
+      },
+      "required": [
+        "scope",
+        "crewId",
+        "availability",
+        "observedAtMs",
+        "items",
+        "partialCoverage",
+        "historicalBaseline"
+      ],
+      "type": "object"
+    },
+    "Pair": {
+      "additionalProperties": false,
+      "properties": {
+        "excerptTruncated": {
+          "type": "boolean"
+        },
+        "first": {
+          "$ref": "#/$defs/Question"
+        },
+        "id": {
+          "type": "string"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "probability": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "second": {
+          "$ref": "#/$defs/Question"
+        },
+        "state": {
+          "$ref": "#/$defs/State"
+        }
+      },
+      "required": [
+        "id",
+        "first",
+        "second",
+        "state",
+        "excerptTruncated"
+      ],
+      "type": "object"
+    },
     "Patch": {
       "additionalProperties": false,
       "properties": {
@@ -20299,6 +20482,60 @@
         "production"
       ],
       "type": "string"
+    },
+    "Question": {
+      "additionalProperties": false,
+      "properties": {
+        "askedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "defaultDueAtMs": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "defaultTruncated": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "questionTruncated": {
+          "type": "boolean"
+        },
+        "resolutionRevision": {
+          "type": "string"
+        },
+        "sourceChannelId": {
+          "type": "string"
+        },
+        "sourceMessageId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "question",
+        "questionTruncated",
+        "resolutionRevision",
+        "sourceChannelId",
+        "sourceMessageId",
+        "askedAtMs",
+        "defaultTruncated"
+      ],
+      "type": "object"
     },
     "QuotaResult": {
       "properties": {
@@ -24495,6 +24732,18 @@
         }
       ]
     },
+    "State": {
+      "enum": [
+        "prepared",
+        "dispatched",
+        "suggested",
+        "different",
+        "unavailable",
+        "unknown",
+        "stale"
+      ],
+      "type": "string"
+    },
     "Status": {
       "additionalProperties": false,
       "properties": {
@@ -24855,7 +25104,8 @@
               "data",
               "onto",
               "artifact",
-              "links"
+              "links",
+              "adminAskGroups"
             ],
             "type": "string"
           },
@@ -28745,11 +28995,17 @@
   },
   "apiVersion": 3,
   "events": {
-    "artifact.changed": {
+    "adminAskGroups.changed": {
       "$ref": "#/$defs/Changed"
     },
-    "artifact.historyChanged": {
+    "adminAskGroups.invalidated": {
+      "$ref": "#/$defs/Invalidated"
+    },
+    "artifact.changed": {
       "$ref": "#/$defs/Changed2"
+    },
+    "artifact.historyChanged": {
+      "$ref": "#/$defs/Changed3"
     },
     "ask.changed": {
       "$ref": "#/$defs/Ask"
@@ -28785,7 +29041,7 @@
       "$ref": "#/$defs/Lagged"
     },
     "links.changed": {
-      "$ref": "#/$defs/Changed3"
+      "$ref": "#/$defs/Changed4"
     },
     "message.appended": {
       "$ref": "#/$defs/Message"
@@ -28836,6 +29092,14 @@
     }
   },
   "methods": {
+    "adminAskGroups.list": {
+      "params": {
+        "$ref": "#/$defs/List"
+      },
+      "result": {
+        "$ref": "#/$defs/Page3"
+      }
+    },
     "adminCase.custodyGet": {
       "params": {
         "$ref": "#/$defs/AdminCaseCustodyGetParams"
@@ -30857,7 +31121,8 @@
     "data",
     "onto",
     "artifact",
-    "links"
+    "links",
+    "adminAskGroups"
   ],
   "transport": "NDJSON over Unix socket; one Request per line, server replies ServerFrame per line"
 }

@@ -172,6 +172,22 @@ where
             {
                 continue;
             }
+            if let ServerFrame::Event(event) = &frame
+                && matches!(
+                    event.event.as_str(),
+                    crewd_proto::admin_ask_groups::CHANGED
+                        | crewd_proto::admin_ask_groups::INVALIDATED
+                )
+                && !crate::admin_ask_groups::event_allowed(
+                    &writer_state,
+                    &writer_actor,
+                    &event.event,
+                    &event.data,
+                )
+                .await
+            {
+                continue;
+            }
             let mut line = match serde_json::to_vec(&frame) {
                 Ok(l) => l,
                 Err(_) => continue,
@@ -883,6 +899,23 @@ async fn request_step(
                 )
             }
         }
+        Ok(req) if crewd_proto::admin_ask_groups::METHODS.contains(&req.method.as_str()) => {
+            if agent.is_attached() {
+                ServerFrame::Response(Response::err(
+                    req.id,
+                    crate::dispatch::refused(
+                        RpcError::FORBIDDEN,
+                        crewd_collab::refusal::Refusal::new(
+                            crewd_collab::refusal::Code::ResourceForbidden,
+                        ),
+                    ),
+                ))
+            } else {
+                ServerFrame::Response(
+                    crate::admin_ask_groups::handle(state, &peer.command_actor(), req).await,
+                )
+            }
+        }
         Ok(req) if crewd_proto::organization_search::METHODS.contains(&req.method.as_str()) => {
             if agent.is_attached() {
                 ServerFrame::Response(Response::err(
@@ -1007,7 +1040,12 @@ async fn request_step(
                 && p.topics.iter().any(|t| {
                     matches!(
                         t.as_str(),
-                        "documents" | "viewFolders" | "data" | "personalDraft" | events::ONTO_TOPIC
+                        "documents"
+                            | "viewFolders"
+                            | "data"
+                            | "personalDraft"
+                            | events::ONTO_TOPIC
+                            | crewd_proto::admin_ask_groups::TOPIC
                     )
                 })
             {
@@ -1020,6 +1058,19 @@ async fn request_step(
                         ),
                     ),
                 )));
+            }
+            if p.topics
+                .iter()
+                .any(|topic| topic == crewd_proto::admin_ask_groups::TOPIC)
+            {
+                let actor = peer.command_actor();
+                if let Err(error) = actor
+                    .authorize(state, crewd_proto::admin_ask_groups::LIST)
+                    .await
+                {
+                    return RequestStep::Reply(ServerFrame::Response(Response::err(id, error)));
+                }
+                agent.reserve_human_event_stream();
             }
             if p.topics.iter().any(|topic| topic == events::ONTO_TOPIC) {
                 let actor = peer.command_actor();
@@ -1370,6 +1421,8 @@ fn spawn_forwarder(
                             e.event.as_str(),
                             "personalDraft.changed"
                                 | events::ASK_INBOX_CHANGED
+                                | crewd_proto::admin_ask_groups::CHANGED
+                                | crewd_proto::admin_ask_groups::INVALIDATED
                                 | events::ONTO_CHANGED
                                 | crewd_proto::managed_artifacts::CHANGED
                                 | crewd_proto::artifact_history::CHANGED
@@ -1397,6 +1450,17 @@ fn spawn_forwarder(
                     if e.event == events::ASK_INBOX_CHANGED
                         && (!ask_inbox_event_allowed(&state, &actor, &e.data).await
                             || attached.load(std::sync::atomic::Ordering::Acquire))
+                    {
+                        continue;
+                    }
+                    if matches!(
+                        e.event.as_str(),
+                        crewd_proto::admin_ask_groups::CHANGED
+                            | crewd_proto::admin_ask_groups::INVALIDATED
+                    ) && !crate::admin_ask_groups::event_allowed(
+                        &state, &actor, &e.event, &e.data,
+                    )
+                    .await
                     {
                         continue;
                     }

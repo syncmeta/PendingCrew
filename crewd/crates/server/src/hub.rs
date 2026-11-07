@@ -213,6 +213,16 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
                 crew_id: crew_id.clone(),
             },
         )?],
+        Change::AdminAskGroupsInvalidated => vec![ev(
+            crewd_proto::admin_ask_groups::INVALIDATED,
+            &crewd_proto::admin_ask_groups::Invalidated {},
+        )?],
+        Change::AdminAskGroupsChanged { crew_id } => vec![ev(
+            crewd_proto::admin_ask_groups::CHANGED,
+            &crewd_proto::admin_ask_groups::Changed {
+                crew_id: crew_id.clone(),
+            },
+        )?],
         Change::OntologyChanged {
             crew_id,
             object_ids,
@@ -240,4 +250,18 @@ fn client_events(conn: &Connection, c: &Change) -> crewd_collab::Result<Vec<Even
         | Change::RestartAnswered { .. }
         | Change::Progress { .. } => vec![],
     })
+}
+
+#[cfg(test)]
+mod admin_ask_invalidation_tests {
+    use super::*;
+    #[test]
+    fn global_hint_is_one_empty_event_without_a_fabricated_crew_or_business_effect() {
+        let c = Connection::open_in_memory().unwrap();
+        let events = client_events(&c, &Change::AdminAskGroupsInvalidated).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, crewd_proto::admin_ask_groups::INVALIDATED);
+        assert_eq!(events[0].data, serde_json::json!({}));
+        assert_eq!(c.total_changes(), 0);
+    }
 }

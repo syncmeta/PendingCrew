@@ -11,6 +11,7 @@
 //!   （握手是以后加字段、协商能力的地方）。
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
+pub mod admin_ask_groups;
 pub mod session_retirement;
 pub use session_retirement::*;
 pub mod work_reassignment;
@@ -373,6 +374,7 @@ pub mod methods {
             .chain(crate::managed_tables_v2::METHODS.iter().copied())
             .chain(crate::managed_tables_v3::METHODS.iter().copied())
             .chain(crate::organization_search::METHODS.iter().copied())
+            .chain(crate::admin_ask_groups::METHODS.iter().copied())
             .chain(crate::lifecycle::METHODS.iter().copied())
             .chain(std::iter::once(crate::executors::EXECUTOR_LIST))
             .collect()
@@ -405,6 +407,7 @@ pub mod events {
         ONTO_TOPIC,
         "artifact",
         crate::managed_tables_v2::TOPIC,
+        crate::admin_ask_groups::TOPIC,
     ];
     pub const SYSTEM_SHUTDOWN: &str = "system.shutdown";
     pub const MESSAGE_APPENDED: &str = "message.appended";
@@ -626,6 +629,14 @@ fn event_payloads(g: &mut schemars::SchemaGenerator) -> Vec<(&'static str, Value
         ),
         (events::ASK_CHANGED, sub::<Ask>(g)),
         (events::ASK_INBOX_CHANGED, sub::<CrewRef>(g)),
+        (
+            admin_ask_groups::INVALIDATED,
+            sub::<admin_ask_groups::Invalidated>(g),
+        ),
+        (
+            admin_ask_groups::CHANGED,
+            sub::<admin_ask_groups::Changed>(g),
+        ),
         (
             events::ONTO_CHANGED,
             sub::<managed_objects_api::OntologyChanged>(g),
@@ -1921,6 +1932,7 @@ pub fn api_schema() -> Value {
     .chain(orchestra::schema_entries(g).0)
     .chain(team_data_api::schema_entries(g))
     .chain(lifecycle::schema_entries(g))
+    .chain(admin_ask_groups::schema_entries(g))
     .chain(std::iter::once((
         executors::EXECUTOR_LIST,
         m(

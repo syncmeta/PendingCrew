@@ -223,6 +223,9 @@ targets:
       - path: Sources/CrewdRemote/CrewdManagedTableV3Wire.swift
       - path: Sources/CrewdRemote/CrewdManagedTableV3Store.swift
       - path: Sources/CrewdRemote/CrewdManagedTableV3Views.swift
+      - path: Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift
+      - path: Sources/CrewdRemote/CrewdAdminAskGroupsStore.swift
+      - path: Sources/CrewdRemote/CrewdAdminAskGroupsViews.swift
       - path: Sources/CrewdRemote/CrewdOrganizationSearchWire.swift
       - path: Sources/CrewdRemote/CrewdOrganizationSearchStore.swift
       - path: Sources/CrewdRemote/CrewdOrganizationSearchViews.swift

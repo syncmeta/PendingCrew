@@ -373,6 +373,7 @@ final class CrewdClient: ObservableObject {
         topics += ["documents","viewFolders","data"].filter { capabilities.contains($0) }
         if capabilities.contains("managedObjects.events.v1") { topics.append("onto") }
         if capabilities.contains("managedArtifacts.v1") { topics.append("artifact") }
+        if capabilities.contains(CrewdAdminAskGroupsWire.capability) { topics.append(CrewdAdminAskGroupsWire.topic) }
         if capabilities.contains("managedLinks.v1") || capabilities.contains("managedTables.v3") { topics.append("links") }
         return topics
     }

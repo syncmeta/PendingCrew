@@ -147,6 +147,7 @@ impl Fixture {
             choice_min: 0.5,
             wake_yes: 0.5,
             similar_requirements: None,
+            similar_asks: None,
             credential_source: "file".into(),
         }
     }

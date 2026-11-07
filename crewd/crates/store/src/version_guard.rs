@@ -307,10 +307,28 @@ pub(crate) fn preflight(path: &Path) -> Result<Guard> {
             return Err(unknown());
         }
         version(actual.0)?;
+        if actual.0 == 33 {
+            conn.pragma_update(None, "foreign_keys", true)?;
+            crate::admin_ask_groups::validate_schema(&conn)?;
+        }
         let integrity: String = conn.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
         if integrity != "ok" {
             return Err(unknown());
         }
+        drop(conn);
+    } else if fields.0 == 33 {
+        // Supported H33 has its own strict format. The unpublished query33
+        // prototype must fail without chmod, WAL recovery or SHM on the source.
+        let copy = PrivateCopy::new()?;
+        let db = copy.copy("probe.db", &mut sources[0].as_mut().unwrap().0)?;
+        guard.recheck()?;
+        let conn = Connection::open_with_flags(
+            &db,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        crate::search_context::ensure_registered(&conn)?;
+        conn.pragma_update(None, "foreign_keys", true)?;
+        crate::admin_ask_groups::validate_schema(&conn)?;
         drop(conn);
     }
     guard.recheck()?;

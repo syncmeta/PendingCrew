@@ -12,6 +12,7 @@ struct CrewdJudgmentConfig: Codable, Equatable {
     var wakeYes: Double
     var credentialSource: String
     var similarRequirements: Bool? = nil
+    var similarAsks: Bool? = nil
     static let empty = Self(enabled: false, provider: "typesafe", baseUrl: "", model: "", choiceMin: 0.5, wakeYes: 0.5, credentialSource: "platform")
     var valid: Bool {
         guard provider == "typesafe", ["platform", "file"].contains(credentialSource),

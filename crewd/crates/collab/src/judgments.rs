@@ -395,6 +395,12 @@ pub fn set_configuration(
         CONFIG_KEY,
         &serde_json::to_string(&next).map_err(crewd_store::StoreError::from)?,
     )?;
+    // No marker is invented for older stores. A new settings UUID invalidates
+    // only the advisory family's coverage, never an H or its original receipt.
+    if crewd_store::admin_ask_groups::available(tx.conn())? {
+        crewd_store::admin_ask_groups::invalidate_coverage(tx.conn())?;
+        tx.note(Change::AdminAskGroupsInvalidated);
+    }
     Ok(next)
 }
 fn key(kind: &JudgmentSourceKind) -> &'static str {
@@ -769,6 +775,7 @@ mod tests {
                 choice_min: 0.5,
                 wake_yes: 0.5,
                 similar_requirements: None,
+                similar_asks: None,
                 credential_source: "file".into(),
             }),
         };
@@ -1258,5 +1265,61 @@ mod tests {
             )
             .unwrap();
         assert!(record(s.conn(), &JudgmentSourceKind::Message, &message.id).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ask_group_invalidation_tests {
+    use super::*;
+    #[test]
+    fn actual_configuration_commit_emits_once_and_refusal_or_rollback_has_no_effect() {
+        let mut s = crate::testkit::store();
+        let side_effects = |c: &Connection| {
+            c.query_row("SELECT (SELECT count(*) FROM messages),(SELECT count(*) FROM wakes),(SELECT count(*) FROM organization_work_events)",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,i64>(2)?))).unwrap()
+        };
+        let before = side_effects(s.conn());
+        let p = JudgmentSettingsSet {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            expected_revision: None,
+            config: None,
+            credential_update: Default::default(),
+        };
+        let (settings, changes) = crate::run(&mut s, 1_000, |tx| {
+            set_configuration(tx, &Sender::Human, p.clone())
+        })
+        .unwrap();
+        assert_eq!(changes, vec![Change::AdminAskGroupsInvalidated]);
+        assert_eq!(side_effects(s.conn()), before);
+        assert!(
+            crate::run(&mut s, 1_001, |tx| set_configuration(
+                tx,
+                &Sender::Human,
+                p.clone()
+            ))
+            .is_err()
+        );
+        assert_eq!(configuration(s.conn()).unwrap(), settings);
+        let next = JudgmentSettingsSet {
+            request_id: uuid::Uuid::new_v4().to_string(),
+            expected_revision: settings.revision.clone(),
+            ..p
+        };
+        let result: Result<((), Vec<Change>)> = crate::run(&mut s, 1_002, |tx| {
+            set_configuration(tx, &Sender::Human, next.clone())?;
+            Err(invalid("forcedRollback"))
+        });
+        assert!(result.is_err());
+        assert_eq!(configuration(s.conn()).unwrap(), settings);
+        assert_eq!(side_effects(s.conn()), before);
+        assert!(
+            crate::run(&mut s, 1_003, |tx| set_configuration(
+                tx,
+                &Sender::Session("w-a1".into()),
+                next
+            ))
+            .is_err()
+        );
+        assert_eq!(configuration(s.conn()).unwrap(), settings);
+        assert_eq!(side_effects(s.conn()), before);
     }
 }

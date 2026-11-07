@@ -987,6 +987,9 @@ impl Principal {
     }
 }
 fn allowed_method(method: &str) -> bool {
+    if method == crewd_proto::admin_ask_groups::LIST {
+        return true;
+    }
     if crewd_proto::managed_tables_v3::METHODS.contains(&method) {
         return true;
     }

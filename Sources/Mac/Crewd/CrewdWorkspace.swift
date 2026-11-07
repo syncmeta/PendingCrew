@@ -228,6 +228,18 @@ final class CrewdWorkspace: ObservableObject {
         return journal
     },available:{[weak self] in self?.client.capabilities.contains(CrewdArtifactWire.capability)==true},
     historyAvailable:{[weak self] in self?.client.capabilities.contains(CrewdArtifactHistoryWire.capability)==true})
+    lazy var adminAskGroups = CrewdAdminAskGroupsStore(origin: { [weak self] in
+        guard let self, !self.retired, self.client.readyForWork,
+              self.client.capabilities.contains(CrewdAdminAskGroupsWire.capability),
+              let scope = self.presentationScope, scope.databaseID != nil else { return nil }
+        return .init(scope: scope, observation: self.observationGeneration,
+                     connection: self.client.connectionEpoch, crew: self.crewID)
+    }, rpc: { [weak self] method, params in
+        guard let self, !self.retired, self.client.readyForWork,
+              self.client.capabilities.contains(CrewdAdminAskGroupsWire.capability),
+              method == CrewdAdminAskGroupsWire.list else { throw CrewdAdminAskGroupsWire.Problem.unavailable }
+        return try await self.client.call(method, params)
+    }, available: { [weak self] in self?.client.capabilities.contains(CrewdAdminAskGroupsWire.capability) == true })
     lazy var managedTablesV2=CrewdManagedTableV2Store(origin:{[weak self] in
         guard let self,!self.retired,self.client.readyForWork,self.originalJournalReady,
               self.client.capabilities.contains(CrewdManagedTableV2Wire.capability) || self.client.capabilities.contains(CrewdManagedTableV2Wire.linksCapability),let scope=self.presentationScope else {return nil}
@@ -686,9 +698,10 @@ final class CrewdWorkspace: ObservableObject {
             guard let self, !self.retired else { return }
             self.artifacts.handleEvent(name,data,connection:self.client.connectionEpoch)
             self.managedTablesV2.handleEvent(name,data,connection:self.client.connectionEpoch)
+            self.adminAskGroups.handleEvent(name,data,connection:self.client.connectionEpoch)
             self.managedTablesV3.handleEvent(name,data,connection:self.client.connectionEpoch)
             switch name {
-            case "artifact.changed","artifact.historyChanged","links.changed":return
+            case "artifact.changed","artifact.historyChanged","links.changed",CrewdAdminAskGroupsWire.changed,CrewdAdminAskGroupsWire.invalidated:return
             case "onto.changed":
                 if self.client.capabilities.contains("managedObjects.events.v1") {
                     self.managedDirectory.handleEvent(name,data,connection:self.client.connectionEpoch)
@@ -1355,6 +1368,7 @@ final class CrewdWorkspace: ObservableObject {
         }
     }
     private func isReadOnly(_ method: String) -> Bool {
+        if method == CrewdAdminAskGroupsWire.list { return true }
         if CrewdManagedTableV3Wire.readMethods.contains(method){return true}
         if [CrewdOrganizationSearchWire.search,CrewdOrganizationSearchWire.expand].contains(method) {return true}
         if [CrewdManagedTableV2Wire.tableGet,CrewdManagedTableV2Wire.tableList,CrewdManagedTableV2Wire.rows,CrewdManagedTableV2Wire.rowGet,CrewdManagedTableV2Wire.lookup,CrewdManagedTableV2Wire.links,CrewdManagedTableV2Wire.linkLookup,CrewdManagedTableV2Wire.resolveTarget].contains(method) {return true}

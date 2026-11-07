@@ -1246,6 +1246,7 @@ async fn paired_human_requirement_review_recovers_exact_receipts_and_stops_after
                         wake_yes: 0.5,
                         credential_source: "file".into(),
                         similar_requirements: Some(true),
+                        similar_asks: None,
                     }),
                 },
             )?;
@@ -5564,4 +5565,118 @@ async fn attached_agent_cannot_use_human_v2_table_and_link_methods_or_human_link
     drop((agent, human));
     stop.send(()).unwrap();
     tokio::time::timeout(LIMIT, server).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn paired_admin_ask_groups_read_and_actual_settings_invalidation_obey_live_grants() {
+    use crewd_proto::admin_ask_groups::{CAPABILITY, INVALIDATED, LIST, TOPIC};
+    let dir = tempfile::tempdir().unwrap();
+    let mut running = service_with(
+        dir.path(),
+        crewd_server::ServeOptions {
+            orchestra: Some(crewd_server::OrchestraServe::default()), // Both executors disabled.
+            ..Default::default()
+        },
+    )
+    .await;
+    let (port, identity) = enabled(&mut running.owner).await;
+    let (cert, _, grant) = approved(&mut running.owner, &identity).await;
+    let mut remote = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    tokio::time::timeout(LIMIT, async {
+        loop {
+            let hello = remote.call("system.hello", json!({})).await;
+            if hello["capabilities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == CAPABILITY)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let crew = local(
+        &mut running.owner,
+        "crew.create",
+        json!({
+            "title":"Actual paired advisory reader", "workingDirectory":dir.path()
+        }),
+    )
+    .await["id"]
+        .clone();
+    let page = remote.call(LIST, json!({"crewId":crew})).await;
+    assert_eq!(page["availability"], "disabled");
+    assert_eq!(page["items"], json!([]));
+    let malformed = remote
+        .frame(LIST, json!({"crewId":crew,"principal":"human"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        malformed["error"]["code"],
+        crewd_proto::RpcError::INVALID_PARAMS
+    );
+
+    let mut updates = RemoteRpc::connect(port, &cert, &identity.spki_sha256).await;
+    updates
+        .call("events.subscribe", json!({"topics":[TOPIC]}))
+        .await;
+    let settings = local(&mut running.owner, "judgment.settings.get", json!({})).await;
+    let intent = json!({"requestId":uuid::Uuid::new_v4().to_string(),
+        "expectedRevision":settings["view"]["settings"]["revision"],
+        "config":null,"credentialUpdate":{"action":"keep"}});
+    let committed = local(&mut running.owner, "judgment.settings.set", intent.clone()).await;
+    assert_eq!(committed["outcome"], "committed");
+    assert_eq!(
+        updates.event().await,
+        json!({"event":INVALIDATED,"data":{}})
+    );
+    assert_eq!(
+        local(&mut running.owner, "judgment.settings.set", intent).await,
+        committed
+    );
+    let mut line = String::new();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), updates.io.read_line(&mut line))
+            .await
+            .is_err(),
+        "recovering an original settings UUID must not emit a new invalidation: {line}"
+    );
+
+    local(
+        &mut running.owner,
+        "remote.revoke",
+        json!({"grantId":grant.grant.id,
+        "expectedRevision":grant.grant.revision,"note":"End advisory pairing fixture"}),
+    )
+    .await;
+    let fresh = json!({"requestId":uuid::Uuid::new_v4().to_string(),
+        "expectedRevision":committed["view"]["settings"]["revision"],
+        "config":null,"credentialUpdate":{"action":"keep"}});
+    assert_eq!(
+        local(&mut running.owner, "judgment.settings.set", fresh).await["outcome"],
+        "committed"
+    );
+    line.clear();
+    if let Ok(Ok(n)) =
+        tokio::time::timeout(Duration::from_millis(200), updates.io.read_line(&mut line)).await
+    {
+        assert_eq!(
+            n, 0,
+            "a revoked H subscriber received a later frame: {line}"
+        );
+    }
+    if let Ok(Ok(frame)) =
+        tokio::time::timeout(LIMIT, remote.frame(LIST, json!({"crewId":crew}))).await
+    {
+        assert!(
+            frame.get("error").is_some(),
+            "revoked grant read a new H page: {frame}"
+        );
+    }
+    drop(updates);
+    drop(remote);
+    stopped(running).await;
 }

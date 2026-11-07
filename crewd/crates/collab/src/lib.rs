@@ -2,6 +2,7 @@
 //! 同步、不碰 tokio、不读时钟：每个写操作是 `fn(&mut Tx, ..) -> Result<T>`，时间是 `Tx` 里调用方给的
 //! `now_ms`；操作把「改了什么」记成 `Change`，`run` 提交成功才交回（服务层据此发事件）。
 //! M3b / M3c 只经这里写协作数据（spec §22.5）。
+pub mod admin_ask_groups;
 pub mod admin_case_custody;
 pub mod admin_case_effect_report;
 pub mod admin_case_execution;
@@ -87,6 +88,10 @@ use rusqlite::Connection;
 /// 一次成功提交改了什么。服务层把它变成客户端事件，并原样发到内部通道（`crewd_server::hub::CollabEvent`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
+    AdminAskGroupsInvalidated,
+    AdminAskGroupsChanged {
+        crew_id: String,
+    },
     MessageAppended {
         channel_id: String,
         seq: i64,
@@ -389,6 +394,10 @@ pub fn run_with_context<T>(
             managed_links::settle_target_deletions(&mut tx)?;
         }
         organization_search::flush(&mut tx)?;
+        if !tx.changes.is_empty() && crewd_store::admin_ask_groups::available(tx.conn())? {
+            let source_changes = tx.changes.clone();
+            admin_ask_groups::note_source_changes(&mut tx, &source_changes)?;
+        }
         (v, tx.changes)
     };
     t.commit()?;

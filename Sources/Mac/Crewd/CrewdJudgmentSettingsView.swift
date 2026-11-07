@@ -52,6 +52,14 @@ private struct CrewdJudgmentSettingsPane: View {
                     Text("开启后，后台也会检查已有的未认领需求。判断服务只收到同一机组、同一公开群中有限的原始需求摘要，用于提示人工审阅。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                if client.capabilities.contains("adminAskGroups.v1") {
+                    Toggle("同类待答问题整理", isOn: Binding(
+                        get: { model.draft.similarAsks == true },
+                        set: { model.draft.similarAsks = $0 ? true : nil }
+                    )).disabled(!model.draft.enabled)
+                    Text("开启后，会在各机组内分别对照待答问题，将问题及预设答复的有限摘要交给已配置的判断服务。人工待办和带选项的决策问题不参与。每个原问题、默认方案和答复保持独立；不会自动回答或撤回。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text("提供方：TypeSafe")
                 TextField("HTTPS 服务端点", text: $model.draft.baseUrl)
                 TextField("模型", text: $model.draft.model)

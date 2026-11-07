@@ -382,6 +382,7 @@ async fn exact_requirement_review_uses_the_original_human_command_receipt() {
                         wake_yes: 0.5,
                         credential_source: "file".into(),
                         similar_requirements: Some(true),
+                        similar_asks: None,
                     }),
                 },
             )?;

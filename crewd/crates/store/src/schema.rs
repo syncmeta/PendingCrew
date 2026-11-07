@@ -4,7 +4,7 @@ use rusqlite::{Connection, params};
 
 /// Knowledge files have an independent schema. Core21 remains the personal draft
 /// writer barrier; Core22 adds an indexed historical escalation discovery source.
-pub const SCHEMA_VERSION: i64 = 32;
+pub const SCHEMA_VERSION: i64 = 33;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 #[cfg(test)]
@@ -796,9 +796,9 @@ pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
 }
 
 pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Result<()> {
-    if !(4..=31).contains(&target) || target == 16 {
+    if !(4..=32).contains(&target) || target == 16 {
         return Err(StoreError::Invalid(
-            "historical fixture supports versions 4 through 31 except reserved Core16".into(),
+            "historical fixture supports versions 4 through 32 except reserved Core16".into(),
         ));
     }
     let objects: i64 = conn.query_row(
@@ -926,6 +926,13 @@ pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Resul
         tx.execute_batch("PRAGMA user_version=31;")?;
         tx.commit()?;
     }
+    if target >= 32 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(crate::managed_tables_v3::DDL)?;
+        crate::managed_tables_v3::migrate(&tx)?;
+        tx.execute_batch("PRAGMA user_version=32;")?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1035,6 +1042,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 /// `VACUUM INTO backups/crewd-v{旧}-pre-v{新}-{时间}.db`；任何一步不成就拒绝迁移，库原样不动（S20 / S25）。
 pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if v == 33 {
+        crate::admin_ask_groups::validate_schema(conn)?;
+    }
     if v == 16 {
         return Err(StoreError::Invalid(
             "reserved/experimental Core16 is not the resource17 format".into(),
@@ -1195,6 +1205,16 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         tx.execute_batch(crate::managed_tables_v3::DDL)?;
         crate::managed_tables_v3::migrate(&tx)?;
         tx.execute_batch("PRAGMA user_version=32;")?;
+        tx.commit()?;
+    }
+    if v < 33 {
+        let tx = conn.unchecked_transaction()?;
+        // New authorities receive dbId inside this same protected transaction;
+        // existing identities are unchanged, and any late failure rolls it back.
+        crate::mark_identity(&tx)?;
+        crate::admin_ask_groups::migrate(&tx)?;
+        tx.execute_batch("PRAGMA user_version=33;")?;
+        crate::admin_ask_groups::validate_schema(&tx)?;
         tx.commit()?;
     }
     Ok(())
@@ -3533,3 +3553,7 @@ mod resource17_tests {
 #[cfg(test)]
 #[path = "schema_v32_tests.rs"]
 mod schema_v32_tests;
+
+#[cfg(test)]
+#[path = "schema_v33_admin_ask_groups_tests.rs"]
+mod schema_v33_admin_ask_groups_tests;

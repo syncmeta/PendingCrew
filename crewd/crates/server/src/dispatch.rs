@@ -279,6 +279,12 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             if state.management.get().is_some() {
                 capabilities.push("lifecycle.management".into());
             }
+            if crate::admin_ask_groups::qualified(state)
+                .await
+                .map_err(collab_err)?
+            {
+                capabilities.push(crewd_proto::admin_ask_groups::CAPABILITY.into());
+            }
             if state.judgment_runtime.get().is_some() {
                 capabilities.push("judgment".into());
             }

@@ -196,14 +196,22 @@ struct CrewdHumanActions:View {
     var inboxIsCurrent: (@MainActor () -> Bool)? = nil
 
     var body: some View {
-        if store.offersAskResolution || workspace?.originalAskRecords(crew:target.key.crew,ask:target.key.ask).isEmpty == false {
+        VStack(alignment: .leading, spacing: 12) {
             if let workspace {
-                CrewdTypedHumanActions(workspace:workspace,store:store,drafts:$drafts,target:target,inboxIsCurrent:inboxIsCurrent)
-            } else {
-                Text("当前入口尚未具备原问题的提交与回执作用域。").padding()
+                CrewdAdminAskGroupsEntry(workspace: workspace, workStore: store, drafts: $drafts,
+                    crew: target.key.crew, current: {
+                        workspace.workStore === store && store.selectedCrew == target.key.scope && (inboxIsCurrent?() ?? true)
+                    })
             }
-        } else {
-            CrewdLegacyHumanActions(store:store,drafts:$drafts,target:target,readExactly:readExactly)
+            if store.offersAskResolution || workspace?.originalAskRecords(crew:target.key.crew,ask:target.key.ask).isEmpty == false {
+                if let workspace {
+                    CrewdTypedHumanActions(workspace:workspace,store:store,drafts:$drafts,target:target,inboxIsCurrent:inboxIsCurrent)
+                } else {
+                    Text("当前入口尚未具备原问题的提交与回执作用域。").padding()
+                }
+            } else {
+                CrewdLegacyHumanActions(store:store,drafts:$drafts,target:target,readExactly:readExactly)
+            }
         }
     }
 }
