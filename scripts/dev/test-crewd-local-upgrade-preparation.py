@@ -250,16 +250,67 @@ def regression_21_to33():
         print('PASS original CLI verbs preserve exact 21 and 33 generations for rollback')
 
 
+def regression_unmigrated():
+    """Exercise the real production stage function before any Core migration.
+
+    Pass the new explicit intent as a Namespace so old production reaches its
+    actual generation check rather than merely failing argument parsing.
+    """
+    with tempfile.TemporaryDirectory(prefix='pcw-upgrade-unmigrated-', dir='/private/tmp') as temporary:
+        root = Path(temporary)
+        refs = source_evidence(root)
+        old = ordinary(root / 'Current.app', refs[21])
+        incoming = ordinary(root / 'Incoming.app', refs[33])
+        packages = [json.loads(run('inspect-package', '--app', app, '--requirement', REQUIREMENT))
+                    for app in (old, incoming)]
+        data = root / 'authority'
+        data.mkdir(mode=0o700)
+        (data / 'crewd.lock').touch()
+        (data / 'crewd.db.id').write_text('unmigrated-generation-id\n')
+        (data / 'exec-registry.json').write_text('{}')
+        sqlite(data / 'crewd.db', 'PRAGMA application_id=0x43525744', 'PRAGMA user_version=21',
+               'CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)',
+               "INSERT INTO meta VALUES('dbId','unmigrated-generation-id'),('lifecycle.clean','true')")
+        before = contents(data)
+        mode = ('--isolated-fixture', root)
+        setup = root / 'prepared'
+        run('prepare', '--authority', data, '--old-app', old, '--new-app', incoming,
+            '--old-source', packages[0]['source'], '--new-source', packages[1]['source'],
+            '--old-digest', packages[0]['bundleDigest'], '--new-digest', packages[1]['bundleDigest'],
+            '--requirement', REQUIREMENT, '--out', setup, *mode)
+        plan = setup / 'plan.json'
+        old.rename(root / 'PreservedOld.app')
+        shutil.copytree(incoming, old, symlinks=True)
+        (data / 'pre-migration-diagnostic').write_text('preserve outgoing generation')
+        outgoing = contents(data)
+        spec = importlib.util.spec_from_file_location('unmigrated_production', HELPER)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        args = argparse.Namespace(authority=str(data), upgraded_app=str(old), plan=str(plan),
+                                  plan_sha=sha(plan), out=str(root / 'rollback'),
+                                  isolated_fixture=str(root), unmigrated=True)
+        module.stage_rollback(args)
+        record = json.loads((root / 'rollback/rollback.json').read_text())
+        assert record['format'] == 3 and record['rollbackState'] == 'unmigrated'
+        assert contents(root / 'rollback/restore') == before
+        assert contents(root / 'rollback/preserved') == contents(data) == outgoing
+        print('PASS actual production unmigrated staging preserves both complete21 generations')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--core', type=Path)
     parser.add_argument('--core-sha')
     parser.add_argument('--red-21-to33', action='store_true', help='focused old-production RED before source changes')
+    parser.add_argument('--red-unmigrated', action='store_true', help='focused old-production unmigrated rollback RED')
     args = parser.parse_args()
     if bool(args.core) != bool(args.core_sha):
         parser.error('--core and --core-sha are required together')
     if args.red_21_to33:
         regression_21_to33()
+        return
+    if args.red_unmigrated:
+        regression_unmigrated()
         return
     with tempfile.TemporaryDirectory(prefix='pcw-local-stage-', dir='/private/tmp') as temporary:
         root = Path(temporary)

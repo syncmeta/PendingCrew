@@ -27,7 +27,7 @@ def checked_record(path, expected, kind):
     raw = path.read_bytes()
     require(hashlib.sha256(raw).hexdigest() == expected, 'record digest differs')
     value = json.loads(raw)
-    require(type(value.get('format')) is int and value['format'] in (1, 2)
+    require(type(value.get('format')) is int and value['format'] in (1, 2, 3)
             and value.get('kind') == kind, 'unsupported transaction record')
     return value
 
@@ -162,7 +162,7 @@ def start(args):
         rollback_path = Path(args.rollback)
         rollback = checked_record(rollback_path, args.rollback_sha, 'pendingcrew-local-rollback-staging')
         preparation.require_mode(rollback, fixture)
-        preparation.rollback_contract(rollback, plan)
+        rollback_layout = preparation.rollback_contract(rollback, plan)
         require(rollback['planSHA256'] == args.plan_sha and rollback.get('app') == plan['app']
                 and rollback['dbId'] == plan['dbId']
                 and rollback[layout['restore']] == before and rollback['oldApp'] == plan['oldApp']
@@ -171,12 +171,12 @@ def start(args):
         sealed = preparation.directory(rollback_path.parent / layout['restore'])
         preserved = preparation.directory(rollback_path.parent / layout['preserved'])
         require(preparation.inventory(preserved) == rollback[layout['upgraded']]
-                and preparation.inspect(preserved, rollback[layout['upgraded']], layout['new']) == plan['dbId'],
+                and preparation.inspect(preserved, rollback[layout['upgraded']], rollback_layout['outgoing']) == plan['dbId'],
                 'preserved upgraded authority changed')
         incoming = old
         active_package, incoming_package = plan['newApp'], plan['oldApp']
         active_rows, staged_rows = rollback[layout['upgraded']], rollback[layout['restore']]
-        versions = [layout['new'], layout['old']]
+        versions = [rollback_layout['outgoing'], layout['old']]
         extra_inputs.append(rollback_path.parent)
     require(app != incoming and preparation.package(app, plan['requirement']) == active_package
             and preparation.package(incoming, plan['requirement']) == incoming_package,
@@ -194,7 +194,8 @@ def start(args):
         preparation.copy_verified(sealed, staged_data, staged_rows)
         with preparation.authority_lease(staged_data) as check_staged:
             intent = {
-                'format': plan['format'], 'kind': 'pendingcrew-local-cutover-intent',
+                'format': rollback['format'] if args.operation == 'rollback' else plan['format'],
+                'kind': 'pendingcrew-local-cutover-intent',
                 'fixtureRoot': fixture,
                 'id': str(uuid.uuid4()), 'operation': args.operation, 'planSHA256': args.plan_sha,
                 'app': str(app), 'authority': str(data), 'dbId': plan['dbId'],
@@ -205,6 +206,8 @@ def start(args):
             }
             if plan['format'] == 2:
                 intent['schemaEvidence'] = plan['schemaEvidence']
+            if intent['format'] == 3:
+                intent['rollbackState'] = rollback['rollbackState']
             require(all(pair[0][0] == pair[1][0] for pair in (intent['appInodes'], intent['dataInodes'])),
                     'same-volume atomic exchange required for both generations')
             leases = (check_original, check_staged)
@@ -233,8 +236,8 @@ def resume(args):
             require(complete.get('kind') == 'pendingcrew-local-cutover-completed'
                     and complete.get('intentSHA256') == args.intent_sha
                     and complete.get('id') == intent['id'], 'completion record differs from intent')
-            if intent['format'] == 2:
-                require(complete.get('format') == 2
+            if intent['format'] in (2, 3):
+                require(complete.get('format') == intent['format']
                         and set(complete) == {'format', 'kind', 'intentSHA256', 'id', 'operation',
                                              'activeApp', 'activeAuthority', 'preservedApp',
                                              'preservedAuthority', 'openedApp'},

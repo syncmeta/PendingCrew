@@ -55,17 +55,19 @@ def fault_child():
     module.main()
 
 
-def exercise(root, fail_at, refs, new_version=33, legacy=False):
+def exercise(root, fail_at, refs, new_version=33, legacy=False, unmigrated=False):
     root.mkdir()
     mode = ('--isolated-fixture', root.parent)
     old = fixture.ordinary(root / 'Current.app', refs[21])
     incoming = fixture.ordinary(root / 'New.app', refs[new_version])
     probe = old / 'Contents/Helpers/activity-probe'
     if fail_at == 0:
-        shutil.copyfile('/bin/sleep', probe)
-        probe.chmod(0o755)
-        subprocess.run(['/usr/bin/codesign', '--force', '--deep', '--sign', '-', str(old)],
-                       check=True, capture_output=True)
+        for app in (old, incoming):
+            target = app / 'Contents/Helpers/activity-probe'
+            shutil.copyfile('/bin/sleep', target)
+            target.chmod(0o755)
+            subprocess.run(['/usr/bin/codesign', '--force', '--deep', '--sign', '-', str(app)],
+                           check=True, capture_output=True)
     old_package, new_package = [
         json.loads(fixture.run('inspect-package', '--app', app, '--requirement', fixture.REQUIREMENT))
         for app in (old, incoming)
@@ -116,7 +118,10 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False):
         intent = output / 'intent.json'
         assert intent.exists() and not (output / 'complete.json').exists()
         record = json.loads(intent.read_text())
-        assert record['format'] == (1 if legacy else 2)
+        expected_format = 3 if unmigrated and operation == 'rollback' else (1 if legacy else 2)
+        assert record['format'] == expected_format
+        if expected_format == 3:
+            assert record['rollbackState'] == 'unmigrated' and record['coreVersions'] == [21, 21]
         if not legacy:
             assert record['schemaEvidence']['new']['source'] == refs[new_version]
             assert record['schemaEvidence']['new']['schemaVersion'] == new_version
@@ -179,7 +184,8 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False):
     assert fixture.contents(data) == fixture.contents(upgrade / 'staged-data') == before
     assert fixture.contents(old) == app_after
     assert fixture.contents(upgrade / 'staged.app') == app_before
-    fixture.sqlite(data / 'crewd.db', 'PRAGMA user_version=' + str(new_version))
+    if not unmigrated:
+        fixture.sqlite(data / 'crewd.db', 'PRAGMA user_version=' + str(new_version))
     (data / 'attachments/after').write_text('post-cutover content')
     upgraded = fixture.contents(data)
     # A known completed original intent is historical evidence, never a fresh
@@ -188,18 +194,81 @@ def exercise(root, fail_at, refs, new_version=33, legacy=False):
         '--intent-sha', fixture.sha(upgrade / 'intent.json'), *mode).stdout
     assert fixture.contents(data) == upgraded
     rollback_stage = root / 'rollback-stage'
+    if unmigrated:
+        # The original migrated-only verb still refuses actual old-schema
+        # data. The new branch is explicit, never guessed from the new App.
+        fixture.run('stage-rollback', '--authority', data, '--upgraded-app', old,
+                    '--plan', plan, '--plan-sha', fixture.sha(plan), '--out', rollback_stage,
+                    *mode, refusal='unsupported Core database generation')
+        assert not rollback_stage.exists() and fixture.contents(data) == upgraded
+        if fail_at == 0:
+            stage_args = ('stage-rollback', '--authority', data, '--upgraded-app', old,
+                          '--plan', plan, '--plan-sha', fixture.sha(plan), '--unmigrated', *mode)
+
+            def refused(label, expected):
+                output = root / ('refused-unmigrated-' + label)
+                current, package = fixture.contents(data), fixture.contents(old)
+                fixture.run(*stage_args, '--out', output, refusal=expected)
+                assert not output.exists()
+                assert fixture.contents(data) == current and fixture.contents(old) == package
+
+            database = data / 'crewd.db'
+            original_database = database.read_bytes()
+            for version in (22, 32, 33, 34):
+                fixture.sqlite(database, 'PRAGMA user_version=' + str(version))
+                refused('schema-' + str(version), 'unsupported Core database generation')
+                database.write_bytes(original_database)
+            for key, value in (('lifecycle.clean', 'false'), ('dbId', 'another-database')):
+                fixture.sqlite(database, "UPDATE meta SET value='" + value + "' WHERE key='" + key + "'")
+                refused(key, 'Core identity or clean shutdown is unconfirmed')
+                database.write_bytes(original_database)
+            for suffix in ('-wal', '-shm', '-journal'):
+                sidecar = data / ('crewd.db' + suffix)
+                sidecar.write_bytes(b'fixture unfinished state')
+                refused(suffix, 'SQLite sidecars')
+                sidecar.unlink()
+            registry = data / 'exec-registry.json'
+            registry.write_text('{"unresolved":{}}')
+            refused('registry', 'unresolved executor process obligations')
+            registry.unlink()
+            with (data / 'crewd.lock').open('rb') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                refused('live-lock', 'Core authority is still in use')
+            lock = data / 'crewd.lock'
+            lock.rename(data / 'real-lock')
+            lock.symlink_to(data / 'real-lock')
+            refused('aliased-lock', 'crewd.lock')
+            lock.unlink()
+            (data / 'real-lock').rename(lock)
+            sealed_marker = setup / 'before/attachments/original'
+            original_marker = sealed_marker.read_bytes()
+            sealed_marker.write_text('changed sealed old authority')
+            refused('sealed-snapshot', 'sealed pre-cut authority changed')
+            sealed_marker.write_bytes(original_marker)
+            assert fixture.contents(data) == upgraded
     fixture.run('stage-rollback', '--authority', data, '--upgraded-app', old,
-                '--plan', plan, '--plan-sha', fixture.sha(plan), '--out', rollback_stage, *mode)
+                '--plan', plan, '--plan-sha', fixture.sha(plan), '--out', rollback_stage, *mode,
+                *(('--unmigrated',) if unmigrated else ()))
     rollback_record = rollback_stage / 'rollback.json'
     rollback = root / 'rollback'
     if fail_at == 0:
         refuse_wrong_app_path('rollback', '--rollback', rollback_record, '--rollback-sha', fixture.sha(rollback_record))
+        process = subprocess.Popen([str(probe), '30'])
+        try:
+            run('start', 'rollback', *common, '--rollback', rollback_record,
+                '--rollback-sha', fixture.sha(rollback_record), '--out', rollback,
+                fail='an affected App process is still running')
+            assert not rollback.exists()
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
     check_transaction('rollback', rollback, '--rollback', rollback_record, '--rollback-sha', fixture.sha(rollback_record))
     assert fixture.contents(data) == before
     assert fixture.contents(old) == app_before
     assert fixture.contents(rollback / 'staged-data') == upgraded
     assert fixture.contents(rollback / 'staged.app') == app_after
-    print(f'PASS format{1 if legacy else 2} Core21→{new_version} upgrade and rollback recover after {fail_at} exchanges')
+    print(f'PASS format{1 if legacy else 2} Core21→{new_version} upgrade and '
+          f'{"unmigrated21" if unmigrated else "migrated"} rollback recover after {fail_at} exchanges')
 
 
 if __name__ == '__main__':
@@ -211,3 +280,4 @@ if __name__ == '__main__':
             for fail_at in range(3):
                 exercise(Path(temporary) / ('current-' + str(fail_at)), fail_at, refs)
                 exercise(Path(temporary) / ('legacy-' + str(fail_at)), fail_at, refs, 22, legacy=True)
+                exercise(Path(temporary) / ('unmigrated-' + str(fail_at)), fail_at, refs, unmigrated=True)
