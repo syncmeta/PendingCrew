@@ -226,7 +226,10 @@ def main():
     assert runtime['passed'] is True and runtime['source'] == s and runtime['schemaVersion'] == QUALIFIED_STORE_VERSION
     assert runtime['real21ProtectedMigration'] is True and runtime['normalBackupRestore'] is True
     assert runtime['providersExecuted'] is False and runtime['installedSystemd'] is False
-    assert [p['phase'] for p in runtime['phases']] == ['old21-seed','new33-migrated','new33-reopen','new33-restored']
+    assert runtime['coreRestoreEmptyKnowledgeCut'] is True and runtime['knowledgeSnapshotRestore'] is True
+    assert runtime['knowledgeOriginalReceiptsPreserved'] is True
+    assert [p['phase'] for p in runtime['phases']] == ['old21-seed','new33-migrated','new33-reopen','new33-restored',
+                                                   'new33-document-reopen','new33-document-restored-reopen']
     assert all(p['confirmed'] and p['exit'] == 0 and p['socketGone'] for p in runtime['phases'])
     after = binding(controller, source, c, s)
     assert current == after

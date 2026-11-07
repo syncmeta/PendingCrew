@@ -2,6 +2,8 @@
 """Actual Linux: pinned ordinary21 -> new33, original UUID, tables/docs/search,
 normal reopen and formal backup/restore. No service installation or providers.
 Every start is our direct child. Every success ends by its original Hibernate.
+Core backup/restore is completed on its supported empty-knowledge cut first;
+documents then use the current SQLite API and its own Human snapshot recovery.
 """
 import argparse, contextlib, fcntl, hashlib, importlib.util, json, os, pathlib
 import platform, shutil, socket, sqlite3, stat, struct, subprocess, sys, time, urllib.request, uuid
@@ -136,6 +138,72 @@ class Core:
             self.log.close()
         except BaseException:self.cleanup_failure();raise
 
+def seed_table(c, crew):
+    scope=c.call('managedObject.scope',{})
+    made=c.call('managedTable.v2.submit',{'scope':scope,'crewId':crew,'requestId':str(uuid.uuid4()),'operation':{'kind':'createTable','title':'Linux33 table','purpose':'Actual ordinary Linux history','fields':[{'name':'Name','kind':{'kind':'text'},'nullable':False}],'titleFieldIndex':0,'rowWritePolicy':'authorCaptainHuman'}})
+    effect=made['effect'];table=effect['tableId']
+    row=c.call('managedTable.v2.submit',{'scope':scope,'crewId':crew,'requestId':str(uuid.uuid4()),'operation':{'kind':'addRow','tableId':table,'expectedSchemaRevision':effect['schemaRevision'],'patches':[{'fieldId':effect['titleFieldId'],'change':{'kind':'setScalar','value':{'type':'text','value':'linux33-runtime-needle'}}}]}})['effect']['rowId']
+    check_table(c, row)
+    deadline=time.monotonic()+60
+    while True:
+        results=c.call('organization.search',{'query':'linux33-runtime-needle','tableId':table})
+        if results['indexState']=='ready':break
+        require(time.monotonic()<deadline,'actual Source search did not become Ready');time.sleep(.05)
+    require(any(hit['target']=={'kind':'row','id':row} for hit in results['items']),'actual new row not found')
+    require(c.call('adminAskGroups.list',{'crewId':crew})['availability']=='disabled','unconfigured real admin classifier unexpectedly enabled')
+    return table,row
+
+def check_table(c, row):
+    actual=c.call('managedTable.v3.row.get',{'id':row})
+    require(actual['id']==row and any(v['value']=={'type':'text','value':'linux33-runtime-needle'} for v in actual['scalarCells']),'actual row or scalar changed')
+    require(c.call('managedTable.v3.history',{'source':{'kind':'row','id':row}})['items'],'real row action history absent')
+
+def seed_document(c, crew):
+    workspace=c.call('data.workspace.get',{'crewId':crew})
+    request={'context':workspace['context'],'requestId':str(uuid.uuid4()),'change':{'kind':'apply','message':'Actual packaged document and block','edits':[
+        {'kind':'createBlock','alias':'body','attributes':{},'content':'Linux33 durable body','contentType':'text/plain','sources':[]},
+        {'kind':'createView','alias':'document','attributes':{},'definition':{'kind':'document','layout':{},'placements':[{'alias':'position','block':{'alias':'body','kind':'created'},'kind':'set','layout':{}}]},'sources':[],'title':'Linux33 document'}]}}
+    receipt=c.call('data.submit',request)
+    require(receipt['phase']=='committed' and receipt['requestId']==request['requestId'],'original document request did not commit')
+    return {'request':request,'receipt':receipt,'view':receipt['created']['document']['object']['reference'],'block':receipt['created']['body']['object']['reference']}
+
+def check_document(c, crew, document):
+    context=c.call('data.workspace.get',{'crewId':crew})['context']
+    view=c.call('data.object.get',{'context':context,'reference':document['view']})['object']
+    block=c.call('data.object.get',{'context':context,'reference':document['block']})['object']
+    require(view['kind']=='view' and view['title']=='Linux33 document' and view['definition']['kind']=='document','current document view changed')
+    require(block['kind']=='block' and block['content']=='Linux33 durable body','current document body changed')
+    original=document['request']
+    lookup=c.call('data.request.get',{'context':original['context'],'requestId':original['requestId']})['lookup']
+    require(lookup['status'] in ['known','historical'] and lookup['result']==document['receipt'],'original document receipt was lost or rewritten')
+    return context,block
+
+def restore_document(c, crew, document):
+    context,block=check_document(c,crew,document)
+    # A real Human-confirmed SQL change makes the supported recovery snapshot.
+    # It contains the original document; Core-only restore cannot replace it.
+    preview=c.call('data.preview',{'context':context,'statements':[{'sql':'CREATE TABLE linux_document_marker(id INTEGER PRIMARY KEY)','params':[]}]})
+    confirmation=c.call('data.confirm',{'context':context,'requestId':str(uuid.uuid4()),'token':preview['token']})
+    require(confirmation['phase']=='committed' and confirmation['snapshotId'],'actual Human recovery snapshot absent')
+    context=confirmation['context'];snapshot=confirmation['snapshotId']
+    snapshots=c.call('data.snapshots',{'context':context})
+    require(any(s['id']==snapshot for s in snapshots['items']),'original recovery snapshot not listed')
+    changed=c.call('data.submit',{'context':context,'requestId':str(uuid.uuid4()),'change':{'kind':'apply','message':'Change after the genuine recovery snapshot','edits':[{'kind':'updateBlock','id':block['id'],'expectedRevision':block['revision'],'contentType':'text/plain','content':'Changed strictly after document snapshot','sources':None,'attributes':{}}]}})
+    require(changed['phase']=='committed','post-snapshot document change did not commit')
+    changed_body=c.call('data.object.get',{'context':changed['context'],'reference':document['block']})['object']
+    require(changed_body['content']=='Changed strictly after document snapshot','actual changed document not observed')
+    request={'context':changed['context'],'requestId':str(uuid.uuid4()),'snapshotId':snapshot}
+    receipt=c.call('data.restore',request)
+    require(receipt['phase']=='committed' and receipt['requestId']==request['requestId'] and receipt['context']['restoreEpoch']!=request['context']['restoreEpoch'],'actual knowledge restore did not advance its original epoch')
+    check_document(c,crew,document)
+    return {'request':request,'receipt':receipt}
+
+def check_document_restore(c, crew, document, restored):
+    check_document(c,crew,document)
+    original=restored['request']
+    lookup=c.call('data.request.get',{'context':original['context'],'requestId':original['requestId']})['lookup']
+    require(lookup['status']=='historical' and lookup['result']==restored['receipt'],'original knowledge restore receipt was not preserved after physical reopen')
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ['package','source','output']:p.add_argument('--'+name,required=True)
@@ -177,20 +245,7 @@ def main():
             save(out/(label+'.json'),{'exit':result.returncode,'stdout':result.stdout,'stderr':result.stderr});require(result.returncode==0,'formal '+label+' failed')
         with Core(new/'bin/crewd',args.source,out,data,home,'new33-migrated',report) as c:
             require(c.identity['dbId']==identity,'real migration changed original DB identity');check_original(c)
-            document=c.call('document.create',{'crewId':crew,'requestId':str(uuid.uuid4()),'title':'Linux33 document','body':'Linux33 durable body'})['document']['id']
-            scope=c.call('managedObject.scope',{})
-            made=c.call('managedTable.v2.submit',{'scope':scope,'crewId':crew,'requestId':str(uuid.uuid4()),'operation':{'kind':'createTable','title':'Linux33 table','purpose':'Actual ordinary Linux history','fields':[{'name':'Name','kind':{'kind':'text'},'nullable':False}],'titleFieldIndex':0,'rowWritePolicy':'authorCaptainHuman'}})
-            table=made['effect']['tableId']
-            row=c.call('managedTable.v2.submit',{'scope':scope,'crewId':crew,'requestId':str(uuid.uuid4()),'operation':{'kind':'addRow','tableId':table,'expectedSchemaRevision':'1','patches':[{'fieldId':'p1','change':{'kind':'setScalar','value':{'type':'text','value':'linux33-runtime-needle'}}}]}})['effect']['rowId']
-            require(c.call('managedTable.v3.row.get',{'id':row})['id']==row,'actual row not readable')
-            require(c.call('managedTable.v3.history',{'source':{'kind':'row','id':row}})['items'],'real row action history absent')
-            deadline=time.monotonic()+60
-            while True:
-                results=c.call('organization.search',{'query':'linux33-runtime-needle','tableId':table})
-                if results['indexState']=='ready':break
-                require(time.monotonic()<deadline,'actual Source search did not become Ready');time.sleep(.05)
-            require(results['items'],'actual new row not found')
-            require(c.call('adminAskGroups.list',{'crewId':crew})['availability']=='disabled','unconfigured real admin classifier unexpectedly enabled')
+            table,row=seed_table(c,crew)
         require(cold(data,33)==identity,'new33 normal cold identity differs')
         protected=list((data/'backups').glob('crewd-v21-pre-v33-*.db'));require(len(protected)==1,'real21 protected migration snapshot absent')
         with contextlib.closing(sqlite3.connect(protected[0].as_uri()+'?immutable=1',uri=True)) as db:
@@ -201,17 +256,24 @@ def main():
         created=set((data/'backups').glob('crewd-manual-*.db'))-backups;require(len(created)==1,'formal backup not uniquely identified');backup=created.pop();backup_sha=sha(backup)
         after_text='Created strictly after formal snapshot'
         with Core(new/'bin/crewd',args.source,out,data,home,'new33-reopen',report) as c:
-            check_original(c);require(c.call('document.get',{'id':document})['body']=='Linux33 durable body','document did not survive normal reopen')
+            check_original(c);check_table(c,row)
             after=c.call('todo.create',{'crewId':crew,'requestId':str(uuid.uuid4()),'text':after_text})['id']
         require(cold(data,33)==identity,'reopen cold identity differs');official('formal-restore','restore','--from',str(backup));require(sha(backup)==backup_sha,'formal backup changed')
         with Core(new/'bin/crewd',args.source,out,data,home,'new33-restored',report) as c:
             check_original(c)
-            require(c.call('document.get',{'id':document})['body']=='Linux33 durable body','formal restore lost original document')
-            require(c.call('managedTable.v3.row.get',{'id':row})['id']==row,'formal restore lost actual row')
+            check_table(c,row)
             require(all(t['id']!=after for t in c.call('todo.list',{'crewId':crew,'ledger':'agent'})),'post-backup object incorrectly survived restore')
+            document=seed_document(c,crew)
         require(cold(data,33)==identity,'restored cold identity differs')
+        with Core(new/'bin/crewd',args.source,out,data,home,'new33-document-reopen',report) as c:
+            check_original(c);check_table(c,row)
+            restored_document=restore_document(c,crew,document)
+        require(cold(data,33)==identity,'document recovery cold identity differs')
+        with Core(new/'bin/crewd',args.source,out,data,home,'new33-document-restored-reopen',report) as c:
+            check_original(c);check_table(c,row);check_document_restore(c,crew,document,restored_document)
+        require(cold(data,33)==identity,'document physical reopen cold identity differs')
         require(sha(out/'original21-cold/crewd.db')==original_cold_sha and inventory(out/'original21-cold')==prior,'original cold predecessor changed')
-        report.update(passed=True,source=args.source,original21Source=PREDECESSOR,original21TarSHA256=PREDECESSOR_TAR_SHA256,schemaVersion=33,dbId=identity,originalRequestId=original,originalRequirementId=original_id,normalBackupRestore=True,real21ProtectedMigration=True,providersExecuted=False,installedSystemd=False)
+        report.update(passed=True,source=args.source,original21Source=PREDECESSOR,original21TarSHA256=PREDECESSOR_TAR_SHA256,schemaVersion=33,dbId=identity,originalRequestId=original,originalRequirementId=original_id,normalBackupRestore=True,coreRestoreEmptyKnowledgeCut=True,knowledgeSnapshotRestore=True,knowledgeOriginalReceiptsPreserved=True,real21ProtectedMigration=True,providersExecuted=False,installedSystemd=False)
     except BaseException as error:
         report['error']=str(error);save(out/'result.json',report);raise
     save(out/'result.json',report);print(json.dumps({'passed':True,'result':str(out/'result.json')}))
