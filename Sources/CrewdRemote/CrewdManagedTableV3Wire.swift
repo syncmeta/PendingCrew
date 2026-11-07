@@ -39,6 +39,9 @@ enum CrewdManagedTableV3Wire {
   typealias LinkCell = V2.LinkCell
   typealias Intent = CrewdManagedV2Intent.Value
   static let capability = "managedTables.v3", observation = "managedTable.v3.observation"
+  // V3 reads and mutations first revalidate the shared managed-object authority.
+  // Keep that prerequisite in the same exact RPC allowlist as the V3 operations.
+  static let scope = "managedObject.scope"
   static let tableGet = "managedTable.v3.get", tableList = "managedTable.v3.list",
     rowGet = "managedTable.v3.row.get", rows = "managedTable.v3.rows",
     rowLinks = "managedTable.v3.row.links"
@@ -46,7 +49,8 @@ enum CrewdManagedTableV3Wire {
     defineCheck = "managedTable.v3.defineCheck", history = "managedTable.v3.history",
     historyValue = "managedTable.v3.history.value"
   static let methods = [
-    tableGet, tableList, rowGet, rows, rowLinks, submit, lookup, defineCheck, history, historyValue,
+    scope, tableGet, tableList, rowGet, rows, rowLinks, submit, lookup, defineCheck, history,
+    historyValue,
   ]
   static var readMethods: [String] { methods.filter { $0 != submit } }
   static let bytePage = 262_144, historyBytes = 32_768, chunkBytes = 4_096

@@ -4,6 +4,7 @@ import hashlib,json,os,pathlib,shutil,subprocess,sys,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 FILES=[
  'Sources/Mac/Crewd/CrewdClient.swift','Sources/Mac/Crewd/CrewdLocalIPC.swift',
+ 'Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift',
  'Sources/Mac/Crewd/CrewdPublicCommandWire.swift','Sources/Mac/Crewd/CrewdCodexWire.swift',
  'Sources/Mac/Crewd/CrewdClaudeHistoryStore.swift','Sources/Mac/Crewd/CrewdPresentationJournal.swift',
  'Sources/Mac/Crewd/CrewdWorkStore.swift','Sources/Mac/Crewd/CrewdPublicCommands.swift',
@@ -30,7 +31,7 @@ def main():
   src=ROOT/rel;dst=out/'product'/rel;dst.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(src,dst);inputs.append({'path':rel,'sha256':sha(dst)})
  for name in ['home','tmp']:(out/name).mkdir(mode=0o700)
  command=['/usr/bin/xcrun','swiftc','-warnings-as-errors','-disable-sandbox','-module-cache-path',str(out/'cache'),'-parse-as-library']+[str(out/'product'/p) for p in FILES]+['-o',str(out/'proof')]
- manifest={'layer':'21 actual Foundation product inputs +1 fixture; mock RPC and local durable journal/two child process prepare only','inputCount':len(FILES),'inputs':inputs,'command':command,'compiler':subprocess.check_output(['/usr/bin/xcrun','swiftc','--version'],text=True,stderr=subprocess.STDOUT),'runnerSHA256':sha(pathlib.Path(__file__))}
+ manifest={'layer':str(len(FILES)-1)+' actual Foundation product inputs +1 fixture; mock RPC and local durable journal/two child process prepare only','inputCount':len(FILES),'inputs':inputs,'command':command,'compiler':subprocess.check_output(['/usr/bin/xcrun','swiftc','--version'],text=True,stderr=subprocess.STDOUT),'runnerSHA256':sha(pathlib.Path(__file__))}
  save(out/'inputs.json',manifest)
  with (out/'build.log').open('xb') as log:built=subprocess.run(command,stdout=log,stderr=log)
  result={'buildExitCode':built.returncode,'inputSnapshotsUnchanged':all(sha(out/'product'/item['path'])==item['sha256'] for item in inputs),'productSourceUnchangedDuringBuild':all(sha(ROOT/item['path'])==item['sha256'] for item in inputs),'Core':False,'fullApp':False,'GUI':False,'daily':False}

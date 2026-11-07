@@ -47,7 +47,7 @@ import Foundation
   }
   func scope(stillCurrent: @MainActor () -> Bool) async throws -> Scope {
     guard let o = origin(), valid(o, stillCurrent) else { throw Problem.unavailable }
-    let raw = try await rpc("managedObject.scope", .object([:]))
+    let raw = try await rpc(Wire.scope, .object([:]))
     guard valid(o, stillCurrent) else { throw Problem.stale }
     try Wire.closedScope(raw)
     let authority = try CrewdKnowledgeStore.decode(raw, Wire.Scope.self)
