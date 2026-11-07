@@ -66,6 +66,28 @@ def contents(root):
     return {p.relative_to(root).as_posix(): sha(p) for p in root.rglob('*') if p.is_file()}
 
 
+def source_evidence(root):
+    """Real isolated Git commits, not a mock schema number supplied to production."""
+    repo = root / 'source-evidence'
+    subprocess.run(['git', 'init', '--quiet', '--initial-branch', 'fixture', str(repo)], check=True)
+    source = repo / 'crewd/crates/store/src/schema.rs'
+    source.parent.mkdir(parents=True)
+    env = dict(os.environ, GIT_AUTHOR_NAME='PendingCrew fixture',
+               GIT_AUTHOR_EMAIL='fixture@example.invalid', GIT_COMMITTER_NAME='PendingCrew fixture',
+               GIT_COMMITTER_EMAIL='fixture@example.invalid')
+    refs = {}
+    for version in (21, 22, 33):
+        source.write_text('pub const SCHEMA_VERSION: i64 = ' + str(version) + ';\n')
+        subprocess.run(['git', '-C', str(repo), 'add', 'crewd'], check=True, env=env)
+        tree = subprocess.check_output(['git', '-C', str(repo), 'write-tree'], env=env, text=True).strip()
+        argv = ['git', '-c', 'commit.gpgsign=false', '-C', str(repo), 'commit-tree', tree,
+                '-m', 'synthetic schema ' + str(version)]
+        if refs:
+            argv += ['-p', refs[max(refs)]]
+        refs[version] = subprocess.check_output(argv, env=env, text=True).strip()
+    return refs
+
+
 def delivery_policy(app):
     spec = importlib.util.spec_from_file_location('delivery_preparation', HELPER)
     module = importlib.util.module_from_spec(spec)
@@ -147,7 +169,7 @@ def legacy_guard(root):
 def native_lock_probe(core, expected, root):
     assert core.is_absolute() and core.resolve() == core and sha(core) == expected
     data = root / 'real-core'
-    home = root / 'home'
+    home = root / 'real-core-home'
     data.mkdir(mode=0o700)
     home.mkdir(mode=0o700)
     env = {'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': str(home),
@@ -181,17 +203,69 @@ def native_lock_probe(core, expected, root):
     print('PASS Python lock contends with actual packaged Core lease')
 
 
+def regression_21_to33():
+    """Run unchanged CLI verbs first, so old code fails on real schema 33.
+
+    This changes a synthetic SQLite header as an installer-contract fixture;
+    it does not claim that a real Core migration or original RPC was exercised.
+    """
+    with tempfile.TemporaryDirectory(prefix='pcw-upgrade-33-red-', dir='/private/tmp') as temporary:
+        root = Path(temporary)
+        refs = source_evidence(root)
+        old = ordinary(root / 'Current.app', refs[21])
+        incoming = ordinary(root / 'Incoming.app', refs[33])
+        packages = [json.loads(run('inspect-package', '--app', app, '--requirement', REQUIREMENT))
+                    for app in (old, incoming)]
+        data = root / 'authority'
+        data.mkdir(mode=0o700)
+        (data / 'crewd.lock').touch()
+        (data / 'crewd.db.id').write_text('original-generation-id\n')
+        sqlite(data / 'crewd.db', 'PRAGMA application_id=0x43525744', 'PRAGMA user_version=21',
+               'CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)',
+               "INSERT INTO meta VALUES('dbId','original-generation-id'),('lifecycle.clean','true')")
+        before = contents(data)
+        setup = root / 'prepared'
+        mode = ('--isolated-fixture', root)
+        run('prepare', '--authority', data, '--old-app', old, '--new-app', incoming,
+            '--old-source', packages[0]['source'], '--new-source', packages[1]['source'],
+            '--old-digest', packages[0]['bundleDigest'], '--new-digest', packages[1]['bundleDigest'],
+            '--requirement', REQUIREMENT, '--out', setup, *mode)
+        plan = setup / 'plan.json'
+        plan_sha = sha(plan)
+        old.rename(root / 'PreservedOld.app')
+        shutil.copytree(incoming, old, symlinks=True)
+        sqlite(data / 'crewd.db', 'PRAGMA user_version=33')
+        (data / 'new-generation-only').write_text('must be preserved separately')
+        upgraded = contents(data)
+        stage = root / 'rollback-stage'
+        # The original production helper reaches its hard-coded inspect(...,22)
+        # and refuses this actual 33 header, rather than failing on a new flag.
+        run('stage-rollback', '--authority', data, '--upgraded-app', old,
+            '--plan', plan, '--plan-sha', plan_sha, '--out', stage, *mode)
+        record = json.loads((stage / 'rollback.json').read_text())
+        assert record['format'] == 2 and record['schemaEvidence']['new']['schemaVersion'] == 33
+        assert contents(stage / 'restore') == before
+        assert contents(stage / 'preserved') == contents(data) == upgraded
+        assert sha(plan) == plan_sha
+        print('PASS original CLI verbs preserve exact 21 and 33 generations for rollback')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--core', type=Path)
     parser.add_argument('--core-sha')
+    parser.add_argument('--red-21-to33', action='store_true', help='focused old-production RED before source changes')
     args = parser.parse_args()
     if bool(args.core) != bool(args.core_sha):
         parser.error('--core and --core-sha are required together')
+    if args.red_21_to33:
+        regression_21_to33()
+        return
     with tempfile.TemporaryDirectory(prefix='pcw-local-stage-', dir='/private/tmp') as temporary:
         root = Path(temporary)
-        old = ordinary(root / 'OldSource.app', '1' * 40)
-        new = ordinary(root / 'NewSource.app', '2' * 40)
+        refs = source_evidence(root)
+        old = ordinary(root / 'OldSource.app', refs[21])
+        new = ordinary(root / 'NewSource.app', refs[33])
         native = ordinary(root / 'Native.app', '3' * 40, native=True)
         delivery_policy(new)
         old_package, new_package = [
@@ -221,6 +295,15 @@ def main():
         mode = ('--isolated-fixture', root)
         base += mode
         prepare = (*base, '--new-digest', new_package['bundleDigest'])
+        original = contents(data)
+        for side, value in (('old', '22'), ('new', '22'), ('new', '999')):
+            out = root / ('wrong-' + side + '-schema-' + value)
+            run(*prepare, '--' + side + '-schema', value, '--out', out,
+                refusal='explicit schema assertion differs from frozen source')
+            assert not out.exists() and contents(data) == original
+        run(*prepare, '--new-source', 'f' * 40, '--out', root / 'wrong-source',
+            refusal='ordinary App source stamp changed')
+        assert not (root / 'wrong-source').exists() and contents(data) == original
         escaped = root.parent / (root.name + '-outside')
         run(*prepare, '--out', escaped, refusal='fixture path escapes private root')
         assert not escaped.exists()
@@ -246,8 +329,25 @@ def main():
         before = contents(data)
         preparation = root / 'preparation'
         run(*prepare, '--out', preparation)
-        assert contents(data) == contents(preparation / 'before21') == before
+        assert contents(data) == contents(preparation / 'before') == before
         plan = preparation / 'plan.json'
+        recorded = json.loads(plan.read_text())
+        assert recorded['format'] == 2 and recorded['schemaEvidence']['old']['schemaVersion'] == 21
+        assert recorded['schemaEvidence']['new']['schemaVersion'] == 33
+        assert recorded['schemaEvidence']['old']['source'] == refs[21]
+        assert recorded['schemaEvidence']['new']['source'] == refs[33]
+        for field, value in (('schemaVersion', 999), ('schemaSourceSHA256', '0' * 64), ('source', refs[22])):
+            altered = json.loads(plan.read_text())
+            altered['schemaEvidence']['new'][field] = value
+            bad = root / ('changed-' + field)
+            bad.mkdir()
+            bad_plan = bad / 'plan.json'
+            bad_plan.write_text(json.dumps(altered))
+            out = bad / 'rollback'
+            run('stage-rollback', '--authority', data, '--plan', bad_plan, '--plan-sha', sha(bad_plan),
+                '--upgraded-app', old, '--out', out, *mode,
+                refusal='frozen source/schema evidence changed')
+            assert not out.exists() and contents(data) == before
         rollback = ('stage-rollback', '--authority', data, '--plan', plan, '--plan-sha', sha(plan))
         run(*rollback, '--upgraded-app', old, '--out', root / 'fixture-as-production',
             refusal='preparation mode or fixture root differs from invocation')
@@ -259,7 +359,7 @@ def main():
         assert contents(old) == contents(new)
         rollback += ('--upgraded-app', old)
         run(*rollback, '--out', root / 'old-only', refusal='unsupported Core database generation')
-        sqlite(data / 'crewd.db', 'PRAGMA user_version=22', 'CREATE TABLE newer(text TEXT)')
+        sqlite(data / 'crewd.db', 'PRAGMA user_version=33', 'CREATE TABLE newer(text TEXT)')
         sqlite(data / 'knowledge/example.sqlite', "UPDATE content SET text='after cutoff'")
         (data / 'attachments/new').write_bytes(b'added after cutoff')
         upgraded = contents(data)
@@ -269,13 +369,13 @@ def main():
         assert not (root / 'wrong-rollback-path').exists()
         staged = root / 'staged-rollback'
         run(*rollback, '--out', staged)
-        assert contents(staged / 'restore21') == before
-        assert contents(staged / 'preserved22') == contents(data) == upgraded
-        assert contents(preparation / 'before21') == before
-        (preparation / 'before21/attachments/example').write_bytes(b'modified evidence')
+        assert contents(staged / 'restore') == before
+        assert contents(staged / 'preserved') == contents(data) == upgraded
+        assert contents(preparation / 'before') == before
+        (preparation / 'before/attachments/example').write_bytes(b'modified evidence')
         run(*rollback, '--out', root / 'tampered', refusal='sealed pre-cut authority changed')
         assert contents(data) == upgraded
-        print('PASS ordinary package checks, lock/sidecar refusal, sealed Core21 and preserved Core22')
+        print('PASS source-bound Core21→33 preparation, schema/blob refusals, lock/sidecar and rollback staging')
         legacy_guard(root)
         if args.core:
             native_lock_probe(args.core, args.core_sha, root)

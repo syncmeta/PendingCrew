@@ -55,11 +55,11 @@ def fault_child():
     module.main()
 
 
-def exercise(root, fail_at):
+def exercise(root, fail_at, refs, new_version=33, legacy=False):
     root.mkdir()
     mode = ('--isolated-fixture', root.parent)
-    old = fixture.ordinary(root / 'Current.app', '1' * 40)
-    incoming = fixture.ordinary(root / 'New.app', '2' * 40)
+    old = fixture.ordinary(root / 'Current.app', refs[21])
+    incoming = fixture.ordinary(root / 'New.app', refs[new_version])
     probe = old / 'Contents/Helpers/activity-probe'
     if fail_at == 0:
         shutil.copyfile('/bin/sleep', probe)
@@ -88,6 +88,16 @@ def exercise(root, fail_at):
                 '--old-digest', old_package['bundleDigest'], '--new-digest', new_package['bundleDigest'],
                 '--requirement', fixture.REQUIREMENT, '--out', setup, *mode)
     plan = setup / 'plan.json'
+    if legacy:
+        # Materialize the exact original format-1 receipt layout as a separate
+        # fixture. Production never rewrites or upgrades existing receipts.
+        assert new_version == 22
+        record = json.loads(plan.read_text())
+        record['format'] = 1
+        record['before21'] = record.pop('before')
+        del record['schemaEvidence']
+        (setup / 'before').rename(setup / 'before21')
+        plan.write_text(json.dumps(record))
     identity_args = ('--plan', plan, '--plan-sha', fixture.sha(plan), '--authority', data, *mode)
     common = (*identity_args, '--app', old)
 
@@ -106,6 +116,26 @@ def exercise(root, fail_at):
         intent = output / 'intent.json'
         assert intent.exists() and not (output / 'complete.json').exists()
         record = json.loads(intent.read_text())
+        assert record['format'] == (1 if legacy else 2)
+        if not legacy:
+            assert record['schemaEvidence']['new']['source'] == refs[new_version]
+            assert record['schemaEvidence']['new']['schemaVersion'] == new_version
+            # A freshly hashed but internally inconsistent intent must still
+            # fail closed before either generation moves.
+            for field, value in (('schemaVersion', 999), ('schemaSourceSHA256', '0' * 64),
+                                 ('source', refs[22]), ('coreVersions', [999, 21])):
+                original_record = intent.read_bytes()
+                altered = json.loads(original_record)
+                if field == 'coreVersions':
+                    altered[field] = value
+                else:
+                    altered['schemaEvidence']['new'][field] = value
+                intent.write_text(json.dumps(altered))
+                locations = (old.stat().st_ino, data.stat().st_ino)
+                run('resume', '--transaction', output, '--intent-sha', fixture.sha(intent), *mode,
+                    fail='cutover source/schema evidence changed')
+                assert (old.stat().st_ino, data.stat().st_ino) == locations
+                intent.write_bytes(original_record)
         order = ['data', 'app'] if operation == 'upgrade' else ['app', 'data']
         for index, name in enumerate(order):
             live = old if name == 'app' else data
@@ -149,9 +179,14 @@ def exercise(root, fail_at):
     assert fixture.contents(data) == fixture.contents(upgrade / 'staged-data') == before
     assert fixture.contents(old) == app_after
     assert fixture.contents(upgrade / 'staged.app') == app_before
-    fixture.sqlite(data / 'crewd.db', 'PRAGMA user_version=22')
+    fixture.sqlite(data / 'crewd.db', 'PRAGMA user_version=' + str(new_version))
     (data / 'attachments/after').write_text('post-cutover content')
     upgraded = fixture.contents(data)
+    # A known completed original intent is historical evidence, never a fresh
+    # exchange after the upgraded authority has changed or migrated.
+    assert 'Already completed' in run('resume', '--transaction', upgrade,
+        '--intent-sha', fixture.sha(upgrade / 'intent.json'), *mode).stdout
+    assert fixture.contents(data) == upgraded
     rollback_stage = root / 'rollback-stage'
     fixture.run('stage-rollback', '--authority', data, '--upgraded-app', old,
                 '--plan', plan, '--plan-sha', fixture.sha(plan), '--out', rollback_stage, *mode)
@@ -164,7 +199,7 @@ def exercise(root, fail_at):
     assert fixture.contents(old) == app_before
     assert fixture.contents(rollback / 'staged-data') == upgraded
     assert fixture.contents(rollback / 'staged.app') == app_after
-    print(f'PASS upgrade and rollback recover after {fail_at} completed exchanges')
+    print(f'PASS format{1 if legacy else 2} Core21→{new_version} upgrade and rollback recover after {fail_at} exchanges')
 
 
 if __name__ == '__main__':
@@ -172,5 +207,7 @@ if __name__ == '__main__':
         fault_child()
     else:
         with tempfile.TemporaryDirectory(prefix='pcw-cutover-', dir='/private/tmp') as temporary:
+            refs = fixture.source_evidence(Path(temporary))
             for fail_at in range(3):
-                exercise(Path(temporary) / str(fail_at), fail_at)
+                exercise(Path(temporary) / ('current-' + str(fail_at)), fail_at, refs)
+                exercise(Path(temporary) / ('legacy-' + str(fail_at)), fail_at, refs, 22, legacy=True)

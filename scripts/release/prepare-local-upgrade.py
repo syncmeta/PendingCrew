@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare evidence for a stopped ordinary Mac Core21→22 update or its rollback."""
+"""Prepare a stopped ordinary Mac upgrade bound to exact source generations."""
 import argparse
 import contextlib
 import fcntl
@@ -15,6 +15,8 @@ import subprocess
 
 BUNDLE_ID = 'com.pendingname.pendingcrew'
 CORE_APPLICATION_ID = 0x43525744
+SCHEMA_SOURCE = 'crewd/crates/store/src/schema.rs'
+REPOSITORY = Path(__file__).resolve().parents[2]
 
 
 def require(condition, message):
@@ -107,6 +109,94 @@ def isolated_root(args, *paths):
 def require_mode(record, fixture):
     require('fixtureRoot' in record and record['fixtureRoot'] == fixture,
             'preparation mode or fixture root differs from invocation')
+
+
+def source_generation(source, fixture):
+    """Read the single schema declaration from the pinned commit, never HEAD.
+
+    The explicit fixture mode has its own synthetic Git object store. It does
+    not replace source evidence with a caller-supplied numeric version.
+    """
+    require(isinstance(source, str) and re.fullmatch(r'[0-9a-f]{40}', source),
+            'full frozen source generation required')
+    repo = directory(Path(fixture) / 'source-evidence') if fixture is not None else REPOSITORY
+    command = ['git', '--no-replace-objects', '-C', str(repo)]
+    commit = subprocess.run([*command, 'rev-parse', '--verify', source + '^{commit}'],
+                            capture_output=True, text=True, timeout=30)
+    require(commit.returncode == 0 and commit.stdout.strip() == source,
+            'frozen schema source commit is unavailable')
+    result = subprocess.run([*command, 'cat-file', 'blob', source + ':' + SCHEMA_SOURCE],
+                            capture_output=True, timeout=30)
+    require(result.returncode == 0, 'frozen schema source blob is unavailable')
+    try:
+        text = result.stdout.decode('utf-8')
+    except UnicodeDecodeError:
+        raise ValueError('frozen schema source is not UTF-8') from None
+    declarations = re.findall(r'^pub const SCHEMA_VERSION: i64 = ([0-9]+);$', text, re.MULTILINE)
+    require(len(declarations) == 1 and 0 < int(declarations[0]) < 2 ** 31,
+            'one exact positive source schema declaration required')
+    return {'source': source, 'schemaVersion': int(declarations[0]),
+            'schemaSourceSHA256': hashlib.sha256(result.stdout).hexdigest()}
+
+
+def schema_evidence(old, new, fixture):
+    evidence = {'old': source_generation(old['source'], fixture),
+                'new': source_generation(new['source'], fixture)}
+    require(evidence['old']['schemaVersion'] < evidence['new']['schemaVersion'],
+            'target source must declare a newer Core generation')
+    return evidence
+
+
+def plan_contract(plan):
+    """Keep original format-1 receipts exact; new plans carry complete evidence."""
+    require(plan.get('kind') == 'pendingcrew-local-upgrade-preparation'
+            and type(plan.get('format')) is int and plan['format'] in (1, 2),
+            'unsupported preparation record')
+    if plan['format'] == 1:
+        return {'old': 21, 'new': 22, 'before': 'before21',
+                'preserved': 'preserved22', 'restore': 'restore21', 'upgraded': 'upgraded22'}
+    require(set(plan) == {'format', 'kind', 'fixtureRoot', 'app', 'authority', 'dbId',
+                         'before', 'oldApp', 'newApp', 'requirement', 'schemaEvidence'},
+            'closed source-bound preparation record required')
+    actual = schema_evidence(plan['oldApp'], plan['newApp'], plan['fixtureRoot'])
+    require(plan['schemaEvidence'] == actual, 'frozen source/schema evidence changed')
+    return {'old': actual['old']['schemaVersion'], 'new': actual['new']['schemaVersion'],
+            'before': 'before', 'preserved': 'preserved', 'restore': 'restore', 'upgraded': 'upgraded'}
+
+
+def rollback_contract(record, plan):
+    layout = plan_contract(plan)
+    require(record.get('format') == plan['format']
+            and record.get('kind') == 'pendingcrew-local-rollback-staging',
+            'unsupported rollback staging record')
+    if plan['format'] == 2:
+        require(set(record) == {'format', 'kind', 'fixtureRoot', 'planSHA256', 'app', 'dbId',
+                               'upgraded', 'restore', 'oldApp', 'upgradedApp', 'schemaEvidence'}
+                and record['schemaEvidence'] == plan['schemaEvidence'],
+                'rollback source/schema evidence differs from preparation')
+    return layout
+
+
+def intent_contract(intent):
+    require(type(intent.get('format')) is int and intent['format'] in (1, 2)
+            and intent.get('kind') == 'pendingcrew-local-cutover-intent'
+            and intent.get('operation') in ('upgrade', 'rollback'), 'unsupported cutover intent')
+    if intent['format'] == 1:
+        require(intent.get('coreVersions') == ([21, 21] if intent['operation'] == 'upgrade' else [22, 21]),
+                'legacy cutover schema generations changed')
+        return
+    require(set(intent) == {'format', 'kind', 'fixtureRoot', 'id', 'operation', 'planSHA256',
+                           'app', 'authority', 'dbId', 'appInodes', 'dataInodes', 'apps',
+                           'requirement', 'coreVersions', 'dataDigests', 'schemaEvidence'},
+            'closed source-bound cutover intent required')
+    apps = intent['apps']
+    require(isinstance(apps, list) and len(apps) == 2, 'two exact App generations required')
+    old, new = apps if intent['operation'] == 'upgrade' else reversed(apps)
+    actual = schema_evidence(old, new, intent['fixtureRoot'])
+    old_version, new_version = actual['old']['schemaVersion'], actual['new']['schemaVersion']
+    expected = [old_version, old_version] if intent['operation'] == 'upgrade' else [new_version, old_version]
+    require(intent['schemaEvidence'] == actual and intent['coreVersions'] == expected,
+            'cutover source/schema evidence changed')
 
 
 def qualify_upgrade(app, fixture):
@@ -244,24 +334,31 @@ def prepare(args):
     new_package = package(new, args.requirement, args.new_source, args.new_digest)
     require(old_package['source'] != new_package['source'], 'distinct source generations required')
     qualify_upgrade(new, fixture)
+    evidence = schema_evidence(old_package, new_package, fixture)
+    for side in ('old', 'new'):
+        assertion = getattr(args, side + '_schema')
+        require(assertion is None or assertion == evidence[side]['schemaVersion'],
+                'explicit schema assertion differs from frozen source')
+    old_version = evidence['old']['schemaVersion']
     with lease(data) as recheck:
         rows = inventory(data)
-        identity = inspect(data, rows, 21)
+        identity = inspect(data, rows, old_version)
         old_rows = inventory(old, bundle=True)
         require(digest(old_rows) == old_package['bundleDigest'], 'old App changed before staging')
         out = disjoint_out(args.out, data, old, new)
-        copy_verified(data, out / 'before21', rows)
+        copy_verified(data, out / 'before', rows)
         copy_verified(old, out / 'Old.app', old_rows, bundle=True)
         require(package(out / 'Old.app', args.requirement) == old_package
                 and package(new, args.requirement) == new_package
-                and inspect(out / 'before21', rows, 21) == identity
+                and inspect(out / 'before', rows, old_version) == identity
                 and inventory(data) == rows, 'staged generations did not verify')
         recheck()
         write_record(out / 'plan.json', {
-            'format': 1, 'kind': 'pendingcrew-local-upgrade-preparation',
+            'format': 2, 'kind': 'pendingcrew-local-upgrade-preparation',
             'fixtureRoot': fixture,
-            'app': str(old), 'authority': str(data), 'dbId': identity, 'before21': rows,
+            'app': str(old), 'authority': str(data), 'dbId': identity, 'before': rows,
             'oldApp': old_package, 'newApp': new_package, 'requirement': args.requirement,
+            'schemaEvidence': evidence,
         })
     print(f'Prepared evidence only: {out / "plan.json"} (SHA256 {sha(out / "plan.json")})')
 
@@ -275,38 +372,41 @@ def stage_rollback(args):
     record = plan_path.read_bytes()
     require(hashlib.sha256(record).hexdigest() == args.plan_sha, 'preparation record digest differs')
     plan = json.loads(record)
-    require(plan.get('format') == 1 and plan.get('kind') == 'pendingcrew-local-upgrade-preparation',
-            'unsupported preparation record')
     require_mode(plan, fixture)
+    layout = plan_contract(plan)
     data = directory(args.authority)
     require(str(data) == plan['authority'], 'rollback authority differs from preparation')
     upgraded_app = directory(args.upgraded_app)
     require(str(upgraded_app) == plan.get('app'), 'upgraded App path differs from preparation')
     old = directory(plan_path.parent / 'Old.app')
-    sealed = directory(plan_path.parent / 'before21')
+    sealed = directory(plan_path.parent / layout['before'])
     require(package(upgraded_app, plan['requirement']) == plan['newApp'], 'upgraded App differs from preparation')
     require(package(old, plan['requirement']) == plan['oldApp'], 'sealed old App changed')
-    require(inventory(sealed) == plan['before21'] and inspect(sealed, plan['before21'], 21) == plan['dbId'],
+    before = plan[layout['before']]
+    require(inventory(sealed) == before and inspect(sealed, before, layout['old']) == plan['dbId'],
             'sealed pre-cut authority changed')
     with lease(data) as recheck:
         after = inventory(data)
-        require(inspect(data, after, 22) == plan['dbId'], 'upgraded authority identity changed')
+        require(inspect(data, after, layout['new']) == plan['dbId'], 'upgraded authority identity changed')
         out = disjoint_out(args.out, data, plan_path.parent, upgraded_app)
-        copy_verified(data, out / 'preserved22', after)
-        copy_verified(sealed, out / 'restore21', plan['before21'])
+        copy_verified(data, out / layout['preserved'], after)
+        copy_verified(sealed, out / layout['restore'], before)
         copy_verified(old, out / 'Old.app', inventory(old, bundle=True), bundle=True)
-        require(inspect(out / 'preserved22', after, 22) == plan['dbId']
-                and inspect(out / 'restore21', plan['before21'], 21) == plan['dbId']
+        require(inspect(out / layout['preserved'], after, layout['new']) == plan['dbId']
+                and inspect(out / layout['restore'], before, layout['old']) == plan['dbId']
                 and package(out / 'Old.app', plan['requirement']) == plan['oldApp']
                 and package(upgraded_app, plan['requirement']) == plan['newApp']
                 and inventory(data) == after, 'rollback staging did not verify')
         recheck()
-        write_record(out / 'rollback.json', {
-            'format': 1, 'kind': 'pendingcrew-local-rollback-staging',
+        record = {
+            'format': plan['format'], 'kind': 'pendingcrew-local-rollback-staging',
             'fixtureRoot': fixture,
-            'planSHA256': args.plan_sha, 'app': str(upgraded_app), 'dbId': plan['dbId'], 'upgraded22': after,
-            'restore21': plan['before21'], 'oldApp': plan['oldApp'], 'upgradedApp': plan['newApp'],
-        })
+            'planSHA256': args.plan_sha, 'app': str(upgraded_app), 'dbId': plan['dbId'], layout['upgraded']: after,
+            layout['restore']: before, 'oldApp': plan['oldApp'], 'upgradedApp': plan['newApp'],
+        }
+        if plan['format'] == 2:
+            record['schemaEvidence'] = plan['schemaEvidence']
+        write_record(out / 'rollback.json', record)
     print(f'Rollback staged without replacing either generation: {out / "rollback.json"}')
 
 
@@ -322,6 +422,8 @@ def main():
                  'new-digest', 'requirement', 'out'):
         cut.add_argument('--' + name, required=True)
     cut.add_argument('--isolated-fixture')
+    cut.add_argument('--old-schema', type=int, help='optional assertion; actual generation comes from frozen source')
+    cut.add_argument('--new-schema', type=int, help='optional assertion; actual generation comes from frozen source')
     cut.set_defaults(action=prepare)
     restore = commands.add_parser('stage-rollback')
     for name in ('authority', 'upgraded-app', 'plan', 'plan-sha', 'out'):

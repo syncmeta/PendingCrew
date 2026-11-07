@@ -27,7 +27,8 @@ def checked_record(path, expected, kind):
     raw = path.read_bytes()
     require(hashlib.sha256(raw).hexdigest() == expected, 'record digest differs')
     value = json.loads(raw)
-    require(value.get('format') == 1 and value.get('kind') == kind, 'unsupported transaction record')
+    require(type(value.get('format')) is int and value['format'] in (1, 2)
+            and value.get('kind') == kind, 'unsupported transaction record')
     return value
 
 
@@ -92,6 +93,7 @@ def location(paths, intent, name, side):
 
 
 def verified(paths, intent, leases):
+    preparation.intent_contract(intent)
     for side in range(2):
         app = location(paths, intent, 'app', side)
         data = location(paths, intent, 'data', side)
@@ -119,7 +121,7 @@ def advance(root, intent, intent_sha, leases):
             verified(paths, intent, leases)
     sync_parents(*paths['app'], *paths['data'])
     publish_record(root, 'complete.json', {
-        'format': 1, 'kind': 'pendingcrew-local-cutover-completed',
+        'format': intent['format'], 'kind': 'pendingcrew-local-cutover-completed',
         'intentSHA256': intent_sha, 'id': intent['id'], 'operation': intent['operation'],
         'activeApp': str(paths['app'][0]), 'activeAuthority': str(paths['data'][0]),
         'preservedApp': str(paths['app'][1]), 'preservedAuthority': str(paths['data'][1]),
@@ -134,43 +136,47 @@ def start(args):
     plan_path = Path(args.plan)
     plan = checked_record(plan_path, args.plan_sha, 'pendingcrew-local-upgrade-preparation')
     preparation.require_mode(plan, fixture)
+    layout = preparation.plan_contract(plan)
     app = preparation.directory(args.app)
     data = preparation.directory(args.authority)
     require(str(app) == plan.get('app'), 'active App path differs from preparation')
     require(str(data) == plan['authority'] and not (app.is_relative_to(data) or data.is_relative_to(app)),
             'cutover paths differ from the prepared authority')
     old = preparation.directory(plan_path.parent / 'Old.app')
-    sealed = preparation.directory(plan_path.parent / 'before21')
+    sealed = preparation.directory(plan_path.parent / layout['before'])
+    before = plan[layout['before']]
     require(preparation.package(old, plan['requirement']) == plan['oldApp']
-            and preparation.inventory(sealed) == plan['before21']
-            and preparation.inspect(sealed, plan['before21'], 21) == plan['dbId'],
+            and preparation.inventory(sealed) == before
+            and preparation.inspect(sealed, before, layout['old']) == plan['dbId'],
             'original preparation evidence changed')
     extra_inputs = [plan_path.parent]
     if args.operation == 'upgrade':
         require(args.new_app and not args.rollback and not args.rollback_sha, 'explicit new ordinary App required')
         incoming = preparation.directory(args.new_app)
         active_package, incoming_package = plan['oldApp'], plan['newApp']
-        active_rows = staged_rows = plan['before21']
-        versions = [21, 21]  # The new App will migrate the copied, still-stopped Core21 on launch.
+        active_rows = staged_rows = before
+        # Both stopped copies remain in the old generation until first launch.
+        versions = [layout['old'], layout['old']]
     else:
         require(args.rollback and args.rollback_sha and not args.new_app, 'explicit rollback staging evidence required')
         rollback_path = Path(args.rollback)
         rollback = checked_record(rollback_path, args.rollback_sha, 'pendingcrew-local-rollback-staging')
         preparation.require_mode(rollback, fixture)
+        preparation.rollback_contract(rollback, plan)
         require(rollback['planSHA256'] == args.plan_sha and rollback.get('app') == plan['app']
                 and rollback['dbId'] == plan['dbId']
-                and rollback['restore21'] == plan['before21'] and rollback['oldApp'] == plan['oldApp']
+                and rollback[layout['restore']] == before and rollback['oldApp'] == plan['oldApp']
                 and rollback['upgradedApp'] == plan['newApp'], 'rollback staging has another generation')
         old = preparation.directory(rollback_path.parent / 'Old.app')
-        sealed = preparation.directory(rollback_path.parent / 'restore21')
-        preserved = preparation.directory(rollback_path.parent / 'preserved22')
-        require(preparation.inventory(preserved) == rollback['upgraded22']
-                and preparation.inspect(preserved, rollback['upgraded22'], 22) == plan['dbId'],
+        sealed = preparation.directory(rollback_path.parent / layout['restore'])
+        preserved = preparation.directory(rollback_path.parent / layout['preserved'])
+        require(preparation.inventory(preserved) == rollback[layout['upgraded']]
+                and preparation.inspect(preserved, rollback[layout['upgraded']], layout['new']) == plan['dbId'],
                 'preserved upgraded authority changed')
         incoming = old
         active_package, incoming_package = plan['newApp'], plan['oldApp']
-        active_rows, staged_rows = rollback['upgraded22'], rollback['restore21']
-        versions = [22, 21]
+        active_rows, staged_rows = rollback[layout['upgraded']], rollback[layout['restore']]
+        versions = [layout['new'], layout['old']]
         extra_inputs.append(rollback_path.parent)
     require(app != incoming and preparation.package(app, plan['requirement']) == active_package
             and preparation.package(incoming, plan['requirement']) == incoming_package,
@@ -188,7 +194,7 @@ def start(args):
         preparation.copy_verified(sealed, staged_data, staged_rows)
         with preparation.authority_lease(staged_data) as check_staged:
             intent = {
-                'format': 1, 'kind': 'pendingcrew-local-cutover-intent',
+                'format': plan['format'], 'kind': 'pendingcrew-local-cutover-intent',
                 'fixtureRoot': fixture,
                 'id': str(uuid.uuid4()), 'operation': args.operation, 'planSHA256': args.plan_sha,
                 'app': str(app), 'authority': str(data), 'dbId': plan['dbId'],
@@ -197,6 +203,8 @@ def start(args):
                 'apps': [active_package, incoming_package], 'requirement': plan['requirement'],
                 'coreVersions': versions, 'dataDigests': list(map(preparation.digest, [active_rows, staged_rows])),
             }
+            if plan['format'] == 2:
+                intent['schemaEvidence'] = plan['schemaEvidence']
             require(all(pair[0][0] == pair[1][0] for pair in (intent['appInodes'], intent['dataInodes'])),
                     'same-volume atomic exchange required for both generations')
             leases = (check_original, check_staged)
@@ -215,6 +223,7 @@ def resume(args):
     intent = checked_record(root / 'intent.json', args.intent_sha, 'pendingcrew-local-cutover-intent')
     fixture = preparation.isolated_root(args, args.transaction, intent['app'], intent['authority'])
     preparation.require_mode(intent, fixture)
+    preparation.intent_contract(intent)
     require(intent['operation'] in ('upgrade', 'rollback'), 'unsupported recorded operation')
     paths = paths_for(root, intent)
     with journal_lease(root):
@@ -224,6 +233,12 @@ def resume(args):
             require(complete.get('kind') == 'pendingcrew-local-cutover-completed'
                     and complete.get('intentSHA256') == args.intent_sha
                     and complete.get('id') == intent['id'], 'completion record differs from intent')
+            if intent['format'] == 2:
+                require(complete.get('format') == 2
+                        and set(complete) == {'format', 'kind', 'intentSHA256', 'id', 'operation',
+                                             'activeApp', 'activeAuthority', 'preservedApp',
+                                             'preservedAuthority', 'openedApp'},
+                        'closed source-bound completion record required')
             print(f'Already completed: {root / "complete.json"}')
             return
         with contextlib.ExitStack() as stack:
