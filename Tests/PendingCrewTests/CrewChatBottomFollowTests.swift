@@ -21,22 +21,19 @@ import CoreGraphics
 /// 仍然测不了的那一条写在末尾的注释里，别当成已覆盖。
 final class CrewChatBottomFollowTests: XCTestCase {
 
-    /// #162：透明窗口标题后不能露出滚动消息。源码契约只能守住中栏的接线与
-    /// 自适应底色；实际标题遮挡、深浅色和窄窗口仍需装机后目视验收。
+    /// #162 的叠字问题已通过去除重复标题/overlay 的 native-shell 裁决解决；
+    /// 保留 scoped light/dark canvas 接线，真实滚动/窄窗仍需原生窗口验收。
     func testChatTitleHasOpaqueColumnScopedBacking() throws {
+        // HANDOFF-20261023 removed the repeated title and its redundant overlay.
+        // Keep the scoped adaptive chat canvas rather than restoring that layer.
         let center = try Self.source("Mac/Views/CrewCenterView.swift")
         let chat = try Self.source("Mac/Views/CrewChatView.swift")
-        let backing = center.components(separatedBy: "private var chatTitleBacking: some View")
-            .dropFirst().first?.components(separatedBy: "private var placeholder: some View").first ?? ""
-        XCTAssertTrue(center.contains(".overlay(alignment: .top) { chatTitleBacking }"),
-                      "标题遮挡必须挂在群聊中栏，不能刷整窗 toolbar 或 sidebar")
-        XCTAssertTrue(backing.contains("crewStore.selectedCrewId != nil") &&
-                      backing.contains("Theme.Palette.canvas") &&
-                      backing.contains("geometry.safeAreaInsets.top") &&
-                      backing.contains(".allowsHitTesting(false)"),
-                      "标题背后需要自适应不透明底色，覆盖动态安全区且不拦工具栏点击")
-        XCTAssertTrue(chat.contains(".background(Theme.Palette.canvas)"),
-                      "标题底色需与群聊画布衔接")
+        XCTAssertTrue(Self.containsCode(".navigationTitle(\"\")", in: center))
+        XCTAssertFalse(Self.containsCode(".overlay(alignment: .top) { chatTitleBacking }", in: center))
+        XCTAssertFalse(Self.containsCode("private var chatTitleBacking:", in: center))
+        XCTAssertTrue(Self.containsCode(".background(CrewdChatStyle.canvas(chromeScheme))", in: chat))
+        XCTAssertFalse(Self.containsCode(".background(Theme.Palette.canvas)", in: chat),
+                       "chat must use the shared light/dark native canvas")
     }
 
     // MARK: - 在不在底部
@@ -567,12 +564,17 @@ final class CrewChatBottomFollowTests: XCTestCase {
 
     /// macOS 侧切 crew 必须重建视图（对齐 iPad）：复用实例会先渲染「新 crewId + 旧
     /// entries」一帧，滚底打在上一个 crew 的内容上。
+
     func testMacCenterViewRebuildsChatOnCrewSwitch() throws {
+        // Crew identity alone is insufficient when two authorities have the
+        // same crew id; a personal projection also retires the old draft view.
         let text = try Self.source("Mac/Views/CrewCenterView.swift")
-        XCTAssertTrue(
-            Self.containsCode(".id(detail.crew.id)", in: text),
-            "CrewCenterView 建 CrewChatView 少了 `.id(crewId)` —— 切 crew 会复用旧实例"
-            + "（Todo #45 的 macOS 错位；iPad 侧 IPadShell 一直是有 .id 的）。")
+        XCTAssertTrue(Self.containsCode(
+            ".id((model.crewdBackend?.workspace.presentationNamespace ?? \"legacy\") + \"/\" + detail.crew.id + \"/\" + personalService.projectionID.uuidString)", in: text))
+        let mobile = try Self.source("Views/IPadShell.swift")
+        XCTAssertTrue(Self.containsCode(
+            ".id((appModel.crewdBackend?.workspace.presentationNamespace ?? \"unconnected\") + \"/\" + id + \"/\" + personalService.projectionID.uuidString)", in: mobile))
+        XCTAssertTrue(Self.containsCode("CrewChatView(", in: text))
     }
 
     /// 切 crew 时跟随/未读要显式归位 —— `.id(crewId)` 是第一道，这句是「万一 .id 掉了」

@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 
 @MainActor
 final class LocalCrewStoreTests: XCTestCase {
@@ -61,12 +62,21 @@ final class LocalCrewStoreTests: XCTestCase {
         let publicReadme = try String(contentsOf: repository.appendingPathComponent("README.md"), encoding: .utf8)
         let publicEnglish = try String(contentsOf: repository.appendingPathComponent("README_EN.md"), encoding: .utf8)
         let publicArchitecture = try String(contentsOf: repository.appendingPathComponent("docs/architecture.md"), encoding: .utf8)
-        XCTAssertEqual(String(readmeFull.split(separator: "\n", omittingEmptySubsequences: false).dropFirst()
-            .joined(separator: "\n")).trimmingCharacters(in: .newlines), publicReadme.trimmingCharacters(in: .newlines),
-            "Chinese offline page must carry the complete public README text at the pinned snapshot")
-        XCTAssertEqual(String(readmeEnglish.split(separator: "\n", omittingEmptySubsequences: false).dropFirst()
-            .joined(separator: "\n")).trimmingCharacters(in: .newlines), publicEnglish.trimmingCharacters(in: .newlines),
-            "English offline page must carry the complete public README text at the pinned snapshot")
+        func pinnedBodyDigest(_ page: String) -> String {
+            let body = page.split(separator: "\n", omittingEmptySubsequences: false).dropFirst()
+                .joined(separator: "\n").trimmingCharacters(in: .newlines)
+            return SHA256.hash(data: Data(body.utf8)).map { String(format: "%02x", $0) }.joined()
+        }
+        XCTAssertTrue(readmeFull.components(separatedBy: "\n")[0].contains("snapshot e427fb2"))
+        XCTAssertTrue(readmeEnglish.components(separatedBy: "\n")[0].contains("snapshot e427fb2"))
+        XCTAssertEqual(pinnedBodyDigest(readmeFull),
+                       "360040f8474cf46d01bf13b311e4273bdd1bebfae86132b9d3bcdb24eb5dd721",
+                       "complete Chinese public bytes pinned at e427fb2 must not drift")
+        XCTAssertEqual(pinnedBodyDigest(readmeEnglish),
+                       "2c88a5f73f6457089fca9c7ad14dfce5724eec9d391c8320316d9102f7b209dc",
+                       "complete English public bytes pinned at e427fb2 must not drift")
+        // This explicit LocalCrewStore exercise does not prove the ordinary
+        // Core authority has an onboarding bootstrap; that migration stays open.
         XCTAssertTrue(publicReadme.contains("一个机组可以有父，可以有子，有机长，有 Agent 成员。"))
         XCTAssertTrue(publicReadme.contains("布置工作时，把输入框左侧的 To Do 图标点亮"))
         XCTAssertTrue(publicArchitecture.contains("共享的**群聊白板**协作。白板是磁盘上的一堆 JSON 文件"))

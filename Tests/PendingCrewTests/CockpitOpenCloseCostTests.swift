@@ -59,29 +59,22 @@ final class CockpitOpenCloseCostTests: XCTestCase {
             "还有文件在用 showingCockpit（\(offenders.joined(separator: "、"))）—— 开关位没真拆干净")
     }
 
-    /// 三栏那一层**保管**开关位，但不许**订阅**它。
-    ///
-    /// 这条单独立，是因为它是整修里唯一一处「改一个字就静默失效、编译器一句话不说」的
-    /// 地方：`@State` 换成 `@StateObject` 看起来更"正确"（持有一个 ObservableObject 嘛），
-    /// 实际上会让 `MacThreePaneView` 重新订阅这个开关位 —— 于是整棵三栏又回到失效范围里，
-    /// #96 白修。
+    /// 原 #96 的热对象隔离仍有效；当前普通三栏已按 authority migration
+    /// 不再挂 legacy 驾驶舱。保留旧 case 名以对应历史回归，不添加无用 owner。
     func testThreePaneHoldsTheCockpitFlagWithoutSubscribingToIt() throws {
+        // The authority migration made the ordinary shell cockpit-free. The
+        // retained component tests below still check the legacy presentation.
         let text = Self.codeOnly(try Self.text(of: "MacRootView.swift"))
         let threePane = try Self.topLevelBlock(named: "struct MacThreePaneView", in: text)
-        XCTAssertTrue(
-            threePane.contains("@State private var cockpit"),
-            "MacThreePaneView 没有用 @State 保管 CockpitPresentation")
-        for subscribing in ["@StateObject private var cockpit",
-                            "@ObservedObject private var cockpit",
-                            "@EnvironmentObject private var cockpit"] {
-            XCTAssertFalse(
-                threePane.contains(subscribing),
-                """
-                MacThreePaneView 用 \(subscribing) **订阅**了驾驶舱开关位 —— \
-                那等于把整棵 NavigationSplitView 重新拉回失效范围，#96 修了个寂寞。\
-                这一层只该「保管」它（@State 只存引用、不订阅），观察归 CockpitLayer。
-                """)
+        XCTAssertTrue(threePane.contains("NavigationSplitView(columnVisibility:$columnVisibility)"))
+        XCTAssertTrue(threePane.contains("@State private var columnVisibility:"))
+        XCTAssertTrue(threePane.contains("CrewCenterView().environmentObject(sessionRunner)"))
+        for retired in ["CockpitPresentation", "CockpitLayer(", "cockpitPresentation",
+                        "@StateObject private var cockpit", "@ObservedObject private var cockpit",
+                        "@EnvironmentObject private var cockpit"] {
+            XCTAssertFalse(threePane.contains(retired), "ordinary root remounted legacy cockpit: \(retired)")
         }
+        XCTAssertFalse(threePane.contains(".animation("), "whole split must not animate hot runner invalidations")
     }
 
     // MARK: - ③ 那个没人读的属性，连同打开时那次多余的二次广播
@@ -266,18 +259,21 @@ final class CockpitOpenCloseCostTests: XCTestCase {
 
     // MARK: - 入口按钮不许再经过 runner
 
+
     func testCockpitButtonWritesThroughThePresentationHandle() throws {
         let center = Self.codeOnly(try Self.text(of: "CrewCenterView.swift"))
-        XCTAssertTrue(
-            center.contains("cockpitPresentation"),
-            """
-            中栏 toolbar 那颗「驾驶舱」按钮没有改走 `@Environment(\\.cockpitPresentation)`。\
-            走 `@EnvironmentObject` 会让中栏**订阅**这个开关位，等于把刚拆掉的广播\
-            又接回来一半。
-            """)
-        XCTAssertFalse(
-            center.contains("EnvironmentObject private var cockpit"),
-            "驾驶舱开关位被中栏用 @EnvironmentObject 订阅了 —— 那就还是会因为开关而重算中栏")
+        XCTAssertFalse(center.contains("cockpitPresentation"), "ordinary center must not reintroduce the retired cockpit route")
+        XCTAssertFalse(center.contains("CockpitLayer("))
+        XCTAssertFalse(center.contains("EnvironmentObject private var cockpit"))
+        XCTAssertTrue(center.contains(".modifier(CrewdOriginalWorkIntegration(workspace:"))
+        let integration = Self.codeOnly(try Self.text(of: "CrewdOriginalWorkIntegration.swift"))
+        let controlsStart = try XCTUnwrap(integration.range(of: "private var workspaceControls:"))
+        let controlsEnd = try XCTUnwrap(integration.range(of: "@ToolbarContentBuilder private var workspaceToolbar:",
+                                                        range: controlsStart.upperBound..<integration.endIndex))
+        let controls = String(integration[controlsStart.lowerBound..<controlsEnd.lowerBound])
+        XCTAssertTrue(controls.contains("CrewdGlassWorkspaceTabs(selection: $workspace.originalSection)"))
+        XCTAssertTrue(controls.contains("workspace.originalSection == \"消息\""))
+        XCTAssertFalse(controls.contains("CockpitPlanStore"), "formal workspace controls cannot read the legacy ledger")
     }
 
     // MARK: - 小工具

@@ -1,26 +1,8 @@
 import XCTest
 
-/// 「仅@你」挪到三个按钮左边（人类 Todo #128）；#155 将默认值改为关闭。
-///
-/// ## 默认状态与空态出路
-///
-/// `CrewCenterView` 里有 Todo #61 定的行为：**切 crew 时筛选归位**，理由原文是
-/// 「换个群还挂着『只看 @ 我』，新群大概率筛成空」。
-///
-/// #128 曾要求默认点亮；#155 新口径只将默认值改为关闭，点击后的筛选判定不变。
-///
-/// 手动打开筛选后，空状态仍须可解释、可一键退出。所以这里除了钉
-/// 「默认关闭」「位置在最左」，还钉死那条出路 —— 筛完一条不剩时，得有一个明说
-/// 「这个群没有 @ 你的消息」和一个点一下就看全部的按钮。
-///
-/// ## 量得到什么、量不到什么
-///
-/// **量得到**：默认值、toolbar 里的声明顺序、切群归位的口径、以及「什么时候该给
-/// 那条出路」的纯判定（真跑，不是扫文本）。
-///
-/// **量不到**：它长什么样、按钮在人眼里是不是真的在那三个按钮左边。
-/// macOS 的 toolbar 最终排布由系统决定，源码顺序只是**必要条件**。
-/// **本文件全绿不构成「位置对了」** —— 那一条只有人眼能验。
+/// 「仅@你」默认关闭、切群归位、搜索时退出筛选，以及空态可一键看全部。
+/// 旧 #128 的三按钮顺序已由 native-shell 工作区菜单布局替代；#155 默认关闭不变。
+/// 纯状态判定与源码接线分别核验，不能代替真实窗口点击、布局或设备验收。
 final class MentionsFilterDefaultOnTests: XCTestCase {
 
     // MARK: - ① 默认关闭
@@ -73,21 +55,23 @@ final class MentionsFilterDefaultOnTests: XCTestCase {
             "搜索时不再强制看全部了 —— 搜索结果会被「仅@你」再筛一道，人会以为搜不到")
     }
 
-    // MARK: - ② 位置：在那三个按钮左边
+    // MARK: - ② 当前工作区消息域菜单接线
+
 
     func testFilterIsDeclaredBeforeTheThreeButtons() throws {
+        // Current accepted layout replaces the old three-button header with
+        // the formal workspace toolbar; filter state still belongs to center.
         let center = Self.codeOnly(try Self.text(of: "CrewCenterView.swift"))
-        guard let filter = center.range(of: "仅@你"),
-              let info = center.range(of: "info.circle"),
-              let cockpit = center.range(of: "speedometer"),
-              let refresh = center.range(of: "arrow.clockwise")
-        else { return XCTFail("toolbar 里那四项找不齐 —— 这条测试的锚点没了，先修测试") }
-
-        for (name, other) in [("crew 详情", info), ("驾驶舱", cockpit), ("刷新", refresh)] {
-            XCTAssertLessThan(
-                filter.lowerBound, other.lowerBound,
-                "「仅@你」声明在「\(name)」后面 —— 人类要的是放在这三个按钮的**左侧**")
-        }
+        XCTAssertTrue(center.contains("CrewdMessageFilterMenu(workspace: workspace, resources: workspace.channelResources,"))
+        XCTAssertTrue(center.contains("communicationView: $communicationView, onlyMentions: $onlyMentions)"))
+        XCTAssertTrue(center.contains("filterControl: AnyView(messageFilter)"))
+        let menu = try Self.onChangeBlock(of: "crewStore.selectedCrewId", in: center)
+        XCTAssertTrue(menu.contains("onlyMentions = CrewMentionFilter.defaultOnlyMentions"))
+        XCTAssertTrue(center.contains("Toggle(\"仅@你\", isOn: $onlyMentions)"))
+        let integration = Self.codeOnly(try Self.text(of: "CrewdOriginalWorkIntegration.swift"))
+        XCTAssertTrue(integration.contains("if workspace.originalSection == \"消息\", let filterControl { filterControl }"))
+        XCTAssertTrue(integration.contains(".toolbar { workspaceToolbar }"))
+        XCTAssertTrue(integration.contains("ToolbarItem(placement: .automatic) { workspaceControls }"))
     }
 
     func testFilterNoLongerPinnedToTheTrailingEdge() throws {

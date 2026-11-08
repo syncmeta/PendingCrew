@@ -290,8 +290,14 @@ final class TodoMarkdownRenderingTests: XCTestCase {
         let overviewStart = try XCTUnwrap(session.range(of: "CrewTodoPanel(crewId:"))
         let overviewEnd = try XCTUnwrap(session.range(of: ".frame(minHeight: 100", range: overviewStart.upperBound..<session.endIndex))
         let overviewContainer = String(session[overviewStart.lowerBound..<overviewEnd.lowerBound])
-        XCTAssertTrue(overviewContainer.contains(".background(CrewTodoPagePalette.background)"),
-                      "Todo 列表短于分栏时，ScrollView 空白区也须是页面底色")
+        XCTAssertTrue(overviewContainer.contains(".background(appModel.usesCrewdAuthority ? Color.clear:CrewTodoPagePalette.background)"),
+                      "legacy retains its warm page; the accepted Core overview has a clear container")
+        XCTAssertTrue(session.contains("if appModel.usesCrewdAuthority {"))
+        XCTAssertTrue(session.contains("CrewdOriginalTodoOverview(workspace: workspace, crewID: crewId)"))
+        let formal = Self.codeOnly(try Self.text(of: "CrewdOriginalWorkIntegration.swift"))
+        XCTAssertTrue(formal.contains("struct CrewdOriginalTodoOverview:"))
+        XCTAssertTrue(formal.contains("CrewdChannelWorkStore"))
+        XCTAssertFalse(formal.contains("LocalTodoStore.shared"), "Core overview cannot read the legacy ledger")
 
     }
 

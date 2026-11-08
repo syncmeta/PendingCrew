@@ -520,7 +520,19 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(store.contains("guard try backend.flushFirstMessageOutbox"))
         XCTAssertTrue(center.contains("if let pending = crewStore.pendingCrewDelivery"))
         XCTAssertTrue(center.contains("crewStore.checkPendingCrewDelivery()"))
-        XCTAssertTrue(center.contains("Text(\"等待送达\")"))
+        XCTAssertTrue(center.contains("Text(pending)"), "show the actual pending/Unknown explanation")
+        let original = try Self.requiredSection(store, "private func commitCrewdPendingCrew(", "func commitPendingCrew(")
+        let accepted = try XCTUnwrap(original.range(of: "guard !receipt.historical, receipt.phase == .committed, let first else"))
+        let spawn = try XCTUnwrap(original.range(of: "await workspace.startCaptainForCreatedCrew(actual"))
+        XCTAssertLessThan(accepted.lowerBound, spawn.lowerBound)
+        XCTAssertTrue(original.contains("originalFirstMessages.contains(where:"))
+        XCTAssertTrue(original.contains("$0.phase == .unknown"))
+        XCTAssertTrue(original.contains("created[\"message\"]"))
+        XCTAssertTrue(original.contains("original[\"text\"].string == text"))
+        XCTAssertTrue(original.contains("CrewdFirstCaptainReply(crewID: actual, channelID: channel,"))
+        let lookup = try Self.requiredSection(store, "func checkPendingCrewDelivery()", "private func activatePendingCrew(")
+        XCTAssertTrue(lookup.contains("workspace.readValue(\"message.list\""))
+        XCTAssertFalse(lookup.contains("workspace.performValue("), "Unknown readback must not repost")
     }
 
     @MainActor
@@ -765,73 +777,72 @@ final class ViewWiringTests: XCTestCase {
                        "coding-agent task 账仍被混进驾驶舱")
     }
 
-    /// Todo #61：筛选钮必须**在中栏 toolbar 上**、且开关状态真的被喂进时间线。
+    /// Todo #61 的可达筛选语义保留，入口已迁到正式 workspace toolbar 菜单。
     /// 「有调用点」不够 —— 判定函数被某个测试或别处引用一下也算有调用点，
     /// 但人在窗口里点不到就等于没有。
+
     func testMentionFilterIsReachableFromTheChatToolbar() throws {
-        let center = try Self.text(of: "CrewCenterView.swift")
-        XCTAssertTrue(center.contains("showOnlyHumanMentions:"),
-                      "中栏没把筛选开关喂给 CrewChatView")
-        XCTAssertTrue(center.contains("ToolbarItem"),
-                      "中栏 toolbar 没了，筛选钮无处可挂")
-        XCTAssertTrue(center.contains("Toggle(isOn: $onlyMentions)"),
-                      "toolbar 上没有能翻这个开关的钮，人点不到")
-        // Todo #69：人类指定的四个字，一个都不许润色。这条测试就是那四个字的守卫 ——
-        // 谁哪天觉得「只看@我」更顺口就改，这里当场红。
-        XCTAssertTrue(center.contains("Text(\"仅@你\")"),
-                      "筛选钮不是人类指定的文字药丸「仅@你」（Todo #69）")
-        XCTAssertFalse(center.contains("systemImage: \"at.circle\""),
-                      "筛选钮还是那个没有文字的图标 —— 人看不出它是干什么的（Todo #69）")
-        // 位置被人类改过两次，两次都写下来 —— 只留最新的一条，下一个人会看不出
-        // 「最右」当初是被谁、为什么推翻的：
-        // - Todo #79：钉在群聊栏**最右**上角（`.primaryAction`）。
-        // - Todo #128（推翻上一条，人类原话「仅@你改成放在三个按钮的左侧」）：
-        //   挪到 crew 详情 / 驾驶舱 / 刷新这三个按钮**左边**，即 toolbar 最前。
-        //   所以它不能再用 `.primaryAction` —— 那个 placement 本身就是「推到最右」。
-        // 声明顺序那条判据在 `MentionsFilterDefaultOnTests`，这里只钉「不许再钉右边」。
-        XCTAssertFalse(center.contains("ToolbarItem(placement: .primaryAction)"),
-                      "「仅@你」又被钉回最右了（Todo #128 要它在那三个按钮左侧）")
-        XCTAssertTrue(center.contains(".tint(Theme.Palette.accent)"),
-                      "「仅@你」点亮态没有复用发送键的主题绿色（Todo #79）")
+        let center = Self.codeOnly(try Self.text(of: "CrewCenterView.swift"))
+        let integration = Self.codeOnly(try Self.text(of: "CrewdOriginalWorkIntegration.swift"))
+        XCTAssertTrue(center.contains("showOnlyHumanMentions: $onlyMentions"))
+        XCTAssertTrue(center.contains("communicationView: $communicationView, onlyMentions: $onlyMentions)"))
+        XCTAssertTrue(center.contains("filterControl: AnyView(messageFilter)"))
+        let menu = try Self.requiredSection(center, "private struct CrewdMessageFilterMenu:", "private struct CrewdMessageFilterGlass:")
+        XCTAssertTrue(menu.contains("Toggle(\"仅@你\", isOn: $onlyMentions)"))
+        XCTAssertTrue(menu.contains(".tint(.gray)"), "accepted native menu tint must not restore the old green pill")
+        XCTAssertTrue(menu.contains("Picker(\"消息分类\", selection: folder)"))
+        XCTAssertTrue(menu.contains("workspace.resourceDrafts.selection(resources.crew, .messages, channel: resources.channel)"))
+        XCTAssertTrue(integration.contains("if workspace.originalSection == \"消息\", let filterControl { filterControl }"))
+        XCTAssertTrue(integration.contains(".toolbar { workspaceToolbar }"))
+        XCTAssertTrue(integration.contains("ToolbarItem(placement: .automatic) { workspaceControls }"))
+        // The sidebar modes remain a separate native segmented control. The
+        // accepted gray message menu did not cancel its theme-accent contract.
+        let sidebar = Self.codeOnly(try Self.text(of: "CrewSidebarView.swift"))
+        let sidebarBody = try Self.requiredSection(sidebar, "var body: some View", "private var viewModePicker:")
+        XCTAssertTrue(sidebarBody.contains("viewModePicker"))
+        let sidebarPicker = try Self.requiredSection(sidebar, "private var viewModePicker:", "private func reloadArrangement()")
+        XCTAssertTrue(sidebarPicker.contains("Picker(\"侧栏\", selection: Binding("))
+        XCTAssertTrue(sidebarPicker.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(sidebarPicker.contains(".tint(Theme.Palette.accent)"),
+                      "sidebar modes must retain their own theme accent")
 
-        let sidebar = try Self.text(of: "CrewSidebarView.swift")
-        XCTAssertTrue(sidebar.contains(".pickerStyle(.segmented)"))
-        XCTAssertTrue(sidebar.contains(".tint(Theme.Palette.accent)"),
-                      "层级/时间流仍继承系统蓝色，没有改成主题绿色（Todo #79）")
+        let filter = Self.codeOnly(try Self.text(of: "CrewTimelineFilter.swift"))
+        let resolveBody = try Self.requiredSection(filter, "static func resolve(", "\n    }")
+        XCTAssertTrue(resolveBody.contains("let mentionFiltered = inputs.onlyMentions"))
+        XCTAssertTrue(resolveBody.contains("CrewMentionFilter.onlyHumanMentions("))
+        let cache = try Self.requiredSection(filter, "final class CrewTimelineFilterCache:", "\n}")
+        let cachedEntries = try Self.requiredSection(cache, "func entries(for inputs: CrewTimelineFilter.Inputs)", "\n    }")
+        XCTAssertTrue(cachedEntries.contains("if let cachedInputs, cachedInputs == inputs {"))
+        XCTAssertTrue(cachedEntries.contains("return hit"))
+        XCTAssertTrue(cachedEntries.contains("let fresh = CrewTimelineFilter.resolve(inputs)"))
+        XCTAssertTrue(cachedEntries.contains("cachedOutput = fresh"))
+        XCTAssertTrue(cachedEntries.contains("return fresh"))
 
-        let chat = try Self.text(of: "CrewChatView.swift")
-        // 人类 Todo #140 ③ 之后筛选判定住在 `CrewTimelineFilter`（那个计算属性一帧被读
-        // 八次、每次重筛 2618 条），所以「走没走筛选」要在那个文件里钉。
-        let filter = try Self.text(of: "CrewTimelineFilter.swift")
-        // **切到 `resolve` 的函数体里去看，而且要带括号。** 整文件找
-        // `CrewMentionFilter.onlyHumanMentions` 会撞上同一文件注释里那句「口径见
-        // `CrewMentionFilter.onlyHumanMentions`」—— 第一版就是这样，于是「把筛选整条
-        // 拿掉」那刀被读成了绿。变异自证那一趟抓到的：**为了讲清楚而写下的注释，
-        // 长成了被检测的形状。**
-        let resolveBody: String = {
-            guard let decl = filter.range(of: "static func resolve(") else { return "" }
-            let tail = filter[decl.upperBound...]
-            guard let end = tail.range(of: "\n    }") else { return String(tail) }
-            return String(tail[..<end.lowerBound])
-        }()
-        XCTAssertFalse(resolveBody.isEmpty, "CrewTimelineFilter.resolve 不见了")
-        XCTAssertTrue(resolveBody.contains("CrewMentionFilter.onlyHumanMentions("),
-                      "群聊时间线判定没走筛选")
-        // 仍然必须筛在 timelineEntries 这个源头 —— 渲染窗口那一整套（renderLimit /
-        // hasMore /「上面还有 N 条」/ anchorOnExpand）全读它，筛在下游会出现
-        // 「显示还有 300 条、点开什么都没有」。判定搬走了，**这条判据一个字没松**：
-        // timelineEntries 仍要先取到筛过的那一份，windowedEntries 才在它下游开窗。
-        let source = chat.range(of: "private var timelineEntries")
-        let filtered = chat.range(of: "timelineFilterCache.entries(for:")
-        let windowed = chat.range(of: "private var windowedEntries")
-        XCTAssertNotNil(source); XCTAssertNotNil(filtered); XCTAssertNotNil(windowed)
-        if let source, let filtered, let windowed {
-            XCTAssertTrue(source.lowerBound < filtered.lowerBound
-                          && filtered.lowerBound < windowed.lowerBound,
-                          "筛选没落在 timelineEntries 里 —— 渲染窗口会按未筛选的条数算")
-        }
-        XCTAssertTrue(chat.contains("CrewChatWindow.window(timelineEntries"),
-                      "渲染窗口不再开在 timelineEntries 下游")
+        let chat = Self.codeOnly(try Self.text(of: "CrewChatView.swift"))
+        XCTAssertTrue(chat.contains("@State private var timelineFilterCache = CrewTimelineFilterCache()"))
+        let mentions = try Self.requiredSection(chat, "private var onlyMentions:", "\n")
+        XCTAssertTrue(mentions.contains("showOnlyHumanMentions?.wrappedValue ?? false"))
+        // Preserve the actual view's filter-before-window invariant, including
+        // its real cache caller. A resolver used only by tests is insufficient.
+        let source = try XCTUnwrap(chat.range(of: "private var timelineEntries:"))
+        let filtered = try XCTUnwrap(chat.range(of: "timelineFilterCache.entries(for:",
+                                               range: source.upperBound..<chat.endIndex))
+        let windowed = try XCTUnwrap(chat.range(of: "private var windowedEntries:"))
+        XCTAssertLessThan(source.lowerBound, filtered.lowerBound)
+        XCTAssertLessThan(filtered.lowerBound, windowed.lowerBound,
+                          "filtering must precede windowing so paging uses filtered counts")
+        let timeline = try Self.requiredSection(chat, "private var timelineEntries:", "\n    }")
+        XCTAssertTrue(timeline.contains("timelineFilterCache.entries(for: CrewTimelineFilter.Inputs("))
+        XCTAssertTrue(timeline.contains("entries: entries, onlyMentions: onlyMentions, roster: mentionRoster"))
+        XCTAssertTrue(timeline.contains("localUserId: localUserId, searchText: searchText"))
+        XCTAssertTrue(timeline.contains("communicationView: currentCommunicationView"))
+        XCTAssertTrue(timeline.contains("messageFolder: messageFolders.filter"))
+        XCTAssertFalse(timeline.contains("CrewChatWindow.window("), "do not filter an already-windowed subset")
+        let window = try Self.requiredSection(chat, "private var windowedEntries:", "\n    }")
+        XCTAssertTrue(window.contains("CrewChatWindow.window(timelineEntries, limit: renderLimit)"),
+                      "the actual render window must consume the filtered timeline")
+        // Default/reset/search and executable empty-state escape controls stay
+        // in MentionsFilterDefaultOnTests; this is only the actual caller path.
     }
 
     /// 人类消息只能由白板观察器按 message id 投递。composer / Todo 再直投一次会用
@@ -1060,62 +1071,126 @@ final class ViewWiringTests: XCTestCase {
 
     /// #121 第四批：行为测试证明了真实 TLS/RPC；这条只锁生产 caller，防止绿零件
     /// 没有被 iOS 根状态、配对入口和 daemon 唯一账本接上。
+
     func testIOSRemoteCrewDataPlaneIsWiredIntoProductionCallers() throws {
-        let appModel = Self.codeOnly(try Self.text(of: "AppModel.swift"))
-        let pairing = Self.codeOnly(try Self.text(of: "IOSRemotePairingView.swift"))
+        let app = Self.codeOnly(try Self.text(of: "AppModel.swift"))
+        let allPairing = Self.codeOnly(try Self.text(of: "IOSRemotePairingView.swift"))
+        let start = try XCTUnwrap(allPairing.range(of: "struct IOSRemotePairingView:"))
+        let pairing = String(allPairing[start.lowerBound...])
         let shell = Self.codeOnly(try Self.text(of: "IPadShell.swift"))
-        let list = Self.codeOnly(try Self.text(of: "CrewListView.swift"))
-        let store = Self.codeOnly(try Self.text(of: "CrewStore.swift"))
-        let daemon = Self.codeOnly(try Self.text(of: "SessionDaemonMain.swift"))
-        let server = try Self.projectText(of: "Sources/Mac/LocalRunner/SessionProtocolEndpoints.swift")
-
-        XCTAssertTrue(appModel.contains("RemoteBackendConfiguration.production()"))
-        XCTAssertTrue(appModel.contains("RemotePendingCrewBackend(configuration:"))
-        XCTAssertFalse(appModel.contains("return nil\n        #endif"),
-                       "iOS AppModel.backend 又退回恒 nil 空壳")
-        XCTAssertTrue(pairing.contains("ManualPairingCoordinator.production()"))
-        XCTAssertTrue(pairing.contains("appModel.reloadRemoteBackend()"))
-        XCTAssertTrue(pairing.contains("crewStore.refreshList()"),
-                      "首次配对后没有主动刷新，启动时跑过的 .task 不会再来")
+        XCTAssertTrue(app.contains("let usesCrewdAuthority = true"))
+        XCTAssertTrue(app.contains("var backend: PendingCrewBackend? { crewdBackend }"))
+        let publish = try Self.requiredSection(app, "private func refreshCommittedBackend()", "func initializeCrewdAuthority()")
+        let journal = try XCTUnwrap(publish.range(of: "guard selected.originalJournalReady else"))
+        let commit = try XCTUnwrap(publish.range(of: "CrewdPendingCrewBackend(workspace: selected)"))
+        XCTAssertLessThan(journal.lowerBound, commit.lowerBound)
+        XCTAssertTrue(publish.contains("guard selected.client.readyForWork else"))
+        XCTAssertTrue(publish.contains("selected.acceptsObservation(epoch), selected.client.connectionEpoch == connection"))
+        XCTAssertTrue(pairing.contains("CrewdEnrollmentView(completed:choose)"))
+        XCTAssertTrue(pairing.contains("await appModel.connectCrewdAuthority(computerID:id)"))
+        XCTAssertTrue(pairing.contains("workspace.client.readyForWork,workspace.originalJournalReady"))
+        let refresh = try XCTUnwrap(pairing.range(of: "await crewStore.refreshList()"))
+        let complete = try XCTUnwrap(pairing.range(of: "if selectionSurface.complete(token){dismiss()}"))
+        XCTAssertLessThan(refresh.lowerBound, complete.lowerBound)
+        XCTAssertTrue(pairing.contains("appModel.crewdWindow.workspace === workspace"))
+        XCTAssertTrue(pairing.contains("workspace.client.connectionEpoch == connection"))
+        XCTAssertTrue(pairing.contains(".onDisappear{closeComputerList(session.id)}"))
+        XCTAssertTrue(pairing.contains("if next == nil,let displayedSession{closeComputerList(displayedSession)}"))
+        XCTAssertTrue(pairing.contains("selectionSurface.cancelChoice();appModel.cancelCrewdAuthoritySelection()"))
+        XCTAssertFalse(pairing.contains("ManualPairingCoordinator.production()"))
+        XCTAssertFalse(app.contains("RemotePendingCrewBackend(configuration:"))
         XCTAssertTrue(shell.contains("IOSRemotePairingView()"))
-        XCTAssertTrue(list.contains("Button(\"重试\")"))
-        XCTAssertTrue(store.contains("error = nil"), "列表重试仍会显示上一轮错误")
-        XCTAssertTrue(daemon.contains("host.server.crewBackend = model.backend"),
-                      "daemon 没把唯一 LocalBackend 账本接到 crew RPC")
-        XCTAssertTrue(server.contains("backend.postCrewMessage("),
-                      "远端 post 没有直达 daemon backend")
+        let backend = Self.codeOnly(try Self.text(of: "CrewdPendingCrewBackend.swift"))
+        XCTAssertTrue(backend.contains("workspace.readValue(\"crew.list\""))
+        XCTAssertTrue(backend.contains("let workspace: CrewdWorkspace"))
 
-        for path in [
-            "Sources/Shared/SessionProtocol.swift",
-            "Sources/Shared/SecureTCPTransport.swift",
-            "Sources/Shared/ManualPairingCoordinator.swift",
-            "Sources/Shared/CrewRPC.swift",
-        ] {
-            XCTAssertFalse(try Self.projectText(of: path).contains("#if os(macOS)"),
-                           "\(path) 仍被 macOS-only 条件锁住")
-        }
+        // Preserve list recovery independently of the authority/pairing rewrite.
+        // Follow the real iOS root, displayed error branch and retry callback;
+        // a Button or error-reset token elsewhere in a file is insufficient.
+        let sidebar = try Self.requiredSection(shell, "NavigationSplitView(preferredCompactColumn:", "} detail: {")
+        XCTAssertTrue(sidebar.contains("CrewListView(connectComputer: canChooseComputer ? { showingPairing = true } : nil,"))
+        XCTAssertTrue(sidebar.contains("selection: $selectedCrewId)"))
+        let list = Self.codeOnly(try Self.text(of: "CrewListView.swift"))
+        let listBody = try Self.requiredSection(list, "var body: some View", "private var flatList:")
+        XCTAssertTrue(listBody.contains(".overlay {"))
+        XCTAssertTrue(listBody.contains("if crewStore.crews.isEmpty, needsEmptyOverlay {"))
+        XCTAssertTrue(listBody.contains("emptyOverlay"))
+        XCTAssertTrue(listBody.contains(".task { await crewStore.refreshList() }"))
+        let empty = try Self.requiredSection(list, "private var emptyOverlay:", "private var awaitingList:")
+        XCTAssertTrue(empty.contains("unavailableOrEmpty"))
+        let failure = try Self.requiredSection(list, "private var connectionFailure:", "private var unavailableOrEmpty:")
+        XCTAssertTrue(failure.contains("appModel.crewdWindow.error ?? appModel.crewdWindow.workspace?.error ?? crewStore.error"))
+        let unavailable = try Self.requiredSection(list, "private var unavailableOrEmpty:", "\n    }")
+        XCTAssertTrue(unavailable.contains("if let error = connectionFailure {"))
+        XCTAssertTrue(unavailable.contains("Text(error)"))
+        let retry = "Button(\"重试\") { Task { await crewStore.refreshList() } }"
+        XCTAssertTrue(unavailable.contains(retry), "list retry must invoke its real shared store")
+        let detail = try Self.requiredSection(shell, "private var detail: some View", "private func settingsAction(")
+        let detailError = try Self.requiredSection(detail,
+            "else if let error = appModel.crewdWindow.error ?? appModel.crewdWindow.workspace?.error ?? crewStore.error {",
+            "} else if !isCompact {")
+        XCTAssertTrue(detailError.contains("Text(error)"))
+        XCTAssertTrue(detailError.contains(retry), "the iOS detail error surface must keep its retry route too")
+
+        let store = Self.codeOnly(try Self.text(of: "CrewStore.swift"))
+        let refreshList = try Self.requiredSection(store, "func refreshList() async", "func refreshDetail(")
+        let clearOldError = try XCTUnwrap(refreshList.range(of: "error = nil"))
+        let lookupBackend = try XCTUnwrap(refreshList.range(of: "guard let backend = currentBackend() else { return }"))
+        let request = try XCTUnwrap(refreshList.range(of: "let result = try await backend.listCrews()"))
+        let clearSuccessError = try XCTUnwrap(refreshList.range(of: "error = nil",
+                                                               range: request.upperBound..<refreshList.endIndex))
+        XCTAssertLessThan(clearOldError.lowerBound, lookupBackend.lowerBound,
+                          "a retry must clear the previous error before resolving its current backend")
+        XCTAssertLessThan(lookupBackend.lowerBound, request.lowerBound)
+        XCTAssertLessThan(request.lowerBound, clearSuccessError.lowerBound,
+                          "successful list recovery must also clear the displayed error")
+        XCTAssertTrue(refreshList.contains("let authority = crewdWorkspace"))
+        XCTAssertTrue(refreshList.contains("guard !usesCrewdAuthority || crewdWorkspace === authority else { return }"))
+        let listFailure = try Self.requiredSection(refreshList, "} catch {", "\n        }")
+        XCTAssertTrue(listFailure.contains("self.error = \"加载 crew 列表失败："))
+        XCTAssertTrue(listFailure.contains("#if os(iOS)"))
+        XCTAssertTrue(listFailure.contains("crews = []"))
+        XCTAssertTrue(listFailure.contains("chiefLayer = nil"), "iOS failure must expose recovery instead of stale crews")
+        let currentBackend = try Self.requiredSection(store, "private func currentBackend()", "\n    }")
+        XCTAssertTrue(currentBackend.contains("guard let backend = appModel.backend else {"))
+        XCTAssertTrue(currentBackend.contains("return backend"))
+        // Source wiring does not prove real iPhone pairing, back gestures, or
+        // same-tip iOS compilation; the independent platform gate must run.
     }
 
     /// #121 第五批的 production caller：保留 iOS 远端会话和终端导航，
     /// 退役的本地手动审批不再是连接门槛。
+
     func testIOSRemoteSessionTerminalIsWiredIntoProductionCallers() throws {
         let shell = Self.codeOnly(try Self.text(of: "IPadShell.swift"))
         let chat = Self.codeOnly(try Self.text(of: "CrewChatView.swift"))
         let roster = Self.codeOnly(try Self.text(of: "CrewRosterBar.swift"))
         let detail = Self.codeOnly(try Self.text(of: "IOSRemoteSessionView.swift"))
-
-        XCTAssertTrue(roster.contains("onOpenSession(sessionID)"),
-                      "iOS roster 的 session 成员仍不可点")
-        XCTAssertTrue(chat.contains("onOpenSession: onOpenRemoteSession"),
-                      "CrewChat 没把远端 session 导航交给 roster")
-        XCTAssertTrue(shell.contains("IOSRemoteSessionView(crewID:"),
-                      "iOS shell 没有 session 详情导航")
-        XCTAssertTrue(detail.contains("backend.openSession(sessionID:"),
-                      "详情页没有接共享连接上的 attach")
-        XCTAssertTrue(detail.contains("remoteSessionBackend?.closeSession(sessionID:"),
-                      "详情退出时没有 detach/release 远端 session")
-        XCTAssertTrue(detail.contains("Button(\"重新连接\""),
-                      "显式断线态没有恢复入口")
+        let terminal = Self.codeOnly(try Self.text(of: "CrewdPublicTerminal.swift"))
+        let controls = Self.codeOnly(try Self.text(of: "CrewdTerminalControlBar.swift"))
+        XCTAssertTrue(roster.contains("onOpenSession(sessionID)"))
+        XCTAssertTrue(chat.contains("onOpenSession: onOpenRemoteSession"))
+        XCTAssertTrue(shell.contains("IOSRemoteSessionView(crewID:"))
+        XCTAssertTrue(detail.contains("workspace.selectSession(sessionID)"))
+        XCTAssertTrue(detail.contains("CrewdPublicTerminal(workspace: workspace, sessionID: sessionID)"))
+        XCTAssertTrue(controls.contains(".task { await control.connect() }"))
+        XCTAssertTrue(terminal.contains("workspace.openTerminalConnection()"))
+        XCTAssertTrue(terminal.contains("connection.call(\"session.terminal.inspect\""))
+        XCTAssertTrue(terminal.contains("connection.call(\"session.terminal.watch\""))
+        XCTAssertTrue(terminal.contains("awaitingWatch = false; connected = true"))
+        XCTAssertTrue(terminal.contains("name == \"session.terminal.output\""))
+        XCTAssertTrue(controls.contains("Button(\"重新读取屏幕\")"))
+        XCTAssertTrue(controls.contains("control.deactivate()"))
+        XCTAssertTrue(controls.contains(".onDisappear { control.deactivate() }"))
+        XCTAssertTrue(detail.contains(".onDisappear { terminal?.retire(); terminal = nil }"))
+        let close = try Self.requiredSection(terminal, "private func closeObservation(", "func deactivate()")
+        XCTAssertTrue(close.contains("client?.disconnect(); client = nil; commands = nil"))
+        XCTAssertTrue(close.contains("invalidateLease(reason)"))
+        let retireStart = try XCTUnwrap(terminal.range(of: "func deactivate()"))
+        let retirement = String(terminal[retireStart.lowerBound...])
+        XCTAssertFalse(retirement.contains("session.stop"), "leaving ends observation, never the remote team")
+        XCTAssertFalse(retirement.contains("terminalWrite"), "leaving/reopening must not replay Unknown input")
+        XCTAssertTrue(terminal.contains("preserveUnsent(queuedInput)"))
     }
 
     /// Todo #22：关闭按钮只此一处定义 —— 别的浮层不许再手糊圆形叉。
@@ -1352,16 +1427,26 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertTrue(readonlyPill.contains(".strokeBorder(Theme.Palette.hairline"))
     }
 
+
     func testUnreadableQuotaViewsAreHiddenWithoutClearingErrors() throws {
         let view = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/CrewSessionWindowView.swift"))
         let footer = Self.codeOnly(try Self.projectText(of: "Sources/Mac/Views/QuotaRingsFooter.swift"))
         let usage = try Self.requiredSection(view, "private var codexUsageRow:", "private func statusBadge(")
         XCTAssertTrue(usage.contains("QuotaRingLayout.shouldDisplay(quota.codex, failure: quota.codexError)"))
         XCTAssertFalse(usage.contains("账号额度：读不到"))
-        XCTAssertTrue(footer.contains("QuotaRingLayout.shouldDisplay(quota.claude, failure: quota.claudeError)"))
-        XCTAssertTrue(footer.contains("QuotaRingLayout.shouldDisplay(quota.codex, failure: quota.codexError)"))
-        XCTAssertFalse(footer.contains("staleBadge: claudeWarning"))
-        XCTAssertFalse(footer.contains("staleBadge: codexWarning"))
+        // 0dc6a4c3 fixed an observed hidden-error bug. Sidebar status and
+        // session numeric visibility deliberately have different contracts.
+        XCTAssertTrue(footer.contains("QuotaRingLayout.shouldDisplayStatus(quota.claude, failure: quota.claudeError)"))
+        XCTAssertTrue(footer.contains("QuotaRingLayout.shouldDisplayStatus(quota.codex, failure: quota.codexError)"))
+        XCTAssertTrue(footer.contains("quota.claude == nil ? $0 : \"旧值 · \" + $0"))
+        XCTAssertTrue(footer.contains("quota.codex == nil ? $0 : \"旧值 · \" + $0"))
+        XCTAssertTrue(footer.contains("_quota = StateObject(wrappedValue: QuotaCenter(workspace: workspace))"))
+        XCTAssertTrue(footer.contains(".onReceive(workspace.client.$readyForWork)"))
+        XCTAssertTrue(footer.contains("if !ready { quota.invalidateRemote() }"))
+        XCTAssertFalse(QuotaRingLayout.shouldDisplay(nil, failure: "unavailable"))
+        XCTAssertTrue(QuotaRingLayout.shouldDisplayStatus(nil, failure: "unavailable"))
+        XCTAssertTrue(QuotaRingLayout.claudeRings(nil).isEmpty)
+        XCTAssertTrue(QuotaRingLayout.codexRings(nil).isEmpty)
     }
 
     /// #166 follow-up: Codex's running-session menus must consume only the
@@ -1830,21 +1915,19 @@ final class ViewWiringTests: XCTestCase {
         XCTAssertLessThan(reload.lowerBound, execute.lowerBound)
     }
 
-    /// Todo #56 ④⑤：纯终端既要真接进 session UI，也必须从 crew agent 编排面隔离。
+    /// Todo #56 的 legacy 终端组件保持 agent 隔离；Core 纯 shell 尚未迁移，另记产品欠账。
     func testPlainTerminalIsWiredIntoSessionUIWithoutAgentOrchestration() throws {
-        let view = try Self.text(of: "CrewSessionWindowView.swift")
-        XCTAssertTrue(view.contains("Image(systemName: \"apple.terminal\")"),
-                      "新建 session 页没有统一的终端图标")
-        XCTAssertTrue(view.contains("private var sessionKindControls"),
-                      "Claude Code / Codex / 终端没有共用纵向药丸选择器")
-        XCTAssertTrue(view.contains("VStack(spacing: 8)"),
-                      "session 类型没有从上到下纵向排列")
-        XCTAssertTrue(view.contains("sessionKindPill(.terminal, title: \"终端\")"),
-                      "新建 session 页没有纯终端选项")
-        XCTAssertTrue(view.contains("Capsule().fill("),
-                      "session 类型的每一行没有画成完整药丸")
-        XCTAssertFalse(view.contains(".pickerStyle(.segmented)"),
-                       "session 类型仍是横向分段选择，不是从上到下一行一个药丸")
+        // Retained legacy component contract only. Ordinary Core creation
+        // still lacks pure-shell support; this test cannot close that gap.
+        let view = Self.codeOnly(try Self.text(of: "CrewSessionWindowView.swift"))
+        XCTAssertTrue(view.contains("Label(\"打开终端\", systemImage: \"apple.terminal\")"))
+        let choice = try Self.requiredSection(view, "private var sessionKindControls:", "private func sessionKindPill(")
+        XCTAssertTrue(choice.contains("if appModel.usesCrewdAuthority, let workspace"))
+        XCTAssertTrue(choice.contains("CrewdExecutorChoiceView(workspace: workspace"))
+        XCTAssertTrue(choice.contains("Picker(\"执行方式\", selection: $selectedKind)"))
+        XCTAssertTrue(choice.contains("Text(\"终端\").tag(LocalCodingAgentKind.terminal)"))
+        XCTAssertTrue(choice.contains(".pickerStyle(.menu)"))
+        XCTAssertFalse(choice.contains(".pickerStyle(.segmented)"))
         XCTAssertTrue(view.contains("case .terminal:\n                break"),
                       "纯终端启动分支没有与世界观/MCP 注入明确断开")
         XCTAssertTrue(view.contains("$0.crewId == crewStore.selectedDetail?.crew.id && $0.kind.isAgent"),
@@ -2157,6 +2240,18 @@ final class ViewWiringTests: XCTestCase {
         let row = Self.codeOnly(try Self.text(of: "CrewSidebarCrewRow.swift"))
         XCTAssertTrue(row.contains("CrewSidebarCrewRow.preview(of: last)"),
                       "共用行没有接上末条消息预览")
+    }
+
+    func testAppleWorkflowChecksIOSIndependentlyOfMacTestOutcome() throws {
+        let workflow = try Self.projectText(of: ".github/workflows/ci.yml")
+        XCTAssertTrue(workflow.contains("XCODE: /Applications/Xcode_26.5.app"))
+        XCTAssertTrue(workflow.contains("name: 构建并记录同版本普通 Core\n        id: normal-core"))
+        let ios = try Self.requiredSection(workflow, "- name: iOS 端编译", "- name: 保留普通 Core 的准确构建记录")
+        XCTAssertTrue(ios.contains("if: ${{ !cancelled() && steps.normal-core.outcome == 'success' }}"))
+        XCTAssertTrue(ios.contains("generic/platform=iOS Simulator"))
+        XCTAssertFalse(workflow.contains("continue-on-error:"), "a failed Mac test must still fail the job")
+        XCTAssertTrue(workflow.contains("-skip-testing:PendingCrewTests/HelperBuildPerMemberTests"))
+        XCTAssertEqual(workflow.components(separatedBy: "-skip-testing:").count - 1, 1)
     }
 
     private static func text(of fileName: String) throws -> String {

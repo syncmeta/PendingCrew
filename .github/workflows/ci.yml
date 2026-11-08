@@ -96,6 +96,7 @@ jobs:
 
       # 普通 App 必须嵌入准确的普通 Core；沿用正式来源记录器，不跳过嵌入检查。
       - name: 构建并记录同版本普通 Core
+        id: normal-core
         working-directory: crewd
         env:
           CARGO_INCREMENTAL: '0'
@@ -137,7 +138,9 @@ jobs:
       # 三端共用一套源码：只编 Mac 会让漏了 `#if os(macOS)` 的 AppKit 调用
       # 把 iOS 端静默打红。`generic/platform=iOS Simulator` 只要 SDK，不需要
       # 装模拟器运行时。
+      # Core 输入合格后独立编译 iOS；Mac 单测失败仍使整个 job 失败。
       - name: iOS 端编译
+        if: ${{ !cancelled() && steps.normal-core.outcome == 'success' }}
         run: |
           xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
             -destination 'generic/platform=iOS Simulator' \
