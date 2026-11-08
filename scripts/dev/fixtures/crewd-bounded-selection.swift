@@ -169,6 +169,8 @@ final class PublicChangeCapture: @unchecked Sendable {
         let window = CrewdRemoteWindow(pairing: pairing, broker: broker, deadlines: limits, factories: factory.factories())
         let model = AppModel(window: window, directory: { localRoot }, bindDrafts: { _ in })
         var other: CrewdRemoteWindow?
+        var ownedSurface: CrewdComputerSelectionSurface?
+        var surfaceTasks: [Task<Void, Never>] = []
         var writerGate: BlockingVaultGate?
         var controlledWriter: Task<CrewdCredentialReadBroker.Value, Error>?
         let rootJournal = localRoot.appendingPathComponent("frontend-presentation/unknown-submissions")
@@ -261,7 +263,7 @@ final class PublicChangeCapture: @unchecked Sendable {
                     let key: CrewdCredentialReadBroker.Key = replace ? .selection(pairing.observationID, originalSummary) : .forget(pairing.observationID, originalSummary)
                     let beforeRecords = gate.count("records"), beforeRead = gate.count(ids[0].uuidString)
                     controlledWriter = Task {
-                        try await broker.observe(key, timeout: 10) {
+                        try await broker.observe(key, owner: pairing, timeout: 10) {
                             if replace { try fixture.replaceReceipt(originalSummary) }
                             else { try pairing.forget(originalSummary) }
                             // NotificationCenter.post has returned, so every
@@ -318,7 +320,7 @@ final class PublicChangeCapture: @unchecked Sendable {
                     if let cancelledSequence {
                         try check(second.validatedComputerSequenceForQA == cancelledSequence && !second.observingComputers,
                             "live shared completion published into B after explicit list cancellation")
-                        try check(window.validatedComputerSequenceForQA == CrewdRemotePairing.credentialRevision.snapshot.sequence,
+                        try check(window.validatedComputerSequenceForQA == pairing.credentialRevision.snapshot.sequence,
                             "A's still-authorized observation did not finish")
                         let resumed = await second.refresh()
                         try check(resumed && second.validatedComputerSequenceForQA > cancelledSequence,
@@ -343,7 +345,7 @@ final class PublicChangeCapture: @unchecked Sendable {
                     try await fixture.credentialABA(original)
                     NotificationCenter.default.removeObserver(observer)
                     try await until({ incorporated >= 2 && !broker.busy && !window.observingComputers &&
-                        window.validatedComputerSequenceForQA == CrewdRemotePairing.credentialRevision.snapshot.sequence }, "post-ABA qualification did not settle")
+                        window.validatedComputerSequenceForQA == pairing.credentialRevision.snapshot.sequence }, "post-ABA qualification did not settle")
                     await model.connectCrewdAuthority(computerID: ids[0])
                     try await until({ window.selected == ids[0] && model.crewdBackend?.workspace === window.workspace }, "fresh post-ABA selection did not qualify")
                     let fresh = window.workspace, records = gate.count("records")
@@ -355,6 +357,87 @@ final class PublicChangeCapture: @unchecked Sendable {
                     try check(window.workspace === fresh && fresh?.isRetired == false && model.crewdBackend?.workspace === fresh,
                         "late old notification revoked a newer qualified selection")
                     try check(gate.count("records") == records, "late incorporated notification manufactured another qualification read")
+                    try preserved()
+                } else if scenario == "sheet-dismissal-lifecycle" {
+                    let surface = CrewdComputerSelectionSurface(); ownedSurface = surface
+                    var readCancellations = 0, refreshCallbacks = 0, successDismissals = 0
+                    for name in ["remote-a.sock", "remote-b.sock"] { try Data().write(to: root.appendingPathComponent(name + ".hold")) }
+                    func start(_ target: UUID) {
+                        let operation = surface.choose(target) { token in
+                            await model.connectCrewdAuthority(computerID: target)
+                            guard surface.isCurrent(token) else { return }
+                            do { try await until({ model.crewdBackend?.workspace === window.workspace && window.selected == target }, "surface backend did not qualify") }
+                            catch { return }
+                            guard surface.isCurrent(token), let qualified = window.workspace,
+                                  model.crewdBackend?.workspace === qualified, qualified.client.readyForWork,
+                                  qualified.originalJournalReady else { return }
+                            refreshCallbacks += 1
+                            await Task.yield() // same guarded await boundary as the UI crew-list callback
+                            guard surface.isCurrent(token), window.workspace === qualified else { return }
+                            if surface.complete(token) { successDismissals += 1 }
+                        }
+                        surfaceTasks.append(operation)
+                    }
+                    let first = surface.open(), readLease = window.computerListObservationLease
+                    surface.observeComputers(in: first.id) { readCancellations += 1; window.cancelComputerListObservation(if: readLease) }
+                    start(ids[0])
+                    try await until({ window.attempt?.target == ids[0] && window.attempt?.phase == .connection }, "first sheet never owned the real connection")
+                    try check(surface.dismiss(first.id), "actual inner-sheet lifecycle did not cancel its session")
+                    try await until({ !model.connectingAuthority }, "sheet dismissal did not withdraw its original Window attempt")
+                    try check(window.workspace === local && model.crewdBackend?.workspace === local, "sheet dismissal retired original authority")
+                    let second = surface.open(); start(ids[1])
+                    try await until({ window.attempt?.target == ids[1] && window.attempt?.phase == .connection }, "replacement sheet did not own its connection")
+                    try check(!surface.dismiss(first.id), "late first-sheet lifecycle cancelled a replacement presentation")
+                    try Data().write(to: root.appendingPathComponent("remote-a.sock.release"))
+                    try check(window.attempt?.target == ids[1] && refreshCallbacks == 0 && readCancellations == 1, "late first selection refreshed/dismissed the replacement")
+                    try Data().write(to: root.appendingPathComponent("remote-b.sock.release"))
+                    try await until({ successDismissals == 1 && surface.presented == nil && window.selected == ids[1] }, "qualified second sheet did not complete")
+                    // A success dismissal is already closed before SwiftUI sends
+                    // onDisappear; its late callback cannot kill a third choice.
+                    try FileManager.default.removeItem(at: root.appendingPathComponent("remote-a.sock.release"))
+                    let third = surface.open(); start(ids[0])
+                    try await until({ window.attempt?.target == ids[0] && window.attempt?.phase == .connection }, "third presentation did not start")
+                    try check(!surface.dismiss(second.id) && surface.presented?.id == third.id && model.connectingAuthority,
+                        "programmatic-success disappearance cancelled a newer selection")
+                    try Data().write(to: root.appendingPathComponent("remote-a.sock.release"))
+                    try await until({ successDismissals == 2 && window.selected == ids[0] && surface.presented == nil }, "third presentation did not qualify")
+                    try check(refreshCallbacks == 2 && readCancellations == 1, "dismissed sheet caused late crew-list/dismiss side effects")
+                    try preserved()
+                } else if scenario == "broker-independent-owner-coalescing" {
+                    let copy = try await fixture.independentPairingCopy()
+                    let original = window.computers.first { $0.id == ids[0] }!
+                    let request = CrewdCredentialReadBroker.Key.selection(copy.observationID, original)
+                    let revision = copy.credentialRevision.current
+                    let completion = BlockingVaultGate(); writerGate = completion
+                    completion.arm("B-read-after-A-write")
+                    controlledWriter = Task {
+                        try await broker.observe(request, owner: copy, timeout: 10) {
+                            let qualified = try copy.selection(original)
+                            try pairing.forget(original)
+                            try completion.enter("B-read-after-A-write")
+                            return .selection(qualified)
+                        }
+                    }
+                    try await until({ completion.waiting }, "original independently owned read did not reach its controlled return")
+                    try check(copy.credentialRevision.current == revision, "unrelated owner modified B's own clock")
+                    var joining = false
+                    let shared = Task {
+                        joining = true
+                        return try await broker.observe(request, owner: copy, timeout: 10) {
+                            throw CheckFailure.failed("same original B read was executed again")
+                        }
+                    }
+                    try await until({ joining }, "second original B observer did not enter")
+                    var mismatchedOwnerRefused = false
+                    do { _ = try await broker.observe(request, owner: pairing, timeout: 0.1) { throw CheckFailure.failed("mismatched owner performed credential IO") } }
+                    catch CrewdRemoteError.wrongIdentity { mismatchedOwnerRefused = true }
+                    try check(mismatchedOwnerRefused && broker.busy && completion.waiting, "broker relaxed original owner/key identity or completed the worker early")
+                    completion.release()
+                    guard let controlledWriter else { throw CheckFailure.failed("missing original owner worker") }
+                    let first = try await controlledWriter.value, next = try await shared.value
+                    guard case .selection(let firstValue) = first, case .selection(let nextValue) = next else { throw CheckFailure.failed("coalesced original owner returned the wrong result") }
+                    try check(firstValue.credentialRevision == revision && nextValue.credentialRevision == revision && completion.count("B-read-after-A-write") == 1,
+                        "unrelated A write invalidated or duplicated B's original observation")
                     try preserved()
                 } else if scenario == "pending-independent-owner" {
                     let copy = try await fixture.independentPairingCopy()
@@ -484,12 +567,15 @@ final class PublicChangeCapture: @unchecked Sendable {
             }
         } catch { result = error }
         // Even a failed assertion drains the truly blocking fake before exit.
-        gate.release(); writerGate?.release(); hint.release(); window.close(); other?.close(); local.retire()
+        gate.release(); writerGate?.release(); hint.release()
+        if let surface = ownedSurface, let active = surface.presented { surface.dismiss(active.id) }
+        window.close(); other?.close(); local.retire()
         for name in ["remote-a.sock", "remote-b.sock"] { try? Data().write(to: root.appendingPathComponent(name + ".release")) }
         try? Data().write(to: root.appendingPathComponent("second-local-crewd.sock.history-release"))
         try await until({ !broker.busy }, "cleanup left synchronous fake outstanding")
         if let controlledWriter { _ = try? await controlledWriter.value }
         await fixture.barrier()
+        for operation in surfaceTasks { await operation.value }
         if hint.started { try await until({ hint.finished }, "cleanup left catalog fake outstanding") }
         if let result { throw result }
         print("PASS actual production bounded-selection: " + scenario)

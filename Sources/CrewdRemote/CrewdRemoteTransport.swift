@@ -15,7 +15,7 @@ enum CrewdRemoteTransport {
             let revision: UUID
             if let first = prepared { plan = first; revision = selection.credentialRevision; prepared = nil }
             else {
-                let value = try await CrewdCredentialReadBroker.shared.observe(.selection(pairing.observationID, selection.computer), timeout: CrewdConnectionDeadlines().credential) {
+                let value = try await CrewdCredentialReadBroker.shared.observe(.selection(pairing.observationID, selection.computer), owner: pairing, timeout: CrewdConnectionDeadlines().credential) {
                     .selection(try pairing.selection(selection.computer))
                 }
                 guard case .selection(let next) = value else { throw CrewdRemoteError.wrongIdentity }
@@ -23,7 +23,7 @@ enum CrewdRemoteTransport {
             }
             try Task.checkCancellation()
             guard client.connectionEpoch == epoch else { throw CancellationError() }
-            guard revision == CrewdRemotePairing.credentialRevision.current else { throw CrewdRemoteError.wrongIdentity }
+            guard revision == pairing.credentialRevision.current else { throw CrewdRemoteError.wrongIdentity }
             guard plan.receipt == selection.connection.receipt else { throw CrewdRemoteError.wrongIdentity }
             try await client.connect(host: plan.invitation.endpoint.host, port: plan.invitation.endpoint.port, parameters: plan.parameters,
                 expectedRemote: CrewdRemoteBindingExpectation(authorityID: plan.receipt.authorityId, dbID: plan.receipt.dbId, grantID: plan.receipt.grantId, grantRevision: plan.receipt.grantRevision), expectedEpoch: epoch)
@@ -32,12 +32,12 @@ enum CrewdRemoteTransport {
     @MainActor static func connector(id: UUID, pairing: CrewdRemotePairing, expectedReceipt: CrewdRemoteReceipt) -> CrewdWorkspace.Connector {
         { client in
             let epoch=client.connectionEpoch
-            let revision = CrewdRemotePairing.credentialRevision.current
-            let value = try await CrewdCredentialReadBroker.shared.observe(.connection(pairing.observationID, id, expectedReceipt), timeout: CrewdConnectionDeadlines().credential) {
+            let revision = pairing.credentialRevision.current
+            let value = try await CrewdCredentialReadBroker.shared.observe(.connection(pairing.observationID, id, expectedReceipt), owner: pairing, timeout: CrewdConnectionDeadlines().credential) {
                 .connection(try pairing.connection(id))
             }
             guard case .connection(let plan) = value else { throw CrewdRemoteError.wrongIdentity }
-            guard revision == CrewdRemotePairing.credentialRevision.current else { throw CrewdRemoteError.wrongIdentity }
+            guard revision == pairing.credentialRevision.current else { throw CrewdRemoteError.wrongIdentity }
             try Task.checkCancellation()
             guard client.connectionEpoch == epoch else {throw CancellationError()}
             guard plan.receipt == expectedReceipt else {throw CrewdRemoteError.wrongIdentity}

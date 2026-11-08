@@ -7,7 +7,7 @@ import argparse, hashlib, json, os, pathlib, socket, subprocess, tempfile, threa
 CASES = ['credential-timeout', 'credential-cancel-local-late-success',
          'credential-cancel-local-late-failure', 'different-target-busy',
          'refresh-coalesced', 'coalesced-two-windows', 'close-pending',
-         'late-connection-new-attempt', 'credential-epoch-aba', 'connection-timeout', 'journal-timeout', 'journal-failure', 'hint-blocked', 'hint-scope-cancel', 'cross-window-credential-forget', 'cross-window-credential-replace', 'cross-window-scope-isolation', 'cross-window-hint-invalidation', 'late-credential-notification', 'cancel-list-observation', 'cross-window-cancelled-fanout', 'pending-independent-owner']
+         'late-connection-new-attempt', 'credential-epoch-aba', 'connection-timeout', 'journal-timeout', 'journal-failure', 'hint-blocked', 'hint-scope-cancel', 'cross-window-credential-forget', 'cross-window-credential-replace', 'cross-window-scope-isolation', 'cross-window-hint-invalidation', 'late-credential-notification', 'cancel-list-observation', 'cross-window-cancelled-fanout', 'pending-independent-owner', 'sheet-dismissal-lifecycle', 'broker-independent-owner-coalescing']
 SOURCES = ['Sources/CrewdRemote/CrewdRemotePairing.swift', 'Sources/CrewdRemote/CrewdRemoteTransport.swift',
            'Sources/CrewdRemote/CrewdRemoteWindow.swift', 'Sources/Stores/AppModel.swift',
            'Sources/PersonalSync/CrewPersonalDraftService.swift',
@@ -22,18 +22,23 @@ def check_ordinary_ios_entry(ios, ipad):
     marker = 'struct IOSRemotePairingView:View'
     assert ios.count(marker) == 1, 'ordinary form was not uniquely found'
     ordinary = ios.split(marker, 1)[1]
-    assert '.sheet(isPresented:$computers){computerList}' in ordinary
+    assert '.sheet(item:computerSheetBinding){session in' in ordinary
+    assert 'computerList(session:session)' in ordinary
+    assert '.onDisappear{closeComputerList(session.id)}' in ordinary, 'actual inner-sheet lifecycle is not fenced'
+    assert 'let displayedSession=selectionSurface.presented?.id' in ordinary
+    assert 'if next == nil,let displayedSession{closeComputerList(displayedSession)}' in ordinary, 'gesture binding has no captured-session cancellation'
+    assert 'selectionSurface.dismiss(sessionID)' in ordinary
+    assert 'if selectionSurface.complete(token){dismiss()}' in ordinary, 'success must finish its token before programmatic dismissal'
     assert 'if let attempt=appModel.crewdWindow.attempt' in ordinary
     assert 'ProgressView(attempt.phase.label)' in ordinary
     for identifier in ['selection-progress', 'cancel-selection', 'cancel-read', 'back']:
         assert 'pendingcrew.saved-computers.'+identifier in ordinary, 'ordinary UI control missing: '+identifier
     assert 'appModel.cancelCrewdAuthoritySelection()' in ordinary
-    assert 'appModel.crewdWindow.cancelComputerListObservation()' in ordinary
-    assert '}.disabled(appModel.crewdWindow.credentialBusy)' not in ordinary, 'whole ordinary row/navigation disabled by pending original worker'
+    assert 'appModel.crewdWindow.cancelComputerListObservation(if:lease)' in ordinary
+    assert '}.disabled(appModel.crewdWindow.credentialBusy)' not in ordinary
     assert '.disabled(!computer.paired && appModel.crewdWindow.credentialBusy)' in ordinary
-    assert 'choiceEpoch==token,!Task.isCancelled' in ordinary
+    assert ordinary.count('selectionSurface.isCurrent(token)') >= 2
     assert 'workspace.originalJournalReady' in ordinary
-    assert 'choiceTask?.cancel()' in ordinary
     return ordinary
 
 
@@ -58,7 +63,11 @@ def main():
     ordinary = check_ordinary_ios_entry(ios, ipad)
     # Retained legacy controls must never satisfy coverage of the real form.
     mutations = [ios.split('struct IOSRemotePairingView:View', 1)[0]+'struct IOSRemotePairingView:View { }',
-                 ios.replace('pendingcrew.saved-computers.cancel-selection', 'legacy-only.cancel-selection')]
+                 ios.replace('pendingcrew.saved-computers.cancel-selection', 'legacy-only.cancel-selection'),
+                 ios.replace('.onDisappear{closeComputerList(session.id)}', ''),
+                 ios.replace('if next == nil,let displayedSession{closeComputerList(displayedSession)}', 'if next == nil {}'),
+                 ios.replace('if selectionSurface.complete(token){dismiss()}', 'dismiss()'),
+                 ios.replace('selectionSurface.dismiss(sessionID)', 'selectionSurface.dismiss(selectionSurface.presented!.id)')]
     for changed in mutations:
         rejected = False
         try: check_ordinary_ios_entry(changed, ipad)
@@ -68,7 +77,12 @@ def main():
         'layer': 'actual IPadShell→ordinary IOSRemotePairingView callsite and source-only control coverage; not UI runtime',
         'iPadShellSHA256': sha(root/'Sources/Views/IPadShell.swift'),
         'ordinaryFormSHA256': sha(root/'Sources/Views/IOSRemotePairingView.swift'),
-        'positive': True, 'negativeControls': 2, 'iOSRuntimeClaim': False}, indent=2)+'\n')
+        'positive': True, 'negativeControls': len(mutations), 'iOSRuntimeClaim': False}, indent=2)+'\n')
+    owner_sources = [root/'Sources/CrewdRemote'/name for name in ['CrewdRemotePairing.swift', 'CrewdRemoteWindow.swift', 'CrewdRemoteTransport.swift']]
+    for source in owner_sources:
+        assert 'CrewdRemotePairing.credentialRevision' not in source.read_text(), 'global credential clock survived: '+str(source)
+    assert 'nonisolated let credentialRevision' in owner_sources[0].read_text()
+    assert 'owner: pairing' in owner_sources[2].read_text()
     fixture = out/'fixture.swift'
     original = root/'scripts/dev/fixtures/crewd-bounded-selection.swift'
     fixture.write_text(original.read_text().replace('@testable import PendingCrew\n', '@testable import '+a.module_name+'\n'))

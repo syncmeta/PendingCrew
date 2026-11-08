@@ -116,3 +116,55 @@ import Combine
     }
     var backend: PendingCrewBackend? { crewdBackend }
 }
+
+/// Owns one concrete saved-computers presentation. Dismissal carries the
+/// captured presentation ID, so an old SwiftUI lifecycle callback cannot cancel
+/// a new presentation or an unrelated Window attempt. No credential work lives
+/// here: cancelling its task uses the Window's existing attempt-token handler.
+@MainActor final class CrewdComputerSelectionSurface: ObservableObject {
+    struct Session: Identifiable, Equatable, Sendable { let id: UUID }
+    struct Choice: Equatable, Sendable { let id: UUID; let sessionID: UUID; let target: UUID }
+    @Published private(set) var presented: Session?
+    private var choice: Choice?
+    private var choiceTask: Task<Void, Never>?
+    private var readCancellation: (sessionID: UUID, action: @MainActor () -> Void)?
+
+    @discardableResult func open() -> Session {
+        if let presented { return presented }
+        let session = Session(id: UUID()); presented = session; return session
+    }
+    func observeComputers(in sessionID: UUID, cancel: @escaping @MainActor () -> Void) {
+        guard presented?.id == sessionID else { return }
+        readCancellation = (sessionID, cancel)
+    }
+    @discardableResult func choose(_ target: UUID, operation: @escaping @MainActor (Choice) async -> Void) -> Task<Void, Never> {
+        let session = open(); cancelChoice()
+        let token = Choice(id: UUID(), sessionID: session.id, target: target); choice = token
+        let task = Task { [weak self] in
+            guard let self, self.isCurrent(token) else { return }
+            await operation(token)
+            if self.choice == token { self.choiceTask = nil; self.choice = nil }
+        }
+        choiceTask = task; return task
+    }
+    func isCurrent(_ token: Choice) -> Bool {
+        !Task.isCancelled && presented?.id == token.sessionID && choice == token
+    }
+    func cancelChoice() {
+        choice = nil; let old = choiceTask; choiceTask = nil; old?.cancel()
+    }
+    @discardableResult func dismiss(_ sessionID: UUID) -> Bool {
+        guard presented?.id == sessionID else { return false }
+        presented = nil; cancelChoice()
+        let reading = readCancellation; readCancellation = nil
+        if reading?.sessionID == sessionID { reading?.action() }
+        return true
+    }
+    @discardableResult func complete(_ token: Choice) -> Bool {
+        guard isCurrent(token) else { return false }
+        // Mark programmatic success before SwiftUI closes its sheet. A late
+        // onDisappear for this ID is then inert, including after a new open.
+        choice = nil; choiceTask = nil; readCancellation = nil; presented = nil
+        return true
+    }
+}
