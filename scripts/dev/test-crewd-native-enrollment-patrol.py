@@ -110,7 +110,8 @@ def verify_app_build_inputs(repo, ref, products, library, app_witness, module_ma
 
 def compile_app_peer(repo, output, ref, products, library, app_witness, module_map):
     """Use the real ordinary App module; keep the original TLS assertions too."""
-    verify_app_build_inputs(repo, ref, products, library, app_witness, module_map)
+    sealed_witness = sha(app_witness)
+    witness = verify_app_build_inputs(repo, ref, products, library, app_witness, module_map)
 
     original = repo / "scripts/dev/fixtures/crewd-native-enrollment-patrol.swift"
     extension = repo / "scripts/dev/fixtures/crewd-native-window-tls.swift"
@@ -136,12 +137,14 @@ def compile_app_peer(repo, output, ref, products, library, app_witness, module_m
                  "-Xlinker", "-rpath", "-Xlinker", str(library.parent.parent / "Frameworks"), "-o", str(peer)]
     with (output / "compile.log").open("xb") as log:
         subprocess.run(arguments, check=True, stdout=log, stderr=log, timeout=120)
+    assert sha(app_witness) == sealed_witness, "App build witness changed while compiling"
+    verify_app_build_inputs(repo, ref, products, library, app_witness, module_map)
     save(output / "client-inputs.json", {
         "ref": ref, "appBuildWitnessSHA256": sha(app_witness), "appLibrarySHA256": sha(library),
         "originalFixtureSHA256": sha(original), "windowExtensionSHA256": sha(extension),
         "renderedFixtureSHA256": sha(fixture), "moduleMapSHA256": sha(module_map),
         "binarySHA256": sha(peer), "command": arguments,
-        "appModules": {str(p): sha(p) for p in (products / "PendingCrew.swiftmodule").glob("*") if p.is_file()},
+        "appModules": witness["appModules"],
     })
     return peer
 
@@ -230,12 +233,16 @@ def main():
     output = pathlib.Path(tempfile.mkdtemp(prefix="pcw-enrollment-patrol.", dir="/private/tmp"))
     print(f"Evidence: {output}", flush=True)
     if app_mode:
+        sealed_app_witness = sha(args.app_build_witness)
         peer = compile_app_peer(repo, output, args.ref, args.products.resolve(strict=True),
                                 args.app_library.resolve(strict=True), args.app_build_witness.resolve(strict=True), args.module_map.resolve(strict=True))
     else:
         peer = compile_peer(repo, output, args.ref, args.products.resolve(strict=True))
     run_core(output, binary, witness["binarySHA256"], args.ref, peer)
     if app_mode:
+        assert sha(args.app_build_witness) == sealed_app_witness, "App build witness changed during TLS runtime"
+        verify_app_build_inputs(repo, args.ref, args.products.resolve(strict=True),
+                                args.app_library.resolve(strict=True), args.app_build_witness.resolve(strict=True), args.module_map.resolve(strict=True))
         result = json.loads((output / "result.json").read_text())
         assert result["native"]["actualAppTwoWindowLocalTLSLocal"]
         print("PASS actual ordinary App two-window Local/mTLS/Local with original Unknown and drafts", flush=True)
