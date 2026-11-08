@@ -1,12 +1,21 @@
 # Linux 后台安装
 
-macOS 客户端与 Linux 后台统一发布在 [0.2.2 预览版（半成品）](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.2)。在 Linux 主机执行：
+当前 Linux 后台为[准确来源 `56de0e51` 的 33 代预发布](https://github.com/syncmeta/PendingCrew/releases/tag/host-56de0e51f41b7be036b3c4745a087d7852ca61b4)，配合 [Mac 0.2.10 预发布](https://github.com/syncmeta/PendingCrew/releases/tag/v0.2.10)。在尚未安装 PendingCrew 的 Linux 主机执行以下整段命令，先下载并核验固定安装器，再交互安装：
 
 ```sh
-curl -fsSL https://github.com/syncmeta/PendingCrew/releases/download/v0.2.2/install.sh | sudo sh
+sudo sh <<'PENDINGCREW'
+set -eu
+pcw_install_dir=$(mktemp -d)
+curl --proto '=https' --proto-redir '=https' -fsSL \
+  https://github.com/syncmeta/PendingCrew/releases/download/host-56de0e51f41b7be036b3c4745a087d7852ca61b4/install.py \
+  -o "$pcw_install_dir/install.py"
+printf 'd84a8af75cfc5e31a84b21214e6749a62f06b99bea2261eacf47c600d74c5a87  %s\n' \
+  "$pcw_install_dir/install.py" | sha256sum -c -
+python3 -I "$pcw_install_dir/install.py" setup
+PENDINGCREW
 ```
 
-按提示选择已有普通账号、Mac/iPhone 可达的主机地址、本机监听 IP、端口，以及仅 Codex 或 Codex + Claude。安装成功后得到一个设备配对链接，在 PendingCrew 客户端打开并确认即可。root 只负责安装，后台始终使用选定的普通账号运行。
+按提示选择已有普通账号、客户端可达的主机地址、本机监听 IP、端口，以及仅 Codex 或 Codex + Claude。安装成功后得到一个设备配对链接，在 PendingCrew 客户端打开并确认即可。root 只负责安装，后台始终使用选定的普通账号运行。已有安装应先读取状态、保留原连接并正常停止，再按下文升级流程操作；不要重复运行首次安装。
 
 ## 安装前准备
 
@@ -32,19 +41,17 @@ sudo journalctl -u pendingcrew.service -n 100
 
 | 文件 | 用途 |
 | --- | --- |
-| `install.sh` | 推荐的一条命令安装入口 |
-| `pendingcrew-0.2.2-linux-amd64.tar.gz` | Linux 后台及管理工具 |
-| `pendingcrew-0.2.2-linux-amd64.manifest.json` | 压缩包摘要、平台与完整组件来源 |
-| `pendingcrew-0.2.2-linux-amd64.install.py` | 由入口自动下载、核验的底层安装器，无需手动调用 |
-| `SHA256SUMS` | 下载文件的 SHA-256 校验值 |
+| `install.py` | 上述命令下载并核验的安装器；内置准确清单地址及摘要 |
+| `manifest.json` | 压缩包摘要、平台与准确组件来源 |
+| `host.tar.gz` | 当前 33 代普通后台及管理工具 |
 
-全部文件在同一个 Release 中。旧长文件名资产保留，避免旧链接失效；推荐使用上面的新入口。脚本依次核验 installer、manifest 和压缩包摘要。下载这些文件不等于离线安装；默认安装仍从固定版本的 HTTPS 地址取得其依赖文件。
+当前 Release 只有以上三个文件。入口先核验安装器，安装器再核验准确 HTTPS 清单与包摘要。下载单个文件不等于离线安装；默认安装仍从固定版本地址取得依赖文件。旧 0.2.2 的 `install.sh` 及长文件名资产仍在其原 Release，指向其原来源，不是当前后台的安装入口。
 
-本次修正安装入口和发行包装，复用原 `ccfd1bc58dc68a0b6572c489d46aaf11ec507cef` 的 Linux Core 与构建证明，组件来源分别记在 manifest 和包内 `release.json`；没有重新编译或重标 Core。新入口已做独立隔离测试，未用它重装 Joy，也不宣称新入口已完成新的真实主机安装。
+当前包有实际 Linux 普通构建、迁移／恢复、独立复核及公开下载证据；Joy 原安装已用这份安装器受保护升级 21→33，systemd 独立运行和原 Mac 配对重连通过。见[交付验收](../../docs/internal/2026-11-08-linux-current33-acceptance.md)及[实际主机验收](../../docs/internal/2026-11-08-joy-current33-installed-acceptance.md)。这不代表已完成新主机所有交互选项、真实回退或长期跨端运行。
 
 ## 无交互安装与已有安装
 
-自动化调用可下载 `install.sh` 后使用 `sudo sh install.sh --non-interactive --user <普通账号> --advertise-host <可达地址> --listen-host <监听IP> --port 49381`。仅 Codex 时加 `--disable-claude`；loopback 还需明确提供 `--accept-loopback-tunnel`。交互参数读取 `/dev/tty`，不与下载脚本的标准输入混用。
+自动化调用应先按上面核验 `install.py`，再用 `sudo python3 -I /path/to/verified/install.py setup --non-interactive --user <普通账号> --advertise-host <可达地址> --listen-host <监听IP> --port 49381`。仅 Codex 时加 `--disable-claude`；loopback 还需明确提供 `--accept-loopback-tunnel`。交互参数读取 `/dev/tty`，不与脚本标准输入混用。
 
 新入口拒绝覆盖已存在或尚未完成的安装。升级、保留原连接及结果未知恢复沿用下面的管理流程；先查询状态并正常停止任务，不以重装覆盖问题。旧版本若没有 `pendingcrew` 短命令，仍可用 `sudo /usr/bin/python3 -I /opt/pendingcrew/current/bin/pendingcrew-host.py <command>` 管理。
 

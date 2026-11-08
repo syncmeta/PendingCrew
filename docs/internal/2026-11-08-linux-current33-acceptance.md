@@ -1,5 +1,7 @@
 # Linux 当前 33 代后台交付验收（2026-11-08）
 
+后续实际交付：Joy 原 21 代安装已受保护升级到本包，systemd 独立运行、原数据／身份／完整授权和原 Mac 配对重连已核对，见[实际主机验收](2026-11-08-joy-current33-installed-acceptance.md)。下文保留发布时的准确证据范围；实际回退及长期运行仍未据此宣称完成。
+
 2026-11-08 08:21（台北），准确源码 `56de0e51f41b7be036b3c4745a087d7852ca61b4`（D）已发布为[非 latest 的 Linux x86_64 后台预发布](https://github.com/syncmeta/PendingCrew/releases/tag/host-56de0e51f41b7be036b3c4745a087d7852ca61b4)。仅含 `host.tar.gz`、`manifest.json`、`install.py`。公开匿名完整下载、逐文件摘要、包内成员及普通 ELF 身份核验通过。它与公开 Mac 0.2.10 的 Rust 产品树相同，但保留其真实 Linux 构建来源 D，不改标为后续 main 合并提交。
 
 ## 准确源码与实际 Linux 构建
