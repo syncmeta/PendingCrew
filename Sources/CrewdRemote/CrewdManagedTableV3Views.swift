@@ -770,9 +770,10 @@ private struct CrewdTableV3Editor: View {
       Button("确认保存") { submit() }
       Button("取消", role: .cancel) {}
     } message: {
-      Text(
-        (table.map { $0.id + " · 定义版本 " + $0.schemaRevision } ?? "新组织表")
-          + (row.map { " · 记录版本 " + $0.revision } ?? "") + "。使用本次核对的稳定字段与版本；原请求失败时只读查回，不自动重发。")
+      let tableDescription: String = table.map { $0.id + " · 定义版本 " + $0.schemaRevision } ?? "新组织表"
+      let rowDescription: String = row.map { " · 记录版本 " + $0.revision } ?? ""
+      let message = tableDescription + rowDescription + "。使用本次核对的稳定字段与版本；原请求失败时只读查回，不自动重发。"
+      Text(message)
     }
     .sheet(item: $selectingField) { field in
       CrewdManagedV2TargetPicker(

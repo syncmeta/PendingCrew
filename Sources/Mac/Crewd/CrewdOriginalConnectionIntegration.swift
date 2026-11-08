@@ -77,7 +77,9 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                 Button("移除配对凭据", role: .destructive) { Task { await window.forget(computer) }; removing = nil }
                 Button("取消", role: .cancel) { removing = nil }
             } message: { computer in
-                Text(computer.name + " · " + computer.endpoint.host + ":" + String(computer.endpoint.port) + "\n删除本设备保存的配对凭据。服务器授权和团队仍保留。")
+                let port = String(computer.endpoint.port)
+                let message: String = "\(computer.name) · \(computer.endpoint.host):\(port)\n删除本设备保存的配对凭据。服务器授权和团队仍保留。"
+                Text(message)
             }
             .onAppear { synchronizeAdministration() }
             .onChange(of: window.workspace.map { ObjectIdentifier($0) }) { _, _ in synchronizeAdministration() }

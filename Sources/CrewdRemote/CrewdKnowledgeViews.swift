@@ -2740,7 +2740,9 @@ struct CrewdManagedDirectoryView: View {
         VStack(alignment:.leading,spacing:12) {
             Button("返回决定日志",systemImage:"chevron.backward") { showDecision(nil) }.disabled(busy)
             Text(item.draft.question).font(.title3).textSelection(.enabled)
-            Text(item.id + " · " + item.status.label + " · " + owner(item.crewId) + (item.frozen ? " · 已归档，只读" : ""))
+            let archived = item.frozen ? " · 已归档，只读" : ""
+            let decisionSummary: String = "\(item.id) · \(item.status.label) · \(owner(item.crewId))\(archived)"
+            Text(decisionSummary)
                 .font(.caption).foregroundStyle(.secondary)
             messageSource(item.id)
             artifactSubject(.decision,item.id,item.crewId,item.frozen)
@@ -2891,8 +2893,9 @@ struct CrewdManagedDirectoryView: View {
         VStack(alignment:.leading,spacing:10) {
             artifactSubject(.risk,risk.id,risk.crewId,risk.frozen)
             Text(risk.draft.summary).font(.title3).textSelection(.enabled)
-            Text(risk.id + " · " + risk.status.label + " · " + owner(risk.crewId) +
-                 (risk.frozen ? " · 已归档，只读":"")).font(.caption).foregroundStyle(.secondary)
+            let archived = risk.frozen ? " · 已归档，只读" : ""
+            let riskSummary: String = "\(risk.id) · \(risk.status.label) · \(owner(risk.crewId))\(archived)"
+            Text(riskSummary).font(.caption).foregroundStyle(.secondary)
             LabeledContent("负责人",value:author(risk.owner))
             LabeledContent("记录者",value:author(risk.author))
             LabeledContent("影响",value:risk.draft.impact.label)
@@ -2934,8 +2937,9 @@ struct CrewdManagedDirectoryView: View {
         VStack(alignment:.leading,spacing:10) {
             artifactSubject(.lesson,lesson.id,lesson.crewId,lesson.frozen)
             Text(lesson.draft.lesson).font(.title3).textSelection(.enabled)
-            Text(lesson.id + " · " + lesson.status.label + " · " + owner(lesson.crewId) +
-                 (lesson.frozen ? " · 已归档，只读":"")).font(.caption).foregroundStyle(.secondary)
+            let archived = lesson.frozen ? " · 已归档，只读" : ""
+            let lessonSummary: String = "\(lesson.id) · \(lesson.status.label) · \(owner(lesson.crewId))\(archived)"
+            Text(lessonSummary).font(.caption).foregroundStyle(.secondary)
             LabeledContent("记录者",value:author(lesson.author))
             if let date = Wire.managedTime(lesson.lastCheckedAt) {
                 LabeledContent("最后核对") { Text(date,format:.dateTime) }

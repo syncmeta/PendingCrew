@@ -195,7 +195,12 @@ struct CrewdManagedV2TargetPicker:View {
         guard let constraint,constraint.kind != "anyReadable" else{return allowed}
         return allowed.filter{$0.rawValue==(constraint.kind=="knowledgeView" ? "knowledge":constraint.kind)}
     }
-    private var draftKey:Data {Data([kind.rawValue,identifier,artifactMode,artifactChoice?.id ?? "",artifactKind.rawValue,artifactValue,repository,knowledgeChoice.map{$0.identity+":"+$0.context.generation} ?? ""].map{String($0.utf8.count)+":"+$0}.joined().utf8)}
+    private var draftKey:Data {
+        let knowledgeKey: String = knowledgeChoice.map { $0.identity + ":" + $0.context.generation } ?? ""
+        let components: [String] = [kind.rawValue, identifier, artifactMode, artifactChoice?.id ?? "", artifactKind.rawValue, artifactValue, repository, knowledgeKey]
+        let encoded = components.map { String($0.utf8.count) + ":" + $0 }.joined()
+        return Data(encoded.utf8)
+    }
     var body:some View {
         NavigationStack {ScrollView {VStack(alignment:.leading,spacing:14) {
             Text("先按当前权限核对目标，再加入这份表单。此处不会修改原对象状态。").font(.caption).foregroundStyle(.secondary)

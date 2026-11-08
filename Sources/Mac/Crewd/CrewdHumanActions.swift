@@ -374,7 +374,9 @@ private struct CrewdTypedHumanActions: View {
                 Text("问题、背景、选项、选择和所填理由会写入组织决定日志，组织成员可阅读。").font(.caption).foregroundStyle(.secondary)
             }
             if let fallback=decision.defaultChoice, let option=decision.option(fallback.optionId) {
-                Text("默认方案 · " + option.id + " · " + option.label + " · " + String(fallback.afterMinutes) + " 分钟后")
+                let minutes = String(fallback.afterMinutes)
+                let defaultSummary: String = "默认方案 · \(option.id) · \(option.label) · \(minutes) 分钟后"
+                Text(defaultSummary)
                     .font(.caption).textSelection(.enabled)
             }
         }

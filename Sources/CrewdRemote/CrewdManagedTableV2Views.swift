@@ -242,7 +242,10 @@ private struct CrewdManagedTableV2Editor:View {
         .confirmationDialog("保存这次明确的表格变更？",isPresented:$confirming) {
             Button("确认保存"){submit()};Button("取消",role:.cancel){}
         } message: {
-            Text((table.map{$0.id+" · 定义版本 "+$0.schemaRevision} ?? "新组织表")+(row.map{" · 记录版本 "+$0.revision} ?? "")+"。仅修改本次填写的稳定字段，其他列与原业务状态保留。")
+            let tableDescription: String = table.map { $0.id + " · 定义版本 " + $0.schemaRevision } ?? "新组织表"
+            let rowDescription: String = row.map { " · 记录版本 " + $0.revision } ?? ""
+            let message = tableDescription + rowDescription + "。仅修改本次填写的稳定字段，其他列与原业务状态保留。"
+            Text(message)
         }
         .sheet(item:$selectingLink){field in
             CrewdManagedV2TargetPicker(workspace:workspace,store:store,scope:target.scope,crew:crew,constraint:field.kind.target,current:{current() && selectingLink?.id==field.id},choose:{value in
