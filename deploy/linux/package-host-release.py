@@ -16,7 +16,7 @@ def url(value, source):
 def verify_component_sources(here, package_source, core_source):
     root = here.parents[1]
     def git(*args):
-        return subprocess.check_output(['git', '-C', str(root), *args], stderr=subprocess.DEVNULL)
+        return subprocess.check_output(['git', '--no-replace-objects', '-C', str(root), *args], stderr=subprocess.DEVNULL)
     for ref in [package_source, core_source]:
         if git('rev-parse', '--verify', ref + '^{commit}').decode().strip() != ref:
             raise ValueError('exact component commit required')
@@ -48,6 +48,17 @@ def verify_component_sources(here, package_source, core_source):
             raise ValueError('actual package component differs from its frozen source')
 
 
+def source_schema(here, source):
+    """The frozen original Core commit issues its generation, never CLI input."""
+    raw = subprocess.check_output(['git', '--no-replace-objects', '-C', str(here.parents[1]), 'show',
+                                   source + ':crewd/crates/store/src/schema.rs'])
+    versions = re.findall(rb'^pub const SCHEMA_VERSION: i64 = ([0-9]+);$', raw, re.MULTILINE)
+    if len(versions) != 1 or int(versions[0]) not in (21, 33):
+        raise ValueError('exact qualified Core21 or Core33 schema source required')
+    return {'sourceCommit': source, 'storeVersion': int(versions[0]),
+            'schemaSourceSHA256': sha(raw)}
+
+
 def package(args):
     if not re.fullmatch('[0-9a-f]{40}', args.source): raise ValueError('full frozen source commit required')
     core_source = getattr(args, 'core_source', None) or args.source
@@ -63,6 +74,9 @@ def package(args):
         raise ValueError('normal frozen-source build proof does not match this ELF')
     here = pathlib.Path(__file__).resolve().parent
     verify_component_sources(here, args.source, core_source)
+    schema = source_schema(here, core_source)
+    if (schema['storeVersion'] == 33 or 'schemaEvidence' in proof) and proof.get('schemaEvidence') != schema:
+        raise ValueError('ordinary build proof has another frozen schema source')
     installer = (here / 'pendingcrew-host.py').read_bytes()
     policy_nodes = [
         node.value for node in ast.parse(installer).body
@@ -73,8 +87,9 @@ def package(args):
     if len(policy_nodes) != 1: raise ValueError('one literal installer prerequisite policy required')
     provider_policy = ast.literal_eval(policy_nodes[0])
     files = {'bin/crewd':core, 'bin/pendingcrew-host.py':installer, 'bin/managed-host.py':(here/'managed-host.py').read_bytes(), 'build-proof.json':proof_bytes}
-    release = {'format':1,'sourceCommit':args.source,'architecture':args.architecture,'storeVersion':21,'apiVersion':3,'files':{name:sha(data) for name,data in files.items()}}
+    release = {'format':1 if schema['storeVersion']==21 else 2,'sourceCommit':args.source,'architecture':args.architecture,'storeVersion':schema['storeVersion'],'apiVersion':3,'files':{name:sha(data) for name,data in files.items()}}
     if core_source != args.source: release['coreSourceCommit'] = core_source
+    if schema['storeVersion'] == 33: release['schemaEvidence'] = schema
     files['release.json'] = canonical(release)
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive,mode='w:gz',format=tarfile.USTAR_FORMAT) as bundle:
@@ -97,7 +112,7 @@ def package(args):
         if not versions: raise ValueError('glibc ELF version evidence missing')
         template = here / 'install.sh'
         root = here.parents[1]
-        if template.read_bytes() != subprocess.check_output(['git','-C',str(root),'show',args.source+':deploy/linux/install.sh']):
+        if template.read_bytes() != subprocess.check_output(['git','--no-replace-objects','-C',str(root),'show',args.source+':deploy/linux/install.sh']):
             raise ValueError('bootstrap template differs from frozen source')
         bootstrap = template.read_text().replace('@INSTALLER_URL@', repr(installer_url)).replace('@INSTALLER_SHA256@', repr(sha(entry))).replace('@MIN_GLIBC@', '.'.join(map(str,max(versions)))).encode()
     out = pathlib.Path(args.output); out.mkdir(mode=0o700,parents=False,exist_ok=False)

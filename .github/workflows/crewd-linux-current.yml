@@ -1,6 +1,6 @@
 name: crewd Linux reviewed host package
 run-name: "Linux host source ${{ inputs.source_sha }} / controller ${{ github.sha }}"
-# Manual only. One normal build/package; never publish, install or run providers.
+# Manual only. One normal build/package; never publish, install systemd or run providers.
 on:
   workflow_dispatch:
     inputs:
@@ -21,7 +21,7 @@ permissions:
 jobs:
   host-package:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       CARGO_INCREMENTAL: '0'
@@ -59,9 +59,13 @@ jobs:
         with:
           workspaces: source/crewd -> target
           cache-on-failure: true
+      - name: Verify installer and source-generation contracts without services
+        run: |
+          python3 -B source/scripts/dev/test-crewd-host-installer.py > "$HOST_EVIDENCE/installer-contracts.log" 2>&1
+          python3 -B source/scripts/dev/test-linux-entry.py > "$HOST_EVIDENCE/entry-contracts.log" 2>&1
       - name: Fetch locked dependencies once
         run: cargo fetch --locked --manifest-path source/crewd/Cargo.toml > "$HOST_EVIDENCE/fetch.log" 2>&1
-      - name: Build one normal Release and one immutable host install tar
+      - name: Build one normal Release, immutable host tar and ordinary runtime proof
         working-directory: source/crewd
         run: python3 -I "$GITHUB_WORKSPACE/controller/scripts/dev/build-crewd-host-release.py" package
       - name: Preserve the single package and full original evidence
