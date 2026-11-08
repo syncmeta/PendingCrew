@@ -113,10 +113,12 @@ struct CrewdWorkCloseView: View {
            confirmed.value["result"]["crewId"].string?.utf8.elementsEqual(crew.utf8) == true {
             let result = confirmed.value["result"]
             let title = confirmed.historical ? "已核实原关闭的历史回执" : "已核实原关闭回执"
+            let originalRevision = result["originalRevision"].string ?? ""
+            let resultRevision = result["resultRevision"].string ?? ""
+            let eventSequence = result["eventSeq"].string ?? ""
+            let revisionSummary: String = "版本 \(originalRevision) → \(resultRevision) · 事件 \(eventSequence)"
             Text(title + " · " + label(result["kind"].string ?? ""))
-            Text("版本 " + (result["originalRevision"].string ?? "") + " → " +
-                 (result["resultRevision"].string ?? "") + " · 事件 " + (result["eventSeq"].string ?? ""))
-                .textSelection(.enabled)
+            Text(revisionSummary).textSelection(.enabled)
             Text("关闭说明：" + (result["note"].string ?? "")).textSelection(.enabled)
             Text("关闭凭据：" + (result["evidence"]["value"].string ?? "")).textSelection(.enabled)
         }
