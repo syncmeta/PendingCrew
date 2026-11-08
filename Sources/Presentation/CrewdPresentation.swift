@@ -136,13 +136,19 @@ struct CrewdAttentionAvatar<Content:View>:View {
             .padding(.trailing,3)
     }
     private func badge(_ count:Int,human:Bool)->some View {
-        Text(count>99 ? "99+":String(count)).font(.system(size:9,weight:.semibold)).monospacedDigit()
-            .foregroundStyle(human ? Color(red:0.37,green:0.28,blue:0):Color.white)
+        let title = count > 99 ? "99+" : String(count)
+        let kind = human ? "人工待办" : "AI待办"
+        let foreground: Color = human ? Color(red:0.37,green:0.28,blue:0) : Color.white
+        let background: Color = human ? Color(red:0.91,green:0.73,blue:0.22) : Color(red:0.91,green:0.33,blue:0.31)
+        let accessibilityText: String = "当前群\(kind) \(count) 项未完成"
+        let helpText: String = "当前群已完整读取的\(kind)"
+        return Text(title).font(.system(size:9,weight:.semibold)).monospacedDigit()
+            .foregroundStyle(foreground)
             .padding(.horizontal,4).frame(minWidth:16,minHeight:16)
-            .background(human ? Color(red:0.91,green:0.73,blue:0.22):Color(red:0.91,green:0.33,blue:0.31),in:Capsule())
+            .background(background,in:Capsule())
             .overlay(Capsule().strokeBorder(Theme.Palette.canvas,lineWidth:1.4))
-            .accessibilityLabel("当前群"+(human ? "人工待办":"AI待办")+" "+String(count)+" 项未完成")
-            .help("当前群已完整读取的"+(human ? "人工待办":"AI待办"))
+            .accessibilityLabel(accessibilityText)
+            .help(helpText)
     }
 }
 
