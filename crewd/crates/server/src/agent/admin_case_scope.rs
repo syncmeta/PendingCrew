@@ -22,6 +22,9 @@ pub(crate) struct Authority {
 }
 #[derive(Clone)]
 enum Scope {
+    Secretary {
+        witness: cases::ExecutionWitness,
+    },
     Work {
         witness: cases::ExecutionWitness,
         id: String,
@@ -31,6 +34,7 @@ enum Scope {
 }
 
 pub(crate) enum MutationPermit {
+    Secretary(crewd_collab::admin_secretary::PublishPermit),
     Work(cases::EffectPermit),
     Unlink(cases::ExecutionWitness, Box<link::UnlinkParams>),
     HandoffRequest(handoff::RequestPermit),
@@ -40,6 +44,7 @@ pub(crate) enum MutationPermit {
 impl MutationPermit {
     pub(crate) fn finish(self, tx: &mut Tx<'_>) -> Result<()> {
         match self {
+            Self::Secretary(p) => crewd_collab::admin_secretary::finish_publish(tx, p),
             Self::Work(p) => cases::finish_effect(tx, p),
             Self::Unlink(witness, params) => link::require_committed(tx.conn(), &witness, &params),
             Self::HandoffRequest(p) => handoff::finish_request(tx, p),
@@ -143,6 +148,23 @@ pub(crate) fn allowed_tool(tool: &str) -> bool {
             | link::UNLINK_TOOL
     )
 }
+pub(crate) fn secretary_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        crewd_proto::admin_secretary::SNAPSHOT_TOOL
+            | crewd_proto::admin_secretary::PUBLISH_TOOL
+            | crewd_proto::admin_secretary::RECEIPT_TOOL
+    )
+}
+pub(crate) async fn secretary_binding(st: &AppState, session: &str) -> Result<bool> {
+    let session = session.to_owned();
+    st.db
+        .call_result(move |s| {
+            let w = cases::session_binding(s.conn(), &session)?.ok_or_else(denied)?;
+            cases::is_secretary_binding(s.conn(), &w)
+        })
+        .await?
+}
 fn work(tool: &str, args: &Value) -> Result<String> {
     if !allowed_tool(tool) {
         return Err(denied());
@@ -154,6 +176,12 @@ fn work(tool: &str, args: &Value) -> Result<String> {
         .ok_or_else(denied)
 }
 impl Authority {
+    pub(crate) fn secretary_witness(&self) -> Result<cases::ExecutionWitness> {
+        match &self.scope {
+            Scope::Secretary { witness } => Ok(witness.clone()),
+            _ => Err(denied()),
+        }
+    }
     pub(crate) fn unlink(
         &self,
         tx: &mut Tx<'_>,
@@ -183,10 +211,12 @@ impl Authority {
         {
             return Err(denied());
         }
-        if let Scope::Work { witness, .. } = &self.scope
-            && (!self.state.admission.contains(witness.source_session_id())
-                || witness.session_id() != actual.id
-                || witness.crew_id() != actual.crew_id)
+        if let Some(witness) = match &self.scope {
+            Scope::Work { witness, .. } | Scope::Secretary { witness } => Some(witness),
+            _ => None,
+        } && (!self.state.admission.contains(witness.source_session_id())
+            || witness.session_id() != actual.id
+            || witness.crew_id() != actual.crew_id)
         {
             return Err(denied());
         }
@@ -205,6 +235,13 @@ impl Authority {
     pub(crate) fn validate_read(&self, c: &Connection) -> Result<()> {
         self.validate_actor(c)?;
         match &self.scope {
+            Scope::Secretary { witness } => {
+                if self.tool == crewd_proto::admin_secretary::RECEIPT_TOOL {
+                    cases::validate_secretary_receipt(c, witness)
+                } else {
+                    cases::validate_secretary_read(c, witness, crewd_store::now_ms())
+                }
+            }
             Scope::Custody(operation) => {
                 let p = custody::validate_operation(
                     c,
@@ -250,6 +287,15 @@ impl Authority {
     pub(crate) fn effect(&self, tx: &mut Tx<'_>) -> Result<MutationPermit> {
         self.validate_actor(tx.conn())?;
         match &self.scope {
+            Scope::Secretary { witness } => {
+                if self.tool != crewd_proto::admin_secretary::PUBLISH_TOOL {
+                    return Err(denied());
+                }
+                let args = super::tools::admin_secretary::publish_params(self.args.clone())
+                    .map_err(|_| denied())?;
+                crewd_collab::admin_secretary::begin_publish(tx, witness, args)
+                    .map(MutationPermit::Secretary)
+            }
             Scope::Custody(operation) => match operation {
                 custody::Operation::Accept {
                     request_id,
@@ -362,6 +408,9 @@ pub(crate) async fn prepare(
             Ok(binding)
         })
         .await??;
+    if witness.is_some() && secretary_binding(st, &me.session_id).await? && !secretary_tool(tool) {
+        return Err(denied());
+    }
     let scope = if custody_tool(tool) {
         if witness.is_some() {
             return Err(denied());
@@ -371,9 +420,16 @@ pub(crate) async fn prepare(
         // Even an ordinary Captain needs an authenticated RPC envelope for handoff.
         Scope::Handoff(handoff_operation(tool, args)?)
     } else if let Some(witness) = witness {
-        Scope::Work {
-            witness,
-            id: work(tool, args)?,
+        if secretary_binding(st, &me.session_id).await? {
+            if !secretary_tool(tool) {
+                return Err(denied());
+            }
+            Scope::Secretary { witness }
+        } else {
+            Scope::Work {
+                witness,
+                id: work(tool, args)?,
+            }
         }
     } else if tool == link::UNLINK_TOOL {
         return Err(denied());
@@ -418,6 +474,7 @@ pub(crate) async fn check_call(
             .await??;
     } else if handoff_tool(tool)
         || custody_tool(tool)
+        || secretary_tool(tool)
         || tool == link::UNLINK_TOOL
         || bound(st, &me.session_id).await?
     {

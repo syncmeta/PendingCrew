@@ -687,6 +687,16 @@ pub struct AdminCaseLaunchView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AdminCaseProvenance {
+    /// A distinct brief-only case. There is no Stop announcement, budget or W
+    /// target; the snapshot is installed and validated by the Secretary module.
+    SecretaryBrief {
+        #[serde(rename = "sourceId")]
+        source_id: String,
+        #[serde(rename = "sourceRevision")]
+        source_revision: String,
+        #[serde(rename = "observedAtMs")]
+        observed_at_ms: i64,
+    },
     HumanRevalidation {
         #[serde(rename = "requestId")]
         request_id: String,

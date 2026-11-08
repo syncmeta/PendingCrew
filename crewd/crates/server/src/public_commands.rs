@@ -327,6 +327,9 @@ fn sql_effect(
         PublicCommand::PatrolStart(p) => {
             serde_json::to_value(collab::patrol_manual::start(tx, &p.crew_id)?)
         }
+        PublicCommand::SecretaryRequest(p) => serde_json::to_value(
+            collab::admin_secretary::human_request(tx, &Sender::Human, p)?,
+        ),
         PublicCommand::RequirementReview(p) => {
             serde_json::to_value(collab::requirement_review::apply(tx, p)?)
         }
@@ -374,6 +377,7 @@ async fn submit(
         | PublicCommand::CrewCreate(_)
         | PublicCommand::CrewCreateFirstMessage(_)
         | PublicCommand::PatrolStart(_)
+        | PublicCommand::SecretaryRequest(_)
         | PublicCommand::RequirementReview(_)
         | PublicCommand::WorkDuplicateClose(_)
         | PublicCommand::WorkCloseWithReceipt(_)
@@ -460,6 +464,7 @@ async fn submit_sql_with_home(
             | PublicCommand::CrewCreate(_)
             | PublicCommand::CrewCreateFirstMessage(_)
             | PublicCommand::PatrolStart(_)
+            | PublicCommand::SecretaryRequest(_)
             | PublicCommand::RequirementReview(_)
             | PublicCommand::WorkDuplicateClose(_)
             | PublicCommand::WorkCloseWithReceipt(_)

@@ -151,6 +151,8 @@ pub enum PublicCommand {
     MessagePost(MessagePostParams),
     #[serde(rename = "work.patrolStart")]
     PatrolStart(crate::PatrolStartParams),
+    #[serde(rename = "adminCase.secretaryRequest")]
+    SecretaryRequest(crate::AdminSecretaryRequest),
     #[serde(rename = "adminCase.requirementReview")]
     RequirementReview(crate::admin_cases::RequirementReviewParams),
     #[serde(rename = "adminCase.workDuplicateClose")]
@@ -246,6 +248,7 @@ impl PublicCommand {
             Self::CrewCreate(_) => &["crew.create"],
             Self::MessagePost(_) => &["message.post"],
             Self::PatrolStart(_) => &[crate::PATROL_START],
+            Self::SecretaryRequest(_) => &[crate::admin_secretary::HUMAN_REQUEST],
             Self::RequirementReview(_) => &[crate::admin_cases::REQUIREMENT_REVIEW],
             Self::WorkDuplicateClose(_) => &[crate::admin_cases::WORK_DUPLICATE_CLOSE],
             Self::WorkCloseWithReceipt(_) => &[crate::methods::WORK_CLOSE],
@@ -289,6 +292,7 @@ impl PublicCommand {
             Self::CrewCreateFirstMessage(_) => "crew.createFirstMessage",
             Self::MessagePost(_) => "message.post",
             Self::PatrolStart(_) => crate::PATROL_START,
+            Self::SecretaryRequest(_) => crate::admin_secretary::HUMAN_REQUEST,
             Self::RequirementReview(_) => crate::admin_cases::REQUIREMENT_REVIEW,
             Self::WorkDuplicateClose(_) => crate::admin_cases::WORK_DUPLICATE_CLOSE,
             Self::WorkCloseWithReceipt(_) => WORK_CLOSE_WITH_RECEIPT,

@@ -148,6 +148,7 @@ import Foundation
   precondition(transferResult == transferPayload && transferResult["outcomeRecord"]["phase"] == .string("unresolved") && transferResult["retirement"] == .string("parked"))
   try await effectReport()
   try await humanBrief()
+  try await secretaryBrief()
   try await requirementReviews()
   print("admin cases opaque pagination, detail, malformed/foreign, crew and connection stale rejection passed")
  }
@@ -263,6 +264,74 @@ import Foundation
   store.invalidateConnection()
   held!.resume(returning: .object(original))
   do { _ = try await pending.value; fatalError("old brief accepted") } catch is CancellationError {}
+ }
+
+ @MainActor private static func secretaryBrief() async throws {
+  let revision=String(repeating:"a",count:64), sourceID="SB11111111-1111-4111-8111-111111111111", caseID="AC00000000000000000001"
+  let generation="1", attempt="22222222-2222-4222-8222-222222222222", request="33333333-3333-4333-8333-333333333333"
+  let refs:CrewdValue = .array([.object(["kind":.string("human_wait"),"id":.string("H53")])])
+  let facts:CrewdValue = .object([
+   "crewId":.string("a"),"observedAtMs":.integer(30),"humanWaitsTruncated":.bool(true),"caseCoverage":.string("recent_sample"),"cases":.array([]),
+   "humanWaits":.array([.object(["askId":.string("H53"),"kind":.string("question"),"question":.string("原始问题"),"questionTruncated":.bool(true),"askedAtMs":.integer(1),"waitedMs":.integer(29),"tier":.string("fresh"),"notifiedTier":.string("fresh"),"blockingWorkIds":.array([]),"blockersTruncated":.bool(false)])]),
+   "patrol":.object(["state":.string("not_recorded"),"scannedCounts":.object([:]),"findingCounts":.object([:]),"findingsTruncated":.bool(false)])
+  ])
+  let source:CrewdValue = .object(["sourceId":.string(sourceID),"caseId":.string(caseID),"crewId":.string("a"),"scope":.object(["dbId":.string("database"),"restoreEpoch":.string("44444444-4444-4444-8444-444444444444")]),"judgmentEpoch":.string("judgment"),"configurationRevision":.string("config"),"revision":.string(revision),"observedAtMs":.integer(30),"facts":facts,"references":refs])
+  let record:CrewdValue = .object([
+   "id":.string(caseID),"crewId":.string("a"),"revision":.string("case-revision"),"createdAt":.integer(30),
+   "source":.object(["sessionId":.string("captain"),"budgetEpoch":.integer(0),"restoreEpoch":.string("judgment"),"announcementId":.string(""),"provenance":.object(["kind":.string("secretary_brief"),"sourceId":.string(sourceID),"sourceRevision":.string(revision),"observedAtMs":.integer(30)])]),
+   "targets":.array([]),"decision":.string("observed"),"decisionRecord":.null,"execution":.string("running"),"executionRecord":.object(["sessionId":.string("bound-author"),"attemptId":.string(attempt),"phase":.string("running"),"reason":.string("started"),"generation":.string(generation),"effectsCount":.integer(0)]),"retirement":.string("not_started"),"retirementRecord":.null,"outcomeRecord":.null,"handoffRecord":.null
+  ])
+  let publication:CrewdValue = .object(["sourceId":.string(sourceID),"caseId":.string(caseID),"crewId":.string("a"),"sourceRevision":.string(revision),"authorSessionId":.string("bound-author"),"attemptId":.string(attempt),"generation":.string(generation),"requestId":.string(request),"revision":.string(String(repeating:"b",count:64)),"body":.string("原问题仍待确认；部分样本。"),"references":refs,"publishedAtMs":.integer(35)])
+  let original:[String:CrewdValue] = ["crewId":.string("a"),"observedAtMs":.integer(40),"state":.string("current"),"currentRevision":.string(revision),"source":source,"case":record,"publication":publication]
+  var response:CrewdValue = .object(original),calls=0
+  var hold=false,held:CheckedContinuation<CrewdValue,Error>?
+  let store=CrewdWorkStore {method,params in
+   calls += 1
+   if method == "adminCase.get" {return record}
+   precondition(method == "adminCase.secretaryBrief" && params == .object(["crewId":.string("a")]))
+   if hold {return try await withCheckedThrowingContinuation {held=$0}}
+   return response
+  }
+  store.selectCrew("a")
+  do {_ = try await store.secretaryBrief();fatalError("secretary capability ignored")} catch {}
+  precondition(calls==0)
+  store.configureCapabilities(["adminCase.secretaryBrief.v1"])
+  let value=try await store.secretaryBrief();precondition(value.state=="current" && value.body==publication["body"].string && !value.canRequest)
+  do {_ = try await store.adminCase(id:caseID);fatalError("old Stop deep link accepted Secretary")} catch {}
+  for (key,bad):(String,CrewdValue) in [("authorSessionId",.string("other")),("generation",.string("2")),("sourceRevision",.string(String(repeating:"c",count:64))),("requestId",.string("not-uuid")),("references",.array([.object(["kind":.string("human_wait"),"id":.string("H54")])])),("body",.string(String(repeating:"界",count:2731)))] {
+   guard case .object(var body)=publication else {fatalError()};body[key]=bad
+   var payload=original;payload["publication"] = .object(body);response = .object(payload)
+   do {_ = try await store.secretaryBrief();fatalError("invalid Secretary publication accepted: \(key)")} catch {}
+  }
+  guard case .object(var completedSource)=source,case .object(var completedFacts)=facts else {fatalError()}
+  let run="55555555-5555-4555-8555-555555555555"
+  let patrolRef:CrewdValue = .object(["kind":.string("patrol"),"id":.string(run)])
+  completedFacts["patrol"] = .object(["state":.string("complete"),"runId":.string(run),"startedAtMs":.integer(7),"completedAtMs":.integer(10),"scannedCounts":.object(["work":.integer(1)]),"findingCounts":.object(["unowned":.integer(1)]),"findingsTruncated":.bool(false)])
+  completedSource["facts"] = .object(completedFacts);completedSource["references"] = .array(refs.array+[patrolRef]);completedSource["patrolRevision"] = .string(String(repeating:"e",count:64))
+  var completed=original;completed["source"] = .object(completedSource);response = .object(completed)
+  let stable=try await store.secretaryBrief();precondition(stable.source["facts"]["patrol"]["completedAtMs"] == .integer(10))
+  completedSource["patrolRevision"] = .null;completed["source"] = .object(completedSource);response = .object(completed)
+  do {_ = try await store.secretaryBrief();fatalError("completed patrol without evidence revision accepted")} catch {}
+  completedSource["patrolRevision"] = .string(String(repeating:"e",count:64))
+  completedFacts["patrol"] = .object(["state":.string("in_progress"),"runId":.string(run),"startedAtMs":.integer(7),"scannedCounts":.object([:]),"findingCounts":.object([:]),"findingsTruncated":.bool(false)])
+  completedSource["facts"] = .object(completedFacts);completed["source"] = .object(completedSource);response = .object(completed)
+  do {_ = try await store.secretaryBrief();fatalError("in-flight patrol became Secretary generation facts")} catch {}
+  var stale=original;stale["state"] = .string("stale");stale["currentRevision"] = .string(String(repeating:"d",count:64));response = .object(stale)
+  let old=try await store.secretaryBrief();precondition(old.state=="stale" && old.body != nil && old.canRequest)
+  var unknown=original;unknown["state"] = .string("unknown");unknown["publication"] = .null
+  guard case .object(var unknownCase)=record,case .object(var unknownExecution)=record["executionRecord"] else {fatalError()}
+  unknownExecution["phase"] = .string("unknown");unknownExecution["reason"] = .string("restart_unknown")
+  unknownCase["execution"] = .string("unknown");unknownCase["executionRecord"] = .object(unknownExecution)
+  unknown["case"] = .object(unknownCase);response = .object(unknown)
+  let uncertain=try await store.secretaryBrief();precondition(!uncertain.canRequest)
+  hold=true
+  let pending=Task {try await store.secretaryBrief()};while held == nil {await Task.yield()}
+  store.selectCrew("b");held!.resume(returning:.object(original))
+  do {_ = try await pending.value;fatalError("late Secretary result crossed crew")} catch is CancellationError {}
+  store.selectCrew("a");held=nil
+  let disconnected=Task {try await store.secretaryBrief()};while held == nil {await Task.yield()}
+  store.invalidateConnection();held!.resume(returning:.object(original))
+  do {_ = try await disconnected.value;fatalError("late Secretary result crossed connection")} catch is CancellationError {}
  }
 
  @MainActor private static func requirementReviews() async throws {

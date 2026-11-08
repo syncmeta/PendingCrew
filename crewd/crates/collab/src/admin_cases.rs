@@ -75,12 +75,34 @@ fn decode(raw: &str, crew: &str, id: &str) -> Result<AdminCaseView> {
         || v.source.budget_epoch < 0
         || (v.source.budget_epoch == 0 && v.source.provenance.is_none())
         || v.source.session_id.is_empty()
-        || v.source.announcement_id.is_empty()
+        || (v.source.announcement_id.is_empty() && !crate::admin_secretary::is_secretary(&v))
         || v.source.restore_epoch.is_empty()
-        || v.targets.is_empty()
+        || (v.targets.is_empty() && !crate::admin_secretary::is_secretary(&v))
         || revision(&v)? != v.revision
     {
         return Err(invalid("invalid admin case record"));
+    }
+    if let Some(AdminCaseProvenance::SecretaryBrief {
+        source_id,
+        source_revision,
+        observed_at_ms,
+    }) = &v.source.provenance
+    {
+        let source = source_id
+            .strip_prefix("SB")
+            .and_then(|v| uuid::Uuid::parse_str(v).ok());
+        if source.is_none_or(|id| format!("SB{id}") != *source_id)
+            || source_revision.len() != 64
+            || !source_revision
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || *observed_at_ms != v.created_at
+            || v.source.budget_epoch != 0
+            || !v.source.announcement_id.is_empty()
+            || !v.targets.is_empty()
+        {
+            return Err(invalid("invalid secretary case source"));
+        }
     }
     if let Some(AdminCaseProvenance::HumanRevalidation {
         request_id,
@@ -121,7 +143,18 @@ pub(crate) fn source_get(c: &Connection, p: &AdminCaseGetParams) -> Result<Admin
     decode(&raw, &p.crew_id, &p.id)
 }
 pub fn get(c: &Connection, p: &AdminCaseGetParams) -> Result<AdminCaseView> {
-    get_at(c, p, crewd_store::now_ms())
+    ordinary_get_at(c, p, crewd_store::now_ms())
+}
+/// Existing public deep links remain Stop-case links. A distinct capability and
+/// method are required to inspect Secretary sources, never a role-name fallback.
+pub fn ordinary_get_at(c: &Connection, p: &AdminCaseGetParams, now: i64) -> Result<AdminCaseView> {
+    let view = source_get(c, p)?;
+    if crate::admin_secretary::is_secretary(&view) {
+        return Err(invalid(
+            "secretary cases require the explicit secretary method",
+        ));
+    }
+    project_at(c, view, Some(now))
 }
 /// Cursor is a restore-bound monotonic sequence, not a timestamp or random id.
 fn source_list(c: &Connection, p: &AdminCaseListParams) -> Result<AdminCaseList> {
@@ -148,7 +181,7 @@ fn source_list(c: &Connection, p: &AdminCaseListParams) -> Result<AdminCaseList>
     let prefix = crew_prefix(&p.crew_id)?;
     let lower = format!("{prefix}AC{after:020}");
     let mut q =
-        c.prepare("SELECT key,value FROM meta WHERE key>?1 AND key<?2 ORDER BY key LIMIT ?3")?;
+        c.prepare("SELECT key,value FROM meta WHERE key>?1 AND key<?2 AND json_extract(value,'$.view.source.provenance.kind') IS NOT 'secretary_brief' ORDER BY key LIMIT ?3")?;
     let rows = q
         .query_map(
             params![lower, format!("{prefix}\u{10ffff}"), i64::from(limit) + 1],
@@ -270,30 +303,7 @@ fn record_source(
         }
         return Ok(existing);
     }
-    let counter = meta_get(tx.conn(), COUNTER)?;
-    if counter.is_none()
-        && tx.conn().query_row(
-            "SELECT EXISTS(SELECT 1 FROM meta WHERE key>=?1 AND key<?2)",
-            params![PREFIX, format!("{PREFIX}\u{10ffff}")],
-            |r| r.get::<_, bool>(0),
-        )?
-    {
-        return Err(invalid("missing admin case sequence"));
-    }
-    let seq = counter
-        .map(|s| {
-            s.parse::<u64>()
-                .map_err(|_| invalid("invalid case sequence"))
-        })
-        .transpose()?
-        .unwrap_or(0)
-        .checked_add(1)
-        .ok_or_else(|| invalid("case sequence overflow"))?;
-    let id = format!("AC{seq:020}");
-    let global_key = format!("admin.case.id.v1:{id}");
-    if meta_get(tx.conn(), &global_key)?.is_some() {
-        return Err(invalid("admin case global sequence collision"));
-    }
+    let (id, seq, global_key) = allocate_identity(tx.conn())?;
     let mut view = AdminCaseView {
         custody_record: None,
         launch_record: None,
@@ -336,6 +346,94 @@ fn record_source(
     crate::admin_case_legacy::index_source(tx, &view)?;
     Ok(view)
 }
+fn allocate_identity(c: &Connection) -> Result<(String, u64, String)> {
+    let counter = meta_get(c, COUNTER)?;
+    if counter.is_none()
+        && c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key>=?1 AND key<?2)",
+            params![PREFIX, format!("{PREFIX}\u{10ffff}")],
+            |r| r.get::<_, bool>(0),
+        )?
+    {
+        return Err(invalid("missing admin case sequence"));
+    }
+    let seq = counter
+        .map(|s| {
+            s.parse::<u64>()
+                .map_err(|_| invalid("invalid case sequence"))
+        })
+        .transpose()?
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| invalid("case sequence overflow"))?;
+    let id = format!("AC{seq:020}");
+    let global_key = format!("admin.case.id.v1:{id}");
+    if meta_get(c, &global_key)?.is_some() {
+        return Err(invalid("admin case global sequence collision"));
+    }
+    Ok((id, seq, global_key))
+}
+
+/// The Secretary collector is the sole minting caller. Reuses the original
+/// Case sequence and persistence, but cannot borrow a Stop/W execution grant.
+pub(crate) fn record_secretary_source(
+    tx: &mut Tx<'_>,
+    p: &crate::admin_secretary::PreparedSource,
+) -> Result<AdminCaseView> {
+    let session = crewd_store::sessions::get(tx.conn(), &p.captain)?
+        .ok_or_else(|| invalid("missing original secretary source"))?;
+    if session.crew_id != p.crew
+        || session.role != Role::Captain
+        || crate::crews::captain_of(tx.conn(), &p.crew)?.as_deref() != Some(p.captain.as_str())
+    {
+        return Err(invalid("secretary source is not the original captain"));
+    }
+    let (id, seq, global_key) = allocate_identity(tx.conn())?;
+    let mut view = AdminCaseView {
+        id,
+        crew_id: p.crew.clone(),
+        revision: String::new(),
+        created_at: tx.now_ms(),
+        source: AdminCaseSource {
+            provenance: Some(AdminCaseProvenance::SecretaryBrief {
+                source_id: p.id.clone(),
+                source_revision: p.revision.clone(),
+                observed_at_ms: p.observed_at,
+            }),
+            session_id: p.captain.clone(),
+            budget_epoch: 0,
+            restore_epoch: crewd_store::judgment_state::epoch(tx.conn())?,
+            announcement_id: String::new(),
+        },
+        targets: Vec::new(),
+        decision: AdminCaseDecision::Observed,
+        decision_record: None,
+        execution: AdminCaseExecution::NotStarted,
+        execution_record: None,
+        retirement: AdminCaseRetirement::NotStarted,
+        retirement_record: None,
+        outcome_record: None,
+        handoff_record: None,
+        custody_record: None,
+        launch_record: None,
+    };
+    view.revision = revision(&view)?;
+    let key = key(&view.crew_id, &view.id)?;
+    if meta_get(tx.conn(), &key)?.is_some() {
+        return Err(invalid("secretary case sequence collision"));
+    }
+    let raw = serde_json::to_string(&Saved {
+        version: 1,
+        view: view.clone(),
+    })
+    .map_err(StoreError::from)?;
+    decode(&raw, &view.crew_id, &view.id)?;
+    meta_set(tx.conn(), &key, &raw)?;
+    meta_set(tx.conn(), COUNTER, &seq.to_string())?;
+    meta_set(tx.conn(), &global_key, &key)?;
+    Ok(view)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CurrentTarget {
     pub source: AdminCaseTarget,
@@ -349,6 +447,71 @@ pub struct Snapshot {
     pub targets: Vec<CurrentTarget>,
     pub fingerprint: String,
 }
+/// The original accepted checkpoint also authenticates historical receipt reads.
+/// Substitute only the immutable original fact version, never the live authority.
+pub(crate) fn secretary_authority_current(
+    c: &Connection,
+    case: &AdminCaseView,
+    checkpoint: &str,
+) -> Result<bool> {
+    let saved = crate::admin_secretary::case_source(c, case)?;
+    if crewd_store::meta_get(c, "dbId")?.as_deref() != Some(saved.scope.db_id.as_str())
+        || crewd_store::personal_drafts::epoch(c)? != saved.scope.restore_epoch
+    {
+        return Ok(false);
+    }
+    Ok(secretary_fingerprint(c, case, &saved, &saved.revision, true)? == checkpoint)
+}
+fn secretary_fingerprint(
+    c: &Connection,
+    case: &AdminCaseView,
+    saved: &crewd_proto::AdminSecretarySnapshot,
+    current_revision: &str,
+    current: bool,
+) -> Result<String> {
+    let epoch = crewd_store::judgment_state::epoch(c)?;
+    let source = crewd_store::sessions::get(c, &case.source.session_id)?
+        .ok_or_else(|| invalid("missing secretary captain"))?;
+    let crew_authority = crewd_store::crews::get(c, &case.crew_id)?
+        .ok_or_else(|| invalid("missing secretary crew"))?;
+    // Exact authority/profile and workspace identity, not output, titles,
+    // working heartbeats, counters, UI order or observation timestamps.
+    let source_authority = (
+        &source.id,
+        &source.crew_id,
+        source.role,
+        &source.executor,
+        &source.agent_session_id,
+        &source.model,
+        &source.effort,
+        source.desired,
+        &source.resume_failed_at,
+        &source.working_directory,
+        &source.worktree,
+    );
+    let crew_authority = (
+        &crew_authority.id,
+        &crew_authority.captain_session_id,
+        &crew_authority.working_directory,
+        &crew_authority.removed_at,
+        crew_authority.management,
+        &crew_authority.parent_ids,
+    );
+    judgments::fingerprint(&(
+        "secretary-case-context.v2",
+        &case.revision,
+        &epoch,
+        &saved.scope,
+        current_revision,
+        current,
+        source_authority,
+        crew_authority,
+        judgments::configuration(c)?,
+        judgments::stop_epoch(c, &case.source.session_id)?,
+        crate::wakes::human_stop_floor(c, &case.source.session_id)?,
+    ))
+}
+
 /// Reads authoritative current work, never interpreting the announcement body.
 /// This is evidence only, not permission to execute any target (including in-scope).
 pub fn snapshot(c: &Connection, crew: &str, id: &str, now: i64) -> Result<Snapshot> {
@@ -360,6 +523,19 @@ pub fn snapshot(c: &Connection, crew: &str, id: &str, now: i64) -> Result<Snapsh
         },
     )?;
     let epoch = crewd_store::judgment_state::epoch(c)?;
+    if crate::admin_secretary::is_secretary(&case) {
+        let (saved, current, current_revision) =
+            crate::admin_secretary::current_source(c, &case, now)?;
+        let fingerprint = secretary_fingerprint(c, &case, &saved, &current_revision, current)?;
+        return Ok(Snapshot {
+            restore_matches: case.source.restore_epoch == epoch
+                && crewd_store::meta_get(c, "dbId")?.as_deref() == Some(saved.scope.db_id.as_str())
+                && crewd_store::personal_drafts::epoch(c)? == saved.scope.restore_epoch,
+            case,
+            targets: Vec::new(),
+            fingerprint,
+        });
+    }
     let book = crate::asks::load_org(c)?;
     let violations = book.stop_violations(
         &crewd_work::SessionId::new(&case.source.session_id),
@@ -1062,7 +1238,7 @@ fn save_decision(tx: &mut Tx<'_>, r: &DecisionSaved) -> Result<()> {
     )?;
     Ok(())
 }
-fn blocked(c: &Connection, s: &Snapshot) -> Result<Option<AdminCaseDecisionReason>> {
+fn blocked(c: &Connection, s: &Snapshot, now: i64) -> Result<Option<AdminCaseDecisionReason>> {
     use AdminCaseDecisionReason as R;
     let Some(session) = crewd_store::sessions::get(c, &s.case.source.session_id)? else {
         return Ok(Some(R::StateChanged));
@@ -1076,7 +1252,11 @@ fn blocked(c: &Connection, s: &Snapshot) -> Result<Option<AdminCaseDecisionReaso
     {
         return Ok(Some(R::Stopped));
     }
-    if !s.targets.iter().any(|t| {
+    if crate::admin_secretary::is_secretary(&s.case) {
+        if !crate::admin_secretary::current_source(c, &s.case, now)?.1 {
+            return Ok(Some(R::StateChanged));
+        }
+    } else if !s.targets.iter().any(|t| {
         t.source.scope == AdminCaseScope::InScope
             && t.current.crew_id == s.case.crew_id
             && t.still_violating
@@ -1134,7 +1314,7 @@ pub fn prepare(tx: &mut Tx<'_>, crew: &str, id: &str) -> Result<Option<DecisionS
         || old.as_ref().is_some_and(|r| r.accepted_epoch == epoch)
         || can_revalidate(tx.conn(), &s, old.as_ref())?;
     let reason = if epoch_accepted {
-        blocked(tx.conn(), &s)?
+        blocked(tx.conn(), &s, now)?
     } else {
         Some(AdminCaseDecisionReason::StateChanged)
     };
@@ -1148,7 +1328,11 @@ pub fn prepare(tx: &mut Tx<'_>, crew: &str, id: &str) -> Result<Option<DecisionS
             .map(|r| r.snapshot.decision_id.clone())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         fingerprint: s.fingerprint.clone(),
-        summary: summary(&s),
+        summary: if crate::admin_secretary::is_secretary(&s.case) {
+            crate::admin_secretary::decision_summary(tx.conn(), &s.case)?
+        } else {
+            summary(&s)
+        },
         settings: judgments::configuration(tx.conn())?,
     };
     let phase = match reason {
@@ -1197,7 +1381,7 @@ fn matching(
     let current = snapshot(tx.conn(), &s.crew, &s.id, tx.now_ms())?;
     if current.fingerprint != s.fingerprint
         || r.accepted_epoch != crewd_store::judgment_state::epoch(tx.conn())?
-        || blocked(tx.conn(), &current)?.is_some()
+        || blocked(tx.conn(), &current, tx.now_ms())?.is_some()
     {
         r.view.phase = AdminCaseDecision::Stale;
         r.view.adopted = false;
@@ -1402,6 +1586,9 @@ fn project_at(c: &Connection, mut view: AdminCaseView, now: Option<i64>) -> Resu
 }
 
 fn can_revalidate(c: &Connection, s: &Snapshot, old: Option<&DecisionSaved>) -> Result<bool> {
+    if crate::admin_secretary::is_secretary(&s.case) {
+        return Ok(false);
+    }
     if old.is_some_and(|r| {
         !matches!(
             r.view.phase,
@@ -1479,7 +1666,7 @@ pub(crate) fn recent_for_human_brief(
 ) -> Result<(Vec<AdminCaseView>, bool)> {
     let prefix = crew_prefix(crew)?;
     let mut query = c.prepare(
-        "SELECT key,value FROM meta WHERE key>=?1 AND key<?2 ORDER BY key DESC LIMIT ?3",
+        "SELECT key,value FROM meta WHERE key>=?1 AND key<?2 AND json_extract(value,'$.view.source.provenance.kind') IS NOT 'secretary_brief' ORDER BY key DESC LIMIT ?3",
     )?;
     let rows = query
         .query_map(
@@ -1519,7 +1706,7 @@ pub(crate) fn execution_eligibility(
     let current = snapshot(c, crew, id, now)?;
     if record.snapshot.fingerprint != current.fingerprint
         || record.accepted_epoch != crewd_store::judgment_state::epoch(c)?
-        || blocked(c, &current)?.is_some()
+        || blocked(c, &current, now)?.is_some()
     {
         return Ok(None);
     }

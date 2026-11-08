@@ -31,6 +31,10 @@ private struct CrewdHumanBriefView: View {
                 Text("事项核对时间  " + timestamp(brief.observedAt)).font(.caption).foregroundStyle(.secondary)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
+                        if store.capabilities.contains("adminCase.secretaryBrief.v1") {
+                            CrewdSecretaryBriefCard(store:store,workspace:workspace,openReference:openSecretaryReference)
+                            Divider()
+                        }
                         waits(brief)
                         Divider()
                         cases(brief)
@@ -87,6 +91,13 @@ private struct CrewdHumanBriefView: View {
                 }
             }
         }
+    }
+    private func openSecretaryReference(_ reference:CrewdValue) {
+        guard let id=reference["id"].string else{return}
+        if reference["kind"] == .string("human_wait") {
+            let crew=store.selectedCrew
+            humanTarget=CrewdHumanTarget(key:.init(scope:crew,crew:crew,ask:id),crewTitle:crewTitle)
+        } else if reference["kind"] == .string("case") {caseID=id}
     }
 
     private func cases(_ brief: CrewdHumanBrief) -> some View {
@@ -153,6 +164,149 @@ private struct CrewdHumanBriefView: View {
                 failure = error.localizedDescription
             }
         }
+    }
+}
+
+private struct CrewdSecretaryBriefCard:View {
+    @ObservedObject var store:CrewdWorkStore
+    let workspace:CrewdWorkspace?
+    let openReference:(CrewdValue)->Void
+    @State private var value:CrewdSecretaryBrief?
+    @State private var failure:String?
+    @State private var reading=false
+    @State private var requesting=false
+    @State private var readID=UUID()
+    private var stateLabel:String {
+        if value?.state == "waiting" {
+            if value?.caseValue["decision"] == .string("unconfigured") {return "尚未配置可用的判断服务，写作没有启动"}
+            if value?.caseValue["decision"] == .string("waiting_admission") {return "等待本机组机长的启动资格"}
+            if value?.caseValue["decision"] == .string("answered"),value?.caseValue["decisionRecord"]["adopted"] == .bool(false) {return "本轮未采用写作建议，原待人清单仍可查看"}
+        }
+        switch value?.state {
+        case "waiting":"已记录写作事项，等待启动条件"
+        case "writing":"秘书正在整理本次事实"
+        case "current":"正文已保存，内容对应本次核对的事实"
+        case "stale":"原事实已变化，以下旧简报仅供核对"
+        case "unknown":"写作结果尚未确认，请核对原记录"
+        case "unavailable":"当前无法核对秘书来源"
+        default:"尚无已生成的简报"
+        }
+    }
+    private var awaitingProgress:Bool {
+        value?.state == "writing" || (value?.state == "waiting" && ["observed","prepared","dispatched","waiting_admission"].contains(value?.caseValue["decision"].string ?? ""))
+    }
+    var body:some View {
+        VStack(alignment:.leading,spacing:9) {
+            HStack {
+                Text("给你的简报").font(.subheadline.weight(.semibold))
+                Spacer()
+                Button("核对进度"){Task{await read()}}.disabled(reading)
+                if let workspace,value?.canRequest == true {
+                    Button("整理给我看"){Task{await request(workspace)}}
+                        .disabled(requesting || !workspace.client.readyForWork || workspace.isRetired || workspace.hasOriginalUnknown(method:CrewdPublicOperation.secretaryRequest.rawValue,crew:store.selectedCrew))
+                }
+            }
+            Text(stateLabel).font(.caption).foregroundStyle(.secondary)
+            if reading || requesting {ProgressView().controlSize(.small)}
+            if let failure {Text(failure).font(.caption).foregroundStyle(.orange)}
+            if let value {
+                if let body=value.body {Text(verbatim:body).textSelection(.enabled)}
+                if value.source["facts"]["humanWaitsTruncated"] == .bool(true)
+                    || value.source["facts"]["caseCoverage"] == .string("recent_sample")
+                    || value.source["facts"]["patrol"]["findingsTruncated"] == .bool(true)
+                    || (value.source["facts"]["patrol"]["findingCounts"]["incomplete_channels"].int ?? 0)>0
+                    || (value.source["facts"]["patrol"]["findingCounts"]["archive_review_incomplete"].int ?? 0)>0 {
+                    Text("这份简报只覆盖已核对的样本，完整事项仍在原清单。").font(.caption).foregroundStyle(.secondary)
+                }
+                if value.source["facts"]["caseCoverage"] == .string("unavailable") {
+                    Text("本次没有可用的案件记录，简报不能据此判断案件均已解决。").font(.caption).foregroundStyle(.orange)
+                }
+                if let at=value.source["facts"]["patrol"]["completedAtMs"].int {
+                    Text("巡检部分依据 "+Date(timeIntervalSince1970:Double(at)/1000).formatted(date:.abbreviated,time:.shortened)+" 的已完成观察；其后进行中的轮次未纳入。").font(.caption).foregroundStyle(.secondary)
+                } else if value.source["facts"]["patrol"]["state"] == .string("not_recorded") {
+                    Text("没有可核对的已完成巡检来源，不能据此认定没有巡检发现。").font(.caption).foregroundStyle(.secondary)
+                }
+                if value.publication != .null {published(value)}
+                if value.state == "unknown" {
+                    Text("生成结果尚不确定；需要核对原记录，此处不会重复启动。").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .task(id:store.readScope) {
+            await read()
+            while !Task.isCancelled && awaitingProgress {
+                do {try await Task.sleep(for:.seconds(value?.state == "writing" ? 3:8))} catch{return}
+                if !Task.isCancelled {await read()}
+            }
+        }
+        .onChange(of:store.readScope){_,_ in readID=UUID();value=nil;failure=nil;reading=false;requesting=false}
+    }
+    private func published(_ value:CrewdSecretaryBrief)->some View {
+        VStack(alignment:.leading,spacing:5) {
+            if let at=value.publication["publishedAtMs"].int {
+                Text("保存于 "+Date(timeIntervalSince1970:Double(at)/1000).formatted(date:.abbreviated,time:.shortened)).font(.caption).foregroundStyle(.secondary)
+            }
+            Text("这是行政会话的整理，不代替你回答问题，也不表示关联工作已完成。").font(.caption).foregroundStyle(.secondary)
+            if let author=value.publication["authorSessionId"].string {
+                DisclosureGroup("整理来源") {
+                    Text("本机组临时行政会话："+author).font(.caption).textSelection(.enabled)
+                    if let at=value.source["observedAtMs"].int {
+                        Text("所据事实观察于 "+Date(timeIntervalSince1970:Double(at)/1000).formatted(date:.abbreviated,time:.shortened)).font(.caption)
+                    }
+                    Text("会话退出："+retirementTitle(value.caseValue["retirement"].string ?? "")).font(.caption)
+                }
+            }
+            ForEach(Array(value.publication["references"].array.enumerated()),id:\.offset){_,reference in
+                if reference["kind"] == .string("patrol") {
+                    DisclosureGroup("原巡检观察") {
+                        if let at=value.source["facts"]["patrol"]["completedAtMs"].int {
+                            Text("原观察结束于 "+Date(timeIntervalSince1970:Double(at)/1000).formatted(date:.abbreviated,time:.shortened)).font(.caption)
+                        }
+                        ForEach(CrewdPatrolBrief.Kind.allCases,id:\.rawValue){kind in
+                            if let count=value.source["facts"]["patrol"]["findingCounts"][kind.rawValue].int {
+                                Text(kind.title+"："+String(count)+kind.unit).font(.caption)
+                            }
+                        }
+                        Text("这是本简报保存的原观察；当前情况仍需在巡检页核对。").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("打开原事项 "+(reference["id"].string ?? "")){openReference(reference)}.font(.caption)
+                }
+            }
+        }
+    }
+    private func retirementTitle(_ state:String)->String {
+        switch state {
+        case "parked":return "已确认退出"
+        case "prepared","dispatched","decision_ready":return "正在核对退出条件"
+        case "exit_requested":return "已请求退出，等待确认"
+        case "unknown":return "退出结果未知"
+        case "stale":return "原退出条件已改变"
+        case "suppressed":return "本次未采用退出建议"
+        default:return "尚未确认退出"
+        }
+    }
+    private func read()async {
+        let scope=store.readScope,id=UUID();readID=id;reading=true
+        defer{if readID==id {reading=false}}
+        do {
+            let result=try await store.secretaryBrief()
+            guard !Task.isCancelled,readID==id,store.readScope==scope else{return}
+            value=result;failure=nil
+        } catch {if !Task.isCancelled,readID==id,store.readScope==scope {value=nil;failure=error.localizedDescription}}
+    }
+    private func request(_ workspace:CrewdWorkspace)async {
+        let scope=store.readScope,crew=store.selectedCrew,epoch=workspace.observationGeneration
+        guard !requesting,workspace.workStore === store,let revision=value?.currentRevision,value?.canRequest == true else{return}
+        requesting=true;defer{if store.readScope==scope {requesting=false}}
+        do {
+            let receipt=try await workspace.submitPublicCommand(.secretaryRequest,params:.object(["crewId":.string(crew),"expectedRevision":.string(revision)]),crew:crew)
+            guard !Task.isCancelled,store.readScope==scope,workspace.acceptsObservation(epoch) else{return}
+            guard receipt.phase == .committed,!receipt.historical else {throw CrewdClientError(message:"原生成请求尚待核对，不会重新发送。")}
+            guard receipt.value["result"]["crewId"] == .string(crew),receipt.value["result"]["sourceRevision"] == .string(revision) else {throw CrewdClientError(message:"原生成请求的来源确认不符。")}
+            failure=nil
+            await read()
+        } catch {if store.readScope==scope,workspace.acceptsObservation(epoch) {failure=error.localizedDescription}}
     }
 }
 

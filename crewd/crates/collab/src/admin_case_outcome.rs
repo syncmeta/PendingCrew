@@ -274,6 +274,52 @@ fn collect(c: &Connection, crew: &str, id: &str, now: i64) -> Result<Saved> {
     if !authority.actually_started {
         return Err(invalid());
     }
+    if crate::admin_secretary::is_secretary(&source) {
+        // Empty W targets do not prove anything. The sole success witness is
+        // this exact author's immutable original publication receipt.
+        let publication = crate::admin_secretary::verified_publication(c, &source)?;
+        let source_current = crate::admin_secretary::current_source(c, &source, now)?.1;
+        let mut view = AdminCaseOutcomeView {
+            case_id: id.into(),
+            crew_id: crew.into(),
+            revision: String::new(),
+            verified_at: now,
+            phase: AdminCaseOutcomePhase::Unresolved,
+            reason: AdminCaseOutcomeReason::NoVerifiedAdminEffect,
+            targets: Vec::new(),
+            out_of_scope: Vec::new(),
+            missing: Vec::new(),
+            pending: Vec::new(),
+            blocked: Vec::new(),
+            resolved_by_admin: Vec::new(),
+            resolved_by_others: Vec::new(),
+        };
+        if !authority.current || !source_current {
+            view.phase = AdminCaseOutcomePhase::Stale;
+            view.reason = AdminCaseOutcomeReason::AuthorityChanged;
+        } else if publication.is_some() {
+            view.phase = AdminCaseOutcomePhase::Resolved;
+            view.reason = AdminCaseOutcomeReason::Verified;
+        }
+        let mut normalized = view.clone();
+        normalized.verified_at = 0;
+        let fingerprint = judgments::fingerprint(&(
+            "secretary-writing-outcome.v1",
+            source.revision,
+            w.attempt_id(),
+            authority.fingerprint,
+            publication,
+            normalized,
+        ))?;
+        view.revision = fingerprint.clone();
+        return Ok(Saved {
+            version: 1,
+            attempt: w.attempt_id().into(),
+            fingerprint,
+            view_checksum: judgments::fingerprint(&view)?,
+            view,
+        });
+    }
     let receipts = execution::effect_receipts(c, &w)?;
     let book = crate::asks::load_org(c)?;
     let mut groups: BTreeMap<String, Vec<AdminCaseTargetKind>> = BTreeMap::new();

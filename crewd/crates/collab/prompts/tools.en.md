@@ -2023,3 +2023,30 @@ Contract selector: omitted or integer 2 uses V2; integer 3 uses the new contract
 ## managed_table_v2_request_get.contractVersion
 
 Contract selector: omitted or integer 2 uses V2; integer 3 uses the new contract. Null, strings, fractional-number representations and unknown versions are rejected without fallback.
+
+## admin_secretary_snapshot
+Read the original same-crew snapshot bound to this Secretary case. This is read-only, grants no wider scope and does not turn a saved observation into a business decision. Preserve all sample and truncation limits.
+
+## admin_secretary_publish
+Save a Human brief and original references for this snapshot. This does not answer H or close or assign W. Keep the original request_id; after an uncertain result only inspect its original receipt, never resend with a new ID. Changed source or execution generation refuses publication.
+
+## admin_secretary_publish.request_id
+The original lowercase UUID for this publication. Retrying requires identical contents.
+
+## admin_secretary_publish.source_revision
+The complete source revision returned by the original snapshot.
+
+## admin_secretary_publish.generation
+The original confirmed execution generation of this Secretary session as a decimal string.
+
+## admin_secretary_publish.body
+A Human-readable brief, at most8192 UTF8 bytes. State the sample and incomplete-coverage limits, and never impersonate a Human answer.
+
+## admin_secretary_publish.references
+Only human_wait, case and patrol identifiers supplied by the original snapshot;1 to40 distinct references.
+
+## admin_secretary_receipt
+Read back the original publication UUID for this Secretary case. A missing receipt does not authorize resending with a different UUID.
+
+## admin_secretary_receipt.request_id
+The original publication UUID.

@@ -114,6 +114,11 @@ fn bucket(c: &Connection, i: &Index, k: &str) -> Result<BTreeMap<String, Link>> 
 /// Per-announcement indexed evidence, protected by an independent bucket registry.
 /// Lookup reads one hash bucket, never rescans all source/history records.
 pub(crate) fn index_source(tx: &mut Tx<'_>, v: &AdminCaseView) -> Result<()> {
+    // Secretary has no Stop announcement or budget epoch to index. The common
+    // AC scan still advances over its strictly decoded typed source.
+    if crate::admin_secretary::is_secretary(v) {
+        return Ok(());
+    }
     let mut i = index(tx.conn())?;
     let k = bucket_key(&v.source.announcement_id)?;
     let mut b = bucket(tx.conn(), &i, &k)?;
@@ -274,6 +279,9 @@ fn verified_source(c: &Connection, id: &str) -> Result<AdminCaseView> {
             id: id.into(),
         },
     )?;
+    if crate::admin_secretary::is_secretary(&v) {
+        return Ok(v);
+    }
     let budget_key = source_key(&v.source.session_id, v.source.budget_epoch, crew)?;
     if meta_get(c, &budget_key)?.as_deref() != Some(id) {
         return Err(invalid());

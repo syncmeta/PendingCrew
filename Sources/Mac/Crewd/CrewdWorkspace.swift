@@ -1648,7 +1648,7 @@ final class CrewdWorkspace: ObservableObject {
     }
     func submitPublicCommand(_ operation: CrewdPublicOperation, params: CrewdValue, crew: String, request: UUID = UUID(), validateReceipt:((CrewdPublicReceipt)throws->Void)?=nil) async throws -> CrewdPublicReceipt {
         guard !stopping else { throw CrewdClientError(message: "正在停工，不再接受新执行。", kind: .notSubmitted) }
-        if operation == .patrolStart || operation == .workDuplicateClose {
+        if operation == .patrolStart || operation == .workDuplicateClose || operation == .secretaryRequest {
             guard client.capabilities.contains(operation.rawValue), client.readyForWork,
                   !crew.isEmpty, crew == crewID, params["crewId"] == .string(crew),
                   !hasOriginalUnknown(method: operation.rawValue, crew: crew),
@@ -1656,7 +1656,7 @@ final class CrewdWorkspace: ObservableObject {
                       publicCommands.pending.contains($0.id) && $0.envelope.operation == operation &&
                           $0.envelope.params["crewId"] == .string(crew)
                   }) else {
-                let action = operation == .patrolStart ? "启动手动巡检" : "确认重复工作关闭"
+                let action = operation == .patrolStart ? "启动手动巡检" : operation == .secretaryRequest ? "整理行政简报" : "确认重复工作关闭"
                 throw CrewdClientError(message: "当前机组无法" + action + "，或已有原请求待核对。", kind: .notSubmitted)
             }
         }
@@ -2122,7 +2122,7 @@ final class CrewdWorkspace: ObservableObject {
         // Current patrol and review state have their own reads.
         let operation = record.params["command"]["operation"].string
         let historicalRecordedRequest = receipt.historical &&
-            [CrewdPublicOperation.patrolStart.rawValue, CrewdPublicOperation.requirementReview.rawValue,
+            [CrewdPublicOperation.patrolStart.rawValue, CrewdPublicOperation.secretaryRequest.rawValue, CrewdPublicOperation.requirementReview.rawValue,
              CrewdPublicOperation.workDuplicateClose.rawValue,CrewdPublicOperation.askResolve.rawValue,
              CrewdPublicOperation.askInboxSchedule.rawValue,CrewdPublicOperation.requirementRuleClose.rawValue,
              CrewdPublicOperation.workCloseWithReceipt.rawValue].contains(operation ?? "") &&

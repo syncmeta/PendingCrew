@@ -4,6 +4,18 @@ use crate::{AppState, dispatch, public_commands::Actor};
 use crewd_proto::{Request, Response, RpcError, admin_cases::*};
 use std::sync::Arc;
 
+pub(crate) async fn secretary_qualified(state: &AppState) -> crewd_collab::Result<bool> {
+    state
+        .db
+        .call_result(|s| {
+            Ok::<bool, crewd_collab::CollabError>(crewd_store::admin_secretary::available(
+                s.conn(),
+            )?)
+        })
+        .await
+        .map_err(crewd_collab::CollabError::from)?
+}
+
 pub(crate) async fn handle(state: &Arc<AppState>, actor: &Actor, req: Request) -> Response {
     let id = req.id;
     match route(state, actor, req).await {
@@ -21,6 +33,27 @@ async fn route(
     let owner = state.clone();
     let by = actor.clone();
     match req.method.as_str() {
+        crewd_proto::admin_secretary::HUMAN_GET => {
+            let p: crewd_proto::AdminSecretaryGet = crewd_proto::parse_params(req.params)?;
+            let view = state
+                .db
+                .call_result(move |store| {
+                    by.authorize_tx(
+                        &owner,
+                        store.conn(),
+                        crewd_proto::admin_secretary::HUMAN_GET,
+                    )?;
+                    crewd_collab::admin_secretary::human_get(
+                        store.conn(),
+                        &p.crew_id,
+                        crewd_store::now_ms(),
+                    )
+                })
+                .await
+                .map_err(dispatch::internal)?
+                .map_err(dispatch::collab_err)?;
+            serde_json::to_value(view).map_err(dispatch::internal)
+        }
         WORK_DUPLICATE_HISTORY => {
             let p: crewd_proto::WorkDuplicateHistoryParams = crewd_proto::parse_params(req.params)?;
             let page = state
@@ -279,7 +312,11 @@ async fn route(
                 .db
                 .call_result(move |store| {
                     by.authorize_tx(&owner, store.conn(), GET)?;
-                    crewd_collab::admin_cases::get_at(store.conn(), &p, crewd_store::now_ms())
+                    crewd_collab::admin_cases::ordinary_get_at(
+                        store.conn(),
+                        &p,
+                        crewd_store::now_ms(),
+                    )
                 })
                 .await
                 .map_err(dispatch::internal)?

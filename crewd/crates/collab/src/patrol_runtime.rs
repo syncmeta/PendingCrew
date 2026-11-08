@@ -13,6 +13,10 @@ struct Saved {
     version: u32,
     epoch: String,
     run: PatrolRun,
+    /// Captured by a new original periodic run, never backfilled on a read or
+    /// at completion. Legacy/in-flight runs without it cannot mint evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    secretary_scope: Option<crewd_proto::managed_objects::Scope>,
 }
 #[derive(Serialize, Deserialize)]
 struct ErrorSaved {
@@ -104,6 +108,172 @@ pub(crate) fn human_observation(c: &Connection, crew: &str) -> Result<Option<Pat
     run(c, crew)
 }
 
+/// A single derived last-completed observation per crew. It is written only by
+/// the actual periodic producer's completion transaction, never adopted from a
+/// partial/current run or from a caller-supplied empty result.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CompletedObservation {
+    version: u32,
+    crew: String,
+    scope: crewd_proto::managed_objects::Scope,
+    epoch: String,
+    run: PatrolRun,
+    checksum: String,
+}
+fn completed_key(crew: &str) -> String {
+    format!("patrol.secretary.completed.v1:{crew}")
+}
+fn completed_scope(c: &Connection) -> Result<crewd_proto::managed_objects::Scope> {
+    Ok(crewd_proto::managed_objects::Scope {
+        db_id: meta_get(c, "dbId")?
+            .filter(|v| !v.is_empty())
+            .ok_or_else(invalid_completed)?,
+        restore_epoch: crewd_store::personal_drafts::epoch(c)?,
+    })
+}
+fn invalid_completed() -> crate::CollabError {
+    StoreError::Invalid(
+        "completed patrol source is unavailable or outside its original Scope".into(),
+    )
+    .into()
+}
+fn completed_checksum(v: &CompletedObservation) -> Result<String> {
+    crate::judgments::fingerprint(&(v.version, &v.crew, &v.scope, &v.epoch, &v.run))
+}
+/// Meaningful completed findings/coverage. UUID, observation timestamps and
+/// in-flight scan progress cannot change this revision; equal counts with a
+/// different original finding identity still do.
+pub(crate) fn completed_semantic_revision(run: &PatrolRun) -> Result<String> {
+    if run.completed_at_ms.is_none_or(|at| at < run.started_at_ms)
+        || run.started_at_ms < 0
+        || run.captured_seq < 0
+        || run.after.is_some()
+        || run.scan != WorkPatrolScan::Channels
+        || uuid::Uuid::parse_str(&run.run_id).is_err()
+        || run
+            .scanned_counts
+            .keys()
+            .any(|k| !matches!(k.as_str(), "work" | "entries" | "channels"))
+    {
+        return Err(invalid_completed());
+    }
+    let mut findings = run.findings.clone();
+    for (kind, ids) in &mut findings {
+        if !matches!(
+            kind.as_str(),
+            "unowned"
+                | "lost"
+                | "stop_escalated"
+                | "long_waits"
+                | "unclaimed"
+                | "needs_ruling"
+                | "archive_candidates"
+                | "idle_archive_candidates"
+                | "incomplete_channels"
+                | "archive_review_incomplete"
+        ) || ids.is_empty()
+            || ids.len() > 50
+            || ids.iter().any(|id| id.is_empty())
+            || run.counts.get(kind).is_none_or(|n| *n < ids.len() as u64)
+        {
+            return Err(invalid_completed());
+        }
+        let n = ids.len();
+        ids.sort();
+        ids.dedup();
+        if ids.len() != n {
+            return Err(invalid_completed());
+        }
+    }
+    if run.counts.keys().any(|k| !findings.contains_key(k))
+        || run.counts.values().any(|n| *n == 0)
+        || run.truncated != run.counts.values().any(|n| *n > 50)
+    {
+        return Err(invalid_completed());
+    }
+    crate::judgments::fingerprint(&(
+        "secretary-completed-patrol.v1",
+        &run.scanned_counts,
+        &run.counts,
+        findings,
+        run.truncated,
+    ))
+}
+fn save_completed(
+    tx: &Tx<'_>,
+    crew: &str,
+    run: &PatrolRun,
+    started_scope: &Option<crewd_proto::managed_objects::Scope>,
+) -> Result<()> {
+    if !crewd_store::admin_secretary::available(tx.conn())? {
+        return Ok(());
+    }
+    let scope = completed_scope(tx.conn())?;
+    if started_scope.as_ref() != Some(&scope) {
+        return Ok(());
+    }
+    completed_semantic_revision(run)?;
+    let mut saved = CompletedObservation {
+        version: 1,
+        crew: crew.into(),
+        scope,
+        epoch: crewd_store::judgment_state::epoch(tx.conn())?,
+        run: run.clone(),
+        checksum: String::new(),
+    };
+    saved.checksum = completed_checksum(&saved)?;
+    meta_set(
+        tx.conn(),
+        &completed_key(crew),
+        &serde_json::to_string(&saved).map_err(StoreError::from)?,
+    )?;
+    Ok(())
+}
+pub(crate) fn secretary_observation(c: &Connection, crew: &str) -> Result<Option<PatrolRun>> {
+    if error_saved(c, crew)?.is_some() {
+        return Err(invalid_completed());
+    }
+    let current = load(c, crew)?;
+    let raw = meta_get(c, &completed_key(crew))?;
+    let Some(raw) = raw else { return Ok(None) }; // Explicitly no recorded completed source.
+    if raw.len() > 131_072 {
+        return Err(invalid_completed());
+    }
+    let saved: CompletedObservation = serde_json::from_str(&raw).map_err(StoreError::from)?;
+    if saved.version != 1 || saved.crew != crew || saved.checksum != completed_checksum(&saved)? {
+        return Err(invalid_completed());
+    }
+    completed_semantic_revision(&saved.run)?;
+    if saved.scope != completed_scope(c)? || saved.epoch != crewd_store::judgment_state::epoch(c)? {
+        return Ok(None);
+    }
+    let current = current.ok_or_else(invalid_completed)?;
+    if current.secretary_scope.as_ref() != Some(&saved.scope) {
+        return Err(invalid_completed());
+    }
+    let current = current.run;
+    if uuid::Uuid::parse_str(&current.run_id).is_err()
+        || current.started_at_ms < 0
+        || current.captured_seq < 0
+    {
+        return Err(invalid_completed());
+    }
+    if current.completed_at_ms.is_some() {
+        if serde_json::to_value(&current).map_err(StoreError::from)?
+            != serde_json::to_value(&saved.run).map_err(StoreError::from)?
+        {
+            return Err(invalid_completed());
+        }
+    } else if current.run_id == saved.run.run_id
+        || current.started_at_ms < saved.run.completed_at_ms.ok_or_else(invalid_completed)?
+        || current.captured_seq < saved.run.captured_seq
+    {
+        return Err(invalid_completed());
+    }
+    Ok(Some(saved.run))
+}
+
 /// After a scan step, only inspect the same round-robin crew. Core owns live
 /// process admission and makes the separate enqueue decision.
 pub fn brief_candidate(c: &Connection) -> Result<Option<(String, String)>> {
@@ -119,6 +289,9 @@ pub fn brief_candidate(c: &Connection) -> Result<Option<(String, String)>> {
 pub fn enqueue_brief(tx: &mut Tx<'_>, crew: &str, captain: &str, generation: &str) -> Result<()> {
     if let Some(run) = run(tx.conn(), crew)? {
         crate::patrol_brief::enqueue(tx, crew, captain, generation, &run)?;
+        if run.completed_at_ms.is_some() {
+            crate::admin_secretary::observe(tx, crew)?;
+        }
     }
     Ok(())
 }
@@ -193,10 +366,18 @@ fn step(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
             version: 1,
             epoch: crewd_store::judgment_state::epoch(tx.conn())?,
             run: new_run(tx.now_ms(), seq),
+            secretary_scope: if crewd_store::admin_secretary::available(tx.conn())? {
+                Some(completed_scope(tx.conn())?)
+            } else {
+                None
+            },
         });
     }
     let saved = saved.as_mut().expect("initialized");
     scan_step(tx, crew, &mut saved.run, true)?;
+    if saved.run.completed_at_ms.is_some() {
+        save_completed(tx, crew, &saved.run, &saved.secretary_scope)?;
+    }
     meta_set(
         tx.conn(),
         &key(crew),

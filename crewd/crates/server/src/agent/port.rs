@@ -2565,6 +2565,36 @@ pub async fn admin_handoff_request(
     })
     .await
 }
+
+pub async fn secretary_snapshot(
+    st: &AppState,
+    w: crewd_collab::admin_case_execution::ExecutionWitness,
+) -> PortResult<crewd_proto::AdminSecretarySnapshot> {
+    read(st, move |c| {
+        crewd_collab::admin_secretary::bound_snapshot(c, &w, crewd_store::now_ms())
+    })
+    .await
+}
+pub async fn secretary_receipt(
+    st: &AppState,
+    w: crewd_collab::admin_case_execution::ExecutionWitness,
+    id: String,
+) -> PortResult<Option<crewd_proto::AdminSecretaryPublication>> {
+    read(st, move |c| {
+        crewd_collab::admin_secretary::publication_receipt(c, &w, &id, crewd_store::now_ms())
+    })
+    .await
+}
+pub async fn secretary_publish(
+    st: &AppState,
+    w: crewd_collab::admin_case_execution::ExecutionWitness,
+    p: crewd_proto::AdminSecretaryPublish,
+) -> PortResult<crewd_proto::AdminSecretaryPublication> {
+    write(st, move |tx| {
+        crewd_collab::admin_secretary::publish(tx, &w, p)
+    })
+    .await
+}
 pub async fn admin_custody_get(
     st: &AppState,
     session: &str,
