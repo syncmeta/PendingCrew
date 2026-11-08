@@ -19,6 +19,19 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     nonisolated static let credentialRevision = CrewdCredentialRevision()
     nonisolated let observationID = UUID()
     nonisolated static let changed = Notification.Name("PendingCrew.CrewdRemotePairsChanged.v1")
+    /// A completed original write, not permission to reconnect or replay work.
+    struct Change: Sendable {
+        enum Kind: Sendable, Equatable { case saved, removed }
+        let kind: Kind
+        let pairingID: UUID
+        let recordID: UUID
+        let revision: UUID
+        let sequence: UInt64
+    }
+    private func publishChange(_ recordID: UUID, kind: Change.Kind = .saved) {
+        let stamp = Self.credentialRevision.advance()
+        NotificationCenter.default.post(name: Self.changed, object: Change(kind: kind, pairingID: observationID, recordID: recordID, revision: stamp.id, sequence: stamp.sequence))
+    }
     private var injected: CrewdRemoteCredentialStore?
     private var enrollmentRemoval:(@CrewdCredentialActor (CrewdRemoteStoredPair,String)throws->Void)?
     private var credentials: CrewdRemoteCredentialStore {
@@ -45,8 +58,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         if pair.receipt != envelope {
             pair.receipt = envelope
             try credentials.save(pair)
-            Self.credentialRevision.advance()
-            NotificationCenter.default.post(name: Self.changed, object: nil)
+            publishChange(id)
         }
         return receipt
     }
@@ -61,8 +73,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
                   old.receipt==nil || old.receipt==pair.receipt else{throw CrewdRemoteError.wrongIdentity}
         }
         try credentials.save(pair)
-        Self.credentialRevision.advance()
-        NotificationCenter.default.post(name:Self.changed,object:nil)
+        publishChange(pair.id)
         return receipt
     }
     func verifyEnrollmentReceipt(_ pair:CrewdRemoteStoredPair,grantId:String,grantRevision:String)throws->CrewdRemoteReceipt {
@@ -116,8 +127,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         #endif
         let text = try CrewdRemoteText.encode(response)
         try credentials.save(CrewdRemoteStoredPair(id: id, invitation: envelope, response: response, privateKey: generated.privateKey, clientCertificate: generated.certificate))
-        Self.credentialRevision.advance()
-        NotificationCenter.default.post(name:Self.changed,object:nil)
+        publishChange(id)
         return Response(id: id, text: text)
     }
     func summaries() throws -> [CrewdRemotePairSummary] {
@@ -144,8 +154,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         }
         try credentials.remove(id)
         responses = responses.filter { $0.value.0 != id }
-        Self.credentialRevision.advance()
-        NotificationCenter.default.post(name:Self.changed,object:nil)
+        publishChange(id, kind: .removed)
     }
     struct Connection: Sendable {
         let invitation: CrewdRemoteInvitation
@@ -154,6 +163,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     }
     struct ComputerSnapshot: Sendable {
         let credentialRevision: UUID
+        let credentialSequence: UInt64
         let computers: [CrewdRemotePairSummary]
         let selectedReceipt: CrewdRemoteReceipt?
     }
@@ -162,9 +172,22 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     func computerSnapshot(selected: UUID?) throws -> ComputerSnapshot {
         let values = try summaries()
         let receipt = try selected.map { try self.receipt($0) }
-        return ComputerSnapshot(credentialRevision: Self.credentialRevision.current, computers: values, selectedReceipt: receipt)
+        let stamp = Self.credentialRevision.snapshot
+        return ComputerSnapshot(credentialRevision: stamp.id, credentialSequence: stamp.sequence, computers: values, selectedReceipt: receipt)
+    }
+    /// A known completed write is requalified only after the previous broker
+    /// worker terminates. A confirmed absent record is a normal list result;
+    /// an existing paired record still passes the original full receipt check.
+    func changedComputerSnapshot(_ recordID: UUID?) throws -> ComputerSnapshot {
+        let values = try summaries()
+        let receipt: CrewdRemoteReceipt?
+        if let id = recordID, values.contains(where: { $0.id == id && $0.paired }) { receipt = try self.receipt(id) }
+        else { receipt = nil }
+        let stamp = Self.credentialRevision.snapshot
+        return ComputerSnapshot(credentialRevision: stamp.id, credentialSequence: stamp.sequence, computers: values, selectedReceipt: receipt)
     }
     struct Selection: Sendable {
+        let credentialSequence: UInt64
         let credentialRevision: UUID
         let computer: CrewdRemotePairSummary
         let connection: Connection
@@ -179,7 +202,9 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
             paired: pair.receipt != nil, response: pair.response, receipt: pair.receipt)
         guard actual == expected, let envelope = pair.receipt else { throw CrewdRemoteError.wrongIdentity }
         let receipt = try validatedReceipt(envelope, pair: pair)
-        return Selection(credentialRevision: Self.credentialRevision.current, computer: actual, connection: try connection(pair: pair, invitation: invite, receipt: receipt))
+        let plan = try connection(pair: pair, invitation: invite, receipt: receipt)
+        let stamp = Self.credentialRevision.snapshot
+        return Selection(credentialSequence: stamp.sequence, credentialRevision: stamp.id, computer: actual, connection: plan)
     }
     func connection(_ id: UUID) throws -> Connection {
         let (pair, invitation, receipt) = try paired(id)
@@ -269,6 +294,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     static let shared = CrewdCredentialReadBroker()
     enum Key: Equatable {
         case computers(UUID, UUID?)
+        case changedComputers(UUID, UUID?)
         case selection(UUID, CrewdRemotePairSummary)
         case connection(UUID, UUID, CrewdRemoteReceipt)
         case forget(UUID, CrewdRemotePairSummary)
@@ -279,6 +305,16 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         case connection(CrewdRemotePairing.Connection)
         case forgotten
     }
+    struct ChangeCompletion {
+        let pairingID: UUID
+        let recordID: UUID?
+        let revision: UUID
+        let result: Result<CrewdRemotePairing.ComputerSnapshot, Error>
+    }
+    /// Live terminal fanout, not a completed-result/credential cache. It lets
+    /// already-pending windows consume the same qualified read even when one
+    /// observer's scheduled task has not yet entered the broker.
+    let changeCompletions = PassthroughSubject<ChangeCompletion, Never>()
     @Published private(set) var busy = false
     private var key: Key?
     private var revision: UUID?
@@ -287,6 +323,10 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
     private var deadlines: [UUID: Task<Void, Never>] = [:]
     private var worker: Task<Void, Never>?
 
+    /// Read-only admission check. It never creates a worker or queues a read.
+    func canObserve(_ requested: Key) -> Bool {
+        waiters.count < 64 && (operationID == nil || (key == requested && revision == CrewdRemotePairing.credentialRevision.current))
+    }
     func observe(_ requested: Key, timeout: TimeInterval,
         operation: @escaping @CrewdCredentialActor @Sendable () throws -> Value) async throws -> Value {
         let observer = UUID()
@@ -324,7 +364,17 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         guard operationID == token else { return }
         let observing = Array(waiters.values)
         waiters.removeAll(); deadlines.values.forEach { $0.cancel() }; deadlines.removeAll()
+        let completedKey = key, completedRevision = revision
         operationID = nil; key = nil; revision = nil; worker = nil; busy = false
+        if let completedKey, case .changedComputers(let owner, let record) = completedKey, let revision = completedRevision {
+            let snapshot: Result<CrewdRemotePairing.ComputerSnapshot, Error>
+            switch result {
+            case .success(.computers(let value)): snapshot = .success(value)
+            case .success: snapshot = .failure(CrewdRemoteError.wrongIdentity)
+            case .failure(let error): snapshot = .failure(error)
+            }
+            changeCompletions.send(.init(pairingID: owner, recordID: record, revision: revision, result: snapshot))
+        }
         for continuation in observing { continuation.resume(with: result) }
     }
 }
@@ -385,7 +435,14 @@ struct CrewdConnectionDeadlines {
 /// stamp before notifying so delayed notifications cannot cancel a newer choice.
 final class CrewdCredentialRevision: @unchecked Sendable {
     private let lock = NSLock()
+    struct Stamp: Sendable { let id: UUID; let sequence: UInt64 }
     private var epoch = UUID()
-    var current: UUID { lock.lock(); defer { lock.unlock() }; return epoch }
-    func advance() { lock.lock(); epoch = UUID(); lock.unlock() }
+    private var sequence: UInt64 = 0
+    var snapshot: Stamp { lock.lock(); defer { lock.unlock() }; return Stamp(id: epoch, sequence: sequence) }
+    var current: UUID { snapshot.id }
+    @discardableResult func advance() -> Stamp {
+        lock.lock(); defer { lock.unlock() }
+        precondition(sequence < UInt64.max)
+        sequence += 1; epoch = UUID(); return Stamp(id: epoch, sequence: sequence)
+    }
 }

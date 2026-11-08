@@ -51,7 +51,8 @@ final class BlockingVaultGate: @unchecked Sendable {
     let ids: [UUID]
     let bindings: [[String: String]]
     private let originals: [UUID: CrewdRemoteStoredPair]
-    init(gate: BlockingVaultGate) throws {
+    private let serverKey: Data
+    init(gate: BlockingVaultGate, portableHints: Bool = false) throws {
         let vault = BlockingMemoryVault(gate: gate)
         let coordinator = CrewdRemotePairing(credentials: vault)
         let signing = P256.Signing.PrivateKey()
@@ -64,7 +65,7 @@ final class BlockingVaultGate: @unchecked Sendable {
         var ids: [UUID] = [], bindings: [[String: String]] = [], originals: [UUID: CrewdRemoteStoredPair] = [:]
         for label in ["A", "B"] {
             let authority = UUID().uuidString.lowercased(), database = "bounded-offline-" + label
-            let invite = CrewdRemoteInvitation(invitationId: UUID().uuidString.lowercased(), server: .init(authorityId: authority, dbId: database, certificateDerBase64: der.base64EncodedString(), spkiSha256: pin), endpoint: .init(host: "127.0.0.1", port: 1), challenge: "offline-challenge-" + label, expiresAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(300)), computerLabel: "Offline " + label)
+            let invite = CrewdRemoteInvitation(invitationId: UUID().uuidString.lowercased(), server: .init(authorityId: authority, dbId: database, certificateDerBase64: der.base64EncodedString(), spkiSha256: pin), endpoint: .init(host: portableHints ? "bounded-" + label.lowercased() + ".invalid" : "127.0.0.1", port: 1), challenge: "offline-challenge-" + label, expiresAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(300)), computerLabel: "Offline " + label)
             let envelope = try CrewdRemoteCertificate.sign(invite, privateKey: signing.derRepresentation)
             let response = try coordinator.respondWithText(envelope, deviceLabel: "Offline QA")
             let pair = try vault.read(response.id)
@@ -75,9 +76,26 @@ final class BlockingVaultGate: @unchecked Sendable {
             originals[response.id] = try vault.read(response.id)
             ids.append(response.id); bindings.append(["authorityId": authority, "dbId": database, "grantId": grant, "grantRevision": "1"])
         }
-        self.pairing = coordinator; self.ids = ids; self.bindings = bindings; self.originals = originals
+        self.pairing = coordinator; self.ids = ids; self.bindings = bindings; self.originals = originals; self.serverKey = signing.derRepresentation
     }
     func barrier() {}
+    func replaceReceipt(_ summary: CrewdRemotePairSummary) throws {
+        guard let pair = originals[summary.id], let envelope = pair.receipt,
+              let bytes = Data(base64Encoded: envelope.payload) else { throw CheckFailure.failed("missing original receipt") }
+        let old = try JSONDecoder().decode(CrewdRemoteReceipt.self, from: bytes)
+        let next = CrewdRemoteReceipt(invitationId: old.invitationId, grantId: old.grantId, authorityId: old.authorityId,
+            dbId: old.dbId, serverSpkiSha256: old.serverSpkiSha256, clientSpkiSha256: old.clientSpkiSha256,
+            grantRevision: "2", acceptedAt: old.acceptedAt)
+        _ = try pairing.confirmReceipt(CrewdRemoteCertificate.sign(next, privateKey: serverKey), id: summary.id)
+    }
+    func independentPairingCopy() throws -> CrewdRemotePairing {
+        let copy = CrewdRemotePairing(credentials: BlockingMemoryVault(gate: BlockingVaultGate()))
+        for pair in originals.values {
+            let receipt = try JSONDecoder().decode(CrewdRemoteReceipt.self, from: Data(base64Encoded: pair.receipt!.payload)!)
+            _ = try copy.adoptEnrollment(pair, grantId: receipt.grantId, grantRevision: receipt.grantRevision)
+        }
+        return copy
+    }
     /// Real production writes in the in-memory vault: A → absent → exactly A.
     func credentialABA(_ summary: CrewdRemotePairSummary) throws {
         guard let pair = originals[summary.id], let envelope = pair.receipt,
@@ -87,11 +105,22 @@ final class BlockingVaultGate: @unchecked Sendable {
         _ = try pairing.adoptEnrollment(pair, grantId: receipt.grantId, grantRevision: receipt.grantRevision)
     }
 }
+final class PublicChangeCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var event: CrewdRemotePairing.Change?
+    func record(_ notification: Notification) {
+        guard let change = notification.object as? CrewdRemotePairing.Change, change.kind == .removed else { return }
+        lock.lock(); event = change; lock.unlock()
+    }
+    var value: CrewdRemotePairing.Change? { lock.lock(); defer { lock.unlock() }; return event }
+}
 @MainActor final class HintGate {
     var started = false, finished = false, applied = false
+    private var currentCheck: (@MainActor () -> Bool)?
+    var scopeIsCurrent: Bool { currentCheck?() == true }
     private var continuation: CheckedContinuation<Void, Never>?
     func save(_ host: ApplePortableHost, current: @escaping @MainActor () -> Bool) async {
-        started = true
+        currentCheck = current; started = true
         await withCheckedContinuation { continuation = $0 }
         applied = current(); finished = true
     }
@@ -126,7 +155,8 @@ final class BlockingVaultGate: @unchecked Sendable {
         let root = URL(fileURLWithPath: CommandLine.arguments[1]), scenario = CommandLine.arguments[2]
         setenv("PENDINGCREW_CREWD_DATA_DIR", root.appendingPathComponent("local").path, 1)
         let gate = BlockingVaultGate(), broker = CrewdCredentialReadBroker(), hint = HintGate()
-        let fixture = try await CredentialFixture(gate: gate)
+        let portableHints = ["hint-blocked", "hint-scope-cancel", "cross-window-hint-invalidation"].contains(scenario)
+        let fixture = try await CredentialFixture(gate: gate, portableHints: portableHints)
         let ids = await fixture.ids, pairing = fixture.pairing, bindings = await fixture.bindings
         let publicBindings = ["remote-a.sock": bindings[0], "remote-b.sock": bindings[1]]
         try JSONSerialization.data(withJSONObject: publicBindings).write(to: root.appendingPathComponent("public-bindings.json"))
@@ -135,7 +165,7 @@ final class BlockingVaultGate: @unchecked Sendable {
         let local = CrewdWorkspace(dataDirectory: localRoot, authorityRecordID: namespace)
         try await local.client.connect(path: localRoot.appendingPathComponent("crewd.sock").path)
         let factory = WindowFactory(root: root, local: local, ids: ids)
-        var limits = CrewdConnectionDeadlines(); limits.credential = 0.12; limits.connection = 1.5; limits.journal = 0.15; limits.hostHint = 0.04
+        var limits = CrewdConnectionDeadlines(); limits.credential = 0.12; limits.connection = 1.5; limits.journal = 0.15; limits.hostHint = scenario == "cross-window-hint-invalidation" ? 10 : 0.04
         let window = CrewdRemoteWindow(pairing: pairing, broker: broker, deadlines: limits, factories: factory.factories())
         let model = AppModel(window: window, directory: { localRoot }, bindDrafts: { _ in })
         var other: CrewdRemoteWindow?
@@ -144,6 +174,23 @@ final class BlockingVaultGate: @unchecked Sendable {
         let rootJournal = localRoot.appendingPathComponent("frontend-presentation/unknown-submissions")
         var result: Error?
         do {
+            // Default production windows share the same pairing owner; separate
+            // injected stores below retain distinct owner IDs without vault IO.
+            let sharedA = CrewdRemoteWindow(), sharedB = CrewdRemoteWindow()
+            try check(sharedA.pairing.observationID == CrewdRemotePairing.shared.observationID && sharedB.pairing.observationID == sharedA.pairing.observationID,
+                "default cross-window pairing scope changed")
+            sharedA.close(); sharedB.close()
+            if portableHints {
+                let values = try await pairing.summaries(), value = values.first { $0.id == ids[0] }!
+                let host = try ApplePortableHost(displayName: value.name, endpoint: URL(string: "tls://" + value.endpoint.host + ":1")!,
+                    transportAuthorityID: bindings[0]["authorityId"]!, databaseID: bindings[0]["dbId"]!, verifiedSPKI: value.pin)
+                try check(host.endpoint.host?.hasSuffix(".invalid") == true, "hint fixture did not qualify original portable-host constructor")
+                var refused = false
+                do { _ = try ApplePortableHost(displayName: value.name, endpoint: URL(string: "tls://127.0.0.1:1")!,
+                    transportAuthorityID: bindings[0]["authorityId"]!, databaseID: bindings[0]["dbId"]!, verifiedSPKI: value.pin) }
+                catch { refused = true }
+                try check(refused, "original loopback portable-host rejection was weakened")
+            }
             await model.connectCrewdAuthority()
             try await until({ model.crewdBackend?.workspace === local }, "Local backend did not qualify")
             try check(local.client.readyForWork && local.originalJournalReady, "Local skipped actual hello/history gates")
@@ -155,11 +202,16 @@ final class BlockingVaultGate: @unchecked Sendable {
                 try check(local.messageDrafts.text(for: draft) == "UNSENT ORIGINAL", "original draft changed")
                 try check(try journal.unknownRecords().contains { $0.id == unknown.id }, "original unknown receipt lost")
             }
-            if scenario == "refresh-coalesced" || scenario == "close-pending" {
+            if scenario == "refresh-coalesced" || scenario == "close-pending" || scenario == "cancel-list-observation" {
                 gate.arm("records"); let before = gate.count("records")
                 let a = Task { await window.refresh() }, b = Task { await window.refresh() }
                 try await until({ gate.waiting }, "synchronous vault never entered")
                 if scenario == "close-pending" { window.close() }
+                else if scenario == "cancel-list-observation" {
+                    window.cancelComputerListObservation()
+                    let ar = await a.value, br = await b.value
+                    try check(!ar && !br && broker.busy && gate.waiting && !window.observingComputers, "ordinary list cancel claimed synchronous completion")
+                }
                 else {
                     let aResult = await a.value, bResult = await b.value
                     try check(!aResult && !bResult && broker.busy && gate.waiting, "observer timeout claimed underlying completion")
@@ -174,11 +226,15 @@ final class BlockingVaultGate: @unchecked Sendable {
                 try preserved()
             } else {
                 let loaded = await window.refresh(); try check(loaded, "initial in-memory list failed")
-                if scenario == "cross-window-credential-forget" {
+                if ["cross-window-credential-forget", "cross-window-credential-replace", "cross-window-scope-isolation", "cross-window-hint-invalidation"].contains(scenario) {
                     // A owns the actual production broker/Pairing.forget call.
                     // Only the final synchronous return is controlled; B uses
                     // its real notification sink, Window, AppModel and journal.
-                    let second = CrewdRemoteWindow(pairing: pairing, broker: broker, deadlines: limits, factories: factory.factories())
+                    let secondPairing: CrewdRemotePairing
+                    if scenario == "cross-window-scope-isolation" { secondPairing = try await fixture.independentPairingCopy() }
+                    else { secondPairing = pairing }
+                    if scenario == "cross-window-hint-invalidation" { factory.hint = hint }
+                    let second = CrewdRemoteWindow(pairing: secondPairing, broker: broker, deadlines: limits, factories: factory.factories())
                     other = second
                     let secondModel = AppModel(window: second, directory: { localRoot }, bindDrafts: { _ in })
                     let secondLoaded = await second.refresh()
@@ -188,17 +244,26 @@ final class BlockingVaultGate: @unchecked Sendable {
                     guard let original = second.workspace, let scope = original.presentationScope else { throw CheckFailure.failed("B original workspace/scope absent") }
                     try check(original.client.readyForWork && original.originalJournalReady, "B skipped real connection or journal")
                     let originalSummary = window.computers.first { $0.id == ids[0] }!
+                    if scenario == "cross-window-hint-invalidation" {
+                        try await until({ hint.started }, "B original host hint was not running")
+                        try check(hint.scopeIsCurrent, "original host-hint lease was not qualified before invalidation")
+                    }
                     let remoteDraft = CrewdDrafts.Context.message(crew: "existing-crew", channel: "existing-channel", session: "")
                     original.messageDrafts.set("UNSENT REMOTE ORIGINAL", for: remoteDraft)
                     let remoteJournal = try CrewdPresentationJournal(root: rootJournal, scope: scope)
                     let remoteUnknown = try remoteJournal.prepare(method: "session.resume", params: .object(["sessionId": .string("existing-remote-session")]), crew: "existing-crew")
-                    var delivered = 0
+                    var delivered = 0, aDelivered = 0
                     second.credentialChangeObservedForQA = { delivered += 1 }
+                    window.credentialChangeObservedForQA = { aDelivered += 1 }
                     let completionGate = BlockingVaultGate(); writerGate = completionGate
                     completionGate.arm("after-original-forget-notification")
+                    let replace = scenario == "cross-window-credential-replace"
+                    let key: CrewdCredentialReadBroker.Key = replace ? .selection(pairing.observationID, originalSummary) : .forget(pairing.observationID, originalSummary)
+                    let beforeRecords = gate.count("records"), beforeRead = gate.count(ids[0].uuidString)
                     controlledWriter = Task {
-                        try await broker.observe(.forget(pairing.observationID, originalSummary), timeout: 10) {
-                            try pairing.forget(originalSummary)
+                        try await broker.observe(key, timeout: 10) {
+                            if replace { try fixture.replaceReceipt(originalSummary) }
+                            else { try pairing.forget(originalSummary) }
                             // NotificationCenter.post has returned, so every
                             // real sink has been scheduled. Keep the original
                             // actor operation outstanding until the controller
@@ -209,19 +274,64 @@ final class BlockingVaultGate: @unchecked Sendable {
                     }
                     try await until({ completionGate.waiting }, "writer never reached its post-notification gate")
                     try await until({ delivered > 0 }, "B actual notification sink was not observed")
+                    try await until({ aDelivered > 0 }, "A actual notification sink was not observed")
                     try check(broker.busy && completionGate.waiting, "original writer finished before B notification delivery")
                     try check(delivered == 1, "unexpected extra credential notification")
-                    try check(original.isRetired || secondModel.crewdBackend == nil, "known removed credential left B's old write authority available while broker busy")
+                    if scenario == "cross-window-scope-isolation" {
+                        try check(second.pairing.observationID != pairing.observationID && !original.isRetired && secondModel.crewdBackend?.workspace === original,
+                            "different injected credential scope with the same record ID was invalidated")
+                    }else {
+                        try check(original.isRetired || secondModel.crewdBackend == nil, "known removed credential left B's old write authority available while broker busy")
+                        try check(original.isRetired && secondModel.crewdBackend == nil, "authority and backend did not synchronously revoke the same original lease")
+                    }
+                    try check(gate.count("records") == beforeRecords, "credential recheck queued before original writer terminal")
+                    if scenario == "cross-window-hint-invalidation" { try check(!hint.scopeIsCurrent && !hint.finished, "hint lease was not synchronously revoked with credential authority") }
                     try check(original.messageDrafts.text(for: remoteDraft) == "UNSENT REMOTE ORIGINAL", "B original draft lost on credential invalidation")
                     try check(try remoteJournal.unknownRecords().contains { $0.id == remoteUnknown.id }, "B original Unknown was removed")
                     completionGate.release()
                     if let controlledWriter { _ = try await controlledWriter.value }
                     try await until({ !broker.busy }, "original forget operation did not terminate")
                     await fixture.barrier()
-                    try await until({ second.workspace == nil && second.selected == nil && secondModel.crewdBackend == nil }, "B did not retire removed original pairing after writer completion")
-                    try check(second.retainedWorkspaces.contains { $0 === original }, "removed credential discarded original B input scope")
+                    if scenario == "cross-window-scope-isolation" {
+                        try check(second.workspace === original && secondModel.crewdBackend?.workspace === original && original.client.readyForWork, "unrelated injected scope retired after another scope's worker completed")
+                    }else {
+                        try await until({ second.workspace == nil && second.selected == nil && secondModel.crewdBackend == nil }, "B did not retire removed original pairing after writer completion")
+                        try check(second.retainedWorkspaces.contains { $0 === original }, "removed credential discarded original B input scope")
+                    }
+                    try await until({ gate.count("records") > beforeRecords && !broker.busy && !second.observingComputers && !window.observingComputers }, "known change did not receive its bounded post-terminal qualification")
+                    await fixture.barrier()
+                    try check(gate.count("records") == beforeRecords + 1, "cross-window known-change recheck was duplicated")
+                    if replace {
+                        try check(second.computers.first { $0.id == ids[0] }?.receipt != originalSummary.receipt, "replacement receipt was not refreshed from original credential authority")
+                        try check(gate.count(ids[0].uuidString) > beforeRead, "existing replacement skipped real credential validation")
+                    }
+                    if scenario == "cross-window-hint-invalidation" {
+                        hint.release(); try await until({ hint.finished }, "original hint did not terminate")
+                        try check(!hint.applied, "revoked credential lease allowed late host-hint publication")
+                    }
                     try check(original.messageDrafts.text(for: remoteDraft) == "UNSENT REMOTE ORIGINAL", "B draft changed after completion")
                     try check(try remoteJournal.unknownRecords().contains { $0.id == remoteUnknown.id }, "B original Unknown was replayed or removed after completion")
+                    try preserved()
+                } else if scenario == "late-credential-notification" {
+                    let capture = PublicChangeCapture()
+                    let observer = NotificationCenter.default.addObserver(forName: CrewdRemotePairing.changed, object: nil, queue: nil) { capture.record($0) }
+                    let original = window.computers.first { $0.id == ids[0] }!
+                    var incorporated = 0; window.credentialChangeObservedForQA = { incorporated += 1 }
+                    try await fixture.credentialABA(original)
+                    NotificationCenter.default.removeObserver(observer)
+                    try await until({ incorporated >= 2 && !broker.busy && !window.observingComputers &&
+                        window.validatedComputerSequenceForQA == CrewdRemotePairing.credentialRevision.snapshot.sequence }, "post-ABA qualification did not settle")
+                    await model.connectCrewdAuthority(computerID: ids[0])
+                    try await until({ window.selected == ids[0] && model.crewdBackend?.workspace === window.workspace }, "fresh post-ABA selection did not qualify")
+                    let fresh = window.workspace, records = gate.count("records")
+                    guard let old = capture.value else { throw CheckFailure.failed("actual original removal event not captured") }
+                    var delivered = 0; window.credentialChangeObservedForQA = { delivered += 1 }
+                    NotificationCenter.default.post(name: CrewdRemotePairing.changed, object: old)
+                    try await until({ delivered == 1 }, "late actual event was not delivered")
+                    await fixture.barrier()
+                    try check(window.workspace === fresh && fresh?.isRetired == false && model.crewdBackend?.workspace === fresh,
+                        "late old notification revoked a newer qualified selection")
+                    try check(gate.count("records") == records, "late incorporated notification manufactured another qualification read")
                     try preserved()
                 } else if scenario == "coalesced-two-windows" {
                     let second = CrewdRemoteWindow(pairing: pairing, broker: broker, deadlines: limits, factories: factory.factories()); other = second

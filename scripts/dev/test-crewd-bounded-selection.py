@@ -7,7 +7,7 @@ import argparse, hashlib, json, os, pathlib, socket, subprocess, tempfile, threa
 CASES = ['credential-timeout', 'credential-cancel-local-late-success',
          'credential-cancel-local-late-failure', 'different-target-busy',
          'refresh-coalesced', 'coalesced-two-windows', 'close-pending',
-         'late-connection-new-attempt', 'credential-epoch-aba', 'connection-timeout', 'journal-timeout', 'journal-failure', 'hint-blocked', 'hint-scope-cancel', 'cross-window-credential-forget']
+         'late-connection-new-attempt', 'credential-epoch-aba', 'connection-timeout', 'journal-timeout', 'journal-failure', 'hint-blocked', 'hint-scope-cancel', 'cross-window-credential-forget', 'cross-window-credential-replace', 'cross-window-scope-isolation', 'cross-window-hint-invalidation', 'late-credential-notification', 'cancel-list-observation']
 SOURCES = ['Sources/CrewdRemote/CrewdRemotePairing.swift', 'Sources/CrewdRemote/CrewdRemoteTransport.swift',
            'Sources/CrewdRemote/CrewdRemoteWindow.swift', 'Sources/Stores/AppModel.swift',
            'Sources/PersonalSync/CrewPersonalDraftService.swift',
@@ -16,6 +16,26 @@ SOURCES = ['Sources/CrewdRemote/CrewdRemotePairing.swift', 'Sources/CrewdRemote/
            'Sources/CrewdRemote/CrewdRemoteMobileRoot.swift']
 
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def check_ordinary_ios_entry(ios, ipad):
+    assert 'IOSRemotePairingView()' in ipad, 'ordinary iPad shell no longer binds this form'
+    marker = 'struct IOSRemotePairingView:View'
+    assert ios.count(marker) == 1, 'ordinary form was not uniquely found'
+    ordinary = ios.split(marker, 1)[1]
+    assert '.sheet(isPresented:$computers){computerList}' in ordinary
+    assert 'if let attempt=appModel.crewdWindow.attempt' in ordinary
+    assert 'ProgressView(attempt.phase.label)' in ordinary
+    for identifier in ['selection-progress', 'cancel-selection', 'cancel-read', 'back']:
+        assert 'pendingcrew.saved-computers.'+identifier in ordinary, 'ordinary UI control missing: '+identifier
+    assert 'appModel.cancelCrewdAuthoritySelection()' in ordinary
+    assert 'appModel.crewdWindow.cancelComputerListObservation()' in ordinary
+    assert '}.disabled(appModel.crewdWindow.credentialBusy)' not in ordinary, 'whole ordinary row/navigation disabled by pending original worker'
+    assert '.disabled(!computer.paired && appModel.crewdWindow.credentialBusy)' in ordinary
+    assert 'choiceEpoch==token,!Task.isCancelled' in ordinary
+    assert 'workspace.originalJournalReady' in ordinary
+    assert 'choiceTask?.cancel()' in ordinary
+    return ordinary
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -33,6 +53,22 @@ def main():
         assert sha(root/entry['path']) == entry['afterSha256'], 'source packet mismatch: '+entry['path']
     out = a.output or pathlib.Path(tempfile.mkdtemp(prefix='pcw-bounded-selection-runtime-', dir='/private/tmp'))
     out.mkdir(exist_ok=True, parents=True)
+    ios = (root/'Sources/Views/IOSRemotePairingView.swift').read_text()
+    ipad = (root/'Sources/Views/IPadShell.swift').read_text()
+    ordinary = check_ordinary_ios_entry(ios, ipad)
+    # Retained legacy controls must never satisfy coverage of the real form.
+    mutations = [ios.split('struct IOSRemotePairingView:View', 1)[0]+'struct IOSRemotePairingView:View { }',
+                 ios.replace('pendingcrew.saved-computers.cancel-selection', 'legacy-only.cancel-selection')]
+    for changed in mutations:
+        rejected = False
+        try: check_ordinary_ios_entry(changed, ipad)
+        except AssertionError: rejected = True
+        assert rejected, 'ordinary-entry source negative control was not detected'
+    (out/'ordinary-ios-entry-source.json').write_text(json.dumps({
+        'layer': 'actual IPadShell→ordinary IOSRemotePairingView callsite and source-only control coverage; not UI runtime',
+        'iPadShellSHA256': sha(root/'Sources/Views/IPadShell.swift'),
+        'ordinaryFormSHA256': sha(root/'Sources/Views/IOSRemotePairingView.swift'),
+        'positive': True, 'negativeControls': 2, 'iOSRuntimeClaim': False}, indent=2)+'\n')
     fixture = out/'fixture.swift'
     original = root/'scripts/dev/fixtures/crewd-bounded-selection.swift'
     fixture.write_text(original.read_text().replace('@testable import PendingCrew\n', '@testable import '+a.module_name+'\n'))

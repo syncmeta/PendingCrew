@@ -9,6 +9,7 @@ import Combine
     @Published private(set) var crewdBackend: CrewdPendingCrewBackend?
     let crewdWindow: CrewdRemoteWindow
     private var authorityObservation: AnyCancellable?
+    private var authorityInvalidation: AnyCancellable?
     private var backendRefresh: Task<Void, Never>?
     private var backendRefreshAgain = false
     private var authorityInitializationAttempted = false
@@ -27,6 +28,10 @@ import Combine
         AppQuitLifecycle.shared.crewdExit = { [weak self] mode in try await self?.crewdWindow.exit(mode: mode) }
         AppQuitLifecycle.shared.crewdMayForceStop = { [weak self] in self?.crewdWindow.canForceManagedStop == true }
         #endif
+        authorityInvalidation = crewdWindow.authorityInvalidated.sink { [weak self] original in
+            guard let self, self.crewdBackend?.workspace === original else { return }
+            self.crewdBackend = nil; self.bindDrafts(nil)
+        }
         authorityObservation = crewdWindow.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
             self?.scheduleBackendRefresh()

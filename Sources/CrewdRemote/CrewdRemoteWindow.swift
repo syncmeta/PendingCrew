@@ -57,14 +57,32 @@ import Combine
     }
     private var refreshTask: Task<Bool, Never>?
     private var refreshID: UUID?
+    @Published private(set) var computerObservation: UUID?
+    var observingComputers: Bool { computerObservation != nil }
+    /// Synchronous invalidation reaches the backend before any deferred refresh.
+    let authorityInvalidated = PassthroughSubject<CrewdWorkspace, Never>()
+    private struct CredentialRecheck {
+        let revision: UUID
+        let sequence: UInt64
+        let recordID: UUID?
+    }
+    private var pendingCredentialRecheck: CredentialRecheck?
+    private var allowAutomaticCredentialRecheck = true
+    private var credentialRecheckTask: Task<Void, Never>?
+    private var closed = false
+    private var lastRemovedAuthority: (recordID: UUID, authority: UUID)?
     private var changes: AnyCancellable?
     private var busyChanges: AnyCancellable?
+    private var recheckCompletions: AnyCancellable?
     private var workspaceChanges: AnyCancellable?
     private var selectionTask: Task<Void, Never>?
     private var candidate: CrewdWorkspace?
     private var selectionEpoch = UUID()
     private var credentialEpoch = UUID()
     private var attemptCredentialRevision: UUID?
+    private var attemptCredentialSequence: UInt64?
+    private var selectedCredentialSequence: UInt64?
+    private var computerListSequence: UInt64 = 0
     private var selectedReceipt: CrewdRemoteReceipt?
     private var hintObservation: Task<Void, Never>?
     private var hintEpoch = UUID()
@@ -75,37 +93,131 @@ import Combine
     /// Diagnostic observation only; records delivery before existing guards.
     /// No state transition, suspension or credential operation is injected.
     var credentialChangeObservedForQA: (@MainActor () -> Void)?
+    var validatedComputerSequenceForQA: UInt64 { computerListSequence }
     #endif
     let pairing: CrewdRemotePairing
     init(pairing: CrewdRemotePairing = .shared, broker: CrewdCredentialReadBroker? = nil,
          deadlines: CrewdConnectionDeadlines = .init(), factories: Factories = .init()) {
         self.pairing = pairing; self.broker = broker ?? .shared; self.limits = deadlines; self.factories = factories
-        busyChanges = self.broker.$busy.sink { [weak self] in self?.credentialBusy = $0 }
+        busyChanges = self.broker.$busy.sink { [weak self] busy in
+            guard let self else { return }
+            self.credentialBusy = busy
+            if !busy { self.scheduleCredentialRecheck() }
+        }
+        recheckCompletions = self.broker.changeCompletions.sink { [weak self] completion in
+            self?.consumeCredentialCompletion(completion)
+        }
         #if !PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT
-        changes = NotificationCenter.default.publisher(for: CrewdRemotePairing.changed).sink { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                #if DEBUG
-                self.credentialChangeObservedForQA?()
-                #endif
-                guard self.computerListState == .loaded else { return }
-                if self.isSelecting {
-                    if let revision = self.attemptCredentialRevision, revision != CrewdRemotePairing.credentialRevision.current {
-                        self.cancelSelection()
-                        let message = "已存电脑记录在连接期间发生变化，电脑尚未切换；请核对后重新选择。"
-                        self.selectionFailure = message; self.error = message
-                    }
-                    return
-                }
-                guard !self.credentialBusy else { return }
-                await self.refresh()
-            }
+        changes = NotificationCenter.default.publisher(for: CrewdRemotePairing.changed).sink { [weak self] notification in
+            let change = notification.object as? CrewdRemotePairing.Change
+            Task { @MainActor in self?.credentialChanged(change) }
         }
         #endif
     }
+    private func credentialChanged(_ change: CrewdRemotePairing.Change?) {
+        #if DEBUG
+        credentialChangeObservedForQA?()
+        #endif
+        guard !closed, change == nil || change?.pairingID == pairing.observationID else { return }
+        // Unloaded windows still do no implicit credential access. A connected
+        // window or active explicit choice must never swallow a known change.
+        guard computerListState == .loaded || selected != nil || attempt != nil else { return }
+        let affectedSelection = selected != nil && (change == nil || (change?.recordID == selected && (change?.sequence ?? 0) > (selectedCredentialSequence ?? 0)))
+        let affectedAttempt = attempt?.target != nil && (change == nil || (change?.recordID == attempt?.target && (change?.sequence ?? 0) > (attemptCredentialSequence ?? 0)))
+        // A notification may arrive after a newer original read/selection. It
+        // cannot revoke that freshly qualified lease or manufacture a reread.
+        if let change, !affectedSelection, !affectedAttempt, change.sequence <= computerListSequence { return }
+        allowAutomaticCredentialRecheck = true
+        let recheckID = affectedSelection ? selected : (affectedAttempt ? attempt?.target : change?.recordID)
+        let stamp = CrewdRemotePairing.credentialRevision.snapshot
+        pendingCredentialRecheck = .init(revision: stamp.id, sequence: stamp.sequence,
+            recordID: affectedSelection || affectedAttempt ? recheckID : (pendingCredentialRecheck?.recordID ?? recheckID))
+        if let change, change.kind == .removed, change.sequence > computerListSequence,
+           !(selected == change.recordID && change.sequence <= (selectedCredentialSequence ?? 0)) { computers.removeAll { $0.id == change.recordID } }
+        if affectedAttempt {
+            cancelSelection()
+            let message = "已存电脑记录在连接期间发生变化，电脑尚未切换；请核对后重新选择。"
+            selectionFailure = message; error = message
+        }
+        if affectedSelection {
+            // No credential read or permission prompt is needed to disable a
+            // locally removed/replaced scope. Retirement keeps Unknown/drafts,
+            // releases this client only and never stops/resends business work.
+            if change?.kind == .removed, let id = selected { lastRemovedAuthority = (id, selectionEpoch) }
+            withdrawComputerListObservation()
+            retireSelected()
+            error = "这台电脑的已存记录已变化，原连接已保留供核对；请重新明确选择。"
+        }
+        scheduleCredentialRecheck()
+    }
+    private func consumeCredentialCompletion(_ completion: CrewdCredentialReadBroker.ChangeCompletion) {
+        guard !closed, completion.pairingID == pairing.observationID, let pending = pendingCredentialRecheck,
+              pending.revision == completion.revision, pending.recordID == completion.recordID else { return }
+        pendingCredentialRecheck = nil
+        switch completion.result {
+        case .success(let snapshot):
+            guard snapshot.credentialRevision == CrewdRemotePairing.credentialRevision.current else { return }
+            computers = snapshot.computers; computerListSequence = snapshot.credentialSequence; computerListState = .loaded
+        case .failure(let failure):
+            computerListState = .failed(failure.localizedDescription)
+            if !isSelecting, error == nil { error = failure.localizedDescription }
+        }
+        // A pending marker has no authority to install a connection, clear a
+        // selection failure, or publish another window's backend/history/hint.
+    }
+    private func scheduleCredentialRecheck() {
+        guard !closed, allowAutomaticCredentialRecheck, !isSelecting, credentialRecheckTask == nil, let pending = pendingCredentialRecheck else { return }
+        let key = CrewdCredentialReadBroker.Key.changedComputers(pairing.observationID, pending.recordID)
+        // Joining the same post-write recheck is allowed. An unrelated live
+        // worker (including a timed-out writer) is never queued behind.
+        guard broker.canObserve(key) else { return }
+        credentialRecheckTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.credentialRecheckTask = nil; self.scheduleCredentialRecheck() }
+            guard !self.closed, !Task.isCancelled, self.allowAutomaticCredentialRecheck, !self.isSelecting,
+                  self.pendingCredentialRecheck?.revision == pending.revision, self.broker.canObserve(key) else { return }
+            let epoch = self.credentialEpoch, authority = self.selectionEpoch, observation = UUID()
+            self.computerObservation = observation
+            defer { if self.computerObservation == observation { self.computerObservation = nil } }
+            self.pendingCredentialRecheck = nil // one bounded observation for this known change
+            do {
+                let value = try await self.broker.observe(key, timeout: self.limits.credential) { [pairing = self.pairing] in
+                    .computers(try pairing.changedComputerSnapshot(pending.recordID))
+                }
+                try Task.checkCancellation()
+                guard !self.closed, self.credentialEpoch == epoch, self.selectionEpoch == authority,
+                      self.pendingCredentialRecheck == nil,
+                      case .computers(let snapshot) = value,
+                      snapshot.credentialRevision == CrewdRemotePairing.credentialRevision.current else { return }
+                self.computers = snapshot.computers; self.computerListSequence = snapshot.credentialSequence; self.computerListState = .loaded
+                // This is a list/qualification refresh, never an authority install.
+                // In particular it cannot erase the explicit selection failure.
+            } catch {
+                if let observed = error as? CrewdConnectionObservationError, case .busy = observed {
+                    if self.pendingCredentialRecheck == nil { self.pendingCredentialRecheck = pending }
+                    return
+                }
+                guard !self.closed, self.credentialEpoch == epoch, self.selectionEpoch == authority,
+                      self.pendingCredentialRecheck == nil, !Task.isCancelled else { return }
+                self.computerListState = .failed(error.localizedDescription)
+                if self.error == nil { self.error = error.localizedDescription }
+            }
+        }
+    }
     @discardableResult func refresh() async -> Bool {
+        guard !closed else { return false }
         if let task = refreshTask { return await task.value }
         guard !isSelecting else { return false }
+        // An explicit read may resume a cancelled pending notification batch,
+        // and shares an already running qualification instead of another key.
+        allowAutomaticCredentialRecheck = true
+        if pendingCredentialRecheck != nil || credentialRecheckTask != nil {
+            let sequence = pendingCredentialRecheck?.sequence ?? CrewdRemotePairing.credentialRevision.snapshot.sequence
+            scheduleCredentialRecheck()
+            if let task = credentialRecheckTask { await task.value }
+            guard !closed, !isSelecting, pendingCredentialRecheck == nil, computerListSequence >= sequence else { return false }
+            if case .loaded = computerListState { return true }; return false
+        }
         let token = UUID(), epoch = credentialEpoch, authority = selectionEpoch, originalSelected = selected
         let task = Task { [self] in
             #if PENDINGCREW_LOCAL_MAC && !PENDINGCREW_REMOTE_PRODUCT
@@ -128,7 +240,7 @@ import Combine
                         if pass == 0, until.timeIntervalSinceNow > 0 { continue }
                         throw CrewdConnectionObservationError.changed
                     }
-                    computers = snapshot.computers; computerListState = .loaded; error = nil
+                    computers = snapshot.computers; computerListSequence = snapshot.credentialSequence; computerListState = .loaded; error = nil
                     if selected != nil, snapshot.selectedReceipt != selectedReceipt { retireSelected() }
                     return true
                 }
@@ -144,15 +256,16 @@ import Combine
             }
             #endif
         }
-        refreshID = token; refreshTask = task
+        refreshID = token; refreshTask = task; computerObservation = token
         let result = await task.value
         if refreshID == token { refreshTask = nil; refreshID = nil }
+        if computerObservation == token { computerObservation = nil }
         return result
     }
     private func retireCurrent() {
         selectionEpoch = UUID(); hintEpoch = UUID(); hintObservation?.cancel(); hintObservation = nil
         workspaceChanges?.cancel(); workspaceChanges = nil
-        if let old = workspace { old.retire(); retainedWorkspaces.append(old) }
+        if let old = workspace { old.retire(); authorityInvalidated.send(old); retainedWorkspaces.append(old) }
     }
     private func install(_ next: CrewdWorkspace) {
         workspace = next
@@ -160,17 +273,28 @@ import Combine
             guard let self, let next, self.workspace === next else { return }; self.objectWillChange.send()
         }
     }
-    private func retireSelected() { retireCurrent(); workspace = nil; selected = nil; selectedReceipt = nil }
+    private func retireSelected() { retireCurrent(); workspace = nil; selected = nil; selectedReceipt = nil; selectedCredentialSequence = nil }
     /// This ends observation only. A pending synchronous credential operation
     /// still owns the process broker, and cannot be repeated or redirected.
+    func cancelComputerListObservation() {
+        allowAutomaticCredentialRecheck = false
+        withdrawComputerListObservation()
+    }
+    private func withdrawComputerListObservation() {
+        credentialEpoch = UUID(); refreshTask?.cancel(); refreshTask = nil; refreshID = nil
+        credentialRecheckTask?.cancel(); computerObservation = nil
+    }
     func cancelSelection() {
         credentialEpoch = UUID(); selectionTask?.cancel(); selectionTask = nil
         refreshTask?.cancel(); refreshTask = nil; refreshID = nil
+        if computerObservation != nil, credentialRecheckTask == nil { computerObservation = nil }
         if let candidate, candidate !== workspace { candidate.retire() }
-        candidate = nil; attempt = nil; attemptCredentialRevision = nil
+        candidate = nil; attempt = nil; attemptCredentialRevision = nil; attemptCredentialSequence = nil
+        scheduleCredentialRecheck()
     }
     func dismissSelectionFailure() { selectionFailure = nil }
     func close() {
+        closed = true; pendingCredentialRecheck = nil; credentialRecheckTask?.cancel(); credentialRecheckTask = nil
         cancelSelection(); hintEpoch = UUID(); hintObservation?.cancel(); hintObservation = nil
         retireSelected()
     }
@@ -201,7 +325,7 @@ import Combine
 
     private func begin(_ target: UUID?, phase: SelectionPhase, duration: TimeInterval) -> UUID {
         cancelSelection(); selectionFailure = nil; selectionNotice = nil; error = nil
-        let token = UUID(); attemptCredentialRevision = target == nil ? nil : CrewdRemotePairing.credentialRevision.current; attempt = .init(id: token, target: target, phase: phase, deadline: Date().addingTimeInterval(duration))
+        let token = UUID(); let stamp = CrewdRemotePairing.credentialRevision.snapshot; attemptCredentialRevision = target == nil ? nil : stamp.id; attemptCredentialSequence = target == nil ? nil : stamp.sequence; attempt = .init(id: token, target: target, phase: phase, deadline: Date().addingTimeInterval(duration))
         return token
     }
     private func advance(_ token: UUID, _ phase: SelectionPhase, duration: TimeInterval) throws {
@@ -214,7 +338,8 @@ import Combine
     }
     private func finish(_ token: UUID) {
         guard attempt?.id == token else { return }
-        candidate = nil; attempt = nil; attemptCredentialRevision = nil; selectionTask = nil
+        candidate = nil; attempt = nil; attemptCredentialRevision = nil; attemptCredentialSequence = nil; selectionTask = nil
+        scheduleCredentialRecheck()
     }
     private func fail(_ token: UUID, _ failure: Error) {
         guard attempt?.id == token else { return }
@@ -250,6 +375,7 @@ import Combine
         }
     }
     func select(_ id: UUID, journalRoot: URL? = nil) async {
+        guard !closed else { return }
         let token = begin(id, phase: .credential, duration: limits.credential)
         let task = Task { [self] in
             do {
@@ -264,7 +390,7 @@ import Combine
                     }
                     try requireAttempt(token)
                     guard case .computers(let snapshot) = value else { throw CrewdRemoteError.wrongIdentity }
-                    computers = snapshot.computers; computerListState = .loaded
+                    computers = snapshot.computers; computerListSequence = snapshot.credentialSequence; computerListState = .loaded
                     // Detect a real changed original receipt before admitting a
                     // new candidate; it is not authorized by the list label.
                     if oldSelected != nil, snapshot.selectedReceipt != selectedReceipt { retireSelected() }
@@ -286,6 +412,7 @@ import Combine
                 try await qualify(next, root: root, token: token)
                 try requireAttempt(token)
                 if workspace !== next { retireCurrent(); selected = id; selectedReceipt = receipt; install(next) }
+                selectedCredentialSequence = qualified.credentialSequence
                 finish(token)
                 rememberHost(qualified.computer, receipt: receipt, workspace: next)
             } catch { fail(token, error) }
@@ -297,6 +424,7 @@ import Combine
     }
     #if os(macOS)
     func selectLocal(directory: URL, journalRoot: URL? = nil) async {
+        guard !closed else { return }
         let token = begin(nil, phase: .connection, duration: limits.connection)
         let task = Task { [self] in
             do {
@@ -309,7 +437,7 @@ import Combine
                 }
                 try await qualify(next, root: journalRoot ?? directory.appendingPathComponent("frontend-presentation/unknown-submissions"), token: token)
                 try requireAttempt(token)
-                if workspace !== next { retireCurrent(); selected = nil; selectedReceipt = nil; install(next) }
+                if workspace !== next { retireCurrent(); selected = nil; selectedReceipt = nil; selectedCredentialSequence = nil; install(next) }
                 finish(token)
             } catch { fail(token, error) }
         }
@@ -328,9 +456,17 @@ import Combine
             _ = try await broker.observe(.forget(pairing.observationID, computer), timeout: limits.credential) { [pairing] in
                 try pairing.forget(computer); return .forgotten
             }
-            guard epoch == credentialEpoch, authority == selectionEpoch, !Task.isCancelled else { return false }
+            guard !closed, !Task.isCancelled else { return false }
+            guard epoch == credentialEpoch, authority == selectionEpoch else {
+                // The real completed notification may already have retired this
+                // very scope. Report that known original delete, never mutate a
+                // replacement selection or call an additional credential read.
+                return lastRemovedAuthority?.recordID == computer.id && lastRemovedAuthority?.authority == authority
+            }
             if selected == computer.id { retireSelected() }
-            _ = await refresh(); return true
+            // The original completed-change notification owns the single
+            // deferred qualification read, including cross-window coalescing.
+            return true
         } catch {
             if epoch == credentialEpoch, authority == selectionEpoch, !Task.isCancelled { self.error = error.localizedDescription }
             return false

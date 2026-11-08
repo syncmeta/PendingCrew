@@ -76,7 +76,7 @@ struct IOSLegacyRemotePairingView: View {
                                     guard epoch == token else { return }
                                     await crewStore.refreshList()
                                     guard epoch == token else { return }
-                                    status = appModel.crewdWindow.workspace?.client.connected == true ? "已安全连接。" : appModel.backendConfigurationError
+                                    status = appModel.crewdWindow.selected == id && appModel.crewdBackend?.workspace.authorityRecordID == id && appModel.crewdBackend?.workspace.originalJournalReady == true ? "已安全连接。" : appModel.backendConfigurationError
                                 }
                             }
                         }.disabled(busy || confirmation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -170,10 +170,13 @@ struct IOSRemotePairingView:View {
     @State private var computers=false
     @State private var pending:CrewdRemotePairSummary?
     @State private var removing:CrewdRemotePairSummary?
+    @State private var choiceTask:Task<Void,Never>?
+    @State private var choiceEpoch=UUID()
     var body:some View {
         CrewdEnrollmentView(completed:choose)
             .safeAreaInset(edge:.bottom){Button("已存电脑与草稿"){computers=true}.padding(8)}
             .sheet(isPresented:$computers){computerList}
+            .onDisappear{invalidateChoice();appModel.crewdWindow.cancelComputerListObservation()}
             .sheet(item:$pending){computer in
                 CrewdRemotePairingView(pairing:appModel.crewdWindow.pairing,pending:computer.id,completed:choose)
             }
@@ -181,6 +184,23 @@ struct IOSRemotePairingView:View {
     private var computerList:some View {
         NavigationStack {
             List {
+                if let attempt=appModel.crewdWindow.attempt {
+                    Section("正在选择电脑") {
+                        ProgressView(attempt.phase.label)
+                            .accessibilityIdentifier("pendingcrew.saved-computers.selection-progress")
+                        Button("取消本次选择"){cancelVisibleSelection()}
+                            .accessibilityIdentifier("pendingcrew.saved-computers.cancel-selection")
+                        Text("当前连接和原输入会保留，确认完成后才会切换。").font(.caption).foregroundStyle(.secondary)
+                    }
+                }else if appModel.crewdWindow.observingComputers {
+                    Section {
+                        ProgressView("正在读取已存电脑…")
+                        Button("结束等待"){appModel.crewdWindow.cancelComputerListObservation()}
+                            .accessibilityIdentifier("pendingcrew.saved-computers.cancel-read")
+                    }
+                }else if appModel.crewdWindow.credentialBusy {
+                    Section {Text("上一项电脑确认仍在等待系统处理；可以返回，原连接和输入已保留。").foregroundStyle(.secondary)}
+                }
                 Section("已存电脑") {
                     if let error=appModel.crewdWindow.error{Text(error).foregroundStyle(.red)}
                     if let error=appModel.computerSelectionError{Text(error).foregroundStyle(.red)}
@@ -197,19 +217,24 @@ struct IOSRemotePairingView:View {
                     ForEach(appModel.crewdWindow.computers){computer in
                         HStack {
                             Button {
-                                if computer.paired{choose(computer.id)}else{computers=false;pending=computer}
+                                if computer.paired{choose(computer.id)}else{invalidateChoice();appModel.crewdWindow.cancelComputerListObservation();computers=false;pending=computer}
                             }label:{VStack(alignment:.leading){Text(computer.name);Text(computer.paired ? "\(computer.endpoint.host):\(computer.endpoint.port)":"原文件配对等待确认").font(.caption).foregroundStyle(.secondary)}}
                             .buttonStyle(.borderless)
+                            .disabled(!computer.paired && appModel.crewdWindow.credentialBusy)
                             Spacer()
                             Button("移除",role:.destructive){removing=computer}.buttonStyle(.borderless)
-                        }.disabled(appModel.crewdWindow.credentialBusy)
+                                .disabled(appModel.crewdWindow.credentialBusy || appModel.connectingAuthority)
+                        }
                     }
                 }
                 Section{CrewPersonalHostDirectory()}
                 Section{CrewPersonalDraftArchive()}
             }
             .navigationTitle("已存电脑")
-            .toolbar{ToolbarItem(placement:.cancellationAction){Button("返回添加电脑"){computers=false}}}
+            .toolbar{ToolbarItem(placement:.cancellationAction){
+                Button("返回添加电脑"){invalidateChoice();appModel.crewdWindow.cancelComputerListObservation();computers=false}
+                    .accessibilityIdentifier("pendingcrew.saved-computers.back")
+            }}
             .task{await appModel.crewdWindow.refresh()}
             .alert("从本设备移除已存电脑",isPresented:Binding(get:{removing != nil},set:{if !$0{removing=nil}}),presenting:removing){computer in
                 Button("移除配对凭据",role:.destructive){Task{_ = await appModel.crewdWindow.forget(computer)};removing=nil}
@@ -217,26 +242,35 @@ struct IOSRemotePairingView:View {
             }message:{computer in Text(computer.name+" · "+computer.endpoint.host+":"+String(computer.endpoint.port)+"\n只移除本设备保存的配对凭据与其私钥恢复副本，不会删除电脑数据或撤销服务器授权。")}
         }
     }
-    private func choose(_ id:UUID){Task{
-        await appModel.connectCrewdAuthority(computerID:id)
-        guard !Task.isCancelled, appModel.crewdWindow.selected == id,
-              let workspace=appModel.crewdBackend?.workspace,
-              workspace.authorityRecordID == id,
-              workspace.client.readyForWork else {
-            computers=true
-            return
+    @MainActor private func invalidateChoice(){
+        choiceEpoch=UUID();choiceTask?.cancel();choiceTask=nil
+    }
+    @MainActor private func cancelVisibleSelection(){
+        invalidateChoice();appModel.cancelCrewdAuthoritySelection();appModel.crewdWindow.cancelComputerListObservation()
+    }
+    @MainActor private func choose(_ id:UUID){
+        invalidateChoice();pending=nil;let token=UUID();choiceEpoch=token
+        computers=true // Keep the actual progress/cancel surface reachable.
+        choiceTask=Task{
+            defer{if choiceEpoch==token{choiceTask=nil}}
+            await appModel.connectCrewdAuthority(computerID:id)
+            guard choiceEpoch==token,!Task.isCancelled else{return}
+            guard appModel.crewdWindow.selected == id,
+                  let workspace=appModel.crewdBackend?.workspace,
+                  workspace.authorityRecordID == id,
+                  workspace.client.readyForWork,workspace.originalJournalReady else {
+                computers=true;return
+            }
+            let connection=workspace.client.connectionEpoch
+            await crewStore.refreshList()
+            guard choiceEpoch==token,!Task.isCancelled,appModel.crewdWindow.selected == id,
+                  appModel.crewdWindow.workspace === workspace,
+                  appModel.crewdBackend?.workspace === workspace,
+                  workspace.client.connectionEpoch == connection,
+                  workspace.client.readyForWork,workspace.originalJournalReady else{return}
+            guard crewStore.error == nil else{computers=true;return}
+            choiceTask=nil;computers=false;dismiss()
         }
-        let connection=workspace.client.connectionEpoch
-        await crewStore.refreshList()
-        // The same saved computer can reconnect while the list read suspends.
-        guard !Task.isCancelled, appModel.crewdWindow.selected == id,
-              appModel.crewdWindow.workspace === workspace,
-              appModel.crewdBackend?.workspace === workspace,
-              workspace.client.connectionEpoch == connection,
-              workspace.client.readyForWork else{return}
-        guard crewStore.error == nil else { computers=true; return }
-        computers=false
-        dismiss()
-    }}
+    }
 }
 #endif
