@@ -226,7 +226,7 @@ final class PublicChangeCapture: @unchecked Sendable {
                 try preserved()
             } else {
                 let loaded = await window.refresh(); try check(loaded, "initial in-memory list failed")
-                if ["cross-window-credential-forget", "cross-window-credential-replace", "cross-window-scope-isolation", "cross-window-hint-invalidation"].contains(scenario) {
+                if ["cross-window-credential-forget", "cross-window-credential-replace", "cross-window-scope-isolation", "cross-window-hint-invalidation", "cross-window-cancelled-fanout"].contains(scenario) {
                     // A owns the actual production broker/Pairing.forget call.
                     // Only the final synchronous return is controlled; B uses
                     // its real notification sink, Window, AppModel and journal.
@@ -288,8 +288,22 @@ final class PublicChangeCapture: @unchecked Sendable {
                     if scenario == "cross-window-hint-invalidation" { try check(!hint.scopeIsCurrent && !hint.finished, "hint lease was not synchronously revoked with credential authority") }
                     try check(original.messageDrafts.text(for: remoteDraft) == "UNSENT REMOTE ORIGINAL", "B original draft lost on credential invalidation")
                     try check(try remoteJournal.unknownRecords().contains { $0.id == remoteUnknown.id }, "B original Unknown was removed")
+                    var cancelledSequence: UInt64?
+                    if scenario == "cross-window-cancelled-fanout" {
+                        cancelledSequence = second.validatedComputerSequenceForQA
+                        second.cancelComputerListObservation()
+                        // A remains entitled to its one post-write recheck;
+                        // B has explicitly withdrawn before that read starts.
+                        gate.arm("records")
+                    }
                     completionGate.release()
                     if let controlledWriter { _ = try await controlledWriter.value }
+                    if scenario == "cross-window-cancelled-fanout" {
+                        try await until({ gate.waiting }, "A recheck did not reach controlled original records read")
+                        try check(!second.observingComputers && second.validatedComputerSequenceForQA == cancelledSequence,
+                            "B cancellation did not retain its prior observation lease")
+                        gate.release()
+                    }
                     try await until({ !broker.busy }, "original forget operation did not terminate")
                     await fixture.barrier()
                     if scenario == "cross-window-scope-isolation" {
@@ -301,6 +315,15 @@ final class PublicChangeCapture: @unchecked Sendable {
                     try await until({ gate.count("records") > beforeRecords && !broker.busy && !second.observingComputers && !window.observingComputers }, "known change did not receive its bounded post-terminal qualification")
                     await fixture.barrier()
                     try check(gate.count("records") == beforeRecords + 1, "cross-window known-change recheck was duplicated")
+                    if let cancelledSequence {
+                        try check(second.validatedComputerSequenceForQA == cancelledSequence && !second.observingComputers,
+                            "live shared completion published into B after explicit list cancellation")
+                        try check(window.validatedComputerSequenceForQA == CrewdRemotePairing.credentialRevision.snapshot.sequence,
+                            "A's still-authorized observation did not finish")
+                        let resumed = await second.refresh()
+                        try check(resumed && second.validatedComputerSequenceForQA > cancelledSequence,
+                            "a later explicit B refresh could not resume the suspended known-change batch")
+                    }
                     if replace {
                         try check(second.computers.first { $0.id == ids[0] }?.receipt != originalSummary.receipt, "replacement receipt was not refreshed from original credential authority")
                         try check(gate.count(ids[0].uuidString) > beforeRead, "existing replacement skipped real credential validation")
@@ -332,6 +355,29 @@ final class PublicChangeCapture: @unchecked Sendable {
                     try check(window.workspace === fresh && fresh?.isRetired == false && model.crewdBackend?.workspace === fresh,
                         "late old notification revoked a newer qualified selection")
                     try check(gate.count("records") == records, "late incorporated notification manufactured another qualification read")
+                    try preserved()
+                } else if scenario == "pending-independent-owner" {
+                    let copy = try await fixture.independentPairingCopy()
+                    let second = CrewdRemoteWindow(pairing: copy, broker: broker, deadlines: limits, factories: factory.factories())
+                    other = second
+                    let secondModel = AppModel(window: second, directory: { localRoot }, bindDrafts: { _ in })
+                    let secondLoaded = await second.refresh()
+                    try check(secondLoaded && copy.observationID != pairing.observationID, "independent B owner was not prepared")
+                    try Data().write(to: root.appendingPathComponent("remote-a.sock.hold"))
+                    let choosing = Task { await secondModel.connectCrewdAuthority(computerID: ids[0]) }
+                    try await until({ second.attempt?.phase == .connection && factory.made == 1 }, "B did not enter real pending connection")
+                    var delivered = 0; second.credentialChangeObservedForQA = { delivered += 1 }
+                    let originalSummary = window.computers.first { $0.id == ids[0] }!
+                    let forgotten = await window.forget(originalSummary)
+                    try check(forgotten, "original A owner forget did not finish")
+                    try await until({ delivered > 0 }, "B did not observe the unrelated owner's real change notification")
+                    try check(second.isSelecting, "unrelated A owner notification cancelled B's pending selection")
+                    try Data().write(to: root.appendingPathComponent("remote-a.sock.release"))
+                    await choosing.value
+                    try await until({ second.selected == ids[0] && secondModel.crewdBackend?.workspace === second.workspace },
+                        "global credential revision rejected an unchanged independently owned B candidate")
+                    try check(second.selectionFailure == nil && second.workspace?.originalJournalReady == true,
+                        "independent B lease failed actual readiness/history after unrelated A change")
                     try preserved()
                 } else if scenario == "coalesced-two-windows" {
                     let second = CrewdRemoteWindow(pairing: pairing, broker: broker, deadlines: limits, factories: factory.factories()); other = second

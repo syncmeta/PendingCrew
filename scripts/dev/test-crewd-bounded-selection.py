@@ -7,7 +7,7 @@ import argparse, hashlib, json, os, pathlib, socket, subprocess, tempfile, threa
 CASES = ['credential-timeout', 'credential-cancel-local-late-success',
          'credential-cancel-local-late-failure', 'different-target-busy',
          'refresh-coalesced', 'coalesced-two-windows', 'close-pending',
-         'late-connection-new-attempt', 'credential-epoch-aba', 'connection-timeout', 'journal-timeout', 'journal-failure', 'hint-blocked', 'hint-scope-cancel', 'cross-window-credential-forget', 'cross-window-credential-replace', 'cross-window-scope-isolation', 'cross-window-hint-invalidation', 'late-credential-notification', 'cancel-list-observation']
+         'late-connection-new-attempt', 'credential-epoch-aba', 'connection-timeout', 'journal-timeout', 'journal-failure', 'hint-blocked', 'hint-scope-cancel', 'cross-window-credential-forget', 'cross-window-credential-replace', 'cross-window-scope-isolation', 'cross-window-hint-invalidation', 'late-credential-notification', 'cancel-list-observation', 'cross-window-cancelled-fanout', 'pending-independent-owner']
 SOURCES = ['Sources/CrewdRemote/CrewdRemotePairing.swift', 'Sources/CrewdRemote/CrewdRemoteTransport.swift',
            'Sources/CrewdRemote/CrewdRemoteWindow.swift', 'Sources/Stores/AppModel.swift',
            'Sources/PersonalSync/CrewPersonalDraftService.swift',
