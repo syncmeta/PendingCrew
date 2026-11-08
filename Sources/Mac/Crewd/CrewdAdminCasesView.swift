@@ -40,69 +40,7 @@ struct CrewdAdminCasesView:View {
                         }.disabled(busy)
                     }
                     if let detail {
-                        Divider()
-                        Text("来源成员："+(detail["source"]["sessionId"].string ?? "")).textSelection(.enabled)
-                        Text("来源公告："+(detail["source"]["announcementId"].string ?? "")).textSelection(.enabled)
-                        Text("观察时间："+time(detail["createdAt"]))
-                        Text("判断："+decisionPhase(detail["decision"].string ?? ""))
-                        if detail["decisionRecord"] != .null {
-                            Text("原因："+decisionReason(detail["decisionRecord"]["reason"].string ?? ""))
-                            if detail["decisionRecord"]["probability"] != .null {Text("介入概率："+detail["decisionRecord"]["probability"].pretty)}
-                            Text(detail["decisionRecord"]["adopted"] == .bool(true) ? "介入建议已采纳；是否启动须看独立执行记录，不代表工作解决。":"本次判断未采纳介入建议。")
-                        }
-                        if detail["launchRecord"] != .null {
-                            let launch=detail["launchRecord"]
-                            Text("启动调度："+launchPhase(launch["phase"].string ?? ""))
-                            Text("调度说明："+launchReason(launch["reason"].string ?? ""))
-                            Text("调度更新时间："+time(launch["updatedAt"]))
-                            Text("等待条件变化不会重新询问模型；绑定后的运行结果以执行记录为准，未知启动不自动重放。").font(.caption).foregroundStyle(.secondary)
-                        } else {
-                            Text(store.capabilities.contains("adminCase.automaticExecution") ? "尚无启动调度记录；未配置、未采纳或依据已失效时不会新建执行成员。" : "当前后台尚未提供自动行政启动调度记录。").font(.caption).foregroundStyle(.secondary)
-                        }
-                        if detail["source"]["provenance"] != .null {
-                            Text("来源：人类重新核验的当前事实；旧公告仅作历史锚点，不代表恢复历史权限。").font(.caption)
-                            Text(detail["source"]["provenance"]["note"].string ?? "").font(.caption).textSelection(.enabled)
-                        }
-                        Text("执行："+executionPhase(detail["execution"].string ?? ""))
-                        if detail["executionRecord"] != .null {
-                            Text("执行成员："+(detail["executionRecord"]["sessionId"].string ?? "")).textSelection(.enabled)
-                            Text("执行原因："+executionReason(detail["executionRecord"]["reason"].string ?? ""))
-                            Text("已核实协作效果："+String(detail["executionRecord"]["effectsCount"].int ?? 0)+"；效果数不代表案件已解决。")
-                            if store.capabilities.contains("adminCase.effects"), detail["id"].string != nil {
-                                Button("查看已核实动作") { showEffects = true }
-                            }
-                            if let generation=detail["executionRecord"]["generation"].string {Text("确认执行代次："+generation)}
-                        }
-                        if detail["outcomeRecord"] == .null {Text("结果：尚无核验记录")}
-                        else {
-                            let outcome=detail["outcomeRecord"]
-                            Text("结果："+outcomePhase(outcome["phase"].string ?? ""))
-                            Text("核验说明："+outcomeReason(outcome["reason"].string ?? ""))
-                            Text("核验时间："+time(outcome["verifiedAt"]))
-                            ForEach(Array(outcome["targets"].array.enumerated()),id:\.offset) {_,result in
-                                Text((result["id"].string ?? "")+" · "+targetReason(result["reason"].string ?? ""))
-                                Text("结果归因："+(result["resolvedBy"] == .string("case_admin") ? "本案行政成员":result["resolvedBy"] == .string("other") ? "其他操作者":"尚未确认解决来源"))
-                                if let actor=result["actorSessionId"].string {Text("操作者："+actor).font(.caption)}
-                                if let seq=result["eventSeq"].string {Text("核验事件序号："+seq).font(.caption)}
-                                if let wake=result["wakeId"].int {Text("通知回执编号："+String(wake)).font(.caption)}
-                            }
-                            Text("核验解决与执行器退场独立；其他操作者解决的目标不算本案行政成果。").font(.caption).foregroundStyle(.secondary)
-                        }
-                        if detail["handoffRecord"] == .null {Text("责任交接：暂无请求记录")}
-                        else { handoffDetails(detail["handoffRecord"]) }
-                        if let custody {custodyDetails(custody)}
-                        else if !store.capabilities.contains("adminCase.custodyGet") {Text("当前后台尚未提供异常责任接管查询。").font(.caption).foregroundStyle(.secondary)}
-                        Text("退场："+retirementPhase(detail["retirement"].string ?? ""))
-                        if detail["retirementRecord"] != .null {
-                            Text("退场说明："+retirementReason(detail["retirementRecord"]["reason"].string ?? ""))
-                            Text(detail["retirementRecord"]["adopted"] == .bool(true) ? "此记录曾收到实际退出确认；结合当前阶段核对。":"此记录尚未确认实际退出。")
-                            Text("退场执行代次："+(detail["retirementRecord"]["generation"].string ?? ""))
-                        }
-                        Text("业务核验解决或有效责任交接可以释放退场条件；业务仍未解决时也可交接后退场。退出请求不等于实际退场，未知结果不会自动重启。").font(.caption).foregroundStyle(.secondary)
-                        ForEach(Array(detail["targets"].array.enumerated()),id:\.offset) {_,target in
-                            Text((target["id"].string ?? "")+" · "+kind(target["kind"].string ?? "")+" · "+(target["scope"] == .string("in_scope") ? "当前范围":"范围外，仅保留来源事实"))
-                            Text("来源快照机组："+(target["crewId"].string ?? "")+" · 工作版本："+(target["revision"].string ?? "")).font(.caption).foregroundStyle(.secondary)
-                        }
+                        caseDetails(detail)
                     }
                 }.frame(maxWidth:.infinity,alignment:.leading)
             }.frame(maxHeight:460)
@@ -117,6 +55,92 @@ struct CrewdAdminCasesView:View {
         }
         .onChange(of:store.readScope) {_,_ in token=UUID();rows=[];detail=nil;next=nil;dismiss()}
         .onDisappear {token=UUID()}
+    }
+    @ViewBuilder private func caseDetails(_ detail: CrewdValue) -> some View {
+        caseSourceDetails(detail)
+        caseExecutionDetails(detail)
+        caseOutcomeDetails(detail)
+        if detail["handoffRecord"] == .null {Text("责任交接：暂无请求记录")}
+        else { handoffDetails(detail["handoffRecord"]) }
+        if let custody {custodyDetails(custody)}
+        else if !store.capabilities.contains("adminCase.custodyGet") {Text("当前后台尚未提供异常责任接管查询。").font(.caption).foregroundStyle(.secondary)}
+        caseRetirementDetails(detail)
+        caseTargetDetails(detail)
+    }
+    @ViewBuilder private func caseSourceDetails(_ detail: CrewdValue) -> some View {
+        Divider()
+        Text("来源成员："+(detail["source"]["sessionId"].string ?? "")).textSelection(.enabled)
+        Text("来源公告："+(detail["source"]["announcementId"].string ?? "")).textSelection(.enabled)
+        Text("观察时间："+time(detail["createdAt"]))
+        Text("判断："+decisionPhase(detail["decision"].string ?? ""))
+        caseDecisionDetails(detail)
+        caseLaunchDetails(detail)
+        if detail["source"]["provenance"] != .null {
+            Text("来源：人类重新核验的当前事实；旧公告仅作历史锚点，不代表恢复历史权限。").font(.caption)
+            Text(detail["source"]["provenance"]["note"].string ?? "").font(.caption).textSelection(.enabled)
+        }
+    }
+    @ViewBuilder private func caseDecisionDetails(_ detail: CrewdValue) -> some View {
+        if detail["decisionRecord"] != .null {
+            Text("原因："+decisionReason(detail["decisionRecord"]["reason"].string ?? ""))
+            if detail["decisionRecord"]["probability"] != .null {Text("介入概率："+detail["decisionRecord"]["probability"].pretty)}
+            Text(detail["decisionRecord"]["adopted"] == .bool(true) ? "介入建议已采纳；是否启动须看独立执行记录，不代表工作解决。":"本次判断未采纳介入建议。")
+        }
+    }
+    @ViewBuilder private func caseLaunchDetails(_ detail: CrewdValue) -> some View {
+        if detail["launchRecord"] != .null {
+            let launch=detail["launchRecord"]
+            Text("启动调度："+launchPhase(launch["phase"].string ?? ""))
+            Text("调度说明："+launchReason(launch["reason"].string ?? ""))
+            Text("调度更新时间："+time(launch["updatedAt"]))
+            Text("等待条件变化不会重新询问模型；绑定后的运行结果以执行记录为准，未知启动不自动重放。").font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text(store.capabilities.contains("adminCase.automaticExecution") ? "尚无启动调度记录；未配置、未采纳或依据已失效时不会新建执行成员。" : "当前后台尚未提供自动行政启动调度记录。").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    @ViewBuilder private func caseExecutionDetails(_ detail: CrewdValue) -> some View {
+        Text("执行："+executionPhase(detail["execution"].string ?? ""))
+        if detail["executionRecord"] != .null {
+            Text("执行成员："+(detail["executionRecord"]["sessionId"].string ?? "")).textSelection(.enabled)
+            Text("执行原因："+executionReason(detail["executionRecord"]["reason"].string ?? ""))
+            Text("已核实协作效果："+String(detail["executionRecord"]["effectsCount"].int ?? 0)+"；效果数不代表案件已解决。")
+            if store.capabilities.contains("adminCase.effects"), detail["id"].string != nil {
+                Button("查看已核实动作") { showEffects = true }
+            }
+            if let generation=detail["executionRecord"]["generation"].string {Text("确认执行代次："+generation)}
+        }
+    }
+    @ViewBuilder private func caseOutcomeDetails(_ detail: CrewdValue) -> some View {
+        if detail["outcomeRecord"] == .null {Text("结果：尚无核验记录")}
+        else {
+            let outcome=detail["outcomeRecord"]
+            Text("结果："+outcomePhase(outcome["phase"].string ?? ""))
+            Text("核验说明："+outcomeReason(outcome["reason"].string ?? ""))
+            Text("核验时间："+time(outcome["verifiedAt"]))
+            ForEach(Array(outcome["targets"].array.enumerated()),id:\.offset) {_,result in
+                Text((result["id"].string ?? "")+" · "+targetReason(result["reason"].string ?? ""))
+                Text("结果归因："+(result["resolvedBy"] == .string("case_admin") ? "本案行政成员":result["resolvedBy"] == .string("other") ? "其他操作者":"尚未确认解决来源"))
+                if let actor=result["actorSessionId"].string {Text("操作者："+actor).font(.caption)}
+                if let seq=result["eventSeq"].string {Text("核验事件序号："+seq).font(.caption)}
+                if let wake=result["wakeId"].int {Text("通知回执编号："+String(wake)).font(.caption)}
+            }
+            Text("核验解决与执行器退场独立；其他操作者解决的目标不算本案行政成果。").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    @ViewBuilder private func caseRetirementDetails(_ detail: CrewdValue) -> some View {
+        Text("退场："+retirementPhase(detail["retirement"].string ?? ""))
+        if detail["retirementRecord"] != .null {
+            Text("退场说明："+retirementReason(detail["retirementRecord"]["reason"].string ?? ""))
+            Text(detail["retirementRecord"]["adopted"] == .bool(true) ? "此记录曾收到实际退出确认；结合当前阶段核对。":"此记录尚未确认实际退出。")
+            Text("退场执行代次："+(detail["retirementRecord"]["generation"].string ?? ""))
+        }
+        Text("业务核验解决或有效责任交接可以释放退场条件；业务仍未解决时也可交接后退场。退出请求不等于实际退场，未知结果不会自动重启。").font(.caption).foregroundStyle(.secondary)
+    }
+    @ViewBuilder private func caseTargetDetails(_ detail: CrewdValue) -> some View {
+        ForEach(Array(detail["targets"].array.enumerated()),id:\.offset) {_,target in
+            Text((target["id"].string ?? "")+" · "+kind(target["kind"].string ?? "")+" · "+(target["scope"] == .string("in_scope") ? "当前范围":"范围外，仅保留来源事实"))
+            Text("来源快照机组："+(target["crewId"].string ?? "")+" · 工作版本："+(target["revision"].string ?? "")).font(.caption).foregroundStyle(.secondary)
+        }
     }
     private func decisionPhase(_ value:String)->String {
         ["observed":"已观察来源，尚未判断","prepared":"判断已准备","dispatched":"判断请求已发出","answered":"模型已答复","unknown":"判断结果未知","unconfigured":"未配置判断模型","waiting_admission":"等待当前运行准入，尚未请求模型","stale":"判断依据已失效"][value] ?? "未知判断状态"
