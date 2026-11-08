@@ -108,7 +108,11 @@ private struct CrewdClaudeHistoryPanel:View {
                     VStack(alignment:.leading,spacing:5){
                         Text(task["requestId"].string ?? "").font(.caption.monospaced()).lineLimit(1)
                         Text(phaseLabel(task)+" · "+(task["currentRuntime"] == .bool(true) ? "当前受管实例":"历史实例")).font(.caption)
-                        Text("创建："+(task["createdAt"].string ?? "")+" · 观察："+(task["observationCount"].string ?? "未知")+" · 未保留："+(task["omittedObservations"].string ?? "未知")).font(.caption).foregroundStyle(.secondary)
+                        let created: String = task["createdAt"].string ?? ""
+                        let observations: String = task["observationCount"].string ?? "未知"
+                        let omitted: String = task["omittedObservations"].string ?? "未知"
+                        let summary: String = "创建：" + created + " · 观察：" + observations + " · 未保留：" + omitted
+                        Text(summary).font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,5)
                 }.buttonStyle(.plain)
             }

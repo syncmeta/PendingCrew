@@ -136,7 +136,25 @@ struct CrewdCodexLocalInputs:View {
                 if archives.isEmpty{Text("尚无可读取的本机原输入").foregroundStyle(.secondary)}
                 ForEach(archives){archive in
                     DisclosureGroup("原电脑："+(archive.journal.scope.authorityID ?? "未知")+" · "+(archive.journal.scope.databaseID ?? "未知")){
-                        ForEach(archive.records){record in HStack{VStack(alignment:.leading){Text(record.params["filename"].string ?? "原文件");Text("原请求："+(record.params["requestId"].string ?? "")).font(.caption.monospaced()).textSelection(.enabled);Text("原机组："+record.crew+" · "+(record.params["sessionId"].string ?? "首轮输入")).font(.caption).foregroundStyle(.secondary)};Spacer();Button("导出原文件"){do{document = .init(bytes:try archive.journal.codexInputOriginal(record));name=record.params["filename"].string ?? "原输入";exporting=true}catch{self.error="原文件未能验证，已保留未覆盖。"}}}}
+                        ForEach(archive.records){record in
+                            let session: String = record.params["sessionId"].string ?? "首轮输入"
+                            let origin: String = "原机组：" + record.crew + " · " + session
+                            HStack{
+                                VStack(alignment:.leading){
+                                    Text(record.params["filename"].string ?? "原文件")
+                                    Text("原请求："+(record.params["requestId"].string ?? "")).font(.caption.monospaced()).textSelection(.enabled)
+                                    Text(origin).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("导出原文件"){
+                                    do{
+                                        document = .init(bytes:try archive.journal.codexInputOriginal(record))
+                                        name=record.params["filename"].string ?? "原输入"
+                                        exporting=true
+                                    }catch{self.error="原文件未能验证，已保留未覆盖。"}
+                                }
+                            }
+                        }
                     }
                 }
             }}

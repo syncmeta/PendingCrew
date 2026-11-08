@@ -35,7 +35,12 @@ struct CrewdAdminCasesView:View {
                         Button {readDetail(row["id"].string ?? "")} label: {
                             VStack(alignment:.leading) {
                                 Text("工作跟进升级 · " + (row["source"]["sessionId"].string ?? "成员"))
-                                Text(decisionPhase(row["decision"].string ?? "")+" · "+executionPhase(row["execution"].string ?? "")+" · \(row["targets"].array.count) 项工作 · " + time(row["createdAt"]))
+                                let decision: String = decisionPhase(row["decision"].string ?? "")
+                                let execution: String = executionPhase(row["execution"].string ?? "")
+                                let targets: String = "\(row["targets"].array.count) 项工作"
+                                let created: String = time(row["createdAt"])
+                                let summary: String = decision + " · " + execution + " · " + targets + " · " + created
+                                Text(summary)
                             }
                         }.disabled(busy)
                     }
@@ -138,7 +143,11 @@ struct CrewdAdminCasesView:View {
     }
     @ViewBuilder private func caseTargetDetails(_ detail: CrewdValue) -> some View {
         ForEach(Array(detail["targets"].array.enumerated()),id:\.offset) {_,target in
-            Text((target["id"].string ?? "")+" · "+kind(target["kind"].string ?? "")+" · "+(target["scope"] == .string("in_scope") ? "当前范围":"范围外，仅保留来源事实"))
+            let id: String = target["id"].string ?? ""
+            let targetKind: String = kind(target["kind"].string ?? "")
+            let scope: String = target["scope"] == .string("in_scope") ? "当前范围" : "范围外，仅保留来源事实"
+            let summary: String = id + " · " + targetKind + " · " + scope
+            Text(summary)
             Text("来源快照机组："+(target["crewId"].string ?? "")+" · 工作版本："+(target["revision"].string ?? "")).font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -176,7 +185,11 @@ struct CrewdAdminCasesView:View {
         if handoff["acceptedAt"] != .null {Text("接受时间："+time(handoff["acceptedAt"]))}
         if let note=handoff["acceptanceNote"].string {Text("机长接受说明："+note)}
         ForEach(Array(handoff["targets"].array.enumerated()),id:\.offset) {_,target in
-            Text("交接快照："+(target["id"].string ?? "")+" · "+(target["crewId"].string ?? "")+" · 版本 "+(target["revision"].string ?? "")).font(.caption)
+            let id: String = target["id"].string ?? ""
+            let crew: String = target["crewId"].string ?? ""
+            let revision: String = target["revision"].string ?? ""
+            let summary: String = "交接快照：" + id + " · " + crew + " · 版本 " + revision
+            Text(summary).font(.caption)
         }
         Text("通知送达不代表机长接手；接受交接只确认后续责任，不代表业务已解决。交接依据失效不会抹去已接受的责任；须完成明确接管或核验解除，原责任才释放。").font(.caption).foregroundStyle(.secondary)
     }
@@ -342,7 +355,11 @@ private struct CrewdAdminCaseEffectsView: View {
 
     private func effect(_ row: CrewdValue) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("#" + (row["ordinal"].string ?? "") + " · " + (row["workId"].string ?? "") + " · " + title(row))
+            let ordinal: String = row["ordinal"].string ?? ""
+            let work: String = row["workId"].string ?? ""
+            let workTitle: String = title(row)
+            let summary: String = "#" + ordinal + " · " + work + " · " + workTitle
+            Text(summary)
                 .font(.subheadline.weight(.medium))
             if let ms = row["occurredAtMs"].int {
                 Text(Date(timeIntervalSince1970: Double(ms) / 1_000).formatted(date: .abbreviated, time: .standard))
@@ -454,7 +471,13 @@ private struct CrewdAdminLegacyView:View {
                         Button("读取当前完整核验") {readPreview(chosen)}.disabled(busy || sessionID.isEmpty || chosen["state"] != .string("observed"))
                         if let preview {
                             Text("当前核验目标：\(preview["targets"].array.count) 项；当前预算 epoch：\(preview["budgetEpoch"].int ?? -1)").font(.headline)
-                            ForEach(Array(preview["targets"].array.enumerated()),id:\.offset) {_,t in Text((t["id"].string ?? "")+" · 版本 "+(t["revision"].string ?? "")+" · "+(t["scope"] == .string("in_scope") ? "当前范围":"范围外，仅保留事实"))}
+                            ForEach(Array(preview["targets"].array.enumerated()),id:\.offset) {_,t in
+                                let id: String = t["id"].string ?? ""
+                                let revision: String = t["revision"].string ?? ""
+                                let scope: String = t["scope"] == .string("in_scope") ? "当前范围" : "范围外，仅保留事实"
+                                let summary: String = id + " · 版本 " + revision + " · " + scope
+                                Text(summary)
+                            }
                             ForEach(Array(preview["blockers"].array.enumerated()),id:\.offset) {_,b in Text(blocker(b.string ?? "")).foregroundStyle(.orange)}
                             TextField("我核实当前成员与完整目标的说明",text:$note,axis:.vertical)
                             Button("确认当前新来源") {confirm(chosen,preview)}.disabled(busy || preview["canConfirm"] != .bool(true) || note.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty)
