@@ -71,6 +71,11 @@ import Combine
     private let broker: CrewdCredentialReadBroker
     private let limits: CrewdConnectionDeadlines
     private let factories: Factories
+    #if DEBUG
+    /// Diagnostic observation only; records delivery before existing guards.
+    /// No state transition, suspension or credential operation is injected.
+    var credentialChangeObservedForQA: (@MainActor () -> Void)?
+    #endif
     let pairing: CrewdRemotePairing
     init(pairing: CrewdRemotePairing = .shared, broker: CrewdCredentialReadBroker? = nil,
          deadlines: CrewdConnectionDeadlines = .init(), factories: Factories = .init()) {
@@ -79,7 +84,11 @@ import Combine
         #if !PENDINGCREW_LOCAL_MAC || PENDINGCREW_REMOTE_PRODUCT
         changes = NotificationCenter.default.publisher(for: CrewdRemotePairing.changed).sink { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.computerListState == .loaded else { return }
+                guard let self else { return }
+                #if DEBUG
+                self.credentialChangeObservedForQA?()
+                #endif
+                guard self.computerListState == .loaded else { return }
                 if self.isSelecting {
                     if let revision = self.attemptCredentialRevision, revision != CrewdRemotePairing.credentialRevision.current {
                         self.cancelSelection()

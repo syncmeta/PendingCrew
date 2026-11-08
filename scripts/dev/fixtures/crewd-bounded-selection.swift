@@ -139,6 +139,8 @@ final class BlockingVaultGate: @unchecked Sendable {
         let window = CrewdRemoteWindow(pairing: pairing, broker: broker, deadlines: limits, factories: factory.factories())
         let model = AppModel(window: window, directory: { localRoot }, bindDrafts: { _ in })
         var other: CrewdRemoteWindow?
+        var writerGate: BlockingVaultGate?
+        var controlledWriter: Task<CrewdCredentialReadBroker.Value, Error>?
         let rootJournal = localRoot.appendingPathComponent("frontend-presentation/unknown-submissions")
         var result: Error?
         do {
@@ -172,7 +174,56 @@ final class BlockingVaultGate: @unchecked Sendable {
                 try preserved()
             } else {
                 let loaded = await window.refresh(); try check(loaded, "initial in-memory list failed")
-                if scenario == "coalesced-two-windows" {
+                if scenario == "cross-window-credential-forget" {
+                    // A owns the actual production broker/Pairing.forget call.
+                    // Only the final synchronous return is controlled; B uses
+                    // its real notification sink, Window, AppModel and journal.
+                    let second = CrewdRemoteWindow(pairing: pairing, broker: broker, deadlines: limits, factories: factory.factories())
+                    other = second
+                    let secondModel = AppModel(window: second, directory: { localRoot }, bindDrafts: { _ in })
+                    let secondLoaded = await second.refresh()
+                    try check(secondLoaded, "second original computer list failed")
+                    await secondModel.connectCrewdAuthority(computerID: ids[0])
+                    try await until({ second.selected == ids[0] && secondModel.crewdBackend?.workspace === second.workspace }, "B did not commit the original remote authority")
+                    guard let original = second.workspace, let scope = original.presentationScope else { throw CheckFailure.failed("B original workspace/scope absent") }
+                    try check(original.client.readyForWork && original.originalJournalReady, "B skipped real connection or journal")
+                    let originalSummary = window.computers.first { $0.id == ids[0] }!
+                    let remoteDraft = CrewdDrafts.Context.message(crew: "existing-crew", channel: "existing-channel", session: "")
+                    original.messageDrafts.set("UNSENT REMOTE ORIGINAL", for: remoteDraft)
+                    let remoteJournal = try CrewdPresentationJournal(root: rootJournal, scope: scope)
+                    let remoteUnknown = try remoteJournal.prepare(method: "session.resume", params: .object(["sessionId": .string("existing-remote-session")]), crew: "existing-crew")
+                    var delivered = 0
+                    second.credentialChangeObservedForQA = { delivered += 1 }
+                    let completionGate = BlockingVaultGate(); writerGate = completionGate
+                    completionGate.arm("after-original-forget-notification")
+                    controlledWriter = Task {
+                        try await broker.observe(.forget(pairing.observationID, originalSummary), timeout: 10) {
+                            try pairing.forget(originalSummary)
+                            // NotificationCenter.post has returned, so every
+                            // real sink has been scheduled. Keep the original
+                            // actor operation outstanding until the controller
+                            // observes B's actual sink entrance, not a sleep.
+                            try completionGate.enter("after-original-forget-notification")
+                            return .forgotten
+                        }
+                    }
+                    try await until({ completionGate.waiting }, "writer never reached its post-notification gate")
+                    try await until({ delivered > 0 }, "B actual notification sink was not observed")
+                    try check(broker.busy && completionGate.waiting, "original writer finished before B notification delivery")
+                    try check(delivered == 1, "unexpected extra credential notification")
+                    try check(original.isRetired || secondModel.crewdBackend == nil, "known removed credential left B's old write authority available while broker busy")
+                    try check(original.messageDrafts.text(for: remoteDraft) == "UNSENT REMOTE ORIGINAL", "B original draft lost on credential invalidation")
+                    try check(try remoteJournal.unknownRecords().contains { $0.id == remoteUnknown.id }, "B original Unknown was removed")
+                    completionGate.release()
+                    if let controlledWriter { _ = try await controlledWriter.value }
+                    try await until({ !broker.busy }, "original forget operation did not terminate")
+                    await fixture.barrier()
+                    try await until({ second.workspace == nil && second.selected == nil && secondModel.crewdBackend == nil }, "B did not retire removed original pairing after writer completion")
+                    try check(second.retainedWorkspaces.contains { $0 === original }, "removed credential discarded original B input scope")
+                    try check(original.messageDrafts.text(for: remoteDraft) == "UNSENT REMOTE ORIGINAL", "B draft changed after completion")
+                    try check(try remoteJournal.unknownRecords().contains { $0.id == remoteUnknown.id }, "B original Unknown was replayed or removed after completion")
+                    try preserved()
+                } else if scenario == "coalesced-two-windows" {
                     let second = CrewdRemoteWindow(pairing: pairing, broker: broker, deadlines: limits, factories: factory.factories()); other = second
                     let secondLoaded = await second.refresh(); try check(secondLoaded, "second list failed")
                     let before = gate.count(ids[0].uuidString); gate.arm(ids[0].uuidString)
@@ -277,10 +328,12 @@ final class BlockingVaultGate: @unchecked Sendable {
             }
         } catch { result = error }
         // Even a failed assertion drains the truly blocking fake before exit.
-        gate.release(); hint.release(); window.close(); other?.close(); local.retire()
+        gate.release(); writerGate?.release(); hint.release(); window.close(); other?.close(); local.retire()
         for name in ["remote-a.sock", "remote-b.sock"] { try? Data().write(to: root.appendingPathComponent(name + ".release")) }
         try? Data().write(to: root.appendingPathComponent("second-local-crewd.sock.history-release"))
         try await until({ !broker.busy }, "cleanup left synchronous fake outstanding")
+        if let controlledWriter { _ = try? await controlledWriter.value }
+        await fixture.barrier()
         if hint.started { try await until({ hint.finished }, "cleanup left catalog fake outstanding") }
         if let result { throw result }
         print("PASS actual production bounded-selection: " + scenario)
