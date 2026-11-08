@@ -182,7 +182,7 @@ private struct CrewdSecretaryBriefCard:View {
             if value?.caseValue["decision"] == .string("waiting_admission") {return "等待本机组机长的启动资格"}
             if value?.caseValue["decision"] == .string("answered"),value?.caseValue["decisionRecord"]["adopted"] == .bool(false) {return "本轮未采用写作建议，原待人清单仍可查看"}
         }
-        switch value?.state {
+        return switch value?.state {
         case "waiting":"已记录写作事项，等待启动条件"
         case "writing":"秘书正在整理本次事实"
         case "current":"正文已保存，内容对应本次核对的事实"
