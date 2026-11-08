@@ -4,7 +4,7 @@ import Foundation
   let id=CrewdWorkID("W1",kind:.plan)!
   var calls=0, badID=false, delay=false
   var held:CheckedContinuation<CrewdValue,Error>?
-  func result(_ p:CrewdValue)->CrewdValue {.object(["id":.string(badID ? "W2":"W1"),"crewId":.string("a"),"revision":.string("2"),"status":.string(p["kind"] == .string("done") ? "done":"dropped"),"title":.string("work"),"owner":.null,"frozen":.bool(false),"note":.null,"nextCheckAt":.null,"parent":.null,"blockedOn":.array([]),"sources":.array([]),"goal":.string("goal"),"dependsOn":.array([]),"acceptance":.string("accept"),"evidence":p["evidence"]])}
+  func result(_ p:CrewdValue)->CrewdValue {.object(["id":.string(badID ? "W2":"W1"),"crewId":.string("a"),"revision":.string("2"),"status":.string(p["kind"] == .string("done") ? "done":"dropped"),"title":.string("work"),"owner":.null,"frozen":.bool(false),"note":.null,"nextCheckAt":.null,"parent":.null,"blockedOn":.array([]),"sources":.array([]),"goal":.string("goal"),"dependsOn":.array([]),"acceptance":.string("accept"),"evidence":p["evidence"],"closure":.object(["kind":p["kind"],"note":p["note"],"evidence":p["evidence"]])])}
   let store=CrewdWorkStore { method,p in
    guard method == "work.close" else {throw CrewdClientError(message:"fixture refresh unavailable")}
    calls += 1

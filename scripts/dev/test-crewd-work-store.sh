@@ -6,56 +6,70 @@ fixture=$(mktemp -d /private/tmp/pcw-work-store.XXXXXX)
 echo "Evidence: $fixture"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-work-store.swift" -o "$fixture/test"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-judgment-inspection.swift" -o "$fixture/inspection"
 "$fixture/inspection"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-patrol.swift" -o "$fixture/patrol"
 "$fixture/patrol"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-patrol-brief.swift" -o "$fixture/patrol-brief"
 "$fixture/patrol-brief"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-coordination.swift" -o "$fixture/coordination"
 "$fixture/coordination"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-reassignment.swift" -o "$fixture/reassignment"
 "$fixture/reassignment"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdRetirementRecord.swift" "$root/scripts/dev/fixtures/crewd-retirement.swift" -o "$fixture/retirement"
 "$fixture/retirement"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-work-close.swift" -o "$fixture/close"
 "$fixture/close"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-message-attribution.swift" -o "$fixture/attribution"
 "$fixture/attribution"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-channel-archive.swift" -o "$fixture/archive"
 "$fixture/archive"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-admin-cases.swift" -o "$fixture/admin-cases"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-admin-launch.swift" -o "$fixture/admin-launch"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-admin-legacy.swift" -o "$fixture/admin-legacy"
 "$fixture/admin-legacy"
 "$fixture/admin-launch"
 xcrun swiftc -module-cache-path "$fixture/cache" -parse-as-library \
  "$root/Sources/Mac/Crewd/CrewdClient.swift" "$root/Sources/Mac/Crewd/CrewdLocalIPC.swift" \
+ "$root/Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift" \
  "$root/Sources/Mac/Crewd/CrewdWorkStore.swift" "$root/scripts/dev/fixtures/crewd-custody.swift" -o "$fixture/custody"
 "$fixture/custody"
 "$fixture/admin-cases"
