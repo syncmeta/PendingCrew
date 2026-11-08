@@ -69,7 +69,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             }
             .sheet(item: $pending, onDismiss: { Task { await window.refresh() } }) { pair in
                 CrewdRemotePairingView(pairing: window.pairing, pending: pair.id) { id in
-                    pending = nil; Task { guard await window.refresh() else { return }; await window.select(id) }
+                    pending = nil; Task { await model.connectCrewdAuthority(computerID:id) }
                 }
             }
 
@@ -83,7 +83,11 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
             .onChange(of: window.workspace.map { ObjectIdentifier($0) }) { _, _ in synchronizeAdministration() }
     }
     @ViewBuilder private var settingsItems:some View {
-            if model.connectingAuthority {ProgressView("正在连接电脑…")}
+            if let attempt=window.attempt {
+                HStack {ProgressView(attempt.phase.label);Button("取消选择"){model.cancelCrewdAuthoritySelection()}}
+                Button("返回本机"){Task{await model.connectCrewdAuthority()}}
+            }
+            if let notice=window.selectionNotice {Text(notice).foregroundStyle(.secondary)}
             if let failure=model.backendConfigurationError {Text(failure).foregroundStyle(.orange).textSelection(.enabled)}
             if window.workspace == nil {
                 Text("后台尚未连接").foregroundStyle(.secondary)
@@ -120,7 +124,7 @@ private struct CrewdOriginalConnectionControls: ViewModifier {
                     if window.computers.isEmpty { Text("没有已存的远程电脑") }
                     ForEach(window.computers) { computer in
                         Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
-                            if computer.paired { Task { await window.select(computer.id) } }
+                            if computer.paired { Task { await model.connectCrewdAuthority(computerID:computer.id) } }
                             else { fromSettings{pending = computer} }
                         }
                     }
@@ -335,13 +339,14 @@ struct CrewdMachinePicker: View {
     }
     var body: some View {
         CrewdMachineMenuButton(name: currentName, avatar: machineAvatar,
-            ready: window.workspace?.client.readyForWork == true && !model.connectingAuthority,
-            enabled: !model.connectingAuthority && !crewStore.pendingCrewSending,
+            ready: window.workspace?.client.readyForWork == true,
+            enabled: !crewStore.pendingCrewSending,
+            progress: window.attempt?.phase.label,
             choices: [.init(name: "本机", enabled: true, action: { Task { await model.connectCrewdAuthority() } })]
                 + window.computers.filter(\.paired).map { computer in
-                    .init(name: computer.name, enabled: !window.credentialBusy,
+                    .init(name: computer.name, enabled: true,
                           action: { Task { await model.connectCrewdAuthority(computerID: computer.id) } })
-                }, openSettings: { window.showingConnectionSettings = true })
+                } + (window.isSelecting ? [.init(name: "取消本次选择", enabled: true, action: { model.cancelCrewdAuthoritySelection() })] : []), openSettings: { window.showingConnectionSettings = true })
         .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
         .task { if window.computerListState == .notLoaded { await window.refresh() } }
         #if DEBUG && PENDINGCREW_HOTRELOAD && os(macOS)
@@ -362,6 +367,7 @@ private struct CrewdMachineMenuButton: NSViewRepresentable {
     let avatar: NSImage
     let ready: Bool
     let enabled: Bool
+    let progress: String?
     let choices: [Choice]
     let openSettings: () -> Void
 
@@ -397,10 +403,11 @@ private struct CrewdMachineMenuButton: NSViewRepresentable {
             attachment.attachmentCell = NSTextAttachmentCell(imageCell: chevron)
             title.append(NSAttributedString(attachment: attachment))
         }
+        if progress != nil { title.append(NSAttributedString(string: " · 连接中…", attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])) }
         button.attributedTitle = title
         button.setAccessibilityLabel("机器：" + name)
         button.setAccessibilityValue(ready ? "已连接" : "未连接")
-        button.toolTip = name + (ready ? " · 已连接" : " · 未连接")
+        button.toolTip = name + (ready ? " · 已连接" : " · 未连接") + (progress.map { " · " + $0 } ?? "")
     }
     final class Coordinator: NSObject {
         var choices: [Choice] = []

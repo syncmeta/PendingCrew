@@ -16,6 +16,8 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
 /// Out-of-band exchange only; this coordinator never sends an enrollment request.
 @CrewdCredentialActor final class CrewdRemotePairing {
     nonisolated static let shared = CrewdRemotePairing()
+    nonisolated static let credentialRevision = CrewdCredentialRevision()
+    nonisolated let observationID = UUID()
     nonisolated static let changed = Notification.Name("PendingCrew.CrewdRemotePairsChanged.v1")
     private var injected: CrewdRemoteCredentialStore?
     private var enrollmentRemoval:(@CrewdCredentialActor (CrewdRemoteStoredPair,String)throws->Void)?
@@ -43,6 +45,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         if pair.receipt != envelope {
             pair.receipt = envelope
             try credentials.save(pair)
+            Self.credentialRevision.advance()
             NotificationCenter.default.post(name: Self.changed, object: nil)
         }
         return receipt
@@ -58,6 +61,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
                   old.receipt==nil || old.receipt==pair.receipt else{throw CrewdRemoteError.wrongIdentity}
         }
         try credentials.save(pair)
+        Self.credentialRevision.advance()
         NotificationCenter.default.post(name:Self.changed,object:nil)
         return receipt
     }
@@ -112,6 +116,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         #endif
         let text = try CrewdRemoteText.encode(response)
         try credentials.save(CrewdRemoteStoredPair(id: id, invitation: envelope, response: response, privateKey: generated.privateKey, clientCertificate: generated.certificate))
+        Self.credentialRevision.advance()
         NotificationCenter.default.post(name:Self.changed,object:nil)
         return Response(id: id, text: text)
     }
@@ -139,6 +144,7 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         }
         try credentials.remove(id)
         responses = responses.filter { $0.value.0 != id }
+        Self.credentialRevision.advance()
         NotificationCenter.default.post(name:Self.changed,object:nil)
     }
     struct Connection: Sendable {
@@ -146,8 +152,40 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
         let receipt: CrewdRemoteReceipt
         let parameters: NWParameters
     }
+    struct ComputerSnapshot: Sendable {
+        let credentialRevision: UUID
+        let computers: [CrewdRemotePairSummary]
+        let selectedReceipt: CrewdRemoteReceipt?
+    }
+    /// One non-suspending original credential-domain snapshot; a list failure is
+    /// never treated as an empty list or as permission to choose another host.
+    func computerSnapshot(selected: UUID?) throws -> ComputerSnapshot {
+        let values = try summaries()
+        let receipt = try selected.map { try self.receipt($0) }
+        return ComputerSnapshot(credentialRevision: Self.credentialRevision.current, computers: values, selectedReceipt: receipt)
+    }
+    struct Selection: Sendable {
+        let credentialRevision: UUID
+        let computer: CrewdRemotePairSummary
+        let connection: Connection
+    }
+    /// Bind the exact displayed public record, its original receipt and its TLS
+    /// identity in one credential operation. No private key leaves this actor.
+    func selection(_ expected: CrewdRemotePairSummary) throws -> Selection {
+        let pair = try credentials.read(expected.id)
+        let invite = try invitation(pair.invitation, requireFresh: false)
+        let actual = CrewdRemotePairSummary(id: pair.id, name: invite.computerLabel,
+            endpoint: invite.endpoint, pin: invite.server.spkiSha256,
+            paired: pair.receipt != nil, response: pair.response, receipt: pair.receipt)
+        guard actual == expected, let envelope = pair.receipt else { throw CrewdRemoteError.wrongIdentity }
+        let receipt = try validatedReceipt(envelope, pair: pair)
+        return Selection(credentialRevision: Self.credentialRevision.current, computer: actual, connection: try connection(pair: pair, invitation: invite, receipt: receipt))
+    }
     func connection(_ id: UUID) throws -> Connection {
         let (pair, invitation, receipt) = try paired(id)
+        return try connection(pair: pair, invitation: invitation, receipt: receipt)
+    }
+    private func connection(pair: CrewdRemoteStoredPair, invitation: CrewdRemoteInvitation, receipt: CrewdRemoteReceipt) throws -> Connection {
         let identity = try CrewdRemoteCertificate.securityIdentity(privateKey: pair.privateKey, certificate: pair.clientCertificate)
         guard let protocolIdentity = sec_identity_create(identity) else { throw CrewdRemoteError.unavailableCredential }
         let options = NWProtocolTLS.Options()
@@ -221,4 +259,133 @@ struct CrewdRemotePairSummary: Identifiable, Equatable, Sendable {
             }
         }
     }
+}
+
+
+/// An observer can leave a synchronous Security operation; it cannot cancel it.
+/// The single process-wide slot remains owned until that operation really ends.
+/// There is deliberately no completed-result cache, retry or credential fallback.
+@MainActor final class CrewdCredentialReadBroker: ObservableObject {
+    static let shared = CrewdCredentialReadBroker()
+    enum Key: Equatable {
+        case computers(UUID, UUID?)
+        case selection(UUID, CrewdRemotePairSummary)
+        case connection(UUID, UUID, CrewdRemoteReceipt)
+        case forget(UUID, CrewdRemotePairSummary)
+    }
+    enum Value: Sendable {
+        case computers(CrewdRemotePairing.ComputerSnapshot)
+        case selection(CrewdRemotePairing.Selection)
+        case connection(CrewdRemotePairing.Connection)
+        case forgotten
+    }
+    @Published private(set) var busy = false
+    private var key: Key?
+    private var revision: UUID?
+    private var operationID: UUID?
+    private var waiters: [UUID: CheckedContinuation<Value, Error>] = [:]
+    private var deadlines: [UUID: Task<Void, Never>] = [:]
+    private var worker: Task<Void, Never>?
+
+    func observe(_ requested: Key, timeout: TimeInterval,
+        operation: @escaping @CrewdCredentialActor @Sendable () throws -> Value) async throws -> Value {
+        let observer = UUID()
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                if let key, key != requested || revision != CrewdRemotePairing.credentialRevision.current {
+                    continuation.resume(throwing: CrewdConnectionObservationError.busy); return
+                }
+                guard waiters.count < 64 else { continuation.resume(throwing: CrewdConnectionObservationError.busy); return }
+                waiters[observer] = continuation
+                deadlines[observer] = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: CrewdConnectionDeadlines.nanoseconds(timeout)) }
+                    catch { return }
+                    self?.withdraw(observer, error: CrewdConnectionObservationError.timedOut)
+                }
+                if operationID == nil {
+                    let token = UUID(); operationID = token; key = requested; revision = CrewdRemotePairing.credentialRevision.current; busy = true
+                    worker = Task { [self] in
+                        let result: Result<Value, Error>
+                        do { result = .success(try await operation()) }
+                        catch { result = .failure(error) }
+                        finish(token, result: result)
+                    }
+                }
+            }
+        }, onCancel: { Task { @MainActor [weak self] in self?.withdraw(observer, error: CancellationError()) } })
+    }
+    private func withdraw(_ observer: UUID, error: Error) {
+        deadlines.removeValue(forKey: observer)?.cancel()
+        waiters.removeValue(forKey: observer)?.resume(throwing: error)
+        // Never clear the slot, cancel worker or issue another underlying read.
+    }
+    private func finish(_ token: UUID, result: Result<Value, Error>) {
+        guard operationID == token else { return }
+        let observing = Array(waiters.values)
+        waiters.removeAll(); deadlines.values.forEach { $0.cancel() }; deadlines.removeAll()
+        operationID = nil; key = nil; revision = nil; worker = nil; busy = false
+        for continuation in observing { continuation.resume(with: result) }
+    }
+}
+
+enum CrewdConnectionObservationError: LocalizedError {
+    case busy, timedOut, changed
+    var errorDescription: String? {
+        switch self {
+        case .changed: return "已存电脑记录刚刚发生变化，请重新读取核对；原输入已保留。"
+        case .busy: return "上一项电脑确认仍在等待系统处理。原配对和输入已保留；可以取消本次选择或返回本机。"
+        case .timedOut: return "本次等待已结束，电脑尚未切换。若系统提示仍在等待处理，请先处理提示；原配对和输入已保留。"
+        }
+    }
+}
+
+struct CrewdConnectionDeadlines {
+    var credential: TimeInterval = 20
+    var connection: TimeInterval = 95
+    var journal: TimeInterval = 20
+    var hostHint: TimeInterval = 5
+    static func nanoseconds(_ seconds: TimeInterval) -> UInt64 {
+        UInt64(min(max(seconds, 0.001), 3600) * 1_000_000_000)
+    }
+}
+
+/// One-shot observation, not a task-group race: a blocked child must never hold
+/// the caller inside a group after its deadline. Late results cannot publish.
+@MainActor final class CrewdBoundedConnectionObservation<Value: Sendable> {
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var deadline: Task<Void, Never>?
+    private var observing = true
+    func value(timeout: TimeInterval, operation: @escaping @MainActor () async throws -> Value) async throws -> Value {
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                guard observing, !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                self.continuation = continuation
+                deadline = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: CrewdConnectionDeadlines.nanoseconds(timeout)) }
+                    catch { return }
+                    self?.finish(.failure(CrewdConnectionObservationError.timedOut))
+                }
+                Task { [self] in
+                    do { finish(.success(try await operation())) }
+                    catch { finish(.failure(error)) }
+                }
+            }
+        }, onCancel: { Task { @MainActor [weak self] in self?.finish(.failure(CancellationError())) } })
+    }
+    private func finish(_ result: Result<Value, Error>) {
+        guard observing else { return }
+        observing = false; deadline?.cancel(); deadline = nil
+        let pending = continuation; continuation = nil; pending?.resume(with: result)
+    }
+}
+
+
+/// Correlation only, never an authority or credential cache. Synchronous writers
+/// stamp before notifying so delayed notifications cannot cancel a newer choice.
+final class CrewdCredentialRevision: @unchecked Sendable {
+    private let lock = NSLock()
+    private var epoch = UUID()
+    var current: UUID { lock.lock(); defer { lock.unlock() }; return epoch }
+    func advance() { lock.lock(); epoch = UUID(); lock.unlock() }
 }

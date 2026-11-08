@@ -353,7 +353,18 @@ import Darwin
     func loadCatalog()async{do{try await coordinator.current.refresh()}catch{};publishProjection()}
     func loadHosts()async{await loadCatalog()}
     func export(_ key:AppleDraftKey)throws->Data{guard let payload=localDraft(key) else{throw AppleSyncFailure.invalid};return try appleSyncEncode(payload)}
-    func rememberHost(_ host:ApplePortableHost)async{do{try await coordinator.current.rememberHost(host);publishProjection();scheduleSync()}catch{initializationError="主机目录未保存，原设备配对未改变。"}}
+    func rememberHost(_ host:ApplePortableHost, stillCurrent:@escaping @MainActor ()->Bool = {true})async{
+        let scope=editingScope()
+        guard stillCurrent(),isCurrent(scope) else{return}
+        do{
+            try await scope.owner.rememberHost(host)
+            guard stillCurrent(),isCurrent(scope) else{return}
+            publishProjection();scheduleSync()
+        }catch{
+            guard stillCurrent(),isCurrent(scope) else{return}
+            initializationError="主机目录未保存，原设备配对未改变。"
+        }
+    }
     nonisolated private static func installationDeviceID(service:String)throws->String {
         let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:service,kSecAttrAccount as String:"installation",kSecAttrSynchronizable as String:false]
         var lookup=query;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne

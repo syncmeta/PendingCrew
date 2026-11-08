@@ -50,6 +50,7 @@ struct CrewdRemoteMobileRoot: View {
     }
     private var computerList: some View {
         List {
+            if let attempt=window.attempt {ProgressView(attempt.phase.label);Button("取消选择"){window.cancelSelection()}}
             if let error = window.error { Text(error).foregroundStyle(.red) }
             if window.computers.isEmpty {
                 Text("在新版 PendingCrew 的电脑端生成邀请，再在这里添加。旧版连接需要重新配对。")

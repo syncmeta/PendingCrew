@@ -72,9 +72,7 @@ struct IOSLegacyRemotePairingView: View {
                                 let token = epoch
                                 Task {
                                     guard epoch == token else { return }
-                                    await appModel.crewdWindow.select(id)
-                                    guard epoch == token else { return }
-                                    await appModel.connectCrewdAuthority()
+                                    await appModel.connectCrewdAuthority(computerID:id)
                                     guard epoch == token else { return }
                                     await crewStore.refreshList()
                                     guard epoch == token else { return }
@@ -104,14 +102,16 @@ struct IOSLegacyRemotePairingView: View {
                     ForEach(appModel.crewdWindow.computers.filter(\.paired)) { computer in
                         HStack {
                             Button(computer.name) { Task {
-                                await appModel.crewdWindow.select(computer.id)
-                                await appModel.connectCrewdAuthority()
+                                await appModel.connectCrewdAuthority(computerID:computer.id)
                                 await crewStore.refreshList()
                             } }.buttonStyle(.borderless).disabled(busy)
                             Spacer()
                             removeButton(computer)
                         }
                     }
+                }
+                if let attempt=appModel.crewdWindow.attempt {
+                    Section {ProgressView(attempt.phase.label);Button("取消选择"){appModel.cancelCrewdAuthoritySelection()}}
                 }
                 if let status { Section {CrewdInlineNotice(title:"当前进度",detail:status)} }
             }

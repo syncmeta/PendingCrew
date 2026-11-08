@@ -49,11 +49,12 @@ private struct CrewdNativeMacRoot: View {
                     .id(ObjectIdentifier(workspace))
             } else { Text("正在连接本机") }
         }.toolbar {
+            if let attempt=window.attempt {ProgressView(attempt.phase.label);Button("取消选择"){window.cancelSelection()}}
             Menu("运行环境") {
                 Button("本机") { Task { await chooseLocal() } }
                 ForEach(window.computers) { computer in
                     Button(computer.name + (computer.paired ? "" : " · 等待确认")) {
-                        if computer.paired { Task { await window.select(computer.id) } }
+                        if computer.paired { Task { await window.select(computer.id, journalRoot: directory.appendingPathComponent("frontend-presentation/unknown-submissions")) } }
                         else { pending = computer }
                     }
                 }
@@ -76,15 +77,15 @@ private struct CrewdNativeMacRoot: View {
         }.sheet(isPresented: $managing) { if let admin { CrewdRemoteManagementView(admin: admin) } }
             .sheet(isPresented: $adding, onDismiss: { Task { await window.refresh() } }) {
                 CrewdRemotePairingView(pairing: window.pairing, pending: nil) { id in
-                    adding = false; Task { guard await window.refresh() else { return }; await window.select(id) }
+                    adding = false; Task { guard await window.refresh() else { return }; await window.select(id, journalRoot: directory.appendingPathComponent("frontend-presentation/unknown-submissions")) }
                 }
             }
             .sheet(item: $pending, onDismiss: { Task { await window.refresh() } }) { pair in
                 CrewdRemotePairingView(pairing: window.pairing, pending: pair.id) { id in
-                    pending = nil; Task { guard await window.refresh() else { return }; await window.select(id) }
+                    pending = nil; Task { guard await window.refresh() else { return }; await window.select(id, journalRoot: directory.appendingPathComponent("frontend-presentation/unknown-submissions")) }
                 }
             }
-            .task { await window.refresh(); await chooseLocal() }
+            .task { await chooseLocal(); await window.refresh() }
             .onChange(of: window.workspace.map {ObjectIdentifier($0)}) {_,_ in synchronizeAdministration()}
             .onDisappear {window.close();synchronizeAdministration()}
     }
