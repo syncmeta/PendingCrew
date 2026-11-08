@@ -756,7 +756,16 @@ pub(crate) mod tests {
     use crewd_store::Store;
 
     fn install(s: &mut Store) {
-        ok(s, |tx| db::migrate(tx.conn()).map_err(Into::into));
+        match s
+            .conn()
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+        {
+            33 => crewd_store::schema::migrate_guarded(s.conn(), None).unwrap(),
+            34 => {}
+            other => panic!("fixture must be genuine historical33 or current34, got {other}"),
+        }
+        db::validate_public(s.conn()).unwrap();
         let settings = crewd_proto::judgments::JudgmentSettings {
             revision: Some("synthetic".into()),
             config: Some(crewd_proto::judgments::JudgmentConfig {
@@ -821,7 +830,11 @@ pub(crate) mod tests {
     }
     pub(crate) fn running_case(s: &mut Store) -> (AdminCaseView, execution::Registration) {
         install(s);
-        ask(s, "w-a1", "请确认原始问题，不得代答");
+        ask(
+            s,
+            "w-a1",
+            "\u{8bf7}\u{786e}\u{8ba4}\u{539f}\u{59cb}\u{95ee}\u{9898}\u{ff0c}\u{4e0d}\u{5f97}\u{4ee3}\u{7b54}",
+        );
         let case = request(s).case.unwrap();
         start_source(s, case)
     }
@@ -837,7 +850,10 @@ pub(crate) mod tests {
                 .contains("secretary_brief_only")
         );
         assert!(
-            !decision.summary.to_string().contains("请确认原始问题"),
+            !decision
+                .summary
+                .to_string()
+                .contains("\u{8bf7}\u{786e}\u{8ba4}\u{539f}\u{59cb}\u{95ee}\u{9898}"),
             "persistent classifier summary must not become a second question ledger"
         );
         assert!(ok(s, |tx| admin_cases::dispatch(tx, &decision)));
@@ -864,7 +880,7 @@ pub(crate) mod tests {
             request_id: uuid::Uuid::new_v4().to_string(),
             source_revision: snapshot.revision,
             generation: snapshot.author.unwrap().generation,
-            body: "有一项仍等待你确认的问题。以下是原始问题的引用；本简报没有替你答复。".into(),
+            body: "\u{6709}\u{4e00}\u{9879}\u{4ecd}\u{7b49}\u{5f85}\u{4f60}\u{786e}\u{8ba4}\u{7684}\u{95ee}\u{9898}\u{3002}\u{4ee5}\u{4e0b}\u{662f}\u{539f}\u{59cb}\u{95ee}\u{9898}\u{7684}\u{5f15}\u{7528}\u{ff1b}\u{672c}\u{7b80}\u{62a5}\u{6ca1}\u{6709}\u{66ff}\u{4f60}\u{7b54}\u{590d}\u{3002}".into(),
             references: snapshot.references,
         }
     }
@@ -1040,7 +1056,7 @@ pub(crate) mod tests {
         wrong.references.push(p.references[0].clone());
         assert!(crate::run(&mut s, NOW, |tx| publish(tx, &reg.witness, wrong)).is_err());
         let mut wrong = p.clone();
-        wrong.body = "界".repeat(db::BODY_BYTES / 3 + 1);
+        wrong.body = "\u{754c}".repeat(db::BODY_BYTES / 3 + 1);
         assert!(crate::run(&mut s, NOW, |tx| publish(tx, &reg.witness, wrong)).is_err());
         let attempt = crate::run(&mut s, NOW, |tx| {
             publish(tx, &reg.witness, p.clone())?;
@@ -1697,8 +1713,8 @@ pub(crate) mod tests {
     #[test]
     fn completed_patrol_evidence_does_not_adopt_old_completed_or_repair_missing_corrupt_or_restored_proof()
      {
-        let mut s = store();
-        let legacy = real_round(&mut s, None); // no Secretary schema: original producer only
+        let mut s = crate::testkit::v33_store();
+        let legacy = real_round(&mut s, None); // real33: original producer only
         install(&mut s);
         let (none, revision) =
             admin_human_brief::completed_patrol(s.conn(), "crew-a", NOW).unwrap();
@@ -1811,6 +1827,160 @@ pub(crate) mod tests {
             admin_human_brief::completed_patrol(s.conn(), "crew-a", NOW).unwrap();
         assert_eq!(available.run_id.as_deref(), Some(fresh.run_id.as_str()));
         assert!(revision.is_some());
+    }
+    #[test]
+    fn genuine33_partial_periodic_run_survives_protected34_migration_without_new_completion_proof()
+    {
+        let mut s = crate::testkit::v33_store();
+        let h = ask(
+            &mut s,
+            "w-a1",
+            "original33 Human question remains independent",
+        );
+        let first = real_round(&mut s, None);
+        trigger_round(&mut s);
+        let mut partial = None;
+        for _ in 0..100 {
+            ok(&mut s, crate::patrol_runtime::tick);
+            if let Some(run) = crate::patrol_runtime::status(s.conn(), "crew-a")
+                .unwrap()
+                .run
+                && run.run_id != first.run_id
+                && run.completed_at_ms.is_none()
+            {
+                partial = Some(run);
+                break;
+            }
+        }
+        let partial = partial.expect("real33 partial round");
+        let raw = crewd_store::meta_get(s.conn(), "patrol.run.v1:crew-a")
+            .unwrap()
+            .unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .unwrap()
+                .get("secretary_scope")
+                .is_none()
+        );
+        let original_scope = scope(s.conn()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crewd.db");
+        s.conn()
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(s);
+        let mut s = Store::open(&path).unwrap();
+        assert!(db::available(s.conn()).unwrap());
+        assert_eq!(
+            s.conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            34
+        );
+        assert_eq!(scope(s.conn()).unwrap(), original_scope);
+        assert_eq!(
+            crewd_store::meta_get(s.conn(), "patrol.run.v1:crew-a")
+                .unwrap()
+                .unwrap(),
+            raw,
+            "migration does not fill old start evidence"
+        );
+        let finished = real_round(&mut s, Some(&first.run_id));
+        assert_eq!(finished.run_id, partial.run_id);
+        let changes = s.conn().total_changes();
+        let (absent, revision) =
+            admin_human_brief::completed_patrol(s.conn(), "crew-a", NOW).unwrap();
+        assert_eq!(absent.state, AdminHumanBriefPatrolState::NotRecorded);
+        assert!(revision.is_none());
+        assert_eq!(
+            s.conn().total_changes(),
+            changes,
+            "source read never repairs completion proof"
+        );
+        assert!(
+            crewd_store::meta_get(s.conn(), "patrol.secretary.completed.v1:crew-a")
+                .unwrap()
+                .is_none()
+        );
+        assert!(db::observer(s.conn(), "crew-a").unwrap().is_none());
+        ok(&mut s, |tx| observe(tx, "crew-a"));
+        assert_eq!(source_count(&s), 0, "migration does not replay old H");
+        trigger_round(&mut s);
+        let fresh = real_round(&mut s, Some(&finished.run_id));
+        let (proven, revision) =
+            admin_human_brief::completed_patrol(s.conn(), "crew-a", NOW).unwrap();
+        assert_eq!(proven.run_id.as_deref(), Some(fresh.run_id.as_str()));
+        assert!(revision.is_some());
+        assert_eq!(
+            asks::get(s.conn(), "crew-a", &h).unwrap().state,
+            AskStateView::Open
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("backups"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn public34_original_restore_preserves_publication_identity_but_old_scope_cannot_republish_or_relaunch()
+     {
+        let mut s = store();
+        let (case, reg) = running_case(&mut s);
+        let p = command(&s, &reg);
+        let value = publish_bound(&mut s, &reg, p.clone());
+        ok(&mut s, |tx| {
+            crate::admin_case_outcome::verify(tx, "crew-a", &case.id)
+        });
+        let h = case_source(s.conn(), &case).unwrap().facts.human_waits[0]
+            .ask_id
+            .clone();
+        let old_scope = scope(s.conn()).unwrap();
+        let seq = crate::asks::load_org(s.conn()).unwrap().state().last_seq;
+        let input = tempfile::tempdir().unwrap();
+        let path = input.path().join("source.sqlite");
+        s.conn()
+            .execute("VACUUM INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        drop(s);
+        let target = tempfile::tempdir().unwrap();
+        let active = Store::open_data_dir(target.path()).unwrap();
+        active.finish().unwrap();
+        drop(active);
+        crewd_store::backup::restore(target.path(), &path).unwrap();
+        let mut s = Store::open_data_dir(target.path()).unwrap();
+        assert_ne!(scope(s.conn()).unwrap(), old_scope);
+        assert_eq!(
+            crate::asks::load_org(s.conn()).unwrap().state().last_seq,
+            seq
+        );
+        assert_eq!(
+            db::receipt(s.conn(), &p.request_id)
+                .unwrap()
+                .unwrap()
+                .revision,
+            value.revision
+        );
+        assert!(publication_receipt(s.conn(), &reg.witness, &p.request_id, NOW).is_err());
+        assert!(crate::run(&mut s, NOW, |tx| publish(tx, &reg.witness, p)).is_err());
+        ok(&mut s, |tx| execution::recover_page(tx, None));
+        ok(&mut s, |tx| admin_cases::recover_page(tx, None));
+        ok(&mut s, |tx| observe(tx, "crew-a"));
+        assert_eq!(source_count(&s), 1);
+        assert_eq!(
+            human_get(s.conn(), "crew-a", NOW).unwrap().state,
+            AdminSecretaryState::NotRecorded
+        );
+        assert!(
+            ok(&mut s, |tx| execution::launch_permit(
+                tx, "crew-a", &case.id
+            ))
+            .is_none()
+        );
+        assert_eq!(
+            asks::get(s.conn(), "crew-a", &h).unwrap().state,
+            AskStateView::Open
+        );
     }
     #[test]
     fn ordinary_stop_case_and_unbound_role_cannot_use_secretary_tools() {

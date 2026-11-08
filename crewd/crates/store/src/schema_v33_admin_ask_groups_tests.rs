@@ -1,4 +1,5 @@
-//! Genuine main32 -> independent administrative33, not the private query33 prototype.
+//! Retained H33 component guards under the current protected upgrade. Original
+//! historical33 evidence remains attached to its original source, never relabeled.
 use crate::{Store, admin_ask_groups as groups, schema};
 use rusqlite::{Connection, params, types::ValueRef};
 use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, path::Path};
@@ -8,7 +9,7 @@ fn version(c: &Connection) -> i64 {
     c.query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap()
 }
-fn rows(c: &Connection, table: &str) -> Vec<Vec<String>> {
+pub(super) fn rows(c: &Connection, table: &str) -> Vec<Vec<String>> {
     let mut q = c
         .prepare(&format!("SELECT * FROM \"{}\"", table.replace('"', "\"\"")))
         .unwrap();
@@ -33,7 +34,7 @@ fn rows(c: &Connection, table: &str) -> Vec<Vec<String>> {
     out.sort();
     out
 }
-fn snapshot(c: &Connection) -> BTreeMap<String, Vec<Vec<String>>> {
+pub(super) fn snapshot(c: &Connection) -> BTreeMap<String, Vec<Vec<String>>> {
     let names=c.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name NOT LIKE 'sqlite_%' OR name='sqlite_sequence') ORDER BY name").unwrap()
         .query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
     names
@@ -48,7 +49,14 @@ fn assert_old_rows(c: &Connection, old: &BTreeMap<String, Vec<Vec<String>>>) {
     for (table, data) in old {
         if table == "meta" {
             let mut actual = rows(c, table);
-            for key in [groups::FORMAT_KEY, "adminAskGroups.schemaDatabase.v1"] {
+            for key in [
+                groups::FORMAT_KEY,
+                "adminAskGroups.schemaDatabase.v1",
+                crate::admin_secretary::FORMAT_KEY,
+                crate::admin_secretary::DATABASE_KEY,
+                crate::admin_secretary::PUBLIC_FORMAT_KEY,
+                crate::admin_secretary::PUBLIC_DATABASE_KEY,
+            ] {
                 let value: String = c
                     .query_row("SELECT value FROM meta WHERE key=?1", [key], |r| r.get(0))
                     .unwrap();
@@ -71,7 +79,7 @@ fn assert_old_rows(c: &Connection, old: &BTreeMap<String, Vec<Vec<String>>>) {
         }
     }
 }
-fn seed32(c: &Connection) {
+pub(super) fn seed32(c: &Connection) {
     crate::testing::historical_fixture(c, 32).unwrap();
     assert_eq!(version(c), 32);
     assert!(!groups::available(c).unwrap());
@@ -198,7 +206,7 @@ fn seed32(c: &Connection) {
     tx.commit().unwrap();
 }
 #[test]
-fn genuine32_to33_protected_snapshot_preserves_every_old_row_default_uuid_and_reopen() {
+fn genuine32_to_current_preserves_h33_every_old_row_default_uuid_and_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("core.db");
     let c = Connection::open(&path).unwrap();
@@ -211,7 +219,7 @@ fn genuine32_to33_protected_snapshot_preserves_every_old_row_default_uuid_and_re
     c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
     drop(c);
     let migrated = Store::open(&path).unwrap();
-    assert_eq!(version(migrated.conn()), 33);
+    assert_eq!(version(migrated.conn()), schema::SCHEMA_VERSION);
     groups::validate_schema(migrated.conn()).unwrap();
     assert!(groups::available(migrated.conn()).unwrap());
     assert_old_rows(migrated.conn(), &old);
@@ -237,7 +245,7 @@ fn genuine32_to33_protected_snapshot_preserves_every_old_row_default_uuid_and_re
             .unwrap()
             .to_str()
             .unwrap()
-            .starts_with("crewd-v32-pre-v33-")
+            .starts_with(&format!("crewd-v32-pre-v{}-", schema::SCHEMA_VERSION))
     );
     let before =
         Connection::open_with_flags(&backups[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -279,13 +287,13 @@ fn late33_ddl_conflict_rolls_back_identity_tables_marker_and_original32_bytes() 
     c.execute_batch("DROP TABLE admin_ask_group_sources")
         .unwrap();
     schema::migrate_guarded(&c, None).unwrap();
-    assert_eq!(version(&c), 33);
+    assert_eq!(version(&c), schema::SCHEMA_VERSION);
     groups::validate_schema(&c).unwrap();
 }
 #[test]
-fn fresh33_has_real_identity_and_pure_validator_never_repairs_known_incompatible_formats() {
+fn fresh_current_has_real_h33_identity_and_validator_never_repairs_incompatible_formats() {
     let store = Store::open_in_memory().unwrap();
-    assert_eq!(version(store.conn()), 33);
+    assert_eq!(version(store.conn()), schema::SCHEMA_VERSION);
     let before = store.conn().total_changes();
     groups::validate_schema(store.conn()).unwrap();
     assert_eq!(store.conn().total_changes(), before);
@@ -312,7 +320,7 @@ fn fresh33_has_real_identity_and_pure_validator_never_repairs_known_incompatible
         assert_eq!(rows(store.conn(), "sqlite_master"), objects);
     }
 }
-fn image(dir: &Path) -> BTreeMap<String, (Vec<u8>, u32)> {
+pub(super) fn image(dir: &Path) -> BTreeMap<String, (Vec<u8>, u32)> {
     fn visit(root: &Path, dir: &Path, out: &mut BTreeMap<String, (Vec<u8>, u32)>) {
         for e in std::fs::read_dir(dir).unwrap() {
             let e = e.unwrap();
@@ -334,7 +342,7 @@ fn image(dir: &Path) -> BTreeMap<String, (Vec<u8>, u32)> {
     out
 }
 #[test]
-fn incompatible_cold33_refuses_before_chmod_or_new_sidecars_and_restore_target_changes() {
+fn current_with_incompatible_h33_refuses_before_chmod_sidecars_or_restore_target_changes() {
     let source = tempfile::tempdir().unwrap();
     let path = source.path().join("incompatible.db");
     let s = Store::open(&path).unwrap();
@@ -357,7 +365,7 @@ fn incompatible_cold33_refuses_before_chmod_or_new_sidecars_and_restore_target_c
     assert_eq!(image(source.path()), before);
 }
 #[test]
-fn incompatible_committed_wal33_refuses_without_creating_shm_or_recovering_original_files() {
+fn current_committed_wal_with_bad_h33_refuses_without_shm_or_original_recovery() {
     let original = tempfile::tempdir().unwrap();
     let path = original.path().join("core.db");
     let s = Store::open(&path).unwrap();

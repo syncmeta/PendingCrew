@@ -2,9 +2,9 @@
 use crate::{Result, StoreError};
 use rusqlite::{Connection, params};
 
-/// Knowledge files have an independent schema. Core21 remains the personal draft
-/// writer barrier; Core22 adds an indexed historical escalation discovery source.
-pub const SCHEMA_VERSION: i64 = 33;
+/// Knowledge files keep their independent schema. Public34 is the protected
+/// Secretary brief format on genuine H33, never the unpublished query34 branch.
+pub const SCHEMA_VERSION: i64 = 34;
 pub const SUPPORTED_SCHEMA_VERSION: i64 = SCHEMA_VERSION;
 
 #[cfg(test)]
@@ -796,9 +796,9 @@ pub(crate) fn initialize_v8_fixture(conn: &Connection) -> Result<()> {
 }
 
 pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Result<()> {
-    if !(4..=32).contains(&target) || target == 16 {
+    if !(4..=33).contains(&target) || target == 16 {
         return Err(StoreError::Invalid(
-            "historical fixture supports versions 4 through 32 except reserved Core16".into(),
+            "historical fixture supports versions 4 through 33 except reserved Core16".into(),
         ));
     }
     let objects: i64 = conn.query_row(
@@ -933,6 +933,14 @@ pub(crate) fn initialize_legacy_fixture(conn: &Connection, target: i64) -> Resul
         tx.execute_batch("PRAGMA user_version=32;")?;
         tx.commit()?;
     }
+    if target >= 33 {
+        let tx = conn.unchecked_transaction()?;
+        crate::mark_identity(&tx)?;
+        crate::admin_ask_groups::migrate(&tx)?;
+        tx.execute_batch("PRAGMA user_version=33;")?;
+        crate::admin_ask_groups::validate_schema(&tx)?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -1042,8 +1050,8 @@ pub fn migrate(conn: &Connection) -> Result<()> {
 /// `VACUUM INTO backups/crewd-v{旧}-pre-v{新}-{时间}.db`；任何一步不成就拒绝迁移，库原样不动（S20 / S25）。
 pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if v == 33 {
-        crate::admin_ask_groups::validate_schema(conn)?;
+    if v > 0 && v <= SCHEMA_VERSION {
+        validate_administrative_format(conn, v)?;
     }
     if v == 16 {
         return Err(StoreError::Invalid(
@@ -1207,17 +1215,46 @@ pub fn migrate_guarded(conn: &Connection, backups: Option<&std::path::Path>) -> 
         tx.execute_batch("PRAGMA user_version=32;")?;
         tx.commit()?;
     }
-    if v < 33 {
+    if v < 34 {
         let tx = conn.unchecked_transaction()?;
-        // New authorities receive dbId inside this same protected transaction;
-        // existing identities are unchanged, and any late failure rolls it back.
-        crate::mark_identity(&tx)?;
-        crate::admin_ask_groups::migrate(&tx)?;
-        tx.execute_batch("PRAGMA user_version=33;")?;
+        // The two final administrative formats share one transaction for older
+        // input. A late34 failure cannot strand newly issued H33 identity.
+        if v < 33 {
+            crate::mark_identity(&tx)?;
+            crate::admin_ask_groups::migrate(&tx)?;
+            tx.execute_batch("PRAGMA user_version=33;")?;
+            crate::admin_ask_groups::validate_schema(&tx)?;
+        }
         crate::admin_ask_groups::validate_schema(&tx)?;
+        crate::admin_secretary::validate_absent(&tx)?;
+        crate::admin_secretary::migrate(&tx)?;
+        let db = crate::meta_get(&tx, "dbId")?
+            .ok_or_else(|| StoreError::Invalid("missing public34 database identity".into()))?;
+        crate::meta_set(
+            &tx,
+            crate::admin_secretary::PUBLIC_FORMAT_KEY,
+            crate::admin_secretary::PUBLIC_FORMAT,
+        )?;
+        crate::meta_set(&tx, crate::admin_secretary::PUBLIC_DATABASE_KEY, &db)?;
+        tx.execute_batch("PRAGMA user_version=34;")?;
+        crate::admin_secretary::validate_public(&tx)?;
         tx.commit()?;
     }
     Ok(())
+}
+
+/// Shared read-only authority qualification for open, WAL preflight and restore.
+/// Old versions must be truly pre-Secretary; public34 must be its exact format.
+pub(crate) fn validate_administrative_format(conn: &Connection, version: i64) -> Result<()> {
+    match version {
+        34 => crate::admin_secretary::validate_public(conn),
+        33 => {
+            crate::admin_ask_groups::validate_schema(conn)?;
+            crate::admin_secretary::validate_absent(conn)
+        }
+        1..=32 => crate::admin_secretary::validate_absent(conn),
+        _ => Ok(()),
+    }
 }
 
 fn migrate_v29(conn: &Connection) -> Result<()> {
@@ -3557,3 +3594,7 @@ mod schema_v32_tests;
 #[cfg(test)]
 #[path = "schema_v33_admin_ask_groups_tests.rs"]
 mod schema_v33_admin_ask_groups_tests;
+
+#[cfg(test)]
+#[path = "schema_v34_admin_secretary_tests.rs"]
+mod schema_v34_admin_secretary_tests;

@@ -19,6 +19,9 @@ pub(crate) fn store() -> Store {
     populate(Store::open_in_memory().unwrap())
 }
 /// A genuine pre-V3 fixture; callers seed legacy requests before migrating it.
+pub(crate) fn v33_store() -> Store {
+    populate(crewd_store::testing::open_legacy_store(33).unwrap())
+}
 pub(crate) fn v31_store() -> Store {
     let s = populate(crewd_store::testing::open_legacy_store(31).unwrap());
     assert_eq!(

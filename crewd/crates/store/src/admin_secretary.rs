@@ -5,7 +5,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 pub const FORMAT_KEY: &str = "adminSecretary.schemaFormat.v1";
 pub const FORMAT: &str = "case-scoped-human-brief.1";
-const DATABASE_KEY: &str = "adminSecretary.schemaDatabase.v1";
+pub(crate) const DATABASE_KEY: &str = "adminSecretary.schemaDatabase.v1";
+pub const PUBLIC_FORMAT_KEY: &str = "adminSecretary.publicFormat.v34";
+pub const PUBLIC_FORMAT: &str = "secretary-brief.public34.1";
+pub(crate) const PUBLIC_DATABASE_KEY: &str = "adminSecretary.publicDatabase.v34";
 pub const FACT_BYTES: usize = 65_536;
 pub const BODY_BYTES: usize = 8_192;
 pub const REFERENCE_LIMIT: usize = 40;
@@ -128,8 +131,8 @@ fn objects(c: &Connection) -> Result<Vec<Catalog>> {
             .collect::<rusqlite::Result<_>>()?,
     )
 }
-/// Read-only format guard; it does not adopt a table name or repair a partial
-/// install. Root assigns the actual public migration before enabling callers.
+/// Pure module-layout guard; the public34 wrapper below also binds the
+/// generation and original H33 authority. Neither verifier repairs a partial install.
 pub fn validate_schema(c: &Connection) -> Result<()> {
     if crate::meta_get(c, FORMAT_KEY)?.as_deref() != Some(FORMAT)
         || !c.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, bool>(0))?
@@ -166,16 +169,60 @@ pub fn validate_schema(c: &Connection) -> Result<()> {
     }
     Ok(())
 }
+/// Genuine pre-34 inputs cannot contain an unpublished or partly installed
+/// Secretary catalog. This is pure qualification, never a lazy migration.
+pub(crate) fn validate_absent(c: &Connection) -> Result<()> {
+    let meta: bool = c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta')",
+        [],
+        |r| r.get(0),
+    )?;
+    let markers = meta
+        && c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key GLOB 'adminSecretary.*' OR key GLOB 'patrol.secretary.completed.v1:*' OR (key GLOB 'patrol.run.v1:*' AND CASE WHEN json_valid(value) THEN json_type(value,'$.secretary_scope') IS NOT NULL ELSE 0 END) OR (key GLOB 'admin.case.v1:*' AND CASE WHEN json_valid(value) THEN json_extract(value,'$.view.source.provenance.kind')='secretary_brief' ELSE 0 END))",
+            [],
+            |r| r.get::<_, bool>(0),
+        )?;
+    if markers || !objects(c)?.is_empty() {
+        return Err(invalid());
+    }
+    Ok(())
+}
+/// The public numerical generation is inseparable from the exact module format,
+/// original H33 authority and original database identity. A private query34 or
+/// an earlier unactivated Secretary candidate is never adopted by its number.
+pub fn validate_public(c: &Connection) -> Result<()> {
+    let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let application: i64 = c.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+    if version != 34
+        || application != i64::from(crate::APPLICATION_ID)
+        || crate::meta_get(c, PUBLIC_FORMAT_KEY)?.as_deref() != Some(PUBLIC_FORMAT)
+    {
+        return Err(invalid());
+    }
+    crate::admin_ask_groups::validate_schema(c)?;
+    validate_schema(c)?;
+    let db = crate::meta_get(c, "dbId")?.ok_or_else(invalid)?;
+    if crate::meta_get(c, PUBLIC_DATABASE_KEY)?.as_deref() != Some(db.as_str()) {
+        return Err(invalid());
+    }
+    let unexpected:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM meta WHERE (key GLOB 'adminSecretary.*' AND key NOT IN (?1,?2,?3,?4)) OR key GLOB 'managedViews.*')",rusqlite::params![FORMAT_KEY,DATABASE_KEY,PUBLIC_FORMAT_KEY,PUBLIC_DATABASE_KEY],|r|r.get(0))?;
+    if unexpected {
+        return Err(invalid());
+    }
+    Ok(())
+}
 pub fn available(c: &Connection) -> Result<bool> {
-    let marker = crate::meta_get(c, FORMAT_KEY)?;
-    if marker.is_none() && objects(c)?.is_empty() {
+    let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < 34 {
+        validate_absent(c)?;
         return Ok(false);
     }
-    validate_schema(c)?;
+    validate_public(c)?;
     Ok(true)
 }
-/// Standalone complete migration body. Deliberately not wired to ACTIVE_SCHEMA
-/// or an assumed generation number by this independent feature author.
+/// Module body called by the public34 protected schema transaction. It does not
+/// commit, assign a version or adopt an existing/partial directory.
 pub fn migrate(c: &Connection) -> Result<()> {
     transaction(c)?;
     if crate::meta_get(c, FORMAT_KEY)?.is_some() || !objects(c)?.is_empty() {
@@ -407,7 +454,7 @@ mod tests {
     use crewd_proto::{Crew, Role, Session};
 
     fn fixture() -> Store {
-        let s = Store::open_in_memory().unwrap();
+        let s = crate::testing::open_legacy_store(33).unwrap();
         for crew in ["a", "b"] {
             crate::crews::upsert(
                 s.conn(),
@@ -445,9 +492,8 @@ mod tests {
         s
     }
     fn install(s: &Store) {
-        s.conn().execute_batch("BEGIN").unwrap();
-        migrate(s.conn()).unwrap();
-        s.conn().execute_batch("COMMIT").unwrap();
+        crate::schema::migrate_guarded(s.conn(), None).unwrap();
+        validate_public(s.conn()).unwrap();
     }
     fn source_row_for(s: &Store) -> Source {
         Source {
@@ -487,7 +533,11 @@ mod tests {
         assert!(migrate(s.conn()).is_err());
         s.conn().execute_batch("BEGIN").unwrap();
         migrate(s.conn()).unwrap();
-        assert!(available(s.conn()).unwrap());
+        validate_schema(s.conn()).unwrap();
+        assert!(
+            available(s.conn()).is_err(),
+            "module-only candidate is not public34"
+        );
         s.conn().execute_batch("ROLLBACK").unwrap();
         assert!(!available(s.conn()).unwrap());
         install(&s);

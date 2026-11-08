@@ -1748,6 +1748,8 @@ mod tests {
         assert_eq!(
             with(|t| t.read_only),
             [
+                crewd_proto::admin_secretary::SNAPSHOT_TOOL,
+                crewd_proto::admin_secretary::RECEIPT_TOOL,
                 "admin_case_custody_get",
                 "admin_case_custody_list",
                 "admin_case_handoff_get",
@@ -1823,6 +1825,7 @@ mod tests {
         assert_eq!(
             with(|t| t.idempotent && !t.read_only),
             [
+                crewd_proto::admin_secretary::PUBLISH_TOOL,
                 "admin_case_custody_accept",
                 "admin_case_handoff_request",
                 "admin_case_handoff_accept",
@@ -1866,6 +1869,8 @@ mod tests {
         assert_eq!(
             with(ToolSpec::passive),
             [
+                crewd_proto::admin_secretary::SNAPSHOT_TOOL,
+                crewd_proto::admin_secretary::RECEIPT_TOOL,
                 "admin_case_custody_get",
                 "admin_case_custody_list",
                 "admin_case_handoff_get",

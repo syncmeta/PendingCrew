@@ -196,6 +196,7 @@ pub mod methods {
         crate::admin_cases::GET,
         crate::admin_cases::EFFECTS,
         crate::admin_cases::HUMAN_BRIEF,
+        crate::admin_secretary::HUMAN_GET,
         crate::admin_cases::REQUIREMENT_REVIEWS,
         crate::admin_cases::WORK_DUPLICATES,
         crate::admin_cases::WORK_DUPLICATE_HISTORY,
@@ -778,6 +779,7 @@ pub fn api_schema() -> Value {
     let _ = sub::<decision_asks::OpenReceipt>(g);
     let _ = sub::<decision_asks::OpenLookup>(g);
     let _ = sub::<WorkCloseReceipt>(g);
+    let _ = sub::<AdminSecretaryRequestResult>(g);
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
         (

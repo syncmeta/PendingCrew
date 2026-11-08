@@ -131,3 +131,56 @@ pub struct AdminSecretaryRequestResult {
     pub case_id: String,
     pub source_revision: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn public34_uses_one_registered_read_and_a_closed_command_not_a_raw_write_alias() {
+        let api = crate::api_schema();
+        assert_eq!(
+            api["methods"].as_object().unwrap().len(),
+            236,
+            "reviewed235 plus this one read only"
+        );
+        assert_eq!(
+            crate::methods::ALL
+                .iter()
+                .filter(|m| **m == HUMAN_GET)
+                .count(),
+            1
+        );
+        assert_eq!(
+            api["methods"][HUMAN_GET],
+            serde_json::json!({"params":{"$ref":"#/$defs/AdminSecretaryGet"},"result":{"$ref":"#/$defs/AdminSecretaryView"}})
+        );
+        assert!(api["methods"].get(HUMAN_REQUEST).is_none());
+        let variants = api["$defs"]["PublicCommand"]["oneOf"].as_array().unwrap();
+        let matching = variants
+            .iter()
+            .filter(|v| v["properties"]["operation"]["const"] == HUMAN_REQUEST)
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(
+            matching[0]["properties"]["params"],
+            serde_json::json!({"$ref":"#/$defs/AdminSecretaryRequest"})
+        );
+        assert_eq!(matching[0]["additionalProperties"], false);
+        let result = &api["$defs"]["AdminSecretaryRequestResult"];
+        assert_eq!(result["additionalProperties"], false);
+        assert_eq!(
+            result["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["crewId", "sourceId", "caseId", "sourceRevision"])
+        );
+        assert!(
+            api["$defs"]["AdminSecretarySnapshot"]["properties"]
+                .get("patrolRevision")
+                .is_some()
+        );
+    }
+}

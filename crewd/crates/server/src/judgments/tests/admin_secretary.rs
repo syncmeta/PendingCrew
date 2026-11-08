@@ -12,7 +12,7 @@ async fn source(f: &Fixture) -> (String, String) {
     let worker = f.worker.clone();
     f.state
         .collab(move |tx| {
-            crewd_store::admin_secretary::migrate(tx.conn())?;
+            crewd_store::admin_secretary::validate_public(tx.conn())?;
             let captain = crews::captain_of(tx.conn(), &crew)?.unwrap();
             sessions::set_desired(tx, &captain, Desired::Running)?;
             // Establish the real completed source before the writing intent;
@@ -122,9 +122,13 @@ async fn call(
         .await
 }
 fn decoded(value: serde_json::Value) -> serde_json::Value {
-    assert_ne!(value["isError"], true, "{value}");
-    serde_json::from_str(value["content"][0]["text"].as_str().unwrap()).unwrap()
+    let actual: crewd_proto::agent::CallResult =
+        serde_json::from_value(value).expect("original agent.call typed result");
+    assert!(!actual.is_error, "{}", actual.text);
+    serde_json::from_str(&actual.text)
+        .expect("Secretary JSON carried by the original typed result text")
 }
+
 #[tokio::test]
 async fn secretary_native_judgment_factory_authenticated_tools_public_receipt_and_original_h() {
     let (f, id, h, permit, _fake) = ready().await;
