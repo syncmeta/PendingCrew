@@ -6,7 +6,9 @@ Build/Products/<configuration> directory containing Swift package modules and
 aggregate objects. No Xcode build, account, Keychain vault or real device is used.
 """
 import argparse
+import hashlib
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -23,6 +25,7 @@ from crewd_recovery_common import Public, birth, save, sha, socket_owned, wait_f
 
 SWIFT = (
     "Sources/Mac/Crewd/CrewdClient.swift", "Sources/Mac/Crewd/CrewdLocalIPC.swift",
+    "Sources/CrewdRemote/CrewdAdminAskGroupsWire.swift",
     *(f"Sources/CrewdRemote/{name}.swift" for name in (
         "CrewdRemoteProtocol", "CrewdRemoteVault", "CrewdRemoteCertificate", "CrewdRemotePairing",
         "CrewdRemoteTransport", "CrewdEnrollment", "CrewdEnrollmentWire", "CrewdEnrollmentVault",
@@ -75,6 +78,71 @@ def compile_peer(repo, output, ref, products):
         subprocess.run(arguments, check=True, stdout=log, stderr=log, timeout=120)
     assert all(sha(path) == digest for path, digest in original_cache.items()), "warm dependency cache changed"
     save(output / "client-inputs.json", {"ref": ref, "swift": checks, "cache": {str(p): d for p, d in original_cache.items()}, "binarySHA256": sha(peer)})
+    return peer
+
+
+def verify_app_build_inputs(repo, ref, products, library, app_witness, module_map):
+    """Fail before compiling or starting Core unless the whole build matches."""
+    witness = json.loads(app_witness.read_text())
+    assert witness["exit"] == 0 and witness["allSourceInputsUnchanged"] is True
+    assert witness["sourceCommit"] == ref
+    assert sha(library) == witness["librarySHA256"]
+    assert subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip() == ref
+    assert not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo, text=True).strip()
+    source_inputs = app_witness.parent / "source-inputs.json"
+    assert sha(source_inputs) == witness["sourceInputSHA256"]
+    entries = json.loads(source_inputs.read_text())
+    assert entries == json.loads((app_witness.parent / "source-inputs-after.json").read_text())
+    tracked = sorted(set(subprocess.check_output(["git", "ls-files", "-z"], cwd=repo).decode().split("\0")) - {""})
+    assert isinstance(entries, list) and all(isinstance(e, dict) and set(e) == {"path", "sha256"} for e in entries)
+    assert [entry["path"] for entry in entries] == tracked, "App source inventory is not the complete unique tracked input"
+    for entry in entries:
+        path = repo / entry["path"]
+        digest = hashlib.sha256(os.fsencode(path.readlink())).hexdigest() if path.is_symlink() else sha(path)
+        assert digest == entry["sha256"], entry["path"]
+    assert products.resolve(strict=True) == pathlib.Path(witness["products"]).resolve(strict=True)
+    assert module_map.resolve(strict=True) == pathlib.Path(witness["moduleMap"]).resolve(strict=True)
+    assert sha(module_map) == witness["moduleMapSHA256"]
+    modules = {p.name: sha(p) for p in (products / "PendingCrew.swiftmodule").glob("*") if p.is_file()}
+    assert modules and modules == witness["appModules"], "App compiler modules differ from the successful build"
+    return witness
+
+
+def compile_app_peer(repo, output, ref, products, library, app_witness, module_map):
+    """Use the real ordinary App module; keep the original TLS assertions too."""
+    verify_app_build_inputs(repo, ref, products, library, app_witness, module_map)
+
+    original = repo / "scripts/dev/fixtures/crewd-native-enrollment-patrol.swift"
+    extension = repo / "scripts/dev/fixtures/crewd-native-window-tls.swift"
+    raw = original.read_text()
+    alias = "// CrewdRemoteTransport's production dependency on the workspace is this typealias.\nenum CrewdWorkspace {\n    typealias Connector = @MainActor (CrewdClient) async throws -> Void\n}\n"
+    assert raw.count(alias) == 1
+    raw = raw.replace(alias, "@testable import PendingCrew\n")
+    marker = '        stage("original enrollment recovered")'
+    assert raw.count(marker) == 1
+    raw = raw.replace(marker, marker + '\n        try await actualWindows(pairing:pairing,recordID:prepared.id,directory:directory,grantID:grant.id)')
+    marker = "    private static func stage(_ value: String) {"
+    assert raw.count(marker) == 1
+    raw = raw.replace(marker, extension.read_text() + "\n" + marker)
+    marker = '"verifiedOnFreshTransport": .bool(true),'
+    assert raw.count(marker) == 1
+    raw = raw.replace(marker, '"actualAppTwoWindowLocalTLSLocal": .bool(true), ' + marker)
+    fixture = output / "fixture.swift"
+    fixture.write_text(raw)
+    peer = output / "native-peer"
+    arguments = ["/usr/bin/xcrun", "swiftc", "-swift-version", "5", "-parse-as-library", "-I", str(products),
+                 "-module-cache-path", str(output / "module-cache"), "-Xcc", "-fmodule-map-file=" + str(module_map),
+                 str(fixture), str(library), "-Xlinker", "-rpath", "-Xlinker", str(library.parent),
+                 "-Xlinker", "-rpath", "-Xlinker", str(library.parent.parent / "Frameworks"), "-o", str(peer)]
+    with (output / "compile.log").open("xb") as log:
+        subprocess.run(arguments, check=True, stdout=log, stderr=log, timeout=120)
+    save(output / "client-inputs.json", {
+        "ref": ref, "appBuildWitnessSHA256": sha(app_witness), "appLibrarySHA256": sha(library),
+        "originalFixtureSHA256": sha(original), "windowExtensionSHA256": sha(extension),
+        "renderedFixtureSHA256": sha(fixture), "moduleMapSHA256": sha(module_map),
+        "binarySHA256": sha(peer), "command": arguments,
+        "appModules": {str(p): sha(p) for p in (products / "PendingCrew.swiftmodule").glob("*") if p.is_file()},
+    })
     return peer
 
 
@@ -146,7 +214,13 @@ def main():
     parser.add_argument("--witness", type=pathlib.Path, required=True)
     parser.add_argument("--ref", required=True)
     parser.add_argument("--products", type=pathlib.Path, required=True)
+    parser.add_argument("--app-library", type=pathlib.Path, help="Optional real ordinary Debug App library with testability enabled")
+    parser.add_argument("--app-build-witness", type=pathlib.Path, help="Exact App build result and sibling source-inputs.json")
+    parser.add_argument("--module-map", type=pathlib.Path, help="The same build's CTOML module map")
     args = parser.parse_args()
+    app_mode = args.app_library is not None
+    if any(v is not None for v in (args.app_library, args.app_build_witness, args.module_map)) and not all(v is not None for v in (args.app_library, args.app_build_witness, args.module_map)):
+        parser.error("--app-library, --app-build-witness and --module-map must be supplied together")
     assert sys.platform == "darwin" and re.fullmatch(r"[0-9a-f]{40}", args.ref)
     repo = pathlib.Path(__file__).resolve().parents[2]
     binary = args.binary.resolve(strict=True)
@@ -155,8 +229,16 @@ def main():
     assert sha(binary) == witness["binarySHA256"]
     output = pathlib.Path(tempfile.mkdtemp(prefix="pcw-enrollment-patrol.", dir="/private/tmp"))
     print(f"Evidence: {output}", flush=True)
-    peer = compile_peer(repo, output, args.ref, args.products.resolve(strict=True))
+    if app_mode:
+        peer = compile_app_peer(repo, output, args.ref, args.products.resolve(strict=True),
+                                args.app_library.resolve(strict=True), args.app_build_witness.resolve(strict=True), args.module_map.resolve(strict=True))
+    else:
+        peer = compile_peer(repo, output, args.ref, args.products.resolve(strict=True))
     run_core(output, binary, witness["binarySHA256"], args.ref, peer)
+    if app_mode:
+        result = json.loads((output / "result.json").read_text())
+        assert result["native"]["actualAppTwoWindowLocalTLSLocal"]
+        print("PASS actual ordinary App two-window Local/mTLS/Local with original Unknown and drafts", flush=True)
     print("PASS production short-link enrollment, original manual patrol receipt after reconnect, and grant revocation", flush=True)
 
 
