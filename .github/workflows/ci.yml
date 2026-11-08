@@ -22,7 +22,7 @@ permissions:
 env:
   # **钉死 Xcode 版本，不用 runner 镜像的默认值。** 镜像升级会静默换掉编译器，
   # 表现成「昨天绿的今天红了、代码一个字没动」——最难查的一类 CI 故障。
-  # 26.5 (17F42) = 开发机上的那一版，两边编译器一致。
+  # 验收固定为 26.5 (17F42)；本机新版编译器通过不能替代这项检查。
   XCODE: /Applications/Xcode_26.5.app
 
 jobs:
@@ -79,12 +79,59 @@ jobs:
 
       - run: scripts/gen-project.sh --fetch
 
+      - name: 读取普通 Core 的固定工具链
+        id: core-toolchain
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' crewd/rust-toolchain.toml)
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.core-toolchain.outputs.channel }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crewd
+
+      # 普通 App 必须嵌入准确的普通 Core；沿用正式来源记录器，不跳过嵌入检查。
+      - name: 构建并记录同版本普通 Core
+        working-directory: crewd
+        env:
+          CARGO_INCREMENTAL: '0'
+          CARGO_BUILD_JOBS: '2'
+        run: |
+          cargo fetch --locked
+          python3 ../scripts/dev/record-crewd-build.py prepare \
+            "$GITHUB_WORKSPACE" "$RUNNER_TEMP/apple-core-evidence" "$GITHUB_SHA"
+          python3 ../scripts/dev/record-crewd-build.py build \
+            "$GITHUB_WORKSPACE" "$RUNNER_TEMP/apple-core-evidence" \
+            "$GITHUB_WORKSPACE/crewd/target/release/crewd" \
+            cargo build --release --locked --offline -p crewd --bin crewd --message-format=json
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          witness = pathlib.Path(os.environ['RUNNER_TEMP']) / 'apple-core-evidence-witness.json'
+          value = json.loads(witness.read_text())
+          binary = pathlib.Path(os.environ['RUNNER_TEMP']) / 'apple-core-evidence' / value['binaryFile']
+          assert value['sourceRef'] == os.environ['GITHUB_SHA']
+          assert value['freshWorkspaceArtifacts'] is True
+          assert value['buildConfiguration']['artifactProfile']['test'] is False
+          assert all('testkit' not in features for features in value['buildConfiguration']['workspaceFeatures'].values())
+          assert hashlib.sha256(binary.read_bytes()).hexdigest() == value['binarySHA256']
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('PENDINGCREW_BACKEND_INPUT=' + str(binary) + '\n')
+              env.write('PENDINGCREW_BACKEND_SHA256=' + value['binarySHA256'] + '\n')
+          PY
+
       - name: macOS 编译 + 单测
         run: |
           xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
             -destination 'platform=macOS' \
             -derivedDataPath DD -clonedSourcePackagesDirPath SourcePackages \
             -skip-testing:PendingCrewTests/HelperBuildPerMemberTests \
+            PENDINGCREW_PRODUCT_SOURCE_REF="$GITHUB_SHA" \
+            PENDINGCREW_BACKEND_INPUT="$PENDINGCREW_BACKEND_INPUT" \
+            PENDINGCREW_BACKEND_SHA256="$PENDINGCREW_BACKEND_SHA256" \
             build test
 
       # 三端共用一套源码：只编 Mac 会让漏了 `#if os(macOS)` 的 AppKit 调用
@@ -95,4 +142,15 @@ jobs:
           xcodebuild -project PendingCrew.xcodeproj -scheme PendingCrew \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath DD -clonedSourcePackagesDirPath SourcePackages \
+            PENDINGCREW_PRODUCT_SOURCE_REF="$GITHUB_SHA" \
             build
+
+      - name: 保留普通 Core 的准确构建记录
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-normal-core-evidence
+          path: |
+            ${{ runner.temp }}/apple-core-evidence
+            ${{ runner.temp }}/apple-core-evidence-witness.json
+          if-no-files-found: ignore
