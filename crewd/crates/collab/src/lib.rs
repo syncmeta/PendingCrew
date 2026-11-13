@@ -46,6 +46,7 @@ pub mod message_attribution;
 pub mod message_delivery;
 pub mod message_provenance;
 pub mod messages;
+pub mod onboarding;
 pub mod patrol_brief;
 pub mod patrol_manual;
 pub mod patrol_runtime;
