@@ -1,6 +1,7 @@
 //! Tool dispatch: look up -> role gate (re-read on every call) -> parse args -> hand to the group
 //! implementations. Receipt text always comes from the `r.*` sections of tools.*.md.
 mod admin_cases;
+pub(crate) mod admin_secretary;
 pub mod asks;
 pub mod captain;
 pub mod channels;
@@ -179,6 +180,11 @@ pub async fn call(st: &AppState, me: &Identity, tool: &str, args: Value) -> Call
         return cx.err("r.captain_only", &[("name", tool)]);
     }
     match tool {
+        crewd_proto::admin_secretary::SNAPSHOT_TOOL
+        | crewd_proto::admin_secretary::PUBLISH_TOOL
+        | crewd_proto::admin_secretary::RECEIPT_TOOL => {
+            admin_secretary::call(&cx, tool, args).await
+        }
         "organization_search_expand" => organization_search::expand(&cx, args).await,
         "managed_table_v2_get"
         | "managed_tables_v2_list"

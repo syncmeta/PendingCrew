@@ -12,6 +12,8 @@
 //! - 客户端在 hello 里报自己的名字 / 版本 / 构建与 `apiVersion`；crewd 回自己的 `apiVersion`、`minApiVersion`、构建身份与能力。
 //! - v3 还没发布：v3 之内的改名不留别名。
 pub mod admin_ask_groups;
+pub mod admin_secretary;
+pub use admin_secretary::*;
 pub mod session_retirement;
 pub use session_retirement::*;
 pub mod work_reassignment;
@@ -194,6 +196,7 @@ pub mod methods {
         crate::admin_cases::GET,
         crate::admin_cases::EFFECTS,
         crate::admin_cases::HUMAN_BRIEF,
+        crate::admin_secretary::HUMAN_GET,
         crate::admin_cases::REQUIREMENT_REVIEWS,
         crate::admin_cases::WORK_DUPLICATES,
         crate::admin_cases::WORK_DUPLICATE_HISTORY,
@@ -776,6 +779,7 @@ pub fn api_schema() -> Value {
     let _ = sub::<decision_asks::OpenReceipt>(g);
     let _ = sub::<decision_asks::OpenLookup>(g);
     let _ = sub::<WorkCloseReceipt>(g);
+    let _ = sub::<AdminSecretaryRequestResult>(g);
     // json! 一次展开 32 个方法会撞宏递归上限：先列成表再收成对象（输出形状不变）。
     let methods: serde_json::Map<String, Value> = [
         (
@@ -1245,6 +1249,10 @@ pub fn api_schema() -> Value {
         (
             admin_cases::HUMAN_BRIEF,
             m(sub::<AdminHumanBriefParams>(g), sub::<AdminHumanBrief>(g)),
+        ),
+        (
+            admin_secretary::HUMAN_GET,
+            m(sub::<AdminSecretaryGet>(g), sub::<AdminSecretaryView>(g)),
         ),
         (
             admin_cases::SIMILAR_REQUIREMENTS,

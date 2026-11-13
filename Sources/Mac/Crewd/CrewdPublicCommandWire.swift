@@ -62,6 +62,16 @@ struct CrewdPublicReceipt {
                   let disposition = result["disposition"].string,
                   ["started", "joined"].contains(disposition) else { throw CrewdPublicWire.invalid() }
         }
+        if originalCommand["operation"] == .string("adminCase.secretaryRequest"),phase == .committed {
+            // Source identity only: original receipts must not duplicate the
+            // purgeable Human facts/body. Presentation performs a fresh read.
+            let result=value["result"],params=originalCommand["params"]
+            guard case .object(let fields)=result,Set(fields.keys)==["crewId","sourceId","caseId","sourceRevision"],
+                  result["crewId"] == params["crewId"],result["sourceRevision"] == params["expectedRevision"],
+                  let sourceID=result["sourceId"].string,sourceID.hasPrefix("SB"),let sourceUUID=UUID(uuidString:String(sourceID.dropFirst(2))),sourceID=="SB"+sourceUUID.uuidString.lowercased(),
+                  let caseID=result["caseId"].string,caseID.hasPrefix("AC"),caseID.utf8.count==22,(UInt64(caseID.dropFirst(2)) ?? 0)>0,
+                  caseID.dropFirst(2).utf8.allSatisfy({(48...57).contains($0)}) else {throw CrewdPublicWire.invalid()}
+        }
         if originalCommand["operation"] == .string(CrewdPublicOperation.requirementReview.rawValue), phase == .committed {
             try CrewdRequirementReviewWire.validateResult(value["result"], params: originalCommand["params"])
         }
@@ -233,6 +243,7 @@ enum CrewdPublicOperation: String, Codable {
     case crewCreate = "crew.create"
     case firstMessage = "crew.createFirstMessage"
     case patrolStart = "work.patrolStart"
+    case secretaryRequest = "adminCase.secretaryRequest"
     case requirementReview = "adminCase.requirementReview"
     case workCloseWithReceipt = "work.closeWithReceipt"
     case workDuplicateClose = "adminCase.workDuplicateClose"
@@ -339,6 +350,11 @@ private enum CrewdPublicParameters {
         case .patrolStart:
             required = ["crewId"]
             _ = try CrewdPublicWire.token(fields["crewId"] ?? .null)
+        case .secretaryRequest:
+            required = ["crewId","expectedRevision"]
+            _ = try CrewdPublicWire.token(fields["crewId"] ?? .null)
+            guard let revision=fields["expectedRevision"]?.string,revision.utf8.count==64,
+                  revision.utf8.allSatisfy({(48...57).contains($0)||(97...102).contains($0)}) else {throw CrewdPublicWire.invalid()}
         case .requirementReview:
             return try CrewdRequirementReviewWire.canonical(value)
         case .workCloseWithReceipt:

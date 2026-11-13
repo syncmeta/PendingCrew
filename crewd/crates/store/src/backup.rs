@@ -279,6 +279,9 @@ fn snapshot_steps_with_floors(
         // 拍出来的这份自己也要过 quick_check，坏的不改名成正式备份。
         {
             let copy = open_for_check(&tmp)?;
+            copy.pragma_update(None, "foreign_keys", true)?;
+            let version: i64 = copy.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+            crate::schema::validate_administrative_format(&copy, version)?;
             ensure_ok(&copy, Check::Quick)?;
         }
         std::fs::File::open(&tmp)?.sync_all()?;
@@ -1096,16 +1099,14 @@ pub fn restore(data_dir: &Path, from: &Path) -> Result<RestoreReport> {
     {
         return Err(StoreError::Invalid("不能用在用的库恢复它自己".into()));
     }
-    // Qualify the supported H33 format on a private cold/WAL copy before a
+    // Qualify the supported administrative format on a private cold/WAL copy before a
     // read-only SQLite open can create sidecars or any target path is touched.
     crate::version_guard::preflight(from)?.recheck()?;
     let src = open_read_only(from)?;
     let app: i32 = src.query_row("PRAGMA application_id", [], |r| r.get(0))?;
     let version: i64 = src.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version == 33 {
-        src.pragma_update(None, "foreign_keys", true)?;
-        crate::admin_ask_groups::validate_schema(&src)?;
-    }
+    src.pragma_update(None, "foreign_keys", true)?;
+    crate::schema::validate_administrative_format(&src, version)?;
     if (app != 0 && app != crate::APPLICATION_ID)
         || version == 16
         || !(1..=crate::schema::SUPPORTED_SCHEMA_VERSION).contains(&version)

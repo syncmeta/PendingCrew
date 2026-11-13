@@ -189,7 +189,10 @@ async fn route(
                 .await
                 .map_err(|_| invalid())?
             {
-                return to_value(catalog::case_tools_for(&me, loc));
+                let secretary = super::admin_case_scope::secretary_binding(state, &session)
+                    .await
+                    .map_err(|_| invalid())?;
+                return to_value(catalog::case_tools_for_purpose(&me, loc, secretary));
             }
             let mut list = catalog::tools_for(&me, loc);
             if !scope.is_live()

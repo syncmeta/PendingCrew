@@ -13,6 +13,7 @@ pub mod admin_case_link;
 pub mod admin_case_outcome;
 pub mod admin_cases;
 pub mod admin_human_brief;
+pub mod admin_secretary;
 pub mod artifact_history;
 pub mod ask_inbox;
 pub mod ask_resolution;

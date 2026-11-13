@@ -201,6 +201,11 @@ fn cases(
     let rows = cases
         .into_iter()
         .filter_map(|case| {
+            // Every secretary case is an authoring record, never a fresh input
+            // for the next secretary case or the old Stop-only Human panel.
+            if crate::admin_secretary::is_secretary(&case) {
+                return None;
+            }
             let outcome_phase = case.outcome_record.map(|v| v.phase);
             if outcome_phase == Some(AdminCaseOutcomePhase::Resolved) {
                 return None;
@@ -226,6 +231,30 @@ fn cases(
 }
 
 fn patrol(c: &Connection, crew: &str, now: i64) -> AdminHumanBriefPatrol {
+    project_patrol(patrol_runtime::human_observation(c, crew), now)
+}
+/// Secretary writing consumes only a proven completed observation. The existing
+/// Human facts panel above continues to show the current in-flight round.
+pub(crate) fn completed_patrol(
+    c: &Connection,
+    crew: &str,
+    now: i64,
+) -> Result<(AdminHumanBriefPatrol, Option<String>)> {
+    let run = patrol_runtime::secretary_observation(c, crew)?;
+    let revision = run
+        .as_ref()
+        .map(patrol_runtime::completed_semantic_revision)
+        .transpose()?;
+    let projected = project_patrol(Ok(run), now);
+    if projected.state == AdminHumanBriefPatrolState::Unavailable {
+        return Err(invalid());
+    }
+    Ok((projected, revision))
+}
+fn project_patrol(
+    observed: Result<Option<crewd_proto::PatrolRun>>,
+    now: i64,
+) -> AdminHumanBriefPatrol {
     use AdminHumanBriefPatrolState as State;
     let empty = |state| AdminHumanBriefPatrol {
         state,
@@ -236,7 +265,7 @@ fn patrol(c: &Connection, crew: &str, now: i64) -> AdminHumanBriefPatrol {
         finding_counts: Default::default(),
         findings_truncated: false,
     };
-    let run = match patrol_runtime::human_observation(c, crew) {
+    let run = match observed {
         Ok(Some(run))
             if uuid::Uuid::parse_str(&run.run_id).is_ok()
                 && run.started_at_ms <= now

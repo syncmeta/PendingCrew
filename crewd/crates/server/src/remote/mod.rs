@@ -1035,6 +1035,8 @@ fn allowed_method(method: &str) -> bool {
             | "adminCase.get"
             | crewd_proto::admin_cases::EFFECTS
             | crewd_proto::admin_cases::HUMAN_BRIEF
+            | crewd_proto::admin_secretary::HUMAN_GET
+            | crewd_proto::admin_secretary::HUMAN_REQUEST
             | "adminCase.custodyGet"
             | "adminCase.custodyTransferGet"
             | "adminCase.custodyPropose"

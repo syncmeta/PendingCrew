@@ -942,3 +942,6 @@ mod admin_native_policy;
 mod admin_native_tools;
 #[path = "admin_handoff.rs"]
 mod handoff;
+
+#[path = "admin_secretary.rs"]
+mod admin_secretary;

@@ -1019,13 +1019,18 @@ final class CrewdWorkStore: ObservableObject {
         guard (result["channel"]["archivedAt"] == .null) == restore else {throw CrewdClientError(message:"群归档回执状态不符，请重新核对，不会重发。")}
         return result
     }
-    private func validateAdminCase(_ row:CrewdValue,crew:String)throws {
+    private func validateAdminCase(_ row:CrewdValue,crew:String,allowSecretary:Bool=false)throws {
+        let secretary=row["source"]["provenance"]["kind"] == .string("secretary_brief")
+        guard !secretary || allowSecretary else {throw CrewdClientError(message:"秘书案型需要单独的简报入口。")}
         guard row["crewId"] == .string(crew),row["id"].string?.isEmpty == false,row["revision"].string?.isEmpty == false,row["createdAt"].int != nil,
-              row["source"]["sessionId"].string?.isEmpty == false,row["source"]["budgetEpoch"].int != nil,row["source"]["restoreEpoch"].string?.isEmpty == false,row["source"]["announcementId"].string?.isEmpty == false,
+              row["source"]["sessionId"].string?.isEmpty == false,row["source"]["budgetEpoch"].int != nil,row["source"]["restoreEpoch"].string?.isEmpty == false,(secretary ? row["source"]["announcementId"] == .string("") : row["source"]["announcementId"].string?.isEmpty == false),
               ["observed","prepared","dispatched","answered","unknown","unconfigured","waiting_admission","stale"].contains(row["decision"].string ?? ""),["not_started","registered","requested","running","unknown","stale"].contains(row["execution"].string ?? ""),["not_started","prepared","dispatched","decision_ready","exit_requested","parked","unknown","stale","suppressed"].contains(row["retirement"].string ?? ""),case .array(let targets)=row["targets"] else {throw CrewdClientError(message:"行政记录身份、来源或状态不完整。")}
         let provenance=row["source"]["provenance"]
         guard let budget=row["source"]["budgetEpoch"].int,budget>=0,budget>0 || provenance != .null else {throw CrewdClientError(message:"原生来源不能使用迁移零预算。")}
-        if provenance != .null {
+        if secretary {
+            guard provenance["sourceId"].string?.hasPrefix("SB") == true,provenance["sourceRevision"].string?.utf8.count==64,
+                  provenance["observedAtMs"] == row["createdAt"],budget==0,targets.isEmpty else {throw CrewdClientError(message:"秘书来源和原始事实不完整。")}
+        } else if provenance != .null {
             guard provenance["kind"] == .string("human_revalidation"),provenance["requestId"].string.flatMap(UUID.init(uuidString:)) != nil,
                   provenance["legacyMessageId"] == row["source"]["announcementId"],provenance["announcementDigest"].string?.isEmpty == false,provenance["previewRevision"].string?.isEmpty == false,
                   provenance["note"].string?.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty == false,provenance["revalidatedAt"] == row["createdAt"] else {throw CrewdClientError(message:"人类重新核验来源证据不完整。")}
@@ -1215,6 +1220,14 @@ final class CrewdWorkStore: ObservableObject {
         let value = try await call("adminCase.humanBrief", .object(["crewId": .string(crew)]))
         try check(token)
         return try CrewdHumanBrief(value: value, crew: crew)
+    }
+    func secretaryBrief() async throws -> CrewdSecretaryBrief {
+        let crew=selectedCrew,token=generation
+        guard capabilities.contains("adminCase.secretaryBrief.v1"),!crew.isEmpty else {throw CrewdClientError(message:"当前后台未开放秘书简报。",kind:.notSubmitted)}
+        let value=try await call("adminCase.secretaryBrief",.object(["crewId":.string(crew)]))
+        try check(token)
+        if value["case"] != .null {try validateAdminCase(value["case"],crew:crew,allowSecretary:true)}
+        return try CrewdSecretaryBrief(value:value,crew:crew)
     }
     private func legacyError()->CrewdClientError {CrewdClientError(message:"历史核验身份、范围或字段不完整。")}
     private func validateLegacy(_ row:CrewdValue)throws {
@@ -1867,6 +1880,95 @@ enum CrewdCaptainBriefPhase: String {
         case .dropped: "已取消"
         case .unknown: "结果未知"
         }
+    }
+}
+
+struct CrewdSecretaryBrief {
+    let state:String
+    let observedAt:Int
+    let currentRevision:String?
+    let source:CrewdValue
+    let caseValue:CrewdValue
+    let publication:CrewdValue
+    var body:String? {publication["body"].string}
+    var canRequest:Bool {currentRevision != nil && !["unknown","waiting","writing","current","unavailable"].contains(state)}
+    private static func hash(_ v:CrewdValue)->Bool {
+        v.string.map{$0.utf8.count==64 && $0.utf8.allSatisfy{(48...57).contains($0)||(97...102).contains($0)}} ?? false
+    }
+    private static func sourceID(_ v:CrewdValue)->Bool {
+        guard let s=v.string,s.hasPrefix("SB"),let id=UUID(uuidString:String(s.dropFirst(2))) else {return false}
+        return s=="SB"+id.uuidString.lowercased()
+    }
+    private static func caseID(_ value:CrewdValue)->Bool {
+        guard let id=value.string,id.hasPrefix("AC"),id.utf8.count==22,(UInt64(id.dropFirst(2)) ?? 0)>0 else{return false}
+        return id.dropFirst(2).utf8.allSatisfy{(48...57).contains($0)}
+    }
+    private static func reference(_ v:CrewdValue)->String? {
+        guard case .object(let fields)=v,Set(fields.keys)==["kind","id"],let kind=v["kind"].string,let id=v["id"].string,!id.isEmpty,!id.unicodeScalars.contains(where:CharacterSet.controlCharacters.contains) else {return nil}
+        switch kind {
+        case "human_wait":guard CrewdWorkID(id,kind:.human) != nil else{return nil}
+        case "case":guard Self.caseID(v["id"]) else{return nil}
+        case "patrol":guard UUID(uuidString:id) != nil else{return nil}
+        default:return nil
+        }
+        return kind+":"+id
+    }
+    init(value:CrewdValue,crew:String)throws {
+        let invalid=CrewdClientError(message:"秘书简报的来源、作者或原回执不完整。")
+        guard case .object(let top)=value,Set(["crewId","observedAtMs","state","currentRevision","source","case","publication"]).isSubset(of:Set(top.keys)),
+              value["crewId"] == .string(crew),let observed=value["observedAtMs"].int,observed>=0,
+              let state=value["state"].string,["not_recorded","waiting","writing","current","stale","unknown","unavailable"].contains(state),
+              value["currentRevision"] == .null || Self.hash(value["currentRevision"]) else{throw invalid}
+        let source=value["source"],record=value["case"],publication=value["publication"]
+        if source == .null {
+            guard record == .null,publication == .null,["not_recorded","stale","unavailable"].contains(state) else{throw invalid}
+        } else {
+            guard Self.sourceID(source["sourceId"]),Self.caseID(source["caseId"]),source["crewId"] == .string(crew),Self.hash(source["revision"]),(Self.hash(value["currentRevision"]) || (state=="stale" && value["currentRevision"] == .null)),
+                  let at=source["observedAtMs"].int,at>=0,at<=observed,source["facts"]["observedAtMs"] == source["observedAtMs"],
+                  source["scope"]["dbId"].string?.isEmpty == false,source["scope"]["restoreEpoch"].string.flatMap(UUID.init(uuidString:)) != nil,
+                  source["judgmentEpoch"].string?.isEmpty == false,source["author"] == .null,
+                  source["configurationRevision"] == .null || source["configurationRevision"].string?.isEmpty == false,
+                  case .array(let refs)=source["references"],refs.count<=40,
+                  Set(refs.compactMap(Self.reference)).count==refs.count else{throw invalid}
+            _ = try CrewdHumanBrief(value:source["facts"],crew:crew)
+            switch source["facts"]["patrol"]["state"].string {
+            case "complete":guard Self.hash(source["patrolRevision"]) else{throw invalid}
+            case "not_recorded":guard source["patrolRevision"] == .null else{throw invalid}
+            default:throw invalid
+            }
+            var expected=Set<String>()
+            for wait in source["facts"]["humanWaits"].array {expected.insert("human_wait:"+(wait["askId"].string ?? ""))}
+            for item in source["facts"]["cases"].array {expected.insert("case:"+(item["caseId"].string ?? ""))}
+            if let run=source["facts"]["patrol"]["runId"].string {expected.insert("patrol:"+run)}
+            guard Set(refs.compactMap(Self.reference))==expected,
+                  record["id"] == source["caseId"],record["crewId"] == .string(crew),
+                  record["source"]["provenance"]["kind"] == .string("secretary_brief"),
+                  record["source"]["provenance"]["sourceId"] == source["sourceId"],record["source"]["provenance"]["sourceRevision"] == source["revision"],
+                  record["source"]["provenance"]["observedAtMs"] == source["observedAtMs"],
+                  record["source"]["restoreEpoch"] == source["judgmentEpoch"],record["source"]["budgetEpoch"] == .integer(0),
+                  record["source"]["announcementId"] == .string(""),case .array(let targets)=record["targets"],targets.isEmpty else{throw invalid}
+            if publication != .null {
+                guard publication["sourceId"] == source["sourceId"],publication["caseId"] == record["id"],publication["crewId"] == .string(crew),
+                      publication["sourceRevision"] == source["revision"],Self.hash(publication["revision"]),
+                      publication["authorSessionId"] == record["executionRecord"]["sessionId"],publication["attemptId"] == record["executionRecord"]["attemptId"],
+                      publication["attemptId"].string.flatMap(UUID.init(uuidString:)) != nil,
+                      let generation=publication["generation"].string,let gen=UInt64(generation),String(gen)==generation,publication["generation"] == record["executionRecord"]["generation"],
+                      publication["requestId"].string.flatMap(UUID.init(uuidString:)) != nil,
+                      let body=publication["body"].string,!body.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty,body.utf8.count<=8192,
+                      let published=publication["publishedAtMs"].int,published>=at,published<=observed,
+                      case .array(let used)=publication["references"],!used.isEmpty,used.count<=40,Set(used.compactMap(Self.reference)).count==used.count,
+                      Set(used.compactMap(Self.reference)).isSubset(of:expected) else{throw invalid}
+            }
+            let derived:String
+            if source["revision"] != value["currentRevision"] || record["execution"] == .string("stale") || record["decision"] == .string("stale") {derived="stale"}
+            else if publication != .null {derived="current"}
+            else if record["execution"] == .string("unknown") || record["decision"] == .string("unknown") {derived="unknown"}
+            else if record["execution"] == .string("running") {derived="writing"}
+            else {derived="waiting"}
+            guard state==derived else{throw invalid}
+        }
+        self.state=state;observedAt=observed;currentRevision=value["currentRevision"].string
+        self.source=source;caseValue=record;self.publication=publication
     }
 }
 

@@ -307,18 +307,16 @@ pub(crate) fn preflight(path: &Path) -> Result<Guard> {
             return Err(unknown());
         }
         version(actual.0)?;
-        if actual.0 == 33 {
-            conn.pragma_update(None, "foreign_keys", true)?;
-            crate::admin_ask_groups::validate_schema(&conn)?;
-        }
+        conn.pragma_update(None, "foreign_keys", true)?;
+        crate::schema::validate_administrative_format(&conn, i64::from(actual.0))?;
         let integrity: String = conn.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
         if integrity != "ok" {
             return Err(unknown());
         }
         drop(conn);
-    } else if fields.0 == 33 {
-        // Supported H33 has its own strict format. The unpublished query33
-        // prototype must fail without chmod, WAL recovery or SHM on the source.
+    } else if fields.0 > 0 {
+        // Administrative formats qualify on a private copy before chmod,
+        // WAL recovery/SHM or any migration may touch the original source.
         let copy = PrivateCopy::new()?;
         let db = copy.copy("probe.db", &mut sources[0].as_mut().unwrap().0)?;
         guard.recheck()?;
@@ -328,7 +326,7 @@ pub(crate) fn preflight(path: &Path) -> Result<Guard> {
         )?;
         crate::search_context::ensure_registered(&conn)?;
         conn.pragma_update(None, "foreign_keys", true)?;
-        crate::admin_ask_groups::validate_schema(&conn)?;
+        crate::schema::validate_administrative_format(&conn, i64::from(fields.0))?;
         drop(conn);
     }
     guard.recheck()?;

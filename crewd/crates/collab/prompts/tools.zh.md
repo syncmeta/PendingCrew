@@ -2023,3 +2023,30 @@ action=links的稳定p字段号，必须属于该O的实际表。
 ## managed_table_v2_request_get.contractVersion
 
 接口版本：省略或整数2走原V2；整数3走新版。null、字符串、带小数的数字和未知版本拒绝，不自动降级。
+
+## admin_secretary_snapshot
+读取本次秘书案件绑定的原始同机组快照。只读，不扩展范围，也不把保存的观察变成当前业务决定。保留截断和样本提示。
+
+## admin_secretary_publish
+保存本次快照的给人简报和原对象引用，不回答 H、不关闭或指派 W。使用原 request_id；结果不明只查原回执，不换编号重发。来源或执行代次变化会拒绝发布。
+
+## admin_secretary_publish.request_id
+本次发布的原始小写 UUID；重试必须保持相同内容。
+
+## admin_secretary_publish.source_revision
+原快照返回的完整事实修订摘要。
+
+## admin_secretary_publish.generation
+本秘书会话已确认的原执行代次十进制字符串。
+
+## admin_secretary_publish.body
+给人阅读的简报正文，最多8192个UTF8字节。明确样本和未完整核对边界，不冒充人的答复。
+
+## admin_secretary_publish.references
+只可引用原快照提供的 human_wait、case、patrol 标识，1到40项，不重复。
+
+## admin_secretary_receipt
+只读查回本次秘书案件的原发布 UUID。没有回执不等于可以另换 UUID 重发。
+
+## admin_secretary_receipt.request_id
+原发布 UUID。

@@ -1333,6 +1333,33 @@
       "oneOf": [
         {
           "additionalProperties": false,
+          "description": "A distinct brief-only case. There is no Stop announcement, budget or W\ntarget; the snapshot is installed and validated by the Secretary module.",
+          "properties": {
+            "kind": {
+              "const": "secretary_brief",
+              "type": "string"
+            },
+            "observedAtMs": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "sourceId": {
+              "type": "string"
+            },
+            "sourceRevision": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "sourceId",
+            "sourceRevision",
+            "observedAtMs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "properties": {
             "announcementDigest": {
               "type": "string"
@@ -1937,6 +1964,333 @@
         "human_task"
       ],
       "type": "string"
+    },
+    "AdminSecretaryAuthor": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "attemptId",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "AdminSecretaryGet": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId"
+      ],
+      "type": "object"
+    },
+    "AdminSecretaryPublication": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "type": "string"
+        },
+        "authorSessionId": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "caseId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "publishedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "references": {
+          "items": {
+            "$ref": "#/$defs/AdminSecretaryReference"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "sourceId": {
+          "type": "string"
+        },
+        "sourceRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceId",
+        "caseId",
+        "crewId",
+        "sourceRevision",
+        "authorSessionId",
+        "attemptId",
+        "generation",
+        "requestId",
+        "revision",
+        "body",
+        "references",
+        "publishedAtMs"
+      ],
+      "type": "object"
+    },
+    "AdminSecretaryReference": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "human_wait",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "case",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "patrol",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AdminSecretaryRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "crewId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "expectedRevision"
+      ],
+      "type": "object"
+    },
+    "AdminSecretaryRequestResult": {
+      "additionalProperties": false,
+      "description": "The public command receipt confirms identity only; it must never retain a\nsecond copy of Human questions or generated prose outside purgeable sources.",
+      "properties": {
+        "caseId": {
+          "type": "string"
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "sourceId": {
+          "type": "string"
+        },
+        "sourceRevision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "crewId",
+        "sourceId",
+        "caseId",
+        "sourceRevision"
+      ],
+      "type": "object"
+    },
+    "AdminSecretarySnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminSecretaryAuthor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "caseId": {
+          "type": "string"
+        },
+        "configurationRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "facts": {
+          "$ref": "#/$defs/AdminHumanBrief"
+        },
+        "judgmentEpoch": {
+          "type": "string"
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "patrolRevision": {
+          "description": "Stable completed finding identities and coverage, never an in-flight run.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "references": {
+          "items": {
+            "$ref": "#/$defs/AdminSecretaryReference"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "sourceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceId",
+        "caseId",
+        "crewId",
+        "scope",
+        "judgmentEpoch",
+        "revision",
+        "observedAtMs",
+        "facts",
+        "references"
+      ],
+      "type": "object"
+    },
+    "AdminSecretaryState": {
+      "enum": [
+        "not_recorded",
+        "waiting",
+        "writing",
+        "current",
+        "stale",
+        "unknown",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "AdminSecretaryView": {
+      "properties": {
+        "case": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminCaseView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "crewId": {
+          "type": "string"
+        },
+        "currentRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observedAtMs": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "publication": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminSecretaryPublication"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdminSecretarySnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/AdminSecretaryState"
+        }
+      },
+      "required": [
+        "crewId",
+        "observedAtMs",
+        "state"
+      ],
+      "type": "object"
     },
     "Artifact": {
       "additionalProperties": false,
@@ -19974,6 +20328,23 @@
           "additionalProperties": false,
           "properties": {
             "operation": {
+              "const": "adminCase.secretaryRequest",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/$defs/AdminSecretaryRequest"
+            }
+          },
+          "required": [
+            "operation",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "operation": {
               "const": "adminCase.requirementReview",
               "type": "string"
             },
@@ -29202,6 +29573,14 @@
       },
       "result": {
         "$ref": "#/$defs/RequirementReviewsPage"
+      }
+    },
+    "adminCase.secretaryBrief": {
+      "params": {
+        "$ref": "#/$defs/AdminSecretaryGet"
+      },
+      "result": {
+        "$ref": "#/$defs/AdminSecretaryView"
       }
     },
     "adminCase.similarRequirements": {

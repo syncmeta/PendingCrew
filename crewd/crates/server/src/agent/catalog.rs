@@ -47,6 +47,7 @@ pub enum Ty {
     ManagedObjectChange,
     ManagedMessageChange,
     DecisionAskDraft,
+    SecretaryReferences,
     /// `[{text, category?}]`
     Messages,
 }
@@ -195,6 +196,30 @@ const fn talk(t: ToolSpec) -> ToolSpec {
 use Ty::*;
 
 pub const CATALOG: &[ToolSpec] = &[
+    ro(ToolSpec {
+        scope: Scope::CaseAdmin,
+        ..all(crewd_proto::admin_secretary::SNAPSHOT_TOOL, &[])
+    }),
+    ro(ToolSpec {
+        scope: Scope::CaseAdmin,
+        ..all(
+            crewd_proto::admin_secretary::RECEIPT_TOOL,
+            &[p("request_id", Str, true)],
+        )
+    }),
+    idempotent(ToolSpec {
+        scope: Scope::CaseAdmin,
+        ..all(
+            crewd_proto::admin_secretary::PUBLISH_TOOL,
+            &[
+                p("request_id", Str, true),
+                p("source_revision", Str, true),
+                p("generation", Str, true),
+                p("body", Str, true),
+                p("references", SecretaryReferences, true),
+            ],
+        )
+    }),
     ro(all(
         "admin_case_custody_get",
         &[p("crew_id", Str, true), p("case_id", Str, true)],
@@ -1078,12 +1103,20 @@ fn definition(t: &ToolSpec, loc: Locale) -> ToolDef {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn case_tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
+    case_tools_for_purpose(me, loc, false)
+}
+pub(crate) fn case_tools_for_purpose(me: &Identity, loc: Locale, secretary: bool) -> Vec<ToolDef> {
     CATALOG
         .iter()
         .filter(|t| {
             (visible(t, me) || visible_in_case(t, me))
-                && super::admin_case_scope::allowed_tool(t.name)
+                && if secretary {
+                    super::admin_case_scope::secretary_tool(t.name)
+                } else {
+                    super::admin_case_scope::allowed_tool(t.name)
+                }
         })
         .map(|t| definition(t, loc))
         .collect()
@@ -1407,6 +1440,9 @@ pub fn input_schema(t: &ToolSpec, loc: Locale) -> Value {
                 schema
             }
             DecisionAskDraft => decision_ask_draft_schema(),
+            SecretaryReferences => {
+                json!({"type":"array","minItems":1,"maxItems":40,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["human_wait","case","patrol"]},"id":{"type":"string","minLength":1,"maxLength":256}},"required":["kind","id"],"additionalProperties":false}})
+            }
             CoordinationChildren => json!({"type":"array","minItems":2,"maxItems":8,"items":{
                 "type":"object",
                 "properties":{
@@ -1656,6 +1692,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn secretary_purpose_has_only_the_three_closed_tools() {
+        let me = who(Role::Admin);
+        let got: std::collections::BTreeSet<_> = case_tools_for_purpose(&me, Locale::Zh, true)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        let expected = std::collections::BTreeSet::from([
+            crewd_proto::admin_secretary::SNAPSHOT_TOOL.to_string(),
+            crewd_proto::admin_secretary::PUBLISH_TOOL.to_string(),
+            crewd_proto::admin_secretary::RECEIPT_TOOL.to_string(),
+        ]);
+        assert_eq!(got, expected);
+        for role in [Role::Worker, Role::Captain, Role::Admin] {
+            assert!(names(&who(role)).iter().all(|t| !expected.contains(t)));
+        }
+        assert!(
+            case_tools_for(&me, Locale::Zh)
+                .iter()
+                .all(|t| !expected.contains(&t.name))
+        );
+    }
+
     /// S76: every tool carries its hints (values = the index table); passive (B14) is derived
     /// from them: read-only or talk.
     #[test]
@@ -1666,6 +1725,7 @@ mod tests {
                 .into_iter()
                 .filter(|tool| find(&tool.name).is_some_and(|spec| spec.scope == Scope::CaseAdmin)),
         );
+        defs.extend(case_tools_for_purpose(&who(Role::Admin), Locale::Zh, true));
         assert_eq!(defs.len(), CATALOG.len());
         for d in &defs {
             let h = d
@@ -1688,6 +1748,8 @@ mod tests {
         assert_eq!(
             with(|t| t.read_only),
             [
+                crewd_proto::admin_secretary::SNAPSHOT_TOOL,
+                crewd_proto::admin_secretary::RECEIPT_TOOL,
                 "admin_case_custody_get",
                 "admin_case_custody_list",
                 "admin_case_handoff_get",
@@ -1763,6 +1825,7 @@ mod tests {
         assert_eq!(
             with(|t| t.idempotent && !t.read_only),
             [
+                crewd_proto::admin_secretary::PUBLISH_TOOL,
                 "admin_case_custody_accept",
                 "admin_case_handoff_request",
                 "admin_case_handoff_accept",
@@ -1806,6 +1869,8 @@ mod tests {
         assert_eq!(
             with(ToolSpec::passive),
             [
+                crewd_proto::admin_secretary::SNAPSHOT_TOOL,
+                crewd_proto::admin_secretary::RECEIPT_TOOL,
                 "admin_case_custody_get",
                 "admin_case_custody_list",
                 "admin_case_handoff_get",

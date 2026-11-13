@@ -288,6 +288,13 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             if state.judgment_runtime.get().is_some() {
                 capabilities.push("judgment".into());
             }
+            if crate::admin_cases::secretary_qualified(state)
+                .await
+                .map_err(collab_err)?
+            {
+                capabilities.push(crewd_proto::admin_secretary::CAPABILITY.into());
+                capabilities.push(crewd_proto::admin_secretary::HUMAN_REQUEST.into());
+            }
             if state.organization_search_runtime.get().is_some() {
                 capabilities.push(crewd_proto::organization_search::CAPABILITY.into());
             }
