@@ -135,7 +135,10 @@ struct CrewdCodexLocalInputs:View {
             ScrollView{VStack(alignment:.leading,spacing:14){
                 if archives.isEmpty{Text("尚无可读取的本机原输入").foregroundStyle(.secondary)}
                 ForEach(archives){archive in
-                    DisclosureGroup("原电脑："+(archive.journal.scope.authorityID ?? "未知")+" · "+(archive.journal.scope.databaseID ?? "未知")){
+                    let authority: String = archive.journal.scope.authorityID ?? "未知"
+                    let database: String = archive.journal.scope.databaseID ?? "未知"
+                    let label: String = "原电脑：" + authority + " · " + database
+                    DisclosureGroup(label){
                         ForEach(archive.records){record in
                             let session: String = record.params["sessionId"].string ?? "首轮输入"
                             let origin: String = "原机组：" + record.crew + " · " + session
