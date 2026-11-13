@@ -122,9 +122,12 @@ struct IOSLegacyRemotePairingView: View {
                 Button("移除配对凭据", role: .destructive) { removeComputer(computer) }
                 Button("取消", role: .cancel) { removing = nil }
             } message: { computer in
-                Text(computer.name + " · " + computer.endpoint.host + ":" + String(computer.endpoint.port) +
-                     "\n本机配对记录：" + computer.id.uuidString.lowercased() +
-                     "\n只移除本设备保存的配对凭据，不会删除电脑上的机组或数据，也不会撤销电脑端授权。")
+                let endpoint: String = computer.endpoint.host + ":" + String(computer.endpoint.port)
+                let record: String = computer.id.uuidString.lowercased()
+                let message: String = computer.name + " · " + endpoint +
+                    "\n本机配对记录：" + record +
+                    "\n只移除本设备保存的配对凭据，不会删除电脑上的机组或数据，也不会撤销电脑端授权。"
+                Text(message)
             }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("稍后继续") { epoch = UUID(); operation.invalidate(); dismiss() } } }
             .onDisappear { epoch = UUID(); operation.invalidate() }
@@ -249,7 +252,11 @@ struct IOSRemotePairingView:View {
             .alert("从本设备移除已存电脑",isPresented:Binding(get:{removing != nil},set:{if !$0{removing=nil}}),presenting:removing){computer in
                 Button("移除配对凭据",role:.destructive){Task{_ = await appModel.crewdWindow.forget(computer)};removing=nil}
                 Button("取消",role:.cancel){removing=nil}
-            }message:{computer in Text(computer.name+" · "+computer.endpoint.host+":"+String(computer.endpoint.port)+"\n只移除本设备保存的配对凭据与其私钥恢复副本，不会删除电脑数据或撤销服务器授权。")}
+            }message:{computer in
+                let endpoint: String = computer.endpoint.host + ":" + String(computer.endpoint.port)
+                let message: String = computer.name + " · " + endpoint + "\n只移除本设备保存的配对凭据与其私钥恢复副本，不会删除电脑数据或撤销服务器授权。"
+                Text(message)
+            }
         }
     }
     @MainActor private func closeComputerList(_ sessionID:UUID){
