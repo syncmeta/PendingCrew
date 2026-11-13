@@ -1,5 +1,5 @@
 //! Deterministic successor controls. Root alone executes these tests.
-use super::tests::{fresh, knowledge, no_automation, projection, state};
+use super::tests::{archive_welcome_root, fresh, knowledge, no_automation, projection, state};
 use super::*;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
@@ -325,6 +325,7 @@ fn n4_active_aliases_and_hard_purge_never_follow_or_claim_cleared() {
             project_committed(s.conn(), &data).unwrap();
             assert!(qualified(s.conn(), &data, &projection(&s)).unwrap());
         }
+        archive_welcome_root(&mut s, 200);
         collab::run(&mut s, 200, |tx| collab::crews::purge(tx, facts::ROOT)).unwrap();
         assert!(project_committed(s.conn(), &data).is_err());
         let s = reopen(&data, s);
@@ -359,6 +360,7 @@ fn n4_unlink_io_failure_retains_all_obligations_then_true_absence_settles() {
     let (_t, data, _lock, mut s) = fresh();
     bootstrap(&mut s, &data).unwrap();
     let original = projection(&s);
+    archive_welcome_root(&mut s, 200);
     collab::run(&mut s, 200, |tx| collab::crews::purge(tx, facts::ROOT)).unwrap();
     {
         let _fault = Fault::at("remove");
@@ -410,6 +412,7 @@ fn n5_complete_batch_capacity_cannot_write_4097_or_discard_unknown_receipts() {
         assert!(after.current.is_none());
         assert_eq!(after.owned.len(), count);
         assert!(after.retired_current.is_some());
+        archive_welcome_root(&mut s, 300);
         collab::run(&mut s, 300, |tx| collab::crews::purge(tx, facts::ROOT)).unwrap();
         assert!(project_committed(s.conn(), &data).is_err());
         assert_eq!(projection(&s).state, "cleanupUnverified");
@@ -515,6 +518,7 @@ fn n5_manifest_4096_boundary_remains_readable_and_cleanup_can_settle_missing_his
     let mut s = reopen(&data, s);
     assert!(projection(&s).current.is_none());
     assert_eq!(projection(&s).manifests.len(), FILE_LIMIT);
+    archive_welcome_root(&mut s, 300);
     collab::run(&mut s, 300, |tx| collab::crews::purge(tx, facts::ROOT)).unwrap();
     project_committed(s.conn(), &data).unwrap();
     assert_eq!(projection(&s).state, "cleared");
@@ -617,6 +621,7 @@ fn n8_preexisting_identical_root_file_is_never_adopted_or_deleted() {
     fs::write(&target, BUNDLED[0].1).unwrap();
     bootstrap(&mut s, &data).unwrap();
     assert!(!projection(&s).owned.iter().any(|f| f.path == BUNDLED[0].0));
+    archive_welcome_root(&mut s, 300);
     collab::run(&mut s, 300, |tx| collab::crews::purge(tx, facts::ROOT)).unwrap();
     project_committed(s.conn(), &data).unwrap();
     assert_eq!(fs::read_to_string(&target).unwrap(), BUNDLED[0].1);
@@ -864,6 +869,55 @@ async fn n7_normal_serve_knowledge_commit_confirm_restore_and_protected_purge_us
         .call_result(|s| {
             assert_eq!(projection(s).state, "inactive");
             assert!(projection(s).current.is_none());
+            Ok::<_, crewd_store::StoreError>(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    // The ordinary protected lifecycle is non-cascading. Move only the Root's
+    // two direct edges through the real API; keep the shared child's two other
+    // parent edges and original identity, then use remove and protected purge.
+    let shared_before = owner
+        .db
+        .call_result(|s| {
+            Ok::<_, crewd_store::StoreError>(
+                crewd_store::crews::get(s.conn(), "pendingcrew-welcome-child")?.unwrap(),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    for &(id, _, parents) in facts::CREWS {
+        if !parents.contains(&facts::ROOT) {
+            continue;
+        }
+        let released = client
+            .call(
+                "crew.release",
+                json!({"crewId":id,"fromParentId":facts::ROOT,"toParentId":null}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(released["id"], id);
+        assert!(
+            released["parentIds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|parent| parent.as_str().is_some_and(|id| id != facts::ROOT))
+        );
+    }
+    owner
+        .db
+        .call_result(move |s| {
+            let root = crewd_store::crews::get(s.conn(), facts::ROOT)?.unwrap();
+            assert!(root.child_ids.is_empty());
+            let shared =
+                crewd_store::crews::get(s.conn(), "pendingcrew-welcome-child")?.unwrap();
+            assert_eq!(shared.id, shared_before.id);
+            assert_eq!(shared.number, shared_before.number);
+            assert_eq!(shared.parent_ids, shared_before.parent_ids);
+            assert!(shared.removed_at.is_none());
             Ok::<_, crewd_store::StoreError>(())
         })
         .await
@@ -1177,6 +1231,7 @@ fn q1_partial_real_unlink_then_selected_io_failure_preserves_tail_at_capacity_an
         fs::set_permissions(root.join(&user.path), fs::Permissions::from_mode(0o600)).unwrap();
         fs::write(root.join(&user.path), b"original user changed history").unwrap();
         fs::remove_file(root.join(&absent_later.path)).unwrap();
+        archive_welcome_root(&mut s, 200);
         collab::run(&mut s, 200, |tx| collab::crews::purge(tx, facts::ROOT)).unwrap();
         {
             let _fault = SelectedUnlinkFault::at(&fail.path);
@@ -1490,6 +1545,10 @@ async fn q3_independent_active_ready_unlink_archive_and_derived_failure_keep_rec
                 Ok::<_,crewd_store::StoreError>((state(s).ready[0].clone(),serde_json::to_value(state(s)).unwrap(),quiet_business(s)))
             }).await.unwrap().unwrap();
             let page=publication.pages[0].clone();let workspace=first.workspace().await;
+            // The immutable receipt capsule belongs to this exact pre-submit
+            // context. Current/after contexts remain correct for object reads,
+            // but never replace this origin when reconciling the original UUID.
+            let submitted_context=workspace["context"].clone();
             let namespace=workspace["context"]["namespace"].as_str().unwrap().to_string();
             let original_block=first.object(&workspace["context"],&namespace,"block",&page.block).await;
             let original_view=first.object(&workspace["context"],&namespace,"view",&page.view).await;
@@ -1524,10 +1583,14 @@ async fn q3_independent_active_ready_unlink_archive_and_derived_failure_keep_rec
                     "derived-failure"=>json!({"kind":"updateBlock","id":page.block,"expectedRevision":original_block["object"]["revision"],"contentType":"text/plain","content":"Committed normal document despite derived failure","sources":null,"attributes":{}}),
                     _=>unreachable!(),
                 };
-                receipt=first.client.call("data.submit",json!({"requestId":request,"context":workspace["context"],"change":{"kind":"apply","message":"Original active tutorial mutation","edits":[edit]}})).await.unwrap();
+                receipt=first.client.call("data.submit",json!({"requestId":request,"context":submitted_context,"change":{"kind":"apply","message":"Original active tutorial mutation","edits":[edit]}})).await.unwrap();
                 assert_eq!(receipt["phase"],"committed");assert_eq!(receipt["requestId"],request);
-                let lookup=first.client.call("data.request.get",json!({"requestId":request,"context":receipt["context"]})).await.unwrap();
+                let lookup=first.client.call("data.request.get",json!({"requestId":request,"context":submitted_context})).await.unwrap();
                 assert_eq!(lookup["lookup"]["status"],"known");assert_eq!(lookup["lookup"]["result"],receipt);
+                assert_ne!(submitted_context,receipt["context"]);
+                let refused=first.client.call("data.request.get",json!({"requestId":request,"context":receipt["context"]})).await.unwrap_err();
+                assert_eq!(refused.0,crewd_proto::RpcError::CONFLICT);
+                assert!(refused.1.contains("original request owner or immutable context differs"));
                 if action=="derived-failure" {
                     first.owner.db.call_result(|s| {
                         assert_eq!(projection(s).state,"pending");assert!(projection(s).current.is_none());
@@ -1562,8 +1625,12 @@ async fn q3_independent_active_ready_unlink_archive_and_derived_failure_keep_rec
                 assert_eq!(second.object(&current["context"],&namespace,"block",&page.block).await,original_block);
                 assert_eq!(second.object(&current["context"],&namespace,"view",&page.view).await,original_view);
             } else {
-                let lookup=second.client.call("data.request.get",json!({"requestId":request,"context":current["context"]})).await.unwrap();
+                let lookup=second.client.call("data.request.get",json!({"requestId":request,"context":submitted_context})).await.unwrap();
                 assert_eq!(lookup["lookup"]["status"],"known");assert_eq!(lookup["lookup"]["result"],receipt);
+                assert_ne!(submitted_context,current["context"]);
+                let refused=second.client.call("data.request.get",json!({"requestId":request,"context":current["context"]})).await.unwrap_err();
+                assert_eq!(refused.0,crewd_proto::RpcError::CONFLICT);
+                assert!(refused.1.contains("original request owner or immutable context differs"));
                 let (kind,id)=if action=="archiveView" {("view",&page.view)} else {("block",&page.block)};
                 let object=second.object(&current["context"],&namespace,kind,id).await;
                 assert_eq!(object["object"]["id"],*id);assert_eq!(object["object"]["revision"],"2");

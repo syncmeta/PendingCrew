@@ -1713,6 +1713,45 @@ mod tests {
             assert_eq!(count, 0, "unexpected {table}");
         }
     }
+    /// Satisfy the ordinary non-cascading lifecycle through the actual Collab
+    /// operations. This library fixture does not emit Hub changes or invoke the
+    /// protected filesystem purge; each caller keeps its original projection
+    /// failure cut and Core-only purge below. The service test uses public RPC.
+    pub(super) fn archive_welcome_root(s: &mut Store, now: i64) {
+        collab::run(s, now, |tx| {
+            let shared_before = collab::crews::get(tx.conn(), "pendingcrew-welcome-child")?;
+            for &(id, _, parents) in facts::CREWS {
+                if !parents.contains(&facts::ROOT) {
+                    continue;
+                }
+                let before = collab::crews::get(tx.conn(), id)?;
+                assert!(before.parent_ids.iter().any(|p| p == facts::ROOT));
+                let expected: Vec<_> = before
+                    .parent_ids
+                    .iter()
+                    .filter(|p| p.as_str() != facts::ROOT)
+                    .cloned()
+                    .collect();
+                let released = collab::crews::release(tx, id, facts::ROOT, None)?;
+                assert_eq!(released.id, before.id);
+                assert_eq!(released.title, before.title);
+                assert_eq!(released.number, before.number);
+                assert_eq!(released.parent_ids, expected);
+                assert!(released.removed_at.is_none());
+            }
+            let shared_after = collab::crews::get(tx.conn(), "pendingcrew-welcome-child")?;
+            assert_eq!(shared_after.id, shared_before.id);
+            assert_eq!(shared_after.number, shared_before.number);
+            assert_eq!(shared_after.parent_ids, shared_before.parent_ids);
+            assert!(shared_after.removed_at.is_none());
+            let root = collab::crews::archive(tx, facts::ROOT)?;
+            assert!(root.child_ids.is_empty());
+            assert!(root.removed_at.is_some());
+            collab::crews::check_purgeable(tx.conn(), facts::ROOT)?;
+            Ok(())
+        })
+        .unwrap();
+    }
     #[test]
     fn ordinary_fresh_origin_publishes_original_dag_knowledge_and_offline_pages_without_models() {
         let (_t, data, _lock, mut s) = fresh();
@@ -2012,7 +2051,7 @@ mod tests {
         let user = export.join("INDEX.md");
         fs::set_permissions(&user, fs::Permissions::from_mode(0o600)).unwrap();
         fs::write(&user, "用户另存的保留稿").unwrap();
-        collab::run(&mut s, 200, |tx| collab::crews::archive(tx, facts::ROOT)).unwrap();
+        archive_welcome_root(&mut s, 200);
         project_committed(s.conn(), &data).unwrap();
         assert!(projection(&s).current.is_none());
         bootstrap(&mut s, &data).unwrap();
