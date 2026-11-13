@@ -153,6 +153,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: apple-normal-core-evidence
+          include-hidden-files: true
           path: |
             ${{ runner.temp }}/apple-core-evidence
             ${{ runner.temp }}/apple-core-evidence-witness.json
