@@ -41,6 +41,20 @@ def rust_digest(rows):
     return hashlib.sha256(''.join(r['path']+'\t'+r['sha256']+'\n' for r in sorted(rows,key=lambda r:r['path']) if r['path'].startswith('crewd/')).encode()).hexdigest()
 
 
+def source_checkpoint(workspace,out,bound,stage):
+    sources={}
+    for label,key in [('controller','controllerRef'),('source','sourceRef'),('legacy33','legacy33Ref')]:
+        root=workspace/label
+        head=git(root,'rev-parse','HEAD').decode().strip()
+        status=git(root,'status','--porcelain').decode()
+        sources[label]={'source':str(root),'expectedRef':bound[key],'actualHEAD':head,
+            'statusPorcelain':status,'sourceClean':status=='','headMatchesExpected':head==bound[key]}
+    # Persist unfiltered observations even when the original strict gate fails.
+    save(out/('source-status-'+stage+'.json'),{'stage':stage,'sources':sources})
+    assert all(x['sourceClean'] and x['headMatchesExpected'] for x in sources.values()),'actual source HEAD/status gate failed: '+stage
+    return sources
+
+
 def binding(workspace):
     refs=[os.environ[x] for x in ['REVIEWED_REF','SOURCE_REF','EXPECTED_RUST_TREE']]
     assert all(re.fullmatch('[0-9a-f]{40}',x) for x in refs)
@@ -88,8 +102,8 @@ def build_one(workspace,out,label,reference,digest):
     assert not target.exists(),'fresh isolated target directory required'
     recorder=workspace/'controller/scripts/dev/record-crewd-build.py'
     env=dict(os.environ,CARGO_TARGET_DIR=str(target))
-    command([sys.executable,'-I',recorder,'prepare',source,normal,reference],source,out/(label+'-prepare.log'),env)
-    command([sys.executable,'-I',recorder,'build',source,normal,target/'release/crewd',
+    command([sys.executable,'-B','-I',recorder,'prepare',source,normal,reference],source,out/(label+'-prepare.log'),env)
+    command([sys.executable,'-B','-I',recorder,'build',source,normal,target/'release/crewd',
         'cargo','build','--offline','--locked','--release','-p','crewd','--message-format=json'],source,out/(label+'-build.log'),env)
     witness=out/(label+'-normal-witness.json');binary=normal/'crewd-presign'
     proof=load('normal_proof',workspace/'controller/scripts/dev/write-codex-first-provenance.py')
@@ -103,6 +117,7 @@ def build_one(workspace,out,label,reference,digest):
 
 def execute(workspace,out,bound):
     controller=workspace/'controller';source=workspace/'source';reference=bound['sourceRef']
+    source_checkpoint(workspace,out,bound,'before-build')
     current,witness,target=build_one(workspace,out,'source',reference,INPUT)
     old,old_witness,_=build_one(workspace,out,'legacy33',LEGACY,LEGACY_INPUT)
     retained=sha(current);env=dict(os.environ,CARGO_TARGET_DIR=str(target))
@@ -138,21 +153,25 @@ def execute(workspace,out,bound):
     assert code==0 and errors.read_bytes()==b''
     generated=json.loads(actual.read_bytes());assert generated==json.loads((source/'crewd/schema/crewd-api.schema.json').read_bytes())
     host=load('official_installer',controller/'deploy/linux/pendingcrew-host.py');host.qualify_public34_schema(generated)
-    build_proof={'sourceCommit':reference,'sourceClean':True,'defaultFeatures':True,'features':[],'test':False,
+    before_package=source_checkpoint(workspace,out,bound,'before-package')
+    build_proof={'sourceCommit':reference,'sourceClean':before_package['source']['sourceClean'],'defaultFeatures':True,'features':[],'test':False,
         'binarySha256':retained,'schemaEvidence':bound['schemaEvidence'],'originalWitnessSHA256':sha(witness)}
     save(out/'build-proof.json',build_proof)
     base='https://github.com/syncmeta/PendingCrew/releases/download/host-'+reference
-    command([sys.executable,'-I',source/'deploy/linux/package-host-release.py','--core',current,'--proof',out/'build-proof.json',
+    command([sys.executable,'-B','-I',source/'deploy/linux/package-host-release.py','--core',current,'--proof',out/'build-proof.json',
         '--source',reference,'--architecture','x86_64','--artifact-url',base+'/host.tar.gz','--manifest-url',base+'/manifest.json',
         '--installer-url',base+'/install.py','--output',out/'install'],source,out/'package.log')
+    source_checkpoint(workspace,out,bound,'after-package')
+    assert binding(workspace)==bound
     command([sys.executable,'-B',controller/'scripts/dev/fixtures/linux_public34/run.py','--core',current,'--core-sha256',retained,
         '--witness',witness,'--source',source,'--expected-ref',reference,'--expected-rust-input',INPUT,
         '--legacy-core',old,'--legacy-witness',old_witness,'--fake-codex',helpers/'fake_codex','--helper-proof',out/'helper-proof.json',
         '--install-package',out/'install','--out',out/'runtime'],source,out/'runtime-driver.log')
     runtime=json.loads((out/'runtime/result.json').read_bytes());assert runtime['exit']==0 and len(runtime['scopes'])==11
     assert sha(current)==retained and sha(target/'release/crewd')==retained
-    assert binding(workspace)==bound
-    save(out/'source-after.json',bound)
+    source_checkpoint(workspace,out,bound,'after-runtime')
+    actual_after=binding(workspace);assert actual_after==bound
+    save(out/'source-after.json',actual_after)
     save(out/'result.json',{'exit':0,'cohort':host.PUBLIC34['cohort'],'sourceRef':reference,'rustInputDigest':INPUT,
         'storeVersion':34,'methodCount':len(generated['methods']),'actualSchemaMatchesCommitted':True,'binarySHA256':retained,
         'ordinaryLinuxDefaultReleaseFresh12':True,'affectedScopesOnly':selections,'runtime':runtime,

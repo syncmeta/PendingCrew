@@ -16,7 +16,11 @@ def load(name,path):
 def qualify(args,record):
     assert re.fullmatch('[0-9a-f]{40}',args.expected_ref) and args.expected_rust_input==INPUT
     git=lambda *v:subprocess.check_output(['git','--no-replace-objects','-C',str(args.source),*v])
-    assert git('rev-parse','HEAD').decode().strip()==args.expected_ref and not git('status','--porcelain')
+    head=git('rev-parse','HEAD').decode().strip()
+    status=git('status','--porcelain').decode()
+    record('actual-source-before-qualification',{'source':str(args.source),'expectedRef':args.expected_ref,
+        'actualHEAD':head,'statusPorcelain':status,'sourceClean':status==''})
+    assert head==args.expected_ref and status==''
     p=load('original_normal_proof',args.source/'scripts/dev/write-codex-first-provenance.py')
     host=load('single_formal_host',args.source/'deploy/linux/pendingcrew-host.py');args.host_contract=host
     assert host.PUBLIC34['rustInputDigest']==INPUT

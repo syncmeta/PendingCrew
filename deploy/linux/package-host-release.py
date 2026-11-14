@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Assemble a reviewed Linux Core into an immutable host package; never publish."""
+import sys
+sys.dont_write_bytecode = True
 import argparse, ast, hashlib, io, json, os, pathlib, re, stat, subprocess, tarfile, urllib.parse
 
 

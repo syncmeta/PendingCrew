@@ -8,9 +8,31 @@ Runtime/catalog/physical-process tests are the separate explicit Linux flow.
 import ast,copy,hashlib,json,pathlib,re,subprocess,sys
 
 
+def source_clean_recipe_controls(root):
+    builder=ast.parse((root/'scripts/dev/build-crewd-linux-public34.py').read_bytes())
+    isolated=[]
+    for node in ast.walk(builder):
+        if not (isinstance(node,ast.Call) and isinstance(node.func,ast.Name) and node.func.id=='command'
+                and node.args and isinstance(node.args[0],ast.List)):continue
+        argv=node.args[0].elts
+        if not (argv and isinstance(argv[0],ast.Attribute) and isinstance(argv[0].value,ast.Name)
+                and argv[0].value.id=='sys' and argv[0].attr=='executable'):continue
+        if any(isinstance(x,ast.Constant) and x.value=='-I' for x in argv):
+            isolated.append(argv)
+    # -I ignores PYTHONDONTWRITEBYTECODE; the interpreter itself must get -B.
+    assert len(isolated)==3
+    assert all(isinstance(a[1],ast.Constant) and a[1].value=='-B'
+        and isinstance(a[2],ast.Constant) and a[2].value=='-I' for a in isolated)
+    package=ast.parse((root/'deploy/linux/package-host-release.py').read_bytes())
+    assert isinstance(package.body[1],ast.Import) and [n.name for n in package.body[1].names]==['sys']
+    assert ast.dump(package.body[2],include_attributes=False)==ast.dump(
+        ast.parse('sys.dont_write_bytecode = True').body[0],include_attributes=False)
+
+
 def main():
     assert not sys.flags.optimize
     root=pathlib.Path(__file__).resolve().parents[2]
+    source_clean_recipe_controls(root)
     source=root/'deploy/linux/pendingcrew-host.py';tree=ast.parse(source.read_bytes())
     selected=['PUBLIC34','PUBLIC34_H33_DDL','PUBLIC34_SECRETARY_DDL']
     pure=['release_generation','qualify_public34_release','qualify_public34_schema','qualify_release_manifest']
