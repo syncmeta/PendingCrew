@@ -53,10 +53,30 @@ def source_schema(here, source):
     raw = subprocess.check_output(['git', '--no-replace-objects', '-C', str(here.parents[1]), 'show',
                                    source + ':crewd/crates/store/src/schema.rs'])
     versions = re.findall(rb'^pub const SCHEMA_VERSION: i64 = ([0-9]+);$', raw, re.MULTILINE)
-    if len(versions) != 1 or int(versions[0]) not in (21, 33):
-        raise ValueError('exact qualified Core21 or Core33 schema source required')
-    return {'sourceCommit': source, 'storeVersion': int(versions[0]),
-            'schemaSourceSHA256': sha(raw)}
+    if len(versions) != 1 or int(versions[0]) not in (21, 33, 34):
+        raise ValueError('exact qualified Core21/Core33/public34 schema source required')
+    evidence = {'sourceCommit': source, 'storeVersion': int(versions[0]),
+                'schemaSourceSHA256': sha(raw)}
+    if int(versions[0]) == 34:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('exact_installer_contract', here/'pendingcrew-host.py')
+        host = importlib.util.module_from_spec(spec); spec.loader.exec_module(host)
+        for name,key in [('admin_ask_groups','h33SourceSHA256'),('admin_secretary','secretarySourceSHA256')]:
+            body = subprocess.check_output(['git','--no-replace-objects','-C',str(here.parents[1]),'show',source+':crewd/crates/store/src/'+name+'.rs'])
+            evidence[key] = sha(body)
+            ddl = re.findall(rb'pub const DDL: &str = r#"(.*?)"#;',body,re.S)
+            expected = host.PUBLIC34_H33_DDL if name == 'admin_ask_groups' else host.PUBLIC34_SECRETARY_DDL
+            if len(ddl) != 1 or ddl[0].decode() != expected: raise ValueError('installer normative DDL differs from the exact Core source')
+        schema = json.loads(subprocess.check_output(['git','--no-replace-objects','-C',str(here.parents[1]),'show',source+':crewd/schema/crewd-api.schema.json']))
+        host.qualify_public34_schema(schema)
+        evidence['apiSchemaSHA256'] = sha(json.dumps(schema,sort_keys=True,separators=(',',':')).encode())
+        rows = []
+        for path in subprocess.check_output(['git','--no-replace-objects','-C',str(here.parents[1]),'ls-tree','-r','--name-only',source,'--','crewd']).decode().splitlines():
+            data = subprocess.check_output(['git','--no-replace-objects','-C',str(here.parents[1]),'show',source+':'+path])
+            rows.append((path,sha(data)))
+        evidence['rustInputDigest'] = sha(''.join(p+'\t'+h+'\n' for p,h in sorted(rows)).encode())
+        host.qualify_public34_release({'cohort':host.PUBLIC34['cohort'],'sourceCommit':source,'architecture':'x86_64','apiVersion':3,'schemaEvidence':evidence})
+    return evidence
 
 
 def package(args):
@@ -75,7 +95,9 @@ def package(args):
     here = pathlib.Path(__file__).resolve().parent
     verify_component_sources(here, args.source, core_source)
     schema = source_schema(here, core_source)
-    if (schema['storeVersion'] == 33 or 'schemaEvidence' in proof) and proof.get('schemaEvidence') != schema:
+    if schema['storeVersion'] == 34 and args.architecture != 'x86_64':
+        raise ValueError('this reviewed public34 cohort qualifies Linux x86_64 only')
+    if (schema['storeVersion'] in (33, 34) or 'schemaEvidence' in proof) and proof.get('schemaEvidence') != schema:
         raise ValueError('ordinary build proof has another frozen schema source')
     installer = (here / 'pendingcrew-host.py').read_bytes()
     policy_nodes = [
@@ -87,9 +109,10 @@ def package(args):
     if len(policy_nodes) != 1: raise ValueError('one literal installer prerequisite policy required')
     provider_policy = ast.literal_eval(policy_nodes[0])
     files = {'bin/crewd':core, 'bin/pendingcrew-host.py':installer, 'bin/managed-host.py':(here/'managed-host.py').read_bytes(), 'build-proof.json':proof_bytes}
-    release = {'format':1 if schema['storeVersion']==21 else 2,'sourceCommit':args.source,'architecture':args.architecture,'storeVersion':schema['storeVersion'],'apiVersion':3,'files':{name:sha(data) for name,data in files.items()}}
+    release = {'format':{21:1,33:2,34:3}[schema['storeVersion']],'sourceCommit':args.source,'architecture':args.architecture,'storeVersion':schema['storeVersion'],'apiVersion':3,'files':{name:sha(data) for name,data in files.items()}}
     if core_source != args.source: release['coreSourceCommit'] = core_source
-    if schema['storeVersion'] == 33: release['schemaEvidence'] = schema
+    if schema['storeVersion'] in (33, 34): release['schemaEvidence'] = schema
+    if schema['storeVersion'] == 34: release['cohort'] = 'public34-secretary-onboarding.1'
     files['release.json'] = canonical(release)
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive,mode='w:gz',format=tarfile.USTAR_FORMAT) as bundle:
@@ -100,7 +123,11 @@ def package(args):
     payload = archive.getvalue()
     artifact = {'url':artifact_url,'sha256':sha(payload),'sourceCommit':args.source,'architecture':args.architecture}
     if core_source != args.source: artifact['coreSourceCommit'] = core_source
-    manifest = canonical({'format':1,'providerPrerequisites':provider_policy,'artifact':artifact})
+    manifest_value = {'format':1,'providerPrerequisites':provider_policy,'artifact':artifact}
+    if schema['storeVersion'] == 34:
+        manifest_value.update(format=2,cohort=release['cohort'])
+        artifact['rustInputDigest'] = schema['rustInputDigest']
+    manifest = canonical(manifest_value)
     entry = installer.decode().replace('DEFAULT_MANIFEST_URL = None', 'DEFAULT_MANIFEST_URL = ' + repr(manifest_url),1).replace('DEFAULT_MANIFEST_SHA256 = None','DEFAULT_MANIFEST_SHA256 = ' + repr(sha(manifest)),1).encode()
     bootstrap = None
     installer_url = getattr(args, 'installer_url', None)

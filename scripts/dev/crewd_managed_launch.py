@@ -58,6 +58,8 @@ def classify(argv):
     seen = set(); i = 0
     while i < len(rest):
         option = rest[i]
+        if command == 'serve' and option == '--disable-claude' and option not in seen:
+            seen.add(option); i += 1; continue
         if command == 'check' and option == '--quick' and option not in seen:
             seen.add(option); i += 1; continue
         if option not in values or i + 1 == len(rest) or not rest[i + 1] or rest[i + 1].startswith('-'):
@@ -126,6 +128,37 @@ def certified_core14_recovery(package, maximum):
         if file.is_absolute() or '..' in file.parts: raise ValueError('recovery sidecar escape')
         path = evidence / file
         if path.resolve() != path or sha(path) != witness[name + 'SHA256']: raise ValueError('fresh-source recovery sidecar changed or aliased')
+    return True
+
+def certified_public34_source(package):
+    # Reuse the original complete fresh-sidecar checker without granting its
+    # historical14/15 WAL delegation. Public34 still rejects pending WAL here.
+    candidate=json.loads((package/'candidate.json').read_text())
+    witness=json.loads((package/'normal-build-witness.json').read_text())
+    if candidate.get('sourceProofTier')!='fresh-owning-workspace-production-graph':return False
+    if witness.get('freshWorkspaceArtifacts') is not True or witness.get('binarySHA256')!=candidate['binarySHA256']:return False
+    cfg=witness['buildConfiguration']
+    if cfg.get('target')!='x86_64-unknown-linux-gnu' or cfg.get('profile')!='release':return False
+    if cfg.get('features')!=[] or cfg.get('artifactFeatures')!=[] or cfg.get('defaultFeatures') is not True or cfg.get('allFeatures') is not False or cfg.get('artifactProfile',{}).get('test') is not False:return False
+    if len(cfg.get('workspaceFeatures',{}))!=12 or any(cfg['workspaceFeatures'].values()):return False
+    evidence_name=pathlib.PurePosixPath(witness['evidenceDirectory']);snapshot=pathlib.PurePosixPath(witness['snapshotDirectory'])
+    if any(p.is_absolute() or '..' in p.parts for p in [evidence_name,snapshot]):raise ValueError('public34 proof escape')
+    evidence=package/evidence_name
+    rows=witness['files']
+    if len(rows)!=680 or len({r['path'] for r in rows})!=680:return False
+    for row in rows:
+        p=pathlib.PurePosixPath(row['path'])
+        if p.is_absolute() or '..' in p.parts or not row['path'].startswith('crewd/'):raise ValueError('public34 source escape')
+        actual=evidence/snapshot/p
+        if actual.resolve()!=actual or sha(actual)!=row['sha256']:raise ValueError('public34 original source changed')
+    digest=hashlib.sha256(''.join(r['path']+'\t'+r['sha256']+'\n' for r in sorted(rows,key=lambda r:r['path'])).encode()).hexdigest()
+    if digest!=witness['rustInputDigest']:return False
+    for name in ['productionGraph','sourcePreflight','workspaceArtifacts','buildLog']:
+        key=name+'File' if name!='buildLog' else name
+        p=pathlib.PurePosixPath(witness[key])
+        if p.is_absolute() or '..' in p.parts:raise ValueError('public34 sidecar escape')
+        actual=evidence/p
+        if actual.resolve()!=actual or sha(actual)!=witness[name+'SHA256']:raise ValueError('public34 fresh sidecar changed')
     return True
 
 def readonly_header(data, maximum, pending_wal_recovery=False):
@@ -201,6 +234,13 @@ def main(prefix, argv):
         private(locks / name)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB); os.set_inheritable(fd, True)
         maximum = supported_schema(package)
+        if maximum == 34:
+            # Source eligibility only: this is NOT installed/runtime acceptance.
+            candidate=json.loads((package/'candidate.json').read_text())
+            witness=json.loads((package/'normal-build-witness.json').read_text())
+            if witness.get('rustInputDigest')!='cc063b67727aeb2869b60e95fbe9f615aeccbcccd24c4c79766057acc8946e55' or len(witness.get('files',[]))!=680:
+                raise ValueError('public34 requires the exact independently reviewed complete Core input')
+            if not certified_public34_source(package):raise ValueError('public34 full fresh-source proof failed')
         # Only the exact certified Core14 serve route enters Store's validated
         # private WAL-copy guard. Offline readers are not substitutes for it.
         recover = argv[2] == 'serve' and certified_core14_recovery(package, maximum)

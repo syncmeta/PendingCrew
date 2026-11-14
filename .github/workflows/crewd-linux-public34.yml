@@ -1,0 +1,100 @@
+name: crewd Linux public34 reviewed cohort
+run-name: "Linux public34 / source ${{ inputs.source_ref }} / controller ${{ inputs.reviewed_ref }}"
+# Explicit new cohort. Historical21/33 and managed-c8 workflows remain historical.
+# Prepares private candidates only: no release upload, SSH, root/systemd install,
+# provider credentials, real model or replacement of a running/daily database.
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_ref:
+        description: Full independently reviewed controller commit, equal to this run SHA
+        required: true
+        type: string
+      source_ref:
+        description: Full reviewed source commit with the same delivery recipes and exact admitted Rust input
+        required: true
+        type: string
+      rust_input_digest:
+        description: Reviewed full 680-file Rust digest (public34 Secretary/onboarding cohort)
+        required: true
+        type: string
+      rust_tree:
+        description: Full reviewed crewd Git tree shared by controller and source
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: linux-public34-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  delivery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CARGO_INCREMENTAL: '0'
+      REVIEWED_REF: ${{ inputs.reviewed_ref }}
+      SOURCE_REF: ${{ inputs.source_ref }}
+      EXPECTED_RUST_INPUT: ${{ inputs.rust_input_digest }}
+      EXPECTED_RUST_TREE: ${{ inputs.rust_tree }}
+    steps:
+      - name: Set the permanent artifact evidence path
+        run: printf 'PUBLIC34_EVIDENCE=%s/linux-public34\n' "${RUNNER_TEMP:?}" >> "${GITHUB_ENV:?}"
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          ref: 1edf6d47f64553773650389b40382a6181a1addb
+          path: legacy33
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind full source and reviewed cohort before tooling/build
+        run: python3 -I controller/scripts/dev/build-crewd-linux-public34.py bind
+      - name: Derive the locked source toolchain
+        id: toolchain
+        run: |
+          python3 -I - <<'PY'
+          import os,pathlib,tomllib
+          value=tomllib.loads(pathlib.Path('source/crewd/rust-toolchain.toml').read_text())['toolchain']['channel']
+          with open(os.environ['GITHUB_OUTPUT'],'a') as stream:stream.write('channel='+value+'\n')
+          PY
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - name: Qualify current236 installer components and entry contracts
+        run: |
+          python3 -B controller/scripts/dev/test-crewd-linux-public34.py > "$PUBLIC34_EVIDENCE/public34-controls.log" 2>&1
+          env -u PCW_HOST_INSTALLER_SOURCE python3 -B source/scripts/dev/test-crewd-host-installer.py InstallerControls > "$PUBLIC34_EVIDENCE/current-installer-controls.log" 2>&1
+          python3 -B source/scripts/dev/test-linux-entry.py > "$PUBLIC34_EVIDENCE/current-entry-controls.log" 2>&1
+      - name: Preserve the historical33 and235 reviewed-builder contract
+        run: |
+          env -u PCW_HOST_INSTALLER_SOURCE python3 -B legacy33/scripts/dev/test-crewd-host-installer.py ReviewedBuildBindingControls > "$PUBLIC34_EVIDENCE/historical33-235-builder-controls.log" 2>&1
+      - name: Fetch each exact locked dependency set once
+        run: |
+          cargo fetch --locked --manifest-path source/crewd/Cargo.toml > "$PUBLIC34_EVIDENCE/current-fetch.log" 2>&1
+          cargo fetch --locked --manifest-path legacy33/crewd/Cargo.toml > "$PUBLIC34_EVIDENCE/legacy33-fetch.log" 2>&1
+      - name: Build two ordinary Linux generations and qualify the current delivery
+        run: python3 -I controller/scripts/dev/build-crewd-linux-public34.py execute
+      - name: Preserve full evidence and incomplete mutable obligations separately
+        if: always()
+        run: python3 -I controller/scripts/dev/archive-crewd-linux-public34.py "$PUBLIC34_EVIDENCE"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crewd-linux-public34-${{ inputs.source_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/linux-public34/
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error

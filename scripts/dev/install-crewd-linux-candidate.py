@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Explicit Linux candidate prefix only. Never modify DBs or manage services; managed launches inspect raw headers."""
-import argparse,fcntl,hashlib,json,os,pathlib,platform,re,shutil,subprocess,sys,tempfile,uuid,stat
+import argparse,contextlib,importlib.util,fcntl,hashlib,json,os,pathlib,platform,re,shutil,subprocess,sys,tempfile,uuid,stat
 
 def digest(root):
  rows=[]
@@ -90,7 +90,7 @@ def status(prefix,request=None):
     cursor=json.loads((prefix/cursor/'transaction.json').read_text())['previousActivation']
  return result
 def main():
- a=argparse.ArgumentParser();a.add_argument('action',choices=['status','install','rollback']);a.add_argument('--prefix',required=True);a.add_argument('--package');a.add_argument('--source-ref');a.add_argument('--request-id');a.add_argument('--expected-current',help='Exact prior activation from status; use none for initial install');args=a.parse_args()
+ a=argparse.ArgumentParser();a.add_argument('action',choices=['status','install','rollback']);a.add_argument('--prefix',required=True);a.add_argument('--package');a.add_argument('--source-ref');a.add_argument('--request-id');a.add_argument('--data-dir',help='Explicit stopped private data binding required for a public34 cohort activation or rollback');a.add_argument('--expected-current',help='Exact prior activation from status; use none for initial install');args=a.parse_args()
  raw_prefix=pathlib.Path(args.prefix).expanduser()
  if not raw_prefix.is_absolute():raise ValueError('prefix must be an explicit absolute path')
  prefix=raw_prefix
@@ -110,7 +110,7 @@ def main():
   p=prefix/name
   if p.is_symlink():raise ValueError('prefix control directories cannot be links')
   private_directory(p,create=True)
- with private_lock(prefix/'.install.lock') as writer,private_lock(prefix/'.runtime.lock') as runtime:
+ with private_lock(prefix/'.install.lock') as writer,private_lock(prefix/'.runtime.lock') as runtime,contextlib.ExitStack() as leases:
   fcntl.flock(writer,fcntl.LOCK_EX|fcntl.LOCK_NB);fcntl.flock(runtime,fcntl.LOCK_EX|fcntl.LOCK_NB)
   if args.action=='install':
    if not args.package:raise ValueError('explicit verified package required')
@@ -122,11 +122,35 @@ def main():
   if not re.fullmatch('[0-9a-f]{40}',ref):raise ValueError('source ref malformed')
   activation=prefix/'activations'/request;transaction=activation/'transaction.json'
   payload={'action':args.action,'sourceRef':ref,'packageInventoryDigest':inventory,'binarySHA256':value['binarySHA256'],'previousActivation':expected}
+  if args.data_dir:payload['dataDir']=str(pathlib.Path(args.data_dir))
   if transaction.exists():
    if json.loads(transaction.read_text())!=payload:raise ValueError('request UUID payload conflict; do not replay')
    print(json.dumps(status(prefix,request),sort_keys=True));return # Readback only after an unknown result.
   if pointer(prefix)!=expected:raise ValueError('activation CAS conflict; refresh status before deciding')
   inactive(prefix)
+  import crewd_managed_launch as launch
+  maximum=launch.supported_schema(package)
+  current=pointer(prefix)
+  prior_maximum=launch.supported_schema((prefix/current/'release').resolve()) if current else None
+  if maximum==34 or prior_maximum==34:
+   if maximum not in (21,33,34):raise ValueError('unknown writer generation is outside the public34 cohort')
+   if maximum==34:
+    witness=json.loads((package/'normal-build-witness.json').read_text())
+    if witness.get('rustInputDigest')!='cc063b67727aeb2869b60e95fbe9f615aeccbcccd24c4c79766057acc8946e55' or not launch.certified_public34_source(package):raise ValueError('unreviewed public34 writer source')
+   if maximum==33:
+    witness=json.loads((package/'normal-build-witness.json').read_text())
+    if witness.get('rustInputDigest')!='0f1f1f96ce3a6704435217459b67c9f037c90d3a02edb88b6bb3153a4344dabc':raise ValueError('unreviewed genuine33 writer source')
+   if not args.data_dir:raise ValueError('public34 switching requires explicit stopped data-dir qualification')
+   data=pathlib.Path(args.data_dir);private_directory(data)
+   if current:
+    prior=json.loads((prefix/current/'transaction.json').read_text())
+    if prior.get('dataDir')!=str(data):raise ValueError('public34 requires the original explicit activation data binding')
+   spec=importlib.util.spec_from_file_location('formal_public34_host',pathlib.Path(__file__).resolve().parents[2]/'deploy/linux/pendingcrew-host.py')
+   host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
+   fd=host.data_lease(data,os.getuid(),os.getgid());leases.callback(os.close,fd)
+   launch.readonly_header(data,maximum)
+   host.qualify_stopped_public34(data)
+   if args.action=='rollback' and host.stopped_database_version(data) not in (None,maximum):raise ValueError('rollback target is incompatible with the stopped database')
   destination=prefix/'releases'/ref
   if destination.is_symlink():raise ValueError('retained release cannot be an external link')
   if destination.exists():

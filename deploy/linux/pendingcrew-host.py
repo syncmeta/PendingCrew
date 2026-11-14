@@ -31,6 +31,146 @@ These are installation prerequisites, not a model-access or full protocol test.
 No tool installation, login, credential copy or task is performed by PendingCrew.'''
 class Refused(Exception): pass
 
+# Explicit source eligibility for one NEW cohort; it is not Linux execution proof.
+PUBLIC34 = {
+    'cohort': 'public34-secretary-onboarding.1',
+    'rustInputDigest': 'cc063b67727aeb2869b60e95fbe9f615aeccbcccd24c4c79766057acc8946e55',
+    'apiSchemaSHA256': 'e619e038d82b1da9eb26f492fb43304725ff01bb717048b0a1d80dada5282d4e',
+    'methodCount': 236,
+    'schemaSourceSHA256': 'ab8f305908ce6eb559289f9d6273dce1789c16392e1a0e44d48576b632bec795',
+    'h33SourceSHA256': '17559e4ef6ad7be953d01c6690036f9f4028aac35b9e3a2ad808c98d0f427d94',
+    'secretarySourceSHA256': '89adb90fd8f1948350aa116add95dae3e430fbaec10769f9947cbc737341fd11',
+}
+PUBLIC34_H33_DDL = """
+CREATE TABLE admin_ask_group_observations (
+    id TEXT PRIMARY KEY NOT NULL CHECK(length(id)=64),
+    crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+    first_number INTEGER NOT NULL REFERENCES object_refs(number) ON DELETE CASCADE,
+    second_number INTEGER NOT NULL REFERENCES object_refs(number) ON DELETE CASCADE,
+    db_id TEXT NOT NULL,
+    restore_stamp TEXT NOT NULL,
+    config_fingerprint TEXT NOT NULL CHECK(length(config_fingerprint)=64),
+    source_fingerprint TEXT NOT NULL CHECK(length(source_fingerprint)=64),
+    first_fingerprint TEXT NOT NULL CHECK(length(first_fingerprint)=64),
+    second_fingerprint TEXT NOT NULL CHECK(length(second_fingerprint)=64),
+    phase TEXT NOT NULL CHECK(phase IN ('prepared','dispatched','suggested','different','unavailable','unknown','stale','invalid')),
+    probability REAL CHECK(probability IS NULL OR probability BETWEEN 0 AND 1),
+    observed_at_ms INTEGER,
+    CHECK(first_number > 0 AND second_number > first_number)
+) STRICT;
+CREATE INDEX admin_ask_group_pending ON admin_ask_group_observations(phase,id);
+CREATE INDEX admin_ask_group_crew ON admin_ask_group_observations(crew_id,id);
+CREATE TABLE admin_ask_group_scan (
+    crew_id TEXT PRIMARY KEY NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+    db_id TEXT NOT NULL,
+    restore_stamp TEXT NOT NULL,
+    config_fingerprint TEXT NOT NULL,
+    floor_number INTEGER NOT NULL CHECK(floor_number>=0),
+    anchor_number INTEGER NOT NULL CHECK(anchor_number>=0),
+    peer_number INTEGER NOT NULL CHECK(peer_number>=0),
+    completed_cut INTEGER NOT NULL CHECK(completed_cut>=0),
+    pass_cut INTEGER NOT NULL CHECK(pass_cut>=0),
+    generation TEXT NOT NULL,
+    pass_generation TEXT NOT NULL
+) STRICT;
+CREATE TABLE admin_ask_group_scheduler (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    after_crew TEXT REFERENCES crews(id) ON DELETE SET NULL
+) STRICT;
+CREATE TABLE admin_ask_group_sources (
+    number INTEGER PRIMARY KEY REFERENCES object_refs(number) ON DELETE CASCADE,
+    crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+    db_id TEXT NOT NULL,
+    restore_stamp TEXT NOT NULL,
+    config_fingerprint TEXT NOT NULL,
+    eligibility TEXT NOT NULL CHECK(eligibility IN ('eligible','excluded','unavailable')),
+    source_fingerprint TEXT
+) STRICT;
+CREATE INDEX admin_ask_group_sources_by_crew ON admin_ask_group_sources(crew_id,number);
+"""
+PUBLIC34_SECRETARY_DDL = """
+CREATE TABLE admin_secretary_sources (
+    id TEXT PRIMARY KEY NOT NULL,
+    case_id TEXT NOT NULL UNIQUE,
+    crew_id TEXT NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+    source_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    db_id TEXT NOT NULL,
+    restore_epoch TEXT NOT NULL,
+    judgment_epoch TEXT NOT NULL,
+    config_revision TEXT,
+    revision TEXT NOT NULL CHECK(length(revision)=64),
+    facts_json TEXT NOT NULL CHECK(json_valid(facts_json) AND json_type(facts_json)='object' AND length(CAST(facts_json AS BLOB))<=65536),
+    created_at_ms INTEGER NOT NULL CHECK(created_at_ms>=0),
+    UNIQUE(crew_id,db_id,restore_epoch,revision),
+    UNIQUE(id,case_id,revision)
+) STRICT;
+CREATE TRIGGER admin_secretary_source_scope BEFORE INSERT ON admin_secretary_sources BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM sessions WHERE id=NEW.source_session_id AND crew_id=NEW.crew_id AND role='captain')
+    THEN RAISE(ABORT,'secretary source has no original same-crew captain') END;
+END;
+CREATE INDEX admin_secretary_sources_crew ON admin_secretary_sources(crew_id,created_at_ms,id);
+CREATE TABLE admin_secretary_references (
+    source_id TEXT NOT NULL REFERENCES admin_secretary_sources(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('human_wait','case','patrol')),
+    reference_id TEXT NOT NULL,
+    object_number INTEGER REFERENCES object_refs(number) ON DELETE CASCADE,
+    PRIMARY KEY(source_id,kind,reference_id),
+    CHECK((kind='human_wait' AND object_number IS NOT NULL AND object_number>0) OR (kind!='human_wait' AND object_number IS NULL))
+) STRICT;
+CREATE INDEX admin_secretary_reference_object ON admin_secretary_references(object_number,source_id);
+CREATE TRIGGER admin_secretary_reference_scope BEFORE INSERT ON admin_secretary_references
+WHEN NEW.object_number IS NOT NULL BEGIN
+    SELECT CASE WHEN NOT EXISTS(
+        SELECT 1 FROM object_refs o JOIN admin_secretary_sources s ON s.id=NEW.source_id
+        WHERE o.number=NEW.object_number AND o.kind='human_task' AND o.crew_id=s.crew_id
+    ) THEN RAISE(ABORT,'secretary source reference is outside its original crew') END;
+END;
+CREATE TRIGGER admin_secretary_reference_purge AFTER DELETE ON admin_secretary_references
+WHEN OLD.object_number IS NOT NULL AND EXISTS(SELECT 1 FROM admin_secretary_sources WHERE id=OLD.source_id)
+BEGIN DELETE FROM admin_secretary_sources WHERE id=OLD.source_id; END;
+CREATE TABLE admin_secretary_publications (
+    source_id TEXT PRIMARY KEY NOT NULL,
+    case_id TEXT NOT NULL UNIQUE,
+    source_revision TEXT NOT NULL CHECK(length(source_revision)=64),
+    author_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    attempt_id TEXT NOT NULL,
+    generation TEXT NOT NULL,
+    request_id TEXT NOT NULL UNIQUE,
+    command_digest TEXT NOT NULL CHECK(length(command_digest)=64),
+    body TEXT NOT NULL CHECK(length(trim(body))>0 AND length(CAST(body AS BLOB))<=8192),
+    references_json TEXT NOT NULL CHECK(json_valid(references_json) AND json_type(references_json)='array' AND json_array_length(references_json)<=40 AND length(CAST(references_json AS BLOB))<=16384),
+    published_at_ms INTEGER NOT NULL CHECK(published_at_ms>=0),
+    revision TEXT NOT NULL CHECK(length(revision)=64),
+    FOREIGN KEY(source_id,case_id,source_revision) REFERENCES admin_secretary_sources(id,case_id,revision) ON DELETE CASCADE
+) STRICT;
+CREATE TRIGGER admin_secretary_publication_scope BEFORE INSERT ON admin_secretary_publications BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM sessions a JOIN admin_secretary_sources s ON s.id=NEW.source_id WHERE a.id=NEW.author_session_id AND a.crew_id=s.crew_id AND a.role='admin')
+    THEN RAISE(ABORT,'secretary author is outside its bound source crew') END;
+END;
+CREATE TRIGGER admin_secretary_source_immutable BEFORE UPDATE ON admin_secretary_sources
+BEGIN SELECT RAISE(ABORT,'immutable secretary source'); END;
+CREATE TRIGGER admin_secretary_publication_immutable BEFORE UPDATE ON admin_secretary_publications
+BEGIN SELECT RAISE(ABORT,'immutable secretary publication'); END;
+CREATE TABLE admin_secretary_observers (
+    crew_id TEXT PRIMARY KEY NOT NULL REFERENCES crews(id) ON DELETE CASCADE,
+    db_id TEXT NOT NULL,
+    restore_epoch TEXT NOT NULL,
+    judgment_epoch TEXT NOT NULL,
+    baseline_revision TEXT NOT NULL CHECK(length(baseline_revision)=64),
+    latest_source_id TEXT REFERENCES admin_secretary_sources(id) ON DELETE SET NULL
+) STRICT;
+CREATE TRIGGER admin_secretary_observer_insert BEFORE INSERT ON admin_secretary_observers
+WHEN NEW.latest_source_id IS NOT NULL BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM admin_secretary_sources WHERE id=NEW.latest_source_id AND crew_id=NEW.crew_id AND db_id=NEW.db_id AND restore_epoch=NEW.restore_epoch AND judgment_epoch=NEW.judgment_epoch)
+    THEN RAISE(ABORT,'secretary observer source scope changed') END;
+END;
+CREATE TRIGGER admin_secretary_observer_update BEFORE UPDATE ON admin_secretary_observers
+WHEN NEW.latest_source_id IS NOT NULL BEGIN
+    SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM admin_secretary_sources WHERE id=NEW.latest_source_id AND crew_id=NEW.crew_id AND db_id=NEW.db_id AND restore_epoch=NEW.restore_epoch AND judgment_epoch=NEW.judgment_epoch)
+    THEN RAISE(ABORT,'secretary observer source scope changed') END;
+END;
+"""
+
 def require_root():
     if platform.system() != 'Linux' or os.getuid() != 0 or os.geteuid() != 0:
         raise Refused('Linux root service management is required; no work Human privilege is inferred')
@@ -206,8 +346,13 @@ def release_generation(release):
     format_ = release.get('format')
     if type(version) is not int or type(format_) is not int:
         raise Refused('integer release generation required')
+    if 'cohort' in release and (format_, version) != (3, 34):
+        raise Refused('legacy release cannot acquire a public34 cohort label')
     if format_ == 1 and version == 21 and 'schemaEvidence' not in release:
         return version
+    if format_ == 3 and version == 34:
+        qualify_public34_release(release)
+        return 34
     core_source = release.get('coreSourceCommit', release.get('sourceCommit'))
     evidence = release.get('schemaEvidence')
     if (format_ != 2 or version != 33 or not isinstance(evidence, dict)
@@ -221,9 +366,172 @@ def release_generation(release):
     return version
 
 
+def qualify_public34_schema(value):
+    digest = sha(json.dumps(value, sort_keys=True, separators=(',', ':')).encode())
+    if (len(value.get('methods', {})) != PUBLIC34['methodCount']
+            or digest != PUBLIC34['apiSchemaSHA256']):
+        raise Refused('complete public34 API236 contract differs')
+
+
+def qualify_release_manifest(manifest):
+    artifact = manifest.get('artifact', {})
+    if type(manifest.get('format')) is not int:
+        raise Refused('integer immutable manifest format required')
+    if manifest.get('format') == 1:
+        if 'cohort' in manifest or 'rustInputDigest' in artifact:
+            raise Refused('legacy manifest cannot acquire public34 source/cohort labels')
+    elif manifest.get('format') == 2:
+        if (manifest.get('cohort') != PUBLIC34['cohort']
+                or artifact.get('rustInputDigest') != PUBLIC34['rustInputDigest']):
+            raise Refused('unqualified public34 manifest cohort/source')
+    else:
+        raise Refused('unsupported immutable release manifest')
+
+
+def qualify_public34_release(release):
+    source = release.get('coreSourceCommit', release.get('sourceCommit'))
+    evidence = release.get('schemaEvidence')
+    expected = {key: PUBLIC34[key] for key in ['schemaSourceSHA256', 'h33SourceSHA256',
+                'secretarySourceSHA256', 'apiSchemaSHA256', 'rustInputDigest']}
+    expected.update(sourceCommit=source, storeVersion=34)
+    if (release.get('cohort') != PUBLIC34['cohort'] or release.get('architecture') != 'x86_64'
+            or type(release.get('apiVersion')) is not int
+            or release.get('apiVersion') != 3 or not isinstance(evidence, dict)
+            or type(evidence.get('storeVersion')) is not int
+            or not isinstance(source, str) or not re.fullmatch('[0-9a-f]{40}', source)
+            or evidence != expected):
+        raise Refused('unqualified public34 cohort/full source/schema evidence')
+
+
+def qualify_stopped_public34(data, rollback=False):
+    """Read a STOPPED database under the caller's Core exclusive lease.
+
+    No checkpoint, migration, metadata repair, row adoption or user-file deletion.
+    These checks mirror the exact admitted Store validators; Store still owns
+    the subsequent real open/transaction/ACL/scope checks. Never call on live DBs.
+    """
+    import sqlite3
+    data = pathlib.Path(data)
+    if not data.is_absolute() or data.resolve() != data or data.is_symlink():
+        raise Refused('canonical stopped data directory required')
+    directory = data.lstat()
+    if not stat.S_ISDIR(directory.st_mode) or stat.S_IMODE(directory.st_mode) != 0o700:
+        raise Refused('stopped data directory must be private0700')
+    version = stopped_database_version(data)
+    database = data / 'crewd.db'
+    identity = data / 'crewd.db.id'
+    if version is None:
+        if os.path.lexists(database) or os.path.lexists(identity) or (data/'backups').exists():
+            raise Refused('missing database has prior identity/recovery obligations')
+        return {'version': None, 'fresh': True}
+    if version not in ((34,) if rollback else (33, 34)):
+        raise Refused('this cohort accepts genuine H33 upgrade or exact public34 only')
+    def original(path):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or info.st_uid != directory.st_uid or stat.S_IMODE(info.st_mode) != 0o600):
+                raise Refused('original owned0600 database/identity required')
+            parts = []
+            while True:
+                part = os.read(fd, 1024*1024)
+                if not part: break
+                parts.append(part)
+            body = b''.join(parts); after = os.fstat(fd); named = path.lstat()
+            if ((info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_mode)
+                    != (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_mode)
+                    or (named.st_dev,named.st_ino,named.st_mode) != (info.st_dev,info.st_ino,info.st_mode)):
+                raise Refused('original database changed or was replaced during read')
+            return (info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_mode,sha(body)),body
+        finally: os.close(fd)
+    before = {}; bodies = {}
+    for path in [database, identity]: before[str(path)],bodies[str(path)] = original(path)
+    try:
+        # SQLite sees only our exclusive private immutable COPY, never the live
+        # pathname or a path replaced by another owner between lstat and open.
+        with tempfile.TemporaryDirectory(prefix='pcw-public34-check-') as temporary:
+            snapshot = pathlib.Path(temporary)/'core.db'
+            snapshot.write_bytes(bodies[str(database)]); snapshot.chmod(0o600)
+            with contextlib.closing(sqlite3.connect(snapshot.as_uri()+'?immutable=1', uri=True)) as c:
+                c.execute('PRAGMA query_only=ON'); c.execute('PRAGMA foreign_keys=ON')
+                if (c.execute('PRAGMA user_version').fetchone() != (version,)
+                        or c.execute('PRAGMA application_id').fetchone() != (0x43525744,)
+                        or c.execute('PRAGMA integrity_check').fetchall() != [('ok',)]
+                        or c.execute('PRAGMA foreign_key_check').fetchall()):
+                    raise Refused('stopped database integrity/application/version differs')
+                def meta(key):
+                    rows = c.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchall()
+                    if len(rows) > 1: raise Refused('duplicate Core metadata')
+                    return rows[0][0] if rows else None
+                db = meta('dbId')
+                if (not isinstance(db, str) or not db or len(db.encode()) > 512
+                        or any(ord(x) < 32 or 127 <= ord(x) <= 159 for x in db)):
+                    raise Refused('invalid original Core database identity')
+                lines = bodies[str(identity)].decode().splitlines()
+                if (not lines or lines[0] != db or len(lines) > 2
+                        or (len(lines) == 2 and lines[1] != 'ino='+str(before[str(database)][1]))):
+                    raise Refused('Core identity sidecar does not name this original database')
+                stamp = meta('personalDraft.restoreStamp.v1')
+                if not isinstance(stamp, str) or str(uuid.UUID(stamp)) != stamp:
+                    raise Refused('missing/invalid original H33 restore authority')
+                def catalog(connection, prefix):
+                    return connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master '
+                        'WHERE name GLOB ? OR tbl_name GLOB ? ORDER BY type,name,tbl_name',
+                        (prefix+'*', prefix+'*')).fetchall()
+                def module(prefix, ddl, tables):
+                    with contextlib.closing(sqlite3.connect(':memory:')) as reference:
+                        reference.executescript('CREATE TABLE crews(id TEXT PRIMARY KEY); '
+                            'CREATE TABLE sessions(id TEXT PRIMARY KEY); '
+                            'CREATE TABLE object_refs(number INTEGER PRIMARY KEY,kind TEXT,crew_id TEXT);')
+                        reference.executescript(ddl)
+                        if catalog(c, prefix) != catalog(reference, prefix):
+                            raise Refused('exact normative module catalog differs: '+prefix)
+                    for name in tables:
+                        if c.execute("SELECT strict,wr FROM pragma_table_list WHERE schema='main' AND name=?", (name,)).fetchall() != [(1, 0)]:
+                            raise Refused('non-STRICT or substituted module table: '+name)
+                        if c.execute('SELECT * FROM pragma_foreign_key_check(?)', (name,)).fetchall():
+                            raise Refused('invalid module foreign-key closure: '+name)
+                if (meta('adminAskGroups.schemaFormat.v1') != 'human-pending-question-groups.1'
+                        or meta('adminAskGroups.schemaDatabase.v1') != db
+                        or meta('managedViews.nativeEvidenceFormat') is not None
+                        or c.execute("SELECT 1 FROM sqlite_master WHERE name GLOB 'work_view_*'").fetchone()):
+                    raise Refused('not the genuine H33 authority/format')
+                module('admin_ask_group_', PUBLIC34_H33_DDL,
+                       ['admin_ask_group_observations', 'admin_ask_group_scan',
+                        'admin_ask_group_scheduler', 'admin_ask_group_sources'])
+                if c.execute('SELECT singleton FROM admin_ask_group_scheduler').fetchall() != [(1,)]:
+                    raise Refused('H33 scheduler singleton differs')
+                if version == 33:
+                    unexpected = c.execute("SELECT 1 FROM meta WHERE key GLOB 'adminSecretary.*' OR key GLOB 'patrol.secretary.completed.v1:*' OR (key GLOB 'patrol.run.v1:*' AND CASE WHEN json_valid(value) THEN json_type(value,'$.secretary_scope') IS NOT NULL ELSE 0 END) OR (key GLOB 'admin.case.v1:*' AND CASE WHEN json_valid(value) THEN json_extract(value,'$.view.source.provenance.kind')='secretary_brief' ELSE 0 END) LIMIT 1").fetchone()
+                    if unexpected or catalog(c, 'admin_secretary_'):
+                        raise Refused('pre34 input contains partial/private Secretary evidence')
+                else:
+                    expected = {'adminSecretary.schemaFormat.v1': 'case-scoped-human-brief.1',
+                        'adminSecretary.schemaDatabase.v1': db,
+                        'adminSecretary.publicFormat.v34': 'secretary-brief.public34.1',
+                        'adminSecretary.publicDatabase.v34': db}
+                    actual = dict(c.execute("SELECT key,value FROM meta WHERE key GLOB 'adminSecretary.*'"))
+                    if actual != expected or c.execute("SELECT 1 FROM meta WHERE key GLOB 'managedViews.*' LIMIT 1").fetchone():
+                        raise Refused('not exact public34 format/original database authority')
+                    module('admin_secretary_', PUBLIC34_SECRETARY_DDL,
+                        ['admin_secretary_sources', 'admin_secretary_references',
+                         'admin_secretary_publications', 'admin_secretary_observers'])
+        for path in [database, identity]:
+            after,_ = original(path)
+            if after != before[str(path)]: raise Refused('stopped database changed during qualification')
+        if stopped_database_version(data) != version: raise Refused('stopped database generation changed')
+        return {'version': version, 'dbId': db, 'H33Qualified': True,
+                'public34Qualified': version == 34, 'readOnly': True}
+    except (sqlite3.Error, ValueError, OSError) as error:
+        raise Refused('stopped Core format qualification failed: '+str(error)) from error
+
+
 def require_install_generation(data, release):
     target = release_generation(release)
     current = stopped_database_version(data)
+    if target == 34:
+        qualify_stopped_public34(data, rollback=False)
     if current is not None and current > target:
         raise Refused('installation would downgrade the stopped Core database')
 
@@ -247,6 +555,8 @@ def extract_release(payload, root, expected):
         if directory.is_dir(): directory.chmod(0o755)
     release = json.loads((unpacked / 'release.json').read_bytes())
     release_generation(release)
+    if release['format'] == 3 and expected.get('rustInputDigest') != release['schemaEvidence']['rustInputDigest']:
+        raise Refused('public34 manifest artifact has another complete source input')
     if release.get('sourceCommit') != expected['sourceCommit'] or release.get('architecture') != expected['architecture'] or release.get('apiVersion') != 3:
         raise Refused('wrong release source/architecture/schema')
     files = release.get('files', {})
@@ -261,7 +571,7 @@ def extract_release(payload, root, expected):
         raise Refused('Core component source mismatch')
     if proof.get('sourceCommit') != core_source or proof.get('sourceClean') is not True or proof.get('defaultFeatures') is not True or proof.get('features') != [] or proof.get('test') is not False or proof.get('binarySha256') != files['bin/crewd']:
         raise Refused('ordinary binary build proof mismatch')
-    if release['format'] == 2 and proof.get('schemaEvidence') != release['schemaEvidence']:
+    if release['format'] in (2, 3) and proof.get('schemaEvidence') != release['schemaEvidence']:
         raise Refused('ordinary build schema proof mismatch')
     header = (unpacked / 'bin/crewd').read_bytes()[:20]
     machine = {'x86_64': 62, 'aarch64': 183}.get(release['architecture'])
@@ -447,10 +757,11 @@ def install(args):
     manifest = json.loads(download(manifest_url, manifest_sha, 1024 * 1024))
     architecture = {'x86_64': 'x86_64', 'aarch64': 'aarch64'}.get(platform.machine())
     artifact = manifest.get('artifact', {})
-    if manifest.get('format') != 1 or artifact.get('architecture') != architecture or not re.fullmatch('[0-9a-f]{40}', artifact.get('sourceCommit', '')) or not immutable_release_url(artifact.get('url', ''), artifact['sourceCommit']):
+    if manifest.get('format') not in (1, 2) or artifact.get('architecture') != architecture or not re.fullmatch('[0-9a-f]{40}', artifact.get('sourceCommit', '')) or not immutable_release_url(artifact.get('url', ''), artifact['sourceCommit']):
         raise Refused('wrong immutable release manifest')
     if not immutable_release_url(manifest_url, artifact['sourceCommit']): raise Refused('manifest URL is not immutable')
     validate_provider_policy(manifest)
+    qualify_release_manifest(manifest)
     data = pathlib.Path(args.data_dir or (pathlib.Path(account.pw_dir) / '.local/share/PendingCrew')).absolute()
     checked_text(str(data))
     if len(os.fsencode(data / 'crewd.sock')) >= 108: raise Refused('data directory exceeds Unix socket address limit')
@@ -472,6 +783,13 @@ def install(args):
         schema = transient(account.pw_uid, account.pw_gid, [str(unpacked / 'bin/crewd'), 'schema'])
         if schema.returncode != 0: raise Refused('ordinary artifact offline schema check failed before installation')
         schema_value = json.loads(schema.stdout)
+        if release['format'] == 3:
+            if schema.stderr: raise Refused('ordinary public34 offline schema emitted diagnostics')
+            qualify_public34_schema(schema_value)
+            if manifest['format'] != 2 or manifest.get('cohort') != release['cohort']:
+                raise Refused('public34 release requires its explicit manifest cohort')
+        elif manifest['format'] != 1:
+            raise Refused('legacy release cannot acquire a public34 manifest label')
         if not {'remote.enrollmentCreate', 'remote.enrollmentLookup'} <= set(schema_value.get('methods', {})):
             raise Refused('artifact has no current enrollment contract; never substitute an old R2 package')
         root_code_directory(PREFIX, create=True)
@@ -485,7 +803,7 @@ def install(args):
                 raise Refused('existing service user/data binding cannot be replaced by installation')
         prior = pointer(PREFIX)
         operation = STATE / ('install-' + installation + '.json')
-        new_record(operation, {'format': 1, 'kind': 'installation', 'requestId': installation, 'expectedCurrent': prior, 'sourceCommit': release['sourceCommit'], 'artifactSha256': artifact['sha256'], 'uid': account.pw_uid, 'dataDir': str(data), 'gid': account.pw_gid, 'providerPaths': tools, 'disableClaude': disable_claude, 'preservedConnection': preserved, 'label': checked_text(args.label, 256), 'advertiseHost': args.advertise_host, 'listenHost': args.listen_host, 'port': args.port, 'configureRequestId': str(uuid.uuid4()), 'enrollmentRequestId': str(uuid.uuid4()), 'enrollmentId': str(uuid.uuid4())})
+        new_record(operation, {'format': 1, 'kind': 'installation', 'requestId': installation, 'expectedCurrent': prior, 'sourceCommit': release['sourceCommit'], **({'cohort':release['cohort']} if release['format']==3 else {}), 'artifactSha256': artifact['sha256'], 'uid': account.pw_uid, 'dataDir': str(data), 'gid': account.pw_gid, 'providerPaths': tools, 'disableClaude': disable_claude, 'preservedConnection': preserved, 'label': checked_text(args.label, 256), 'advertiseHost': args.advertise_host, 'listenHost': args.listen_host, 'port': args.port, 'configureRequestId': str(uuid.uuid4()), 'enrollmentRequestId': str(uuid.uuid4()), 'enrollmentId': str(uuid.uuid4())})
         with contextlib.ExitStack() as leases:
             for name, mode in [('.install.lock', 0o600), ('.runtime.lock', 0o644)]:
                 try:
@@ -587,6 +905,17 @@ def resume_installation(args):
         raise Refused('original provider selection is invalid; no rediscovery')
     tools = provider_preflight(account, original['providerPaths'], disable_claude=True) if disable_claude else provider_preflight(account, original['providerPaths'])
     data = pathlib.Path(original['dataDir'])
+    release = None
+    if 'cohort' in original:
+        if original['cohort'] != PUBLIC34['cohort']: raise Refused('original installation cohort changed')
+        directory = PREFIX/'releases'/original['sourceCommit']; root_code_directory(directory)
+        release = json.loads((directory/'release.json').read_bytes())
+        if release_generation(release)!=34 or release['sourceCommit']!=original['sourceCommit']:
+            raise Refused('original public34 retained release changed')
+        for name,digest in release['files'].items():
+            path=directory/name; info=path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_mode&0o022 or sha(path.read_bytes())!=digest:
+                raise Refused('original public34 retained component changed')
     socket_unit, service_unit = units(account, data, tools, disable_claude=disable_claude)
     expected = [(pathlib.Path('/etc/systemd/system/pendingcrew.socket'), socket_unit.encode()), (pathlib.Path('/etc/systemd/system/pendingcrew.service'), service_unit.encode())]
     binding = STATE / 'installation.json'
@@ -609,6 +938,7 @@ def resume_installation(args):
                 fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
             if active() or pointer(PREFIX) != 'activations/'+request: raise Refused('original activation changed during recovery')
             leases.callback(os.close,data_lease(data,original['uid'],original['gid']))
+            if release is not None: require_install_generation(data,release)
             for path,content in expected: replace_root_file(path,content)
             replace_root_file(binding,json.dumps({'format':1,'requestId':request,'uid':original['uid'],'gid':original['gid'],'dataDir':str(data),'sourceCommit':original['sourceCommit']}).encode(),0o600)
     finish_installation(original)
@@ -637,6 +967,8 @@ def stopped_database_version(data):
 def require_rollback_generation(data, release):
     target = release_generation(release)
     version = stopped_database_version(data)
+    if target == 34:
+        qualify_stopped_public34(data, rollback=True)
     if version not in (None, target):
         raise Refused('rollback target is not qualified for the stopped database')
     return version
@@ -672,10 +1004,11 @@ def rollback(args):
             if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or sha(member.read_bytes()) != digest:
                 raise Refused('rollback immutable release changed')
         leases.callback(os.close, data_lease(pathlib.Path(binding['dataDir']), binding['uid'], binding['gid']))
-        version = require_rollback_generation(pathlib.Path(binding['dataDir']), release)
+        data = pathlib.Path(binding['dataDir'])
+        version = require_rollback_generation(data, release)
         # This candidate has exactly one writer qualification. No guessed ranges
         # or downgrade migrations; the old writer must match the stopped format.
-        if release['format'] == 2:
+        if release['format'] in (2, 3):
             proof = json.loads((release_dir / 'build-proof.json').read_bytes())
             if proof.get('schemaEvidence') != release['schemaEvidence']:
                 raise Refused('rollback original schema proof mismatch')
