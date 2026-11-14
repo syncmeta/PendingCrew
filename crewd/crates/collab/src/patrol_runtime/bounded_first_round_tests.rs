@@ -138,7 +138,7 @@ fn observation() -> TestFaultObservation {
 #[test]
 fn empty_crew_naturally_covers_all_three_sources_in_one_selected_tick() {
     let mut s = store();
-    let wakes = serde_json::to_value(crate::wakes::list(s.conn(), None, 100).unwrap()).unwrap();
+    let wakes = crate::wakes::list(s.conn(), None, 100).unwrap();
     let done = tick_crew(&mut s, "crew-a", NOW);
     assert_eq!(done.scan, WorkPatrolScan::Channels);
     assert_eq!(done.after, None);
@@ -157,10 +157,7 @@ fn empty_crew_naturally_covers_all_three_sources_in_one_selected_tick() {
         serde_json::to_value(secretary_observation(s.conn(), "crew-a").unwrap().unwrap()).unwrap(),
         serde_json::to_value(&done).unwrap()
     );
-    assert_eq!(
-        serde_json::to_value(crate::wakes::list(s.conn(), None, 100).unwrap()).unwrap(),
-        wakes
-    );
+    assert_eq!(crate::wakes::list(s.conn(), None, 100).unwrap(), wakes);
 }
 
 #[test]
@@ -171,7 +168,7 @@ fn small_mixed_sources_complete_with_real_scoped_findings_and_no_execution() {
     let entries = (0..3).map(|_| entry(&mut s, "crew-a")).collect::<Vec<_>>();
     topic(&mut s, "crew-a");
     topic(&mut s, "crew-a");
-    let before = serde_json::to_value(crate::wakes::list(s.conn(), None, 100).unwrap()).unwrap();
+    let before = crate::wakes::list(s.conn(), None, 100).unwrap();
     let done = tick_crew(&mut s, "crew-a", NOW);
     assert_eq!(done.completed_at_ms, Some(NOW));
     assert_eq!(done.scanned_counts["work"], 4);
@@ -185,10 +182,7 @@ fn small_mixed_sources_complete_with_real_scoped_findings_and_no_execution() {
             .any(|id| foreign.contains(id))
     );
     assert!(completed_semantic_revision(&done).is_ok());
-    assert_eq!(
-        serde_json::to_value(crate::wakes::list(s.conn(), None, 100).unwrap()).unwrap(),
-        before
-    );
+    assert_eq!(crate::wakes::list(s.conn(), None, 100).unwrap(), before);
 }
 
 #[test]
