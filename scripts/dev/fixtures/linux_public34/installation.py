@@ -89,9 +89,9 @@ def installation_flow(r):
               '--request-id',rid,'--expected-current',expected or 'none']
         if package:argv+=['--package',str(package)]
         if reference:argv+=['--source-ref',reference]
-        return r.tool([__import__('sys').executable,*argv],action+'-'+rid,expected=0 if success else None,contains=contains)
+        return r.tool([__import__('sys').executable,'-B',*argv],action+'-'+rid,expected=0 if success else None,contains=contains)
     def status(rid):
-        value=r.tool([__import__('sys').executable,str(installer),'status','--prefix',str(prefix),'--request-id',rid],'status-'+rid)
+        value=r.tool([__import__('sys').executable,'-B',str(installer),'status','--prefix',str(prefix),'--request-id',rid],'status-'+rid)
         return json.loads(value['stdout'])
     first=str(uuid.uuid4());install('install',first,None,package=old);active=status(first)['currentActivation']
     assert status(first)['outcome']=='committed-current'

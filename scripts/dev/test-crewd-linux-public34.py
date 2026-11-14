@@ -23,6 +23,17 @@ def source_clean_recipe_controls(root):
     assert len(isolated)==3
     assert all(isinstance(a[1],ast.Constant) and a[1].value=='-B'
         and isinstance(a[2],ast.Constant) and a[2].value=='-I' for a in isolated)
+    installation=ast.parse((root/'scripts/dev/fixtures/linux_public34/installation.py').read_bytes())
+    child_python=[]
+    for node in ast.walk(installation):
+        if not (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+                and node.func.attr=='tool' and node.args and isinstance(node.args[0],ast.List)):continue
+        argv=node.args[0].elts
+        if argv and isinstance(argv[0],ast.Attribute) and argv[0].attr=='executable':
+            child_python.append(argv)
+    # Parent interpreter flags do not propagate to these child interpreters.
+    assert len(child_python)==2
+    assert all(isinstance(a[1],ast.Constant) and a[1].value=='-B' for a in child_python)
     package=ast.parse((root/'deploy/linux/package-host-release.py').read_bytes())
     assert isinstance(package.body[1],ast.Import) and [n.name for n in package.body[1].names]==['sys']
     assert ast.dump(package.body[2],include_attributes=False)==ast.dump(

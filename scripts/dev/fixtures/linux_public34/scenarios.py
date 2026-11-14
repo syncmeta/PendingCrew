@@ -18,7 +18,7 @@ def fixed_facts(r,value):
 
 def original_table_rows(c):
     # Catalog comes from our actual stopped product copy, not caller SQL.
-    tables=[x[0] for x in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    tables=[x[0] for x in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
     def cell(value):
         if isinstance(value,bytes):return {'sqliteBlobHex':value.hex()}
         return value
