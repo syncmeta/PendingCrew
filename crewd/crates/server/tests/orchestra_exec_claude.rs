@@ -56,7 +56,7 @@ async fn launches_the_given_program_with_world_model_and_comms() {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
+            "#!/bin/sh\nset -e\ncapture='{}'\npending=\"$capture.pending\"\nprintf '%s\\n' \"$@\" > \"$pending\"\n/bin/mv \"$pending\" \"$capture\"\nexec sleep 30\n",
             argv.display()
         ),
     )

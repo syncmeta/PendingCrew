@@ -171,6 +171,7 @@ fn import_into_the_legacy_dir_itself_is_refused_and_writes_nothing() {
 fn import_is_refused_while_serve_holds_the_data_dir() {
     let data = tempfile::tempdir().unwrap();
     let _d = start(data.path());
+    let before = rpc(data.path(), "crew.list", "null");
     let out = crewd(data.path())
         .args(["import", "--from"])
         .arg(fixture())
@@ -183,7 +184,7 @@ fn import_is_refused_while_serve_holds_the_data_dir() {
         String::from_utf8_lossy(&out.stderr)
     );
     let crews = rpc(data.path(), "crew.list", "null");
-    assert_eq!(crews.as_array().unwrap().len(), 0, "serve 的库没被动过");
+    assert_eq!(crews, before, "serve 的原机组一个字段都不能变");
 }
 
 #[test]
@@ -850,6 +851,8 @@ fn rpc_drives_every_client_method() {
         ("adminCase.effects", "[]", Code(-32602)),
         ("adminCase.get", "[]", Code(-32602)),
         ("adminCase.humanBrief", "[]", Code(-32602)),
+        ("adminAskGroups.list", r#"{"crewId":"local-aaaa"}"#, Ok),
+        ("adminCase.secretaryBrief", r#"{"crewId":"local-aaaa"}"#, Ok),
         ("adminCase.legacyConfirm", "[]", Code(-32602)),
         ("adminCase.legacyGet", "[]", Code(-32602)),
         ("adminCase.legacyList", "[]", Code(-32602)),

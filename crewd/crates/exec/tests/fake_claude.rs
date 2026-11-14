@@ -694,6 +694,11 @@ async fn delayed_echo_child(mode: EchoMode) -> EchoRun {
         &py,
         r#"import os, pathlib, select, sys, termios, time
 root = pathlib.Path(__file__).parent
+def publish_receipt(name, data):
+    # Existence is the parent's completion barrier, so publish only after close.
+    pending = root / ('.' + name + '.pending')
+    pending.write_bytes(data)
+    os.replace(pending, root / name)
 pause_body = sys.argv[1] == 'pause'
 hold_clear_echo = sys.argv[1] == 'timer'
 clear_echoed = False
@@ -715,17 +720,17 @@ while True:
     if not pause_body and not echoed and (root / 'show-echo').exists():
         echoed = True
         draw()
-        (root / 'echo-shown').write_bytes(value)
+        publish_receipt('echo-shown', value)
     if hold_clear_echo and not clear_echoed and (root / 'show-clear').exists():
         clear_echoed = True
         draw()
-        (root / 'clear-shown').write_bytes(b'yes')
+        publish_receipt('clear-shown', b'yes')
     ready, _, _ = select.select([0], [], [], 0.01)
     if not ready:
         continue
     chunk = os.read(0, 4096)
     received.extend(chunk)
-    # Append-only evidence: no partial-file read races with the parent.
+    # Stream evidence is distinct from the completed receipts published below.
     with (root / 'received').open('ab') as f:
         f.write(chunk)
     suppress_draw = False
@@ -734,7 +739,7 @@ while True:
             value = value[:-1]
         elif key == 21:
             value = b''
-            (root / 'cleared').write_bytes(b'yes')
+            publish_receipt('cleared', b'yes')
             suppress_draw = hold_clear_echo
         elif key == 13:
             with (root / 'submitted.log').open('ab') as f:
@@ -744,13 +749,13 @@ while True:
             value += bytes([key])
     if pause_body and not paused:
         paused = True
-        (root / 'body-prefix').write_bytes(chunk)
+        publish_receipt('body-prefix', chunk)
         while not (root / 'resume-reading').exists():
             time.sleep(0.01)
     if pause_body and b'x' in chunk:
-        (root / 'raw-consumed').write_bytes(b'x')
+        publish_receipt('raw-consumed', b'x')
     if not pause_body and not (root / 'human-consumed').exists():
-        (root / 'human-consumed').write_bytes(chunk)
+        publish_receipt('human-consumed', chunk)
     if echoed and not suppress_draw:
         draw()
 "#,
@@ -984,7 +989,11 @@ async fn raw_during_a_backpressured_body_cancels_the_remaining_bytes_without_cle
     let id = r.r.h.send(body.clone()).unwrap();
     r.receipt("body-prefix").await;
     let prefix = r.bytes("body-prefix");
-    assert!(!prefix.is_empty() && prefix.iter().all(|b| *b == b'B'));
+    assert!(
+        !prefix.is_empty() && prefix.iter().all(|b| *b == b'B'),
+        "complete first PTY chunk must be nonempty B-only: len={} bytes={prefix:?}",
+        prefix.len()
+    );
     r.r.h.raw(b"x".to_vec()).unwrap();
     // FIFO barrier proves the raw command was handled while the child still wasn't reading.
     r.r.h.status().await.unwrap();
