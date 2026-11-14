@@ -165,9 +165,7 @@ fn late_ddl_and_final_marker_faults_roll_back_the_entire_administrative_transact
                 c.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
                     AuthAction::CreateTable {
                         table_name: "admin_secretary_observers",
-                    } => {
-                        Authorization::Deny
-                    }
+                    } => Authorization::Deny,
                     _ => Authorization::Allow,
                 }))
                 .unwrap();
