@@ -178,21 +178,21 @@ fn bootstrap_inner(store: &mut Store, data: &Path) -> anyhow::Result<()> {
         );
     }
     // An intentionally removed tutorial is never materialized again.
-    if !state.ready.is_empty() {
-        if facts::root_lifecycle(store.conn())? != facts::RootLifecycle::Active {
-            if let Err(error) = project_committed(store.conn(), &data) {
-                if error
-                    .downcast_ref::<StatusQualificationFailure>()
-                    .is_some_and(|failure| failure.revocation_unknown)
-                {
-                    return Err(error);
-                }
-                eprintln!(
-                    "crewd: onboarding projection inactive/cleanup unresolved; Core lifecycle preserved: {error}"
-                );
+    if !state.ready.is_empty()
+        && facts::root_lifecycle(store.conn())? != facts::RootLifecycle::Active
+    {
+        if let Err(error) = project_committed(store.conn(), &data) {
+            if error
+                .downcast_ref::<StatusQualificationFailure>()
+                .is_some_and(|failure| failure.revocation_unknown)
+            {
+                return Err(error);
             }
-            return Ok(());
+            eprintln!(
+                "crewd: onboarding projection inactive/cleanup unresolved; Core lifecycle preserved: {error}"
+            );
         }
+        return Ok(());
     }
     let origin = if let Some(p) = &state.pending {
         p.origin.clone()
