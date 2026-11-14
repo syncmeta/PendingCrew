@@ -84,16 +84,75 @@ fn a_swapped_db_refuses_to_start() {
 
 #[test]
 fn a_pre_marker_db_is_adopted() {
+    use std::os::unix::fs::PermissionsExt;
+
     let d = tempfile::tempdir().unwrap();
-    // N4 之前建的库：没有 id 文件，meta 里也没有 dbId。
+    let db = d.path().join(DB_FILE);
+    // 真正的 N4 前代：按原 V1 -> V2 创建，不能把 public34 删掉 dbId 冒充旧库。
+    crewd_store::testing::write_v2_db(&db);
+    let assert_legacy = |c: &rusqlite::Connection| {
+        assert_eq!(
+            c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            c.query_row("PRAGMA application_id", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(meta_get(c, "dbId").unwrap(), None);
+        assert_eq!(
+            c.query_row("SELECT title FROM crews WHERE id='old'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+            "示例"
+        );
+        assert_eq!(
+            c.query_row("SELECT text FROM messages WHERE id='m1'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+            "示例"
+        );
+    };
     {
-        let s = Store::open(&d.path().join(DB_FILE)).unwrap();
-        s.conn()
-            .execute("DELETE FROM meta WHERE key='dbId'", [])
-            .unwrap();
-        s.conn().execute_batch("PRAGMA application_id=0").unwrap();
+        let c =
+            rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        assert_legacy(&c);
     }
-    let id = db_id(d.path());
+    assert_eq!(sidecars(d.path()), [DB_FILE]);
+
+    let s = Store::open_data_dir(d.path()).unwrap();
+    let id = meta_get(s.conn(), "dbId").unwrap().unwrap();
+    assert_eq!(id.len(), 32, "{id}");
+    assert!(
+        id.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    );
+    assert_eq!(
+        s.conn()
+            .query_row("PRAGMA application_id", [], |r| r.get::<_, i32>(0))
+            .unwrap(),
+        APPLICATION_ID
+    );
+    assert_eq!(
+        s.conn()
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        crewd_store::schema::SCHEMA_VERSION
+    );
+    assert_eq!(meta_get(s.conn(), "onboarding.fresh.v1").unwrap(), None);
+    assert_eq!(
+        s.conn()
+            .query_row("SELECT text FROM messages WHERE id='m1'", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+        "示例"
+    );
     assert_eq!(
         std::fs::read_to_string(d.path().join(ID_FILE))
             .unwrap()
@@ -101,6 +160,51 @@ fn a_pre_marker_db_is_adopted() {
             .next()
             .unwrap(),
         id
+    );
+    assert_eq!(
+        std::fs::metadata(&db).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(d.path().join(ID_FILE))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    drop(s);
+
+    let snapshots: Vec<_> = std::fs::read_dir(d.path().join("backups"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(snapshots.len(), 1, "非空旧库迁移前必须有保护快照");
+    let name = snapshots[0].file_name().unwrap().to_string_lossy();
+    assert!(
+        name.starts_with(&format!(
+            "crewd-v2-pre-v{}-",
+            crewd_store::schema::SCHEMA_VERSION
+        )) && name.ends_with(".db"),
+        "{name}"
+    );
+    let snap = rusqlite::Connection::open_with_flags(
+        &snapshots[0],
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_legacy(&snap);
+    assert_eq!(
+        snap.query_row("PRAGMA quick_check", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    drop(snap);
+    assert_eq!(db_id(d.path()), id, "认领后重开保留原生成身份");
+    assert_eq!(
+        std::fs::read_dir(d.path().join("backups")).unwrap().count(),
+        1,
+        "重开不重复迁移或拍快照"
     );
 }
 
@@ -175,6 +279,8 @@ fn an_id_less_old_db_copied_in_is_refused_before_anything_touches_it() {
 
 #[test]
 fn an_id_less_current_db_copied_in_is_refused_too() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
     let d = tempfile::tempdir().unwrap();
     db_id(d.path());
     let other = tempfile::tempdir().unwrap();
@@ -185,14 +291,56 @@ fn an_id_less_current_db_copied_in_is_refused_too() {
             .unwrap();
     }
     remove_db(d.path());
-    std::fs::copy(other.path().join(DB_FILE), d.path().join(DB_FILE)).unwrap();
+    let db = d.path().join(DB_FILE);
+    std::fs::copy(other.path().join(DB_FILE), &db).unwrap();
+    // public34 的 H33/Secretary 目录绑定原 dbId；删掉它已经是破损格式，
+    // 必须由早于 identity peek 的只读 preflight 拒绝，不能重新补一个身份。
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let before = std::fs::read(&db).unwrap();
+    assert_eq!((before[18], before[19]), (2, 2), "保留 WAL 头夹具");
     let names_before = sidecars(d.path());
+    let files_before: Vec<_> = names_before
+        .iter()
+        .map(|name| {
+            let path = d.path().join(name);
+            let m = std::fs::metadata(&path).unwrap();
+            (
+                std::fs::read(path).unwrap(),
+                m.mode(),
+                m.ino(),
+                m.mtime(),
+                m.mtime_nsec(),
+            )
+        })
+        .collect();
     let err = Store::open_data_dir(d.path())
         .err()
         .expect("没有 dbId 的库不能顶替");
-    assert!(matches!(err, StoreError::DbUnmarked { .. }), "{err:?}");
+    assert!(
+        matches!(&err, StoreError::Invalid(message) if message == "unsupported administrative question-grouping database format"),
+        "必须是 public34 的 H33 身份资格拒绝：{err:?}"
+    );
     // 复审 2 轮 4：偷看不留 -wal / -shm（这是个 WAL 头的文件）。
     assert_eq!(sidecars(d.path()), names_before, "偷看不建旁路文件");
+    let files_after: Vec<_> = names_before
+        .iter()
+        .map(|name| {
+            let path = d.path().join(name);
+            let m = std::fs::metadata(&path).unwrap();
+            (
+                std::fs::read(path).unwrap(),
+                m.mode(),
+                m.ino(),
+                m.mtime(),
+                m.mtime_nsec(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        files_after, files_before,
+        "库/id/旁路文件字节、权限、inode、mtime 全不动"
+    );
+    assert_eq!(std::fs::read(db).unwrap(), before, "不能补 dbId 或修格式");
 }
 
 /// id 文件在、库文件却是空的（0 字节）：等于库丢了，不在里面建表。

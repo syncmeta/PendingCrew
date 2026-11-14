@@ -163,11 +163,9 @@ fn late_ddl_and_final_marker_faults_roll_back_the_entire_administrative_transact
             let catalog = rows(&c, "sqlite_master");
             if fault == "ddl" {
                 c.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
-                    AuthAction::CreateTable { table_name }
-                        if table_name == "admin_secretary_observers" =>
-                    {
-                        Authorization::Deny
-                    }
+                    AuthAction::CreateTable {
+                        table_name: "admin_secretary_observers",
+                    } => Authorization::Deny,
                     _ => Authorization::Allow,
                 }))
                 .unwrap();

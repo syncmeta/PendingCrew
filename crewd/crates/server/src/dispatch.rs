@@ -279,19 +279,16 @@ async fn route(state: &AppState, req: Request) -> Result<Value, RpcError> {
             if state.management.get().is_some() {
                 capabilities.push("lifecycle.management".into());
             }
-            if crate::admin_ask_groups::qualified(state)
-                .await
-                .map_err(collab_err)?
+            // Discovery must remain independent of the FIFO whose health this
+            // response reports. Operation routes retain their live Tx guards.
+            if state.db.opened_admin_ask_groups() && crate::admin_ask_groups::runtime_healthy(state)
             {
                 capabilities.push(crewd_proto::admin_ask_groups::CAPABILITY.into());
             }
             if state.judgment_runtime.get().is_some() {
                 capabilities.push("judgment".into());
             }
-            if crate::admin_cases::secretary_qualified(state)
-                .await
-                .map_err(collab_err)?
-            {
+            if state.db.opened_admin_secretary() {
                 capabilities.push(crewd_proto::admin_secretary::CAPABILITY.into());
                 capabilities.push(crewd_proto::admin_secretary::HUMAN_REQUEST.into());
             }

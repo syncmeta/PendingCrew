@@ -12,12 +12,35 @@ enum Msg {
     Stop,
 }
 
+/// Validated installation metadata for this opened Store. This is discovery,
+/// never current authorization, queue health or a guarantee that work will run.
+/// Restore/open creates a new owner and must qualify its actual catalog again.
+struct OpenedCatalog {
+    admin_ask_groups: bool,
+    admin_secretary: bool,
+}
+impl OpenedCatalog {
+    fn qualify(store: &Store) -> Result<Self> {
+        let c = store.conn();
+        let admin_secretary = crate::admin_secretary::available(c)?;
+        let admin_ask_groups = crate::admin_ask_groups::available(c)?;
+        if admin_ask_groups {
+            crate::admin_ask_groups::validate_schema(c)?;
+        }
+        Ok(Self {
+            admin_ask_groups,
+            admin_secretary,
+        })
+    }
+}
+
 /// 可克隆的句柄。所有句柄都 drop 之后线程退出、库关闭；也可显式 `shutdown`。
 #[derive(Clone)]
 pub struct Db {
     tx: mpsc::Sender<Msg>,
     database_thread_id: std::thread::ThreadId,
     health: crate::db_health::DbHealth,
+    opened_catalog: Arc<OpenedCatalog>,
     /// 线程句柄由所有克隆共享；`shutdown` 取走它来 join。
     thread: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -25,6 +48,11 @@ pub struct Db {
 impl Db {
     /// 把 `store` 交给库线程；之后只能经 `call` 用它。
     pub fn spawn(store: Store) -> std::io::Result<Db> {
+        // Qualify before transferring ownership or publishing the FIFO handle.
+        // Never synthesize positive discovery metadata on qualification failure.
+        let opened_catalog = Arc::new(OpenedCatalog::qualify(&store).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+        })?);
         let (tx, rx) = mpsc::channel::<Msg>();
         let health = crate::db_health::DbHealth::default();
         let thread_health = health.clone();
@@ -46,8 +74,20 @@ impl Db {
             tx,
             database_thread_id,
             health,
+            opened_catalog,
             thread: Arc::new(Mutex::new(Some(handle))),
         })
+    }
+
+    /// Supported catalog observed before this actor started, bound to its Store.
+    /// Actual operations must still reauthorize and validate their current Tx.
+    pub fn opened_admin_ask_groups(&self) -> bool {
+        self.opened_catalog.admin_ask_groups
+    }
+
+    /// Pure installation discovery, readable even if this actor is busy/closed.
+    pub fn opened_admin_secretary(&self) -> bool {
+        self.opened_catalog.admin_secretary
     }
 
     /// Independent last fault snapshot; never queries or queues work on SQLite.
@@ -186,6 +226,57 @@ mod tests {
     use std::pin::Pin;
     use std::task::Poll;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn spawn_refuses_unqualified_opened_catalog_instead_of_advertising_support() {
+        for damage in 0..4 {
+            let store = Store::open_in_memory().unwrap();
+            match damage {
+                0 => assert_eq!(
+                    store
+                        .conn()
+                        .execute(
+                            "UPDATE meta SET value=?2 WHERE key=?1",
+                            rusqlite::params![
+                                crate::admin_secretary::PUBLIC_FORMAT_KEY,
+                                "private-query34"
+                            ],
+                        )
+                        .unwrap(),
+                    1
+                ),
+                1 => assert_eq!(
+                    store
+                        .conn()
+                        .execute(
+                            "UPDATE meta SET value=?2 WHERE key=?1",
+                            rusqlite::params![
+                                crate::admin_secretary::PUBLIC_DATABASE_KEY,
+                                "foreign-db"
+                            ],
+                        )
+                        .unwrap(),
+                    1
+                ),
+                2 => store
+                    .conn()
+                    .execute_batch("DROP TABLE admin_secretary_publications")
+                    .unwrap(),
+                3 => store
+                    .conn()
+                    .execute_batch("CREATE TABLE work_view_private_unpublished(id TEXT)")
+                    .unwrap(),
+                _ => unreachable!(),
+            }
+            match Db::spawn(store) {
+                Ok(db) => {
+                    db.shutdown();
+                    panic!("unqualified opened catalog accepted: {damage}");
+                }
+                Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::InvalidData),
+            }
+        }
+    }
 
     fn db() -> Db {
         Db::spawn(Store::open_in_memory().unwrap()).unwrap()

@@ -51,6 +51,28 @@ async fn unread_committed_response_survives_disconnect_and_service_restart() {
     let work = dir.path().join("work");
     std::fs::create_dir(&work).unwrap();
     let (stop, server) = start(dir.path()).await;
+    // Capture the actual cold startup baseline, including built-in onboarding.
+    // No business command has been submitted, and no live SQLite file is read.
+    stop.send(()).unwrap();
+    server.await.unwrap();
+    let baseline = {
+        let store = crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap();
+        let management: i64 = store
+            .conn()
+            .query_row("SELECT COUNT(*) FROM crews WHERE management=1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(management, 1);
+        ["crews", "channels", "messages", "public_command_receipts"].map(|table| {
+            let count: i64 = store
+                .conn()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            (table, count)
+        })
+    };
+    let (stop, server) = start(dir.path()).await;
     let mut submitter = connect(dir.path()).await;
     let hello = call(&mut submitter, "system.hello", json!({})).await;
     let identity = &hello["runtimeIdentity"];
@@ -100,16 +122,13 @@ async fn unread_committed_response_survives_disconnect_and_service_restart() {
     stop.send(()).unwrap();
     server.await.unwrap();
     let store = crewd_store::Store::open(&dir.path().join("crewd.db")).unwrap();
-    for (table, expected) in [
-        ("crews", 2),
-        ("channels", 3),
-        ("messages", 1),
-        ("public_command_receipts", 1),
-    ] {
+    // Management already exists in the retained baseline. The one original
+    // command adds one crew, its lobby and Human channel, one message and receipt.
+    for ((table, before), added) in baseline.into_iter().zip([1, 2, 1, 1]) {
         let count: i64 = store
             .conn()
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, expected, "{table}");
+        assert_eq!(count, before + added, "{table}");
     }
 }
