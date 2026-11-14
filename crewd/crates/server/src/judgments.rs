@@ -247,8 +247,66 @@ fn diagnostic_invalid() -> std::io::Error {
         "safe diagnostic file unavailable",
     )
 }
+
+// Validate the original bytes before Value can collapse duplicate object keys.
+// The caller bounds bytes, and serde_json retains its normal nesting limit.
+struct UniqueDiagnosticJson;
+impl<'de> serde::Deserialize<'de> for UniqueDiagnosticJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = UniqueDiagnosticJson;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("JSON without duplicate object keys")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut keys = std::collections::BTreeSet::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if !keys.insert(key) {
+                        return Err(serde::de::Error::custom("duplicate diagnostic key"));
+                    }
+                    map.next_value::<UniqueDiagnosticJson>()?;
+                }
+                Ok(UniqueDiagnosticJson)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
+                while sequence.next_element::<UniqueDiagnosticJson>()?.is_some() {}
+                Ok(UniqueDiagnosticJson)
+            }
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson)
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson)
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson)
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson)
+            }
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson)
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(UniqueDiagnosticJson)
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
 fn safe_diagnostic_line(line: &[u8]) -> bool {
     if line.len() > 2048 || !line.ends_with(b"\n") {
+        return false;
+    }
+    if serde_json::from_slice::<UniqueDiagnosticJson>(line).is_err() {
         return false;
     }
     let Ok(serde_json::Value::Object(object)) = serde_json::from_slice(line) else {
@@ -427,7 +485,6 @@ impl PrivateDiagnosticFiles {
 }
 impl std::io::Write for PrivateDiagnosticFiles {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        use std::io::Write;
         if !safe_diagnostic_line(bytes) {
             return Err(diagnostic_invalid());
         }
@@ -1268,6 +1325,55 @@ mod safe_diagnostic_tests {
         let text = String::from_utf8(bytes).unwrap();
         assert!(!text.contains("Authorization"));
         assert!(!text.contains("https://"));
+    }
+    #[test]
+    fn duplicate_keys_at_any_depth_refuse_both_logs_without_modifying_them() {
+        use std::os::unix::fs::MetadataExt;
+        let decision = String::from_utf8(line()).unwrap();
+        let inputs = [
+            "{\"event\":\"jev_diagnostic_open_v1\",\"runtime_binding_id\":\"private raw body\",\"runtime_binding_id\":\"00000000-0000-0000-0000-000000000001\"}\n".to_owned(),
+            decision.replace("\"status\":401", "\"status\":\"private raw body\",\"status\":401"),
+            decision.replace("\"credential\":\"read_failed\"", "\"credential\":\"private raw body\",\"credential\":\"read_failed\""),
+            "{\"event\":\"jev_diagnostic_open_v1\",\"runtime_binding_id\":\"private raw body\",\"runtime_\\u0062inding_id\":\"00000000-0000-0000-0000-000000000001\"}\n".to_owned(),
+        ];
+        // Exercise duplicate detection inside arrays as well as objects.
+        assert!(serde_json::from_slice::<UniqueDiagnosticJson>(br#"[{"a":1,"a":2}]"#).is_err());
+        for raw in inputs {
+            assert!(!safe_diagnostic_line(raw.as_bytes()));
+            for damaged in [DIAGNOSTIC_CURRENT, DIAGNOSTIC_PREVIOUS] {
+                let dir = tempfile::tempdir().unwrap();
+                let root = dir.path().canonicalize().unwrap();
+                std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+                let mut before = Vec::new();
+                for name in [DIAGNOSTIC_CURRENT, DIAGNOSTIC_PREVIOUS] {
+                    let path = root.join(name);
+                    let mut bytes = DIAGNOSTIC_HEADER.to_vec();
+                    if name == damaged {
+                        bytes.extend_from_slice(raw.as_bytes());
+                    }
+                    std::fs::write(&path, &bytes).unwrap();
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                        .unwrap();
+                    let meta = std::fs::metadata(&path).unwrap();
+                    before.push((
+                        path,
+                        bytes,
+                        meta.dev(),
+                        meta.ino(),
+                        meta.permissions().mode(),
+                    ));
+                }
+                assert!(PrivateDiagnosticFiles::open(&root).is_err());
+                for (path, bytes, dev, ino, mode) in before {
+                    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                    let after = std::fs::metadata(path).unwrap();
+                    assert_eq!(
+                        (after.dev(), after.ino(), after.permissions().mode()),
+                        (dev, ino, mode)
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn unknown_symlink_hardlink_and_insecure_logs_are_not_modified() {

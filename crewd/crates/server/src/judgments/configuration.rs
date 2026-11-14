@@ -192,6 +192,19 @@ pub(super) enum KeyLoadFailure {
     WorkerUnavailable,
 }
 
+// Preserve the original negative-path tests without changing their assertions.
+#[cfg(test)]
+pub(super) async fn load_key(
+    state: &Arc<AppState>,
+    data: PathBuf,
+    settings: &JudgmentSettings,
+) -> Option<crewd_jev::client::ApiKey> {
+    load_key_observed(state, data, settings)
+        .await
+        .ok()
+        .flatten()
+}
+
 pub(super) async fn load_key_observed(
     state: &Arc<AppState>,
     data: PathBuf,
