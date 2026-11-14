@@ -1103,10 +1103,6 @@ fn definition(t: &ToolSpec, loc: Locale) -> ToolDef {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn case_tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
-    case_tools_for_purpose(me, loc, false)
-}
 pub(crate) fn case_tools_for_purpose(me: &Identity, loc: Locale, secretary: bool) -> Vec<ToolDef> {
     CATALOG
         .iter()
@@ -1594,6 +1590,10 @@ mod tests {
     use super::*;
     use crate::agent::{Identity, Role};
     use crewd_collab::Locale;
+
+    fn case_tools_for(me: &Identity, loc: Locale) -> Vec<ToolDef> {
+        case_tools_for_purpose(me, loc, false)
+    }
 
     /// The supplements' removed list (index "Removed without a same-shape successor" + merged).
     const M3B_REMOVED: &[&str] = &[

@@ -1803,6 +1803,8 @@ mod tests {
             "adminCase.legacyRecovery",
             "adminCase.requirementReview",
             "adminCase.requirementReviews",
+            crewd_proto::admin_secretary::CAPABILITY,
+            crewd_proto::admin_secretary::HUMAN_REQUEST,
             "adminCase.similarRequirements",
             "adminCase.workDuplicateClose",
             "adminCase.workDuplicateHistory",

@@ -4,18 +4,6 @@ use crate::{AppState, dispatch, public_commands::Actor};
 use crewd_proto::{Request, Response, RpcError, admin_cases::*};
 use std::sync::Arc;
 
-pub(crate) async fn secretary_qualified(state: &AppState) -> crewd_collab::Result<bool> {
-    state
-        .db
-        .call_result(|s| {
-            Ok::<bool, crewd_collab::CollabError>(crewd_store::admin_secretary::available(
-                s.conn(),
-            )?)
-        })
-        .await
-        .map_err(crewd_collab::CollabError::from)?
-}
-
 pub(crate) async fn handle(state: &Arc<AppState>, actor: &Actor, req: Request) -> Response {
     let id = req.id;
     match route(state, actor, req).await {
