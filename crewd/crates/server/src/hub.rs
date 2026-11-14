@@ -22,6 +22,9 @@ impl SubscriptionCreations {
 pub struct Hub {
     tx: broadcast::Sender<Event>,
     collab: broadcast::Sender<CollabEvent>,
+    // Configuration only, never an identity or access grant. All clones share
+    // the ordinary server's one post-commit derived-projection destination.
+    onboarding_root: std::sync::Arc<std::sync::OnceLock<std::path::PathBuf>>,
     #[cfg(any(test, feature = "testkit"))]
     subscription_creations: SubscriptionCreations,
 }
@@ -31,9 +34,13 @@ impl Hub {
         Self {
             tx: broadcast::channel(1024).0,
             collab: broadcast::channel(4096).0,
+            onboarding_root: Default::default(),
             #[cfg(any(test, feature = "testkit"))]
             subscription_creations: SubscriptionCreations(Default::default()),
         }
+    }
+    pub(crate) fn set_onboarding_root(&self, root: std::path::PathBuf) {
+        let _ = self.onboarding_root.set(root);
     }
     pub fn publish(&self, e: Event) {
         // 没有订阅者时 send 会报错，这正常，忽略。
@@ -58,6 +65,17 @@ impl Hub {
     /// 提交之后、在库线程上调（`AppState::collab` 保证）：每条变更原样发内部通道，再现读数据发客户端事件。
     /// 取数失败只记日志（数据已经提交，不能让发事件的失败把成功的操作说成失败）。
     pub fn emit(&self, conn: &Connection, changes: &[Change]) {
+        // All callers have committed before emit. In particular the ordinary
+        // Knowledge route released apply's writer transaction. This never emits
+        // recursively, sends work or changes a committed business result.
+        if let Some(root) = self.onboarding_root.get()
+            && crate::onboarding::relevant(changes)
+            && let Err(error) = crate::onboarding::project_committed(conn, root)
+        {
+            eprintln!(
+                "crewd: onboarding offline projection pending/cleanup requires reconciliation: {error}"
+            );
+        }
         for c in changes {
             let _ = self.collab.send(c.clone());
             match client_events(conn, c) {

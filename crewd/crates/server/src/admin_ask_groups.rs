@@ -17,21 +17,6 @@ pub(crate) fn enabled(state: &AppState, c: &Connection) -> crewd_collab::Result<
         && crewd_store::admin_ask_groups::available(c)?
         && runtime_healthy(state))
 }
-/// Root hello/paired routing must additionally retain current Human authorization.
-pub(crate) async fn qualified(state: &AppState) -> crewd_collab::Result<bool> {
-    let runtime = state.judgment_runtime.get().cloned();
-    state
-        .db
-        .call_result(move |s| {
-            let healthy = || runtime.as_ref().is_some_and(|r| r.ask_groups_healthy());
-            Ok::<bool, crewd_collab::CollabError>(
-                healthy() && crewd_store::admin_ask_groups::available(s.conn())? && healthy(),
-            )
-        })
-        .await
-        .map_err(crewd_collab::CollabError::from)?
-}
-
 /// A committed hint has no H identity/body. Both queueing and final socket send
 /// must use this current authorization check, never a subscription as a grant.
 pub(crate) async fn event_allowed(

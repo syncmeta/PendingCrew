@@ -343,26 +343,51 @@ impl Store {
     /// 库文件和它的 -wal / -shm 一律只给本用户读写（0600；PM 2026-10-07）。
     pub fn open(path: &Path) -> Result<Self> {
         let guard = version_guard::preflight(path)?;
-        Self::open_preflight(path, guard)
+        Self::open_preflight(path, guard, false)
     }
 
-    fn open_preflight(path: &Path, guard: version_guard::Guard) -> Result<Self> {
+    fn open_preflight(
+        path: &Path,
+        guard: version_guard::Guard,
+        fresh_onboarding: bool,
+    ) -> Result<Self> {
         guard.recheck()?;
         fsutil::restrict_db_files(path)?;
-        Self::init(Connection::open(path)?, Some(backup::backups_dir_for(path)))
+        Self::init(
+            Connection::open(path)?,
+            Some(backup::backups_dir_for(path)),
+            fresh_onboarding,
+        )
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?, None)
+        Self::init(Connection::open_in_memory()?, None, false)
     }
 
-    fn init(conn: Connection, backups: Option<std::path::PathBuf>) -> Result<Self> {
+    fn init(
+        conn: Connection,
+        backups: Option<std::path::PathBuf>,
+        fresh_onboarding: bool,
+    ) -> Result<Self> {
         // 先认人再动手（复审 M1）：别人的回滚日志库不能被 journal_mode=WAL 顺手改掉。
         refuse_foreign(&conn)?;
         pin_pragmas(&conn)?;
         let source_context = search_context::Context::register(&conn)?;
         schema::migrate_guarded(&conn, backups.as_deref())?;
-        mark_identity(&conn)?;
+        // Only open_data_dir's original absent-DB/no-recovery cut may set this
+        // origin. Generic open, imported/old empty databases and restores never
+        // infer first use from empty crew rows. Identity and this marker commit
+        // together; an open-after-identity/before-server-hook crash is resumable.
+        // A crash during schema creation before this transaction remains an
+        // unmarked existing database, deliberately not guessed fresh on reopen.
+        {
+            let tx = conn.unchecked_transaction()?;
+            mark_identity(&tx)?;
+            if fresh_onboarding {
+                meta_set(&tx, "onboarding.fresh.v1", "1")?;
+            }
+            tx.commit()?;
+        }
         Ok(Self {
             conn,
             backups,
@@ -392,7 +417,8 @@ impl Store {
         let id_path = dir.join(ID_FILE);
         let record = read_id_file(&id_path)?;
         let recorded = record.as_ref().map(|r| r.id.clone());
-        if !exists_strict(&db)? {
+        let fresh_onboarding = !exists_strict(&db)?;
+        if fresh_onboarding {
             let why = if recorded.is_some() {
                 Some(format!("{ID_FILE} 还在"))
             } else if backup::has_backups(&dir.join(backup::BACKUPS_DIR))? {
@@ -445,7 +471,7 @@ impl Store {
                 });
             }
         }
-        let store = Store::open_preflight(&db, guard)?;
+        let store = Store::open_preflight(&db, guard, fresh_onboarding)?;
         let id = meta_get(store.conn(), "dbId")?
             .ok_or_else(|| StoreError::Invalid("库里没有 dbId".into()))?;
         if let Some(expected) = recorded

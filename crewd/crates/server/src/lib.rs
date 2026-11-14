@@ -33,6 +33,7 @@ mod message_delivery;
 pub mod native_helpers;
 pub mod native_receipts;
 mod notifications;
+mod onboarding;
 pub mod orchestra;
 mod organization_search;
 pub(crate) mod peer;
@@ -477,6 +478,10 @@ async fn serve_with_hooks_inner(
     if let Err(error) = store.with_tx(|tx| crewd_store::message_evidence::capture_legacy(tx)) {
         eprintln!("crewd: message evidence compatibility unavailable: {error}");
     }
+    // Closed first-use publication: only Core facts and the normal SQLite
+    // Knowledge authority; no model/session/wake creation. The data-dir lock
+    // remains held and no public socket or Db actor has been exposed yet.
+    onboarding::bootstrap(&mut store, &data_dir)?;
     // Cache only an identity actually read from the opened store before public
     // readiness. Hello must remain available when the FIFO later closes/fails.
     let current_db_id = crewd_store::meta_get(store.conn(), "dbId")?
@@ -523,6 +528,9 @@ async fn serve_with_hooks_inner(
     } else {
         Arc::new(AppState::new(db.clone()))
     };
+    state
+        .hub
+        .set_onboarding_root(std::fs::canonicalize(&data_dir)?);
     let _ = state
         .runtime_identity
         .set(crewd_proto::commands::RuntimeIdentity {
