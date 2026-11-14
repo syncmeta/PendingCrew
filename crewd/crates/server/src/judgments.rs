@@ -183,12 +183,395 @@ use std::sync::{
 use tokio::sync::{Mutex, Semaphore, broadcast};
 use tokio::task::{JoinHandle, JoinSet};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FactoryFailure {
+    MissingRevision,
+    MissingConfiguration,
+    Disabled,
+    InvalidConfiguration,
+    StateUnavailable,
+    CredentialMissing,
+    Credential(configuration::KeyLoadFailure),
+    ClientInitialization,
+}
+
+#[derive(serde::Serialize)]
+struct SafeDecisionDiagnostic {
+    event: &'static str,
+    case_id: String,
+    decision_id: String,
+    snapshot: String,
+    factory: Option<FactoryFailure>,
+    failure: Option<crewd_jev::error::FailureDiagnostic>,
+    attempts: Option<u32>,
+    latency_ms: u64,
+}
+impl SafeDecisionDiagnostic {
+    fn new(
+        snapshot: &crewd_collab::admin_cases::DecisionSnapshot,
+        factory: Option<FactoryFailure>,
+        failure: Option<crewd_jev::error::FailureDiagnostic>,
+        attempts: Option<u32>,
+        latency_ms: u64,
+    ) -> Option<Self> {
+        if uuid::Uuid::parse_str(&snapshot.decision_id).is_err()
+            || snapshot.id.len() != 22
+            || !snapshot.id.starts_with("AC")
+            || !snapshot.id[2..].bytes().all(|b| b.is_ascii_digit())
+            || snapshot.fingerprint.len() != 64
+            || !snapshot.fingerprint.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return None;
+        }
+        Some(Self {
+            event: "jev_decision_diagnostic_v1",
+            case_id: snapshot.id.clone(),
+            decision_id: snapshot.decision_id.clone(),
+            snapshot: snapshot.fingerprint.clone(),
+            factory,
+            failure,
+            attempts,
+            latency_ms,
+        })
+    }
+}
+
+const DIAGNOSTIC_CURRENT: &str = "jev-decision-diagnostics-v1.jsonl";
+const DIAGNOSTIC_PREVIOUS: &str = "jev-decision-diagnostics-v1.jsonl.1";
+const DIAGNOSTIC_FILE_LIMIT: usize = 128 * 1024;
+const DIAGNOSTIC_HEADER: &[u8] = b"{\"event\":\"jev_diagnostic_file_v1\"}\n";
+fn diagnostic_invalid() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "safe diagnostic file unavailable",
+    )
+}
+fn safe_diagnostic_line(line: &[u8]) -> bool {
+    if line.len() > 2048 || !line.ends_with(b"\n") {
+        return false;
+    }
+    let Ok(serde_json::Value::Object(object)) = serde_json::from_slice(line) else {
+        return false;
+    };
+    let names: std::collections::BTreeSet<_> = object.keys().map(String::as_str).collect();
+    match object.get("event").and_then(serde_json::Value::as_str) {
+        Some("jev_diagnostic_file_v1") => names == std::collections::BTreeSet::from(["event"]),
+        Some("jev_diagnostic_open_v1") => {
+            names == std::collections::BTreeSet::from(["event", "runtime_binding_id"])
+                && object["runtime_binding_id"]
+                    .as_str()
+                    .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        }
+        Some("jev_diagnostic_shutdown_v1") => {
+            names == std::collections::BTreeSet::from(["event", "dropped", "runtime_binding_id"])
+                && object.get("dropped").is_some_and(serde_json::Value::is_u64)
+                && object["runtime_binding_id"]
+                    .as_str()
+                    .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        }
+        Some("jev_decision_diagnostic_v1") => {
+            names
+                == std::collections::BTreeSet::from([
+                    "event",
+                    "case_id",
+                    "decision_id",
+                    "snapshot",
+                    "factory",
+                    "failure",
+                    "attempts",
+                    "latency_ms",
+                    "runtime_binding_id",
+                ])
+                && object["case_id"].as_str().is_some_and(|id| {
+                    id.len() == 22
+                        && id.starts_with("AC")
+                        && id[2..].bytes().all(|b| b.is_ascii_digit())
+                })
+                && object["decision_id"]
+                    .as_str()
+                    .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+                && object["snapshot"]
+                    .as_str()
+                    .is_some_and(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+                && serde_json::from_value::<Option<FactoryFailure>>(object["factory"].clone())
+                    .is_ok()
+                && serde_json::from_value::<Option<crewd_jev::error::FailureDiagnostic>>(
+                    object["failure"].clone(),
+                )
+                .is_ok_and(|diagnostic| {
+                    diagnostic
+                        .is_none_or(|d| d.status.is_none_or(|status| (100..=599).contains(&status)))
+                })
+                && serde_json::from_value::<Option<u32>>(object["attempts"].clone()).is_ok()
+                && object["latency_ms"].is_u64()
+                && object["runtime_binding_id"]
+                    .as_str()
+                    .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+        }
+        _ => false,
+    }
+}
+struct PrivateDiagnosticFiles {
+    directory: std::fs::File,
+    current: std::fs::File,
+}
+impl PrivateDiagnosticFiles {
+    fn trusted(file: &std::fs::File, directory: bool) -> std::io::Result<()> {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = file.metadata()?;
+        if meta.uid() != unsafe { libc::geteuid() }
+            || (directory && (!meta.is_dir() || meta.permissions().mode() & 0o077 != 0))
+            || (!directory
+                && (!meta.is_file()
+                    || meta.nlink() != 1
+                    || meta.permissions().mode() & 0o777 != 0o600))
+        {
+            return Err(diagnostic_invalid());
+        }
+        Ok(())
+    }
+    fn contents(file: &mut std::fs::File) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read, Seek};
+        Self::trusted(file, false)?;
+        if file.metadata()?.len() > DIAGNOSTIC_FILE_LIMIT as u64 {
+            return Err(diagnostic_invalid());
+        }
+        file.rewind()?;
+        let mut bytes = Vec::new();
+        file.take((DIAGNOSTIC_FILE_LIMIT + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > DIAGNOSTIC_FILE_LIMIT
+            || !bytes.starts_with(DIAGNOSTIC_HEADER)
+            || !bytes.ends_with(b"\n")
+            || !bytes
+                .split_inclusive(|b| *b == b'\n')
+                .all(safe_diagnostic_line)
+        {
+            return Err(diagnostic_invalid());
+        }
+        Ok(bytes)
+    }
+    fn open_file(directory: &std::fs::File, name: &str) -> std::io::Result<std::fs::File> {
+        use std::io::Write;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        let name = std::ffi::CString::new(name).map_err(|_| diagnostic_invalid())?;
+        let flags =
+            libc::O_RDWR | libc::O_APPEND | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        let mut fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+        let mut created = false;
+        if fd < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
+            fd = unsafe {
+                libc::openat(
+                    directory.as_raw_fd(),
+                    name.as_ptr(),
+                    flags | libc::O_CREAT | libc::O_EXCL,
+                    0o600,
+                )
+            };
+            created = fd >= 0;
+        }
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        Self::trusted(&file, false)?;
+        if created {
+            file.write_all(DIAGNOSTIC_HEADER)?;
+        }
+        Self::contents(&mut file)?;
+        Ok(file)
+    }
+    fn open(data: &std::path::Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        if !data.is_absolute() || data.canonicalize()? != data {
+            return Err(diagnostic_invalid());
+        }
+        let before = std::fs::symlink_metadata(data)?;
+        let directory = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(data)?;
+        Self::trusted(&directory, true)?;
+        let opened = directory.metadata()?;
+        let after = std::fs::symlink_metadata(data)?;
+        if !before.is_dir()
+            || before.file_type().is_symlink()
+            || (before.dev(), before.ino()) != (opened.dev(), opened.ino())
+            || (after.dev(), after.ino()) != (opened.dev(), opened.ino())
+            || data.canonicalize()? != data
+        {
+            return Err(diagnostic_invalid());
+        }
+        // Refuse an unsafe/unknown pre-existing second file before touching either log.
+        use std::os::fd::AsRawFd;
+        let previous =
+            std::ffi::CString::new(DIAGNOSTIC_PREVIOUS).map_err(|_| diagnostic_invalid())?;
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let exists = unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                previous.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if exists == 0 {
+            let _ = Self::open_file(&directory, DIAGNOSTIC_PREVIOUS)?;
+        } else if std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound {
+            return Err(std::io::Error::last_os_error());
+        }
+        let current = Self::open_file(&directory, DIAGNOSTIC_CURRENT)?;
+        Ok(Self { directory, current })
+    }
+}
+impl std::io::Write for PrivateDiagnosticFiles {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        use std::io::Write;
+        if !safe_diagnostic_line(bytes) {
+            return Err(diagnostic_invalid());
+        }
+        let current = Self::contents(&mut self.current)?;
+        if current.len() + bytes.len() > DIAGNOSTIC_FILE_LIMIT {
+            let mut previous = Self::open_file(&self.directory, DIAGNOSTIC_PREVIOUS)?;
+            // Only validated, owned open inodes are reset; never unlink/rename a path.
+            previous.set_len(0)?;
+            previous.write_all(&current)?;
+            self.current.set_len(0)?;
+            self.current.write_all(DIAGNOSTIC_HEADER)?;
+        }
+        self.current.write_all(bytes)?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.current)
+    }
+}
+
+/// Bounded, best-effort observation. No I/O or blocking send on the decision path.
+struct DiagnosticSink {
+    sender: std::sync::Mutex<Option<std::sync::mpsc::SyncSender<Vec<u8>>>>,
+    worker: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    dropped: Arc<std::sync::atomic::AtomicU64>,
+    failed: Arc<AtomicBool>,
+    runtime_binding_id: String,
+}
+impl DiagnosticSink {
+    fn new(data: PathBuf, runtime_binding_id: String) -> Self {
+        Self::with_factory(runtime_binding_id, move || {
+            Ok(Box::new(PrivateDiagnosticFiles::open(&data)?) as Box<dyn std::io::Write + Send>)
+        })
+    }
+    #[cfg(test)]
+    fn with_writer(writer: Box<dyn std::io::Write + Send>) -> Self {
+        Self::with_factory("00000000-0000-0000-0000-000000000001".into(), move || {
+            Ok(writer)
+        })
+    }
+    fn with_factory(
+        runtime_binding_id: String,
+        factory: impl FnOnce() -> std::io::Result<Box<dyn std::io::Write + Send>> + Send + 'static,
+    ) -> Self {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<Vec<u8>>(64);
+        let dropped = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let failed = Arc::new(AtomicBool::new(false));
+        let worker_failed = failed.clone();
+        let worker_dropped = dropped.clone();
+        let identity = runtime_binding_id.clone();
+        let worker = std::thread::Builder::new().name("jev-safe-diagnostics".into()).spawn(move || {
+            let write=|| -> std::io::Result<()> {
+                if uuid::Uuid::parse_str(&identity).is_err() { return Err(diagnostic_invalid()); }
+                let mut writer=factory()?;
+                let mut opening=serde_json::to_vec(&serde_json::json!({"event":"jev_diagnostic_open_v1","runtime_binding_id":identity})).map_err(std::io::Error::other)?;
+                opening.push(b'\n'); writer.write_all(&opening)?;
+                while let Ok(line) = receiver.recv() { writer.write_all(&line)?; }
+                writer.flush()?;
+                let mut footer=serde_json::to_vec(&serde_json::json!({"event":"jev_diagnostic_shutdown_v1","runtime_binding_id":identity,"dropped":worker_dropped.load(Ordering::Relaxed)})).map_err(std::io::Error::other)?;
+                footer.push(b'\n');writer.write_all(&footer)?;writer.flush()
+            };
+            if write().is_err() { worker_failed.store(true,Ordering::Release); }
+        }).ok();
+        if worker.is_none() {
+            failed.store(true, Ordering::Release);
+        }
+        Self {
+            sender: std::sync::Mutex::new(worker.as_ref().map(|_| sender)),
+            worker: std::sync::Mutex::new(worker),
+            dropped,
+            failed,
+            runtime_binding_id,
+        }
+    }
+    fn try_line(&self, line: Vec<u8>) {
+        let sent = line.len() <= 2048
+            && self.sender.try_lock().ok().is_some_and(|guard| {
+                guard
+                    .as_ref()
+                    .is_some_and(|sender| sender.try_send(line).is_ok())
+            });
+        if !sent {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    fn record(&self, record: Option<SafeDecisionDiagnostic>) {
+        #[derive(serde::Serialize)]
+        struct Envelope<'a> {
+            runtime_binding_id: &'a str,
+            #[serde(flatten)]
+            diagnostic: SafeDecisionDiagnostic,
+        }
+        if let Some(record) = record
+            && let Ok(mut line) = serde_json::to_vec(&Envelope {
+                runtime_binding_id: &self.runtime_binding_id,
+                diagnostic: record,
+            })
+        {
+            line.push(b'\n');
+            self.try_line(line);
+        } else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    async fn shutdown(&self, budget: std::time::Duration) -> bool {
+        if let Ok(mut sender) = self.sender.lock() {
+            sender.take();
+        }
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            let finished = match self.worker.lock() {
+                Ok(worker) => worker
+                    .as_ref()
+                    .is_none_or(std::thread::JoinHandle::is_finished),
+                Err(_) => return false,
+            };
+            if finished {
+                let joined = match self.worker.lock() {
+                    Ok(mut worker) => worker.take().is_none_or(|worker| worker.join().is_ok()),
+                    Err(_) => false,
+                };
+                return joined && !self.failed.load(Ordering::Acquire);
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(
+                deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .min(std::time::Duration::from_millis(5)),
+            )
+            .await;
+        }
+    }
+}
+
+type ProviderCache = Option<(String, Arc<DecisionProvider>, Option<FactoryFailure>)>;
 pub(crate) struct Runtime {
     state: Weak<AppState>,
     data: PathBuf,
     closed: Arc<AtomicBool>,
     slots: Arc<Semaphore>,
-    provider: Mutex<Option<(String, Arc<DecisionProvider>)>>,
+    provider: Mutex<ProviderCache>,
+    diagnostics: DiagnosticSink,
     tasks: Mutex<JoinSet<()>>,
     pump: Mutex<Option<JoinHandle<()>>>,
     automatic_admin: bool,
@@ -251,12 +634,14 @@ impl Runtime {
         if !active {
             return Ok(None);
         }
+        let diagnostics = DiagnosticSink::new(data.clone(), state.runtime_binding_id.clone());
         let this = Arc::new(Self {
             state: Arc::downgrade(state),
             data,
             closed: Arc::new(AtomicBool::new(false)),
             slots: Arc::new(Semaphore::new(32)),
             provider: Mutex::new(None),
+            diagnostics,
             tasks: Mutex::new(JoinSet::new()),
             pump: Mutex::new(None),
             automatic_admin,
@@ -434,33 +819,57 @@ impl Runtime {
         });
     }
     async fn current_provider(&self, settings: &JudgmentSettings) -> Option<Arc<DecisionProvider>> {
-        let revision = settings.revision.as_ref()?;
-        let config = settings.config.as_ref()?;
+        self.current_provider_observed(settings).await.0
+    }
+    async fn current_provider_observed(
+        &self,
+        settings: &JudgmentSettings,
+    ) -> (Option<Arc<DecisionProvider>>, Option<FactoryFailure>) {
+        let Some(revision) = settings.revision.as_ref() else {
+            return (None, Some(FactoryFailure::MissingRevision));
+        };
+        let Some(config) = settings.config.as_ref() else {
+            return (None, Some(FactoryFailure::MissingConfiguration));
+        };
         if !config.enabled {
-            return None;
+            return (None, Some(FactoryFailure::Disabled));
         }
-        let state = self.state.upgrade()?;
-        configuration::validate_config(&state, config).ok()?;
-        let epoch = state
+        let Some(state) = self.state.upgrade() else {
+            return (None, Some(FactoryFailure::StateUnavailable));
+        };
+        if configuration::validate_config(&state, config).is_err() {
+            return (None, Some(FactoryFailure::InvalidConfiguration));
+        }
+        let epoch = match state
             .db
             .call_result(|s| crewd_store::judgment_state::epoch(s.conn()))
             .await
-            .ok()?
-            .ok()?;
+        {
+            Ok(Ok(epoch)) => epoch,
+            _ => return (None, Some(FactoryFailure::StateUnavailable)),
+        };
         let cache_key = format!("{revision}:{epoch}");
         let mut slot = self.provider.lock().await;
-        if let Some((old, p)) = &*slot
+        if let Some((old, p, diagnostic)) = &*slot
             && old == &cache_key
         {
-            return Some(p.clone());
+            return (Some(p.clone()), *diagnostic);
         }
-        if let Some((_, old)) = slot.take() {
+        if let Some((_, old, _)) = slot.take() {
             old.revoke();
         }
-        let key = configuration::load_key(&state, self.data.clone(), settings).await;
-        let provider = Arc::new(DecisionProvider::new(provider_config(config), key).ok()?);
-        *slot = Some((cache_key, provider.clone()));
-        Some(provider)
+        let (key, diagnostic) =
+            match configuration::load_key_observed(&state, self.data.clone(), settings).await {
+                Ok(Some(key)) => (Some(key), None),
+                Ok(None) => (None, Some(FactoryFailure::CredentialMissing)),
+                Err(cause) => (None, Some(FactoryFailure::Credential(cause))),
+            };
+        let provider = match DecisionProvider::new(provider_config(config), key) {
+            Ok(provider) => Arc::new(provider),
+            Err(_) => return (None, Some(FactoryFailure::ClientInitialization)),
+        };
+        *slot = Some((cache_key, provider.clone(), diagnostic));
+        (Some(provider), diagnostic)
     }
     async fn run(&self, kind: JudgmentSourceKind, id: String, recovery: bool) {
         if let Err(e) = self.run_inner(kind, id, recovery).await {
@@ -724,13 +1133,13 @@ impl Runtime {
         Ok(())
     }
     async fn invalidate(&self) {
-        if let Some((_, p)) = self.provider.lock().await.take() {
+        if let Some((_, p, _)) = self.provider.lock().await.take() {
             p.revoke();
         }
     }
     pub(crate) async fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
-        if let Some((_, p)) = self.provider.lock().await.take() {
+        if let Some((_, p, _)) = self.provider.lock().await.take() {
             p.revoke();
         }
         if let Some(pump) = self.pump.lock().await.take() {
@@ -740,6 +1149,10 @@ impl Runtime {
         let mut tasks = self.tasks.lock().await;
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
+        let _ = self
+            .diagnostics
+            .shutdown(std::time::Duration::from_millis(200))
+            .await;
     }
 }
 
@@ -802,3 +1215,222 @@ fn public_view(r: &JudgmentRecord) -> JudgmentView {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod safe_diagnostic_tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    fn record() -> SafeDecisionDiagnostic {
+        SafeDecisionDiagnostic {
+            event: "jev_decision_diagnostic_v1",
+            case_id: "AC00000000000000000002".into(),
+            decision_id: "00000000-0000-0000-0000-000000000002".into(),
+            snapshot: "a".repeat(64),
+            factory: Some(FactoryFailure::Credential(
+                configuration::KeyLoadFailure::ReadFailed,
+            )),
+            failure: Some(crewd_jev::error::FailureDiagnostic {
+                kind: crewd_jev::error::FailureKind::Unauthorized,
+                status: Some(401),
+            }),
+            attempts: Some(1),
+            latency_ms: 17,
+        }
+    }
+    fn line() -> Vec<u8> {
+        let mut value = serde_json::to_value(record()).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "runtime_binding_id".into(),
+            serde_json::json!("00000000-0000-0000-0000-000000000001"),
+        );
+        let mut bytes = serde_json::to_vec(&value).unwrap();
+        bytes.push(b'\n');
+        bytes
+    }
+    #[test]
+    fn only_closed_typed_records_are_accepted() {
+        let bytes = line();
+        assert!(safe_diagnostic_line(&bytes));
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        value["raw_error"] =
+            serde_json::json!("Authorization private-body https://private.invalid");
+        let mut unsafe_line = serde_json::to_vec(&value).unwrap();
+        unsafe_line.push(b'\n');
+        assert!(!safe_diagnostic_line(&unsafe_line));
+        for field in ["case_id", "decision_id", "snapshot", "factory", "failure"] {
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            value[field] = serde_json::json!("private-token");
+            let mut bad = serde_json::to_vec(&value).unwrap();
+            bad.push(b'\n');
+            assert!(!safe_diagnostic_line(&bad));
+        }
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(!text.contains("Authorization"));
+        assert!(!text.contains("https://"));
+    }
+    #[test]
+    fn unknown_symlink_hardlink_and_insecure_logs_are_not_modified() {
+        for shape in ["unknown", "symlink", "hardlink", "insecure"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let target = root.join("private-user-file");
+            std::fs::write(&target, b"user bytes remain\n").unwrap();
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let log = root.join(DIAGNOSTIC_CURRENT);
+            match shape {
+                "symlink" => std::os::unix::fs::symlink(&target, &log).unwrap(),
+                "hardlink" => std::fs::hard_link(&target, &log).unwrap(),
+                "insecure" => {
+                    std::fs::write(&log, DIAGNOSTIC_HEADER).unwrap();
+                    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+                }
+                _ => {
+                    std::fs::write(&log, b"unknown contents\n").unwrap();
+                    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
+                }
+            }
+            let original = std::fs::read(&target).unwrap();
+            let metadata = std::fs::metadata(&target).unwrap();
+            let log_before = std::fs::read(&log).unwrap();
+            assert!(PrivateDiagnosticFiles::open(&root).is_err());
+            assert_eq!(std::fs::read(&target).unwrap(), original);
+            assert_eq!(std::fs::read(&log).unwrap(), log_before);
+            assert_eq!(
+                std::fs::metadata(&target).unwrap().permissions().mode(),
+                metadata.permissions().mode()
+            );
+        }
+    }
+    #[test]
+    fn rotation_is_two_bounded_owned_files_and_never_accepts_free_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut files = PrivateDiagnosticFiles::open(&root).unwrap();
+        assert!(files.write_all(b"private arbitrary string\n").is_err());
+        for _ in 0..900 {
+            files.write_all(&line()).unwrap();
+        }
+        drop(files);
+        let mut names = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|q| q.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                std::ffi::OsString::from(DIAGNOSTIC_CURRENT),
+                std::ffi::OsString::from(DIAGNOSTIC_PREVIOUS)
+            ]
+        );
+        for name in [DIAGNOSTIC_CURRENT, DIAGNOSTIC_PREVIOUS] {
+            let path = root.join(name);
+            assert!(std::fs::metadata(&path).unwrap().len() <= 128 * 1024);
+            let bytes = std::fs::read(path).unwrap();
+            assert!(
+                bytes
+                    .split_inclusive(|b| *b == b'\n')
+                    .all(safe_diagnostic_line)
+            );
+        }
+    }
+    struct ShortWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl Write for ShortWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let n = bytes.len().min(3);
+            self.0.lock().unwrap().extend_from_slice(&bytes[..n]);
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn short_writes_are_completed_and_footer_is_not_guessed() {
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = DiagnosticSink::with_writer(Box::new(ShortWriter(bytes.clone())));
+        sink.record(Some(record()));
+        assert!(sink.shutdown(std::time::Duration::from_secs(1)).await);
+        let data = bytes.lock().unwrap().clone();
+        let lines = data.split_inclusive(|b| *b == b'\n').collect::<Vec<_>>();
+        assert_eq!(lines.len(), 3);
+        assert!(lines.into_iter().all(safe_diagnostic_line));
+        assert!(
+            String::from_utf8(data)
+                .unwrap()
+                .contains("jev_diagnostic_shutdown_v1")
+        );
+    }
+    struct FailedWriter;
+    impl Write for FailedWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("controlled writer failure"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("controlled flush failure"))
+        }
+    }
+    #[tokio::test]
+    async fn worker_error_is_incomplete_and_cannot_block_authority() {
+        let sink = DiagnosticSink::with_writer(Box::new(FailedWriter));
+        sink.record(Some(record()));
+        assert!(!sink.shutdown(std::time::Duration::from_secs(1)).await);
+        assert_eq!(
+            crewd_jev::provider::BUDGET,
+            std::time::Duration::from_secs(2)
+        );
+    }
+    struct BlockedWriter(Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+    impl Write for BlockedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let (lock, changed) = &*self.0;
+            let mut ready = lock.lock().unwrap();
+            while !*ready {
+                ready = changed.wait(ready).unwrap();
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    struct Release(Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            let (lock, changed) = &*self.0;
+            *lock.lock().unwrap() = true;
+            changed.notify_all();
+        }
+    }
+    #[test]
+    fn blocked_reader_full_queue_does_not_hold_runtime_drop_or_shutdown() {
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let release = Release(gate.clone());
+        let (sent, received) = std::sync::mpsc::sync_channel(1);
+        let owner = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let sink = DiagnosticSink::with_writer(Box::new(BlockedWriter(gate)));
+            for _ in 0..1000 {
+                sink.record(Some(record()));
+            }
+            let complete = runtime.block_on(sink.shutdown(std::time::Duration::from_millis(200)));
+            let dropped = sink.dropped.load(Ordering::Relaxed);
+            drop(sink);
+            drop(runtime);
+            sent.send((complete, dropped)).unwrap();
+        });
+        let (complete, dropped) = received
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("diagnostic blocked Core-like runtime drop");
+        assert!(!complete);
+        assert!(dropped >= 935);
+        drop(release);
+        owner.join().unwrap();
+    }
+}

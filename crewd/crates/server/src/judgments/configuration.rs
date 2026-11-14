@@ -176,35 +176,69 @@ fn key_store(data: &Path, b: &Binding) -> Result<crewd_jev::key::KeyStore, ()> {
 }
 /// Reads are allowed only after exact current DB/config/binding/barrier validation.
 /// No default account/file key is silently inherited by another endpoint or DB.
-pub(super) async fn load_key(
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum KeyLoadFailure {
+    StateUnavailable,
+    BindingInvalid,
+    ConfigurationUnknown,
+    ConfigurationChanged,
+    BindingMissing,
+    BindingMismatch,
+    StoreUnavailable,
+    ReadFailed,
+    Untrusted,
+    Invalid,
+    WorkerUnavailable,
+}
+
+pub(super) async fn load_key_observed(
     state: &Arc<AppState>,
     data: PathBuf,
     settings: &JudgmentSettings,
-) -> Option<crewd_jev::client::ApiKey> {
+) -> Result<Option<crewd_jev::client::ApiKey>, KeyLoadFailure> {
     let expected = settings.clone();
-    let b = state
+    let found = state
         .db
         .call_result(move |s| -> crewd_collab::Result<_> {
-            if pending(s.conn())?.is_some() || facts::configuration(s.conn())? != expected {
-                return Ok(None);
+            if pending(s.conn())?.is_some() {
+                return Ok(Err(KeyLoadFailure::ConfigurationUnknown));
+            }
+            if facts::configuration(s.conn())? != expected {
+                return Ok(Err(KeyLoadFailure::ConfigurationChanged));
             }
             let Some(b) = binding(s.conn())? else {
-                return Ok(None);
+                return Ok(Err(KeyLoadFailure::BindingMissing));
             };
             let current_db = db(s.conn())?;
             let epoch = crewd_store::judgment_state::epoch(s.conn())?;
-            Ok(expected
-                .config
-                .as_ref()
-                .filter(|cfg| matches(&b, cfg, &current_db, &epoch))
-                .map(|_| b))
+            Ok(
+                if expected
+                    .config
+                    .as_ref()
+                    .is_some_and(|cfg| matches(&b, cfg, &current_db, &epoch))
+                {
+                    Ok(b)
+                } else {
+                    Err(KeyLoadFailure::BindingMismatch)
+                },
+            )
         })
         .await
-        .ok()?
-        .ok()??;
-    tokio::task::spawn_blocking(move || key_store(&data, &b).ok()?.load().ok().flatten())
-        .await
-        .ok()?
+        .map_err(|_| KeyLoadFailure::StateUnavailable)?
+        .map_err(|_| KeyLoadFailure::BindingInvalid)??;
+    tokio::task::spawn_blocking(move || {
+        let store = key_store(&data, &found).map_err(|_| KeyLoadFailure::StoreUnavailable)?;
+        store.load().map_err(|error| match error {
+            crewd_jev::key::KeyError::Untrusted { .. }
+            | crewd_jev::key::KeyError::InsecurePermissions { .. } => KeyLoadFailure::Untrusted,
+            crewd_jev::key::KeyError::Invalid => KeyLoadFailure::Invalid,
+            crewd_jev::key::KeyError::Io(_) => KeyLoadFailure::ReadFailed,
+            _ => KeyLoadFailure::StoreUnavailable,
+        })
+    })
+    .await
+    .map_err(|_| KeyLoadFailure::WorkerUnavailable)?
 }
 pub(crate) async fn handle(state: &Arc<AppState>, actor: &Actor, req: Request) -> Response {
     let id = req.id;

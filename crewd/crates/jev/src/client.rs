@@ -1,6 +1,6 @@
 //! `POST {base}/v1/systemone` 的异步客户端：Bearer key、发前脱敏、单次超时 + 总时限、
 //! 429 / 529 / 5xx / 连接错误按指数退避重试（尊重 Retry-After，有上限），401 / 422 不重试。
-use crate::error::CallError;
+use crate::error::{CallError, FailureDiagnostic, FailureKind};
 use crate::model::{Request, Response};
 use crate::scrub::scrub_request;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, RETRY_AFTER};
@@ -101,6 +101,21 @@ pub struct CallReport {
 }
 
 #[derive(Debug)]
+pub struct ObservedCall {
+    pub result: Result<(Response, String), CallError>,
+    pub report: CallReport,
+    pub diagnostic: Option<FailureDiagnostic>,
+    pub http_status: Option<u16>,
+}
+
+type AttemptObservation = (
+    Result<(Response, String), CallError>,
+    Option<Duration>,
+    Option<FailureDiagnostic>,
+    Option<u16>,
+);
+
+#[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
     endpoint: String,
@@ -185,6 +200,12 @@ impl Client {
         &self,
         request: &Request,
     ) -> (Result<(Response, String), CallError>, CallReport) {
+        let observed = self.evaluate_observed_raw(request).await;
+        (observed.result, observed.report)
+    }
+
+    /// The same one call and retry budget, with a text-free observation sidecar.
+    pub async fn evaluate_observed_raw(&self, request: &Request) -> ObservedCall {
         let started = Instant::now();
         let mut request = request.clone();
         let scrub_hits = scrub_request(&mut request);
@@ -196,22 +217,31 @@ impl Client {
         let body = match serde_json::to_vec(&request) {
             Ok(b) => b,
             Err(e) => {
-                return (
-                    Err(CallError::Malformed(format!("请求序列化失败：{e}"))),
-                    report(0),
-                );
+                let error = CallError::Malformed(format!("请求序列化失败：{e}"));
+                return ObservedCall {
+                    diagnostic: Some(error.diagnostic()),
+                    result: Err(error),
+                    report: report(0),
+                    http_status: None,
+                };
             }
         };
         let mut attempts = 0;
+        let mut diagnostic: Option<FailureDiagnostic>;
+        let mut http_status: Option<u16>;
         let result = loop {
             let remaining = self.deadline.saturating_sub(started.elapsed());
             if remaining.is_zero() {
+                diagnostic = Some(FailureDiagnostic::new(FailureKind::Timeout));
+                http_status = None;
                 break Err(CallError::Timeout);
             }
             attempts += 1;
-            let (outcome, retry_after) = self
+            let (outcome, retry_after, observed, status) = self
                 .attempt(&body, self.attempt_timeout.min(remaining))
                 .await;
+            diagnostic = observed;
+            http_status = status;
             match outcome {
                 Ok(response) => break Ok(response),
                 Err(e) if e.is_retryable() && attempts < self.retry.max_attempts => {
@@ -227,14 +257,15 @@ impl Client {
                 Err(e) => break Err(e),
             }
         };
-        (result, report(attempts))
+        ObservedCall {
+            result,
+            report: report(attempts),
+            diagnostic,
+            http_status,
+        }
     }
 
-    async fn attempt(
-        &self,
-        body: &[u8],
-        timeout: Duration,
-    ) -> (Result<(Response, String), CallError>, Option<Duration>) {
+    async fn attempt(&self, body: &[u8], timeout: Duration) -> AttemptObservation {
         let sent = self
             .http
             .post(&self.endpoint)
@@ -246,7 +277,10 @@ impl Client {
             .await;
         let mut response = match sent {
             Ok(r) => r,
-            Err(e) => return (Err(transport_error(e)), None),
+            Err(e) => {
+                let diagnostic = transport_diagnostic(&e, false);
+                return (Err(transport_error(e)), None, Some(diagnostic), None);
+            }
         };
         let status = response.status().as_u16();
         let wait = retry_after(response.headers());
@@ -258,6 +292,11 @@ impl Client {
             return (
                 Err(CallError::Malformed("response exceeds byte limit".into())),
                 None,
+                Some(FailureDiagnostic {
+                    kind: FailureKind::Malformed,
+                    status: Some(status),
+                }),
+                Some(status),
             );
         }
         let mut bytes = Vec::new();
@@ -270,26 +309,53 @@ impl Client {
                     return (
                         Err(CallError::Malformed("response exceeds byte limit".into())),
                         None,
+                        Some(FailureDiagnostic {
+                            kind: FailureKind::Malformed,
+                            status: Some(status),
+                        }),
+                        Some(status),
                     );
                 }
                 Ok(None) => break,
-                Err(e) => return (Err(transport_error(e)), wait),
+                Err(e) => {
+                    let mut diagnostic = transport_diagnostic(&e, true);
+                    diagnostic.status = Some(status);
+                    return (
+                        Err(transport_error(e)),
+                        wait,
+                        Some(diagnostic),
+                        Some(status),
+                    );
+                }
             }
         }
         if (200..300).contains(&status) {
             let parsed = serde_json::from_slice::<Response>(&bytes)
                 .map(|r| (r, String::from_utf8_lossy(&bytes).into_owned()))
                 .map_err(|e| CallError::Malformed(e.to_string()));
-            return (parsed, None);
+            let diagnostic = parsed.as_ref().err().map(|error| FailureDiagnostic {
+                status: Some(status),
+                ..error.diagnostic()
+            });
+            return (parsed, None, diagnostic, Some(status));
         }
-        (
-            Err(CallError::from_status(
-                status,
-                &String::from_utf8_lossy(&bytes),
-            )),
-            wait,
-        )
+        let error = CallError::from_status(status, &String::from_utf8_lossy(&bytes));
+        let diagnostic = error.diagnostic();
+        (Err(error), wait, Some(diagnostic), Some(status))
     }
+}
+
+fn transport_diagnostic(error: &reqwest::Error, reading: bool) -> FailureDiagnostic {
+    let fallback = if error.is_timeout() {
+        FailureKind::Timeout
+    } else if reading || error.is_body() {
+        FailureKind::NetworkRead
+    } else if error.is_connect() {
+        FailureKind::NetworkConnect
+    } else {
+        FailureKind::NetworkUnknown
+    };
+    FailureDiagnostic::transport(error, fallback)
 }
 
 fn transport_error(e: reqwest::Error) -> CallError {

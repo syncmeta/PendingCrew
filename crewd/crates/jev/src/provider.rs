@@ -2,6 +2,7 @@
 //! One instance selects one provider; there is no fallback chain. Callers supply the
 //! authoritative semantic version, then must revalidate it before committing effects.
 use crate::client::{ApiKey, Client, ClientConfig};
+use crate::error::{FailureDiagnostic, FailureKind};
 use crate::model::{Answer, ChoiceCriteria, NoulCriteria, Question, Request};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -87,6 +88,43 @@ impl JudgmentResult {
         }
     }
 }
+
+/// A sidecar, never an execution grant or a new public judgment DTO.
+#[derive(Clone, Debug)]
+pub struct ObservedJudgment {
+    pub result: JudgmentResult,
+    pub diagnostic: Option<FailureDiagnostic>,
+    pub attempts: Option<u32>,
+    pub latency_ms: u64,
+}
+impl ObservedJudgment {
+    fn new(result: JudgmentResult, diagnostic: Option<FailureDiagnostic>) -> Self {
+        let (attempts, latency_ms) = match &result {
+            JudgmentResult::Answered {
+                attempts,
+                latency_ms,
+                ..
+            } => (Some(*attempts), *latency_ms),
+            JudgmentResult::Deferred {
+                attempts,
+                latency_ms,
+                ..
+            } => (*attempts, *latency_ms),
+        };
+        Self {
+            result,
+            diagnostic,
+            attempts,
+            latency_ms,
+        }
+    }
+    fn deferred(reason: &str, kind: FailureKind, attempts: Option<u32>, started: Instant) -> Self {
+        Self::new(
+            JudgmentResult::deferred(reason, attempts, started),
+            Some(FailureDiagnostic::new(kind)),
+        )
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DecisionConfig {
@@ -135,7 +173,7 @@ fn probability(v: f64) -> bool {
 }
 #[derive(Debug, Default)]
 struct Cached {
-    result: OnceCell<JudgmentResult>,
+    result: OnceCell<ObservedJudgment>,
     ready: Notify,
 }
 #[derive(Debug)]
@@ -184,20 +222,50 @@ impl DecisionProvider {
     /// The owner, not just its waiter, shares the caller's absolute deadline.
     /// A later cache waiter can never extend the first dispatch's deadline.
     pub async fn evaluate_until(&self, batch: &Batch, deadline: Instant) -> JudgmentResult {
+        self.evaluate_observed_until(batch, deadline).await.result
+    }
+    /// Uses the very same owner, cache cell and caller deadline as old waiters.
+    pub async fn evaluate_observed_until(
+        &self,
+        batch: &Batch,
+        deadline: Instant,
+    ) -> ObservedJudgment {
         let started = Instant::now();
         let deadline = deadline.min(started + BUDGET);
         if deadline <= started {
-            return JudgmentResult::deferred("deadline", Some(0), started);
+            return ObservedJudgment::deferred(
+                "deadline",
+                FailureKind::OuterDeadline,
+                Some(0),
+                started,
+            );
         }
         if *self.revoked.borrow() {
-            return JudgmentResult::deferred("configuration_changed", Some(0), started);
+            return ObservedJudgment::deferred(
+                "configuration_changed",
+                FailureKind::ConfigurationChanged,
+                Some(0),
+                started,
+            );
         }
         let Some(client) = &self.client else {
-            return JudgmentResult::deferred("unconfigured", Some(0), started);
+            return ObservedJudgment::deferred(
+                "unconfigured",
+                FailureKind::Unconfigured,
+                Some(0),
+                started,
+            );
         };
         let request = match self.request(batch) {
             Ok(r) => r,
-            Err(()) => return JudgmentResult::deferred("invalid_input", Some(0), started),
+            Err(()) => {
+                return ObservedJudgment::deferred(
+                    "invalid_input",
+                    FailureKind::InvalidInput,
+                    Some(0),
+                    started,
+                );
+            }
         };
         let key = serde_json::to_string(batch).expect("typed JSON values serialize");
         let cell = {
@@ -213,7 +281,12 @@ impl DecisionProvider {
                     if let Some(v) = victim {
                         cache.remove(&v);
                     } else {
-                        return JudgmentResult::deferred("busy", Some(0), started);
+                        return ObservedJudgment::deferred(
+                            "busy",
+                            FailureKind::Busy,
+                            Some(0),
+                            started,
+                        );
                     }
                 }
                 let c = Arc::new(Cached::default());
@@ -226,10 +299,15 @@ impl DecisionProvider {
                 // This sole owner remains bounded by the same total business deadline.
                 tokio::spawn(async move {
                     let result = if *revoked.borrow() {
-                        JudgmentResult::deferred("configuration_changed", Some(0), started)
+                        ObservedJudgment::deferred(
+                            "configuration_changed",
+                            FailureKind::ConfigurationChanged,
+                            Some(0),
+                            started,
+                        )
                     } else {
                         tokio::select! { biased;
-                            _ = revoked.changed() => JudgmentResult::deferred("configuration_changed", None, started),
+                            _ = revoked.changed() => ObservedJudgment::deferred("configuration_changed", FailureKind::ConfigurationChanged, None, started),
                             result = Self::call(&client, &request, &batch, started, deadline) => result,
                         }
                     };
@@ -255,30 +333,55 @@ impl DecisionProvider {
         batch: &Batch,
         started: Instant,
         deadline: Instant,
-    ) -> JudgmentResult {
-        match tokio::time::timeout_at(deadline.into(), client.evaluate_raw(request)).await {
-            Err(_) => JudgmentResult::deferred("deadline", None, started),
-            Ok((Err(_), report)) => {
-                JudgmentResult::deferred("provider_error", Some(report.attempts), started)
+    ) -> ObservedJudgment {
+        match tokio::time::timeout_at(deadline.into(), client.evaluate_observed_raw(request)).await
+        {
+            Err(_) => {
+                ObservedJudgment::deferred("deadline", FailureKind::OuterDeadline, None, started)
             }
-            Ok((Ok((response, raw)), report)) => {
+            Ok(observed) => {
+                let report = observed.report;
+                let (response, raw) = match observed.result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return ObservedJudgment::new(
+                            JudgmentResult::deferred(
+                                "provider_error",
+                                Some(report.attempts),
+                                started,
+                            ),
+                            Some(observed.diagnostic.unwrap_or_else(|| error.diagnostic())),
+                        );
+                    }
+                };
                 let answers = validate_answers(batch, &response.answers);
                 match answers {
-                    None => {
-                        JudgmentResult::deferred("invalid_response", Some(report.attempts), started)
-                    }
-                    Some(answers) => JudgmentResult::Answered {
-                        answers,
-                        model: response.model,
-                        probability_source: ProbabilitySource::Native,
-                        suggestion_only: false,
-                        raw_usage: serde_json::from_str::<Value>(&raw)
-                            .ok()
-                            .and_then(|v| v.get("usage").cloned()),
-                        attempts: report.attempts,
-                        latency_ms: report.latency.as_millis().min(u64::MAX as u128) as u64,
-                        calibrated: false,
-                    },
+                    None => ObservedJudgment::new(
+                        JudgmentResult::deferred(
+                            "invalid_response",
+                            Some(report.attempts),
+                            started,
+                        ),
+                        Some(FailureDiagnostic {
+                            kind: FailureKind::InvalidNative,
+                            status: observed.http_status,
+                        }),
+                    ),
+                    Some(answers) => ObservedJudgment::new(
+                        JudgmentResult::Answered {
+                            answers,
+                            model: response.model,
+                            probability_source: ProbabilitySource::Native,
+                            suggestion_only: false,
+                            raw_usage: serde_json::from_str::<Value>(&raw)
+                                .ok()
+                                .and_then(|v| v.get("usage").cloned()),
+                            attempts: report.attempts,
+                            latency_ms: report.latency.as_millis().min(u64::MAX as u128) as u64,
+                            calibrated: false,
+                        },
+                        None,
+                    ),
                 }
             }
         }

@@ -319,10 +319,22 @@ impl super::Runtime {
                 .await?;
             return Ok(());
         }
-        let Some(provider) = self.current_provider(&snapshot.settings).await else {
+        let (provider, factory_diagnostic) =
+            self.current_provider_observed(&snapshot.settings).await;
+        let Some(provider) = provider else {
+            let diagnostic = super::SafeDecisionDiagnostic::new(
+                &snapshot,
+                factory_diagnostic,
+                Some(crewd_jev::error::FailureDiagnostic::new(
+                    crewd_jev::error::FailureKind::Unconfigured,
+                )),
+                Some(0),
+                0,
+            );
             state
                 .collab(move |tx| facts::defer(tx, &snapshot, Reason::Unconfigured).map(|_| ()))
                 .await?;
+            self.diagnostics.record(diagnostic);
             return Ok(());
         };
         let prepared = snapshot.clone();
@@ -340,22 +352,42 @@ impl super::Runtime {
         if !dispatched {
             return Ok(());
         }
-        let deadline = std::time::Instant::now() + crewd_jev::provider::BUDGET;
-        let outcome = if self.closed.load(Ordering::Acquire)
+        let started = std::time::Instant::now();
+        let deadline = started + crewd_jev::provider::BUDGET;
+        let (outcome, failure, attempts, latency_ms) = if self.closed.load(Ordering::Acquire)
             || !state.admission.contains(&snapshot.source_session)
         {
-            (None, Reason::NoAdmission)
+            ((None, Reason::NoAdmission), None, Some(0), 0)
         } else {
             match tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
-                provider.evaluate_until(&batch(&snapshot), deadline),
+                provider.evaluate_observed_until(&batch(&snapshot), deadline),
             )
             .await
             {
-                Ok(result) => selection(result),
-                Err(_) => (None, Reason::ProviderUnavailable),
+                Ok(observed) => (
+                    selection(observed.result),
+                    observed.diagnostic,
+                    observed.attempts,
+                    observed.latency_ms,
+                ),
+                Err(_) => (
+                    (None, Reason::ProviderUnavailable),
+                    Some(crewd_jev::error::FailureDiagnostic::new(
+                        crewd_jev::error::FailureKind::OuterDeadline,
+                    )),
+                    None,
+                    started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+                ),
             }
         };
+        let diagnostic = super::SafeDecisionDiagnostic::new(
+            &snapshot,
+            factory_diagnostic,
+            failure,
+            attempts,
+            latency_ms,
+        );
         let admission = state.admission.clone();
         let closed = self.closed.clone();
         state
@@ -371,6 +403,7 @@ impl super::Runtime {
                 facts::settle(tx, &snapshot, probability, reason).map(|_| ())
             })
             .await?;
+        self.diagnostics.record(diagnostic);
         Ok(())
     }
 }
@@ -396,5 +429,54 @@ mod tests {
         let (probability, reason) = selection(result);
         assert!(probability.is_none());
         assert_eq!(reason, Reason::Generated);
+    }
+    #[test]
+    fn provider_failure_keeps_original_decision_and_snapshot_without_changing_selection() {
+        let snapshot = facts::DecisionSnapshot {
+            crew: "owned-fixture".into(),
+            id: "AC00000000000000000002".into(),
+            source_session: "original-source".into(),
+            decision_id: "00000000-0000-0000-0000-000000000002".into(),
+            fingerprint: "a".repeat(64),
+            summary: json!({}),
+            settings: super::super::JudgmentSettings {
+                revision: None,
+                config: None,
+            },
+        };
+        let diagnostic = crewd_jev::error::FailureDiagnostic {
+            kind: crewd_jev::error::FailureKind::Unauthorized,
+            status: Some(403),
+        };
+        let outcome = selection(JudgmentResult::Deferred {
+            reason: "provider_error".into(),
+            attempts: Some(1),
+            latency_ms: 17,
+        });
+        assert_eq!(outcome, (None, Reason::ProviderUnavailable));
+        let safe = super::super::SafeDecisionDiagnostic::new(
+            &snapshot,
+            None,
+            Some(diagnostic),
+            Some(1),
+            17,
+        )
+        .unwrap();
+        assert_eq!(safe.decision_id, snapshot.decision_id);
+        assert_eq!(safe.snapshot, snapshot.fingerprint);
+        assert_eq!(safe.case_id, snapshot.id);
+        assert_eq!(safe.failure, Some(diagnostic));
+        assert_eq!(safe.attempts, Some(1));
+        assert_eq!(safe.latency_ms, 17);
+        let text = serde_json::to_string(&safe).unwrap();
+        for forbidden in [
+            "Authorization",
+            "https://",
+            "body",
+            "source_session",
+            "original-source",
+        ] {
+            assert!(!text.contains(forbidden));
+        }
     }
 }

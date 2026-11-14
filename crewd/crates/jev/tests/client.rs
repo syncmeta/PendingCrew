@@ -256,3 +256,105 @@ async fn nothing_listening_is_a_transport_error_after_retries() {
     }
     assert_eq!(report.attempts, 3);
 }
+
+#[tokio::test]
+async fn observed_statuses_keep_counts_without_exporting_any_error_text() {
+    use crewd_jev::error::FailureKind;
+    for (status, kind) in [
+        (401, FailureKind::Unauthorized),
+        (403, FailureKind::Unauthorized),
+        (422, FailureKind::Rejected),
+        (429, FailureKind::RateLimited),
+        (529, FailureKind::Overloaded),
+        (503, FailureKind::Server),
+    ] {
+        let fake = FakeJev::start(vec![
+            Reply::status(status)
+                .body("private-response-body https://private.invalid secret-header"),
+        ])
+        .await;
+        let mut cfg = config(&fake.base_url);
+        cfg.retry.max_attempts = 1;
+        let result = Client::new(cfg)
+            .unwrap()
+            .evaluate_observed_raw(&request(json!({})))
+            .await;
+        let diag = result.diagnostic.unwrap();
+        assert_eq!(diag.kind, kind);
+        assert_eq!(diag.status, Some(status));
+        assert_eq!(result.report.attempts, 1);
+        assert_eq!(fake.requests().len(), 1);
+        let text = serde_json::to_string(&diag).unwrap();
+        for forbidden in [
+            "private-response-body",
+            "https://",
+            "private.invalid",
+            "secret-header",
+            TEST_KEY,
+        ] {
+            assert!(!text.contains(forbidden));
+        }
+    }
+    let fake = FakeJev::start(vec![
+        Reply::status(429),
+        Reply::status(429),
+        Reply::status(429),
+    ])
+    .await;
+    let result = Client::new(config(&fake.base_url))
+        .unwrap()
+        .evaluate_observed_raw(&request(json!({})))
+        .await;
+    assert_eq!(result.report.attempts, 3);
+    assert_eq!(fake.requests().len(), 3);
+    assert_eq!(result.diagnostic.unwrap().kind, FailureKind::RateLimited);
+}
+
+#[tokio::test]
+async fn observed_parse_failure_is_not_a_transport_or_a_native_answer() {
+    use crewd_jev::error::FailureKind;
+    let fake = FakeJev::start(vec![Reply::ok("not-json-private-payload")]).await;
+    let result = Client::new(config(&fake.base_url))
+        .unwrap()
+        .evaluate_observed_raw(&request(json!({})))
+        .await;
+    assert_eq!(result.diagnostic.unwrap().kind, FailureKind::Malformed);
+    assert_eq!(result.report.attempts, 1);
+    assert_eq!(fake.requests().len(), 1);
+    assert!(
+        !serde_json::to_string(&result.diagnostic)
+            .unwrap()
+            .contains("not-json-private-payload")
+    );
+}
+
+#[tokio::test]
+async fn strict_https_rejects_a_non_tls_peer_with_typed_or_honest_unknown_cause() {
+    use crewd_jev::error::FailureKind;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut input = [0; 4096];
+        let _ = stream.read(&mut input).await;
+        let _ = stream.write_all(b"not a TLS record\r\n").await;
+    });
+    let mut cfg = config(&format!("https://{address}"));
+    cfg.retry.max_attempts = 1;
+    let observed = Client::new(cfg)
+        .unwrap()
+        .evaluate_observed_raw(&request(json!({})))
+        .await;
+    assert!(observed.result.is_err());
+    assert!(matches!(
+        observed.diagnostic.unwrap().kind,
+        FailureKind::Tls
+            | FailureKind::NetworkConnect
+            | FailureKind::NetworkRead
+            | FailureKind::NetworkUnknown
+            | FailureKind::Timeout
+    ));
+    assert_eq!(observed.report.attempts, 1);
+    peer.await.unwrap();
+}

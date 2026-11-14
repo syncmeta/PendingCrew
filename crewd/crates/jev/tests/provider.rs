@@ -230,3 +230,99 @@ async fn shortened_absolute_deadline_cancels_owner_and_is_cached_without_replay(
     assert!(matches!(again,JudgmentResult::Deferred{reason,..} if reason=="deadline"));
     assert_eq!(fake.requests().len(), 1);
 }
+
+#[tokio::test]
+async fn observed_error_and_old_waiter_share_one_cached_dispatch() {
+    use crewd_jev::error::FailureKind;
+    let fake = FakeJev::start(vec![Reply::status(422).body("do-not-export-this-body")]).await;
+    let p = provider(&fake);
+    let b = batch("observed-error-once");
+    let observed = p
+        .evaluate_observed_until(&b, std::time::Instant::now() + BUDGET)
+        .await;
+    assert_eq!(observed.diagnostic.unwrap().kind, FailureKind::Rejected);
+    assert_eq!(observed.diagnostic.unwrap().status, Some(422));
+    assert_eq!(observed.attempts, Some(1));
+    let old = p.evaluate(&b).await;
+    assert_eq!(old, observed.result);
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn observed_outer_deadline_is_cached_and_does_not_fabricate_attempt_count() {
+    use crewd_jev::error::FailureKind;
+    let fake = FakeJev::start(vec![
+        Reply::ok(body()).delayed(std::time::Duration::from_millis(1000)),
+    ])
+    .await;
+    let p = provider(&fake);
+    let b = batch("observed-absolute-deadline");
+    let observed = p
+        .evaluate_observed_until(
+            &b,
+            std::time::Instant::now() + std::time::Duration::from_millis(250),
+        )
+        .await;
+    assert_eq!(
+        observed.diagnostic.unwrap().kind,
+        FailureKind::OuterDeadline
+    );
+    assert_eq!(observed.attempts, None);
+    let again = p
+        .evaluate_observed_until(&b, std::time::Instant::now() + BUDGET)
+        .await;
+    assert_eq!(observed.result, again.result);
+    assert_eq!(observed.diagnostic, again.diagnostic);
+    assert_eq!(fake.requests().len(), 1);
+    assert_eq!(BUDGET, std::time::Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn observed_invalid_native_answer_remains_deferred_without_replay() {
+    use crewd_jev::error::FailureKind;
+    let fake = FakeJev::start(vec![Reply::ok(r#"{"model":"fixture","answers":{}}"#)]).await;
+    let p = provider(&fake);
+    let b = batch("observed-invalid-native");
+    let observed = p
+        .evaluate_observed_until(&b, std::time::Instant::now() + BUDGET)
+        .await;
+    assert_eq!(
+        observed.diagnostic.unwrap().kind,
+        FailureKind::InvalidNative
+    );
+    assert!(
+        matches!(observed.result,JudgmentResult::Deferred{ref reason,..} if reason=="invalid_response")
+    );
+    assert_eq!(p.evaluate(&b).await, observed.result);
+    assert_eq!(fake.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn canceled_old_waiter_and_observed_late_waiter_use_the_same_owner() {
+    let fake = FakeJev::start(vec![
+        Reply::ok(body()).delayed(std::time::Duration::from_millis(80)),
+    ])
+    .await;
+    let p = Arc::new(provider(&fake));
+    let first = p.clone();
+    let waiting = tokio::spawn(async move { first.evaluate(&batch("mixed-cancel-owner")).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while fake.requests().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    waiting.abort();
+    let _ = waiting.await;
+    let observed = p
+        .evaluate_observed_until(
+            &batch("mixed-cancel-owner"),
+            std::time::Instant::now() + BUDGET,
+        )
+        .await;
+    assert!(matches!(observed.result, JudgmentResult::Answered { .. }));
+    assert!(observed.diagnostic.is_none());
+    assert_eq!(observed.attempts, Some(1));
+    assert_eq!(fake.requests().len(), 1);
+}
