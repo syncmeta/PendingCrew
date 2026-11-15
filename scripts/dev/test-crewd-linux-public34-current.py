@@ -400,6 +400,94 @@ class ToolSupervisionControls(unittest.TestCase):
         self.assertFalse(any(name=='archive-manifest.json' for name,_ in f.saved))
 
 
+class NamedTerminalParserControls(unittest.TestCase):
+    """Actual archived libtest bytes, no compiler/test/Core/network execution."""
+    LISTED = ('client::tests::backoff_grows_by_four_is_capped_and_a_long_retry_after_gives_up', 'client::tests::endpoint_accepts_https_and_local_http_only', 'client::tests::key_is_trimmed_validated_and_never_printed', 'client::tests::retry_after_reads_integer_seconds_only', 'decisions::attribute::tests::candidates_plus_none_capped_and_described_with_vocab_words', 'decisions::attribute::tests::none_is_reserved_and_empty_candidate_list_is_refused', 'decisions::attribute::tests::none_maps_to_none', 'decisions::route::tests::answers_map_to_targets_and_low_confidence_defers', 'decisions::route::tests::bad_inputs_are_refused', 'decisions::route::tests::invented_or_missing_answers_are_malformed', 'decisions::route::tests::options_are_the_three_fixed_ones_plus_members_shuffled_by_seed', 'decisions::route::tests::roster_is_capped_at_fifteen_most_recent', 'decisions::route::tests::wire_order_matches_options', 'decisions::tests::clip_counts_characters_not_bytes', 'decisions::tests::defaults_are_pinned', 'decisions::tests::keys_must_be_ascii_slugs_unique_and_not_reserved', 'decisions::tests::member_view_has_no_raw_numbers', 'decisions::tests::quantities_become_words_without_digits', 'decisions::tests::roster_is_cut_to_the_most_recent_and_unknown_rank_goes_last', 'decisions::urgency::tests::argmax_level_and_gate', 'decisions::urgency::tests::levels_are_in_order_and_quantities_are_words', 'decisions::urgency::tests::out_of_range_levels_or_scores_are_malformed', 'decisions::urgency::tests::state_never_carries_the_durations_or_counts_as_digits', 'decisions::wake::tests::a_missing_member_answer_voids_the_whole_judgement', 'decisions::wake::tests::empty_set_goes_to_the_captain', 'decisions::wake::tests::no_members_or_empty_message_is_refused', 'decisions::wake::tests::one_noul_per_member_and_only_the_last_five_recent_messages', 'decisions::wake::tests::wake_set_is_everyone_at_or_above_the_line', 'diag::tests::existing_loose_file_is_tightened', 'diag::tests::one_json_object_per_line_in_a_private_file', 'diag::tests::rotates_into_a_single_old_file', 'error::tests::safe_projection_uses_types_and_never_error_text', 'error::tests::statuses_are_classified_like_the_docs_say', 'eval::tests::calibration_buckets_include_one_in_the_top_bucket', 'eval::tests::summary_counts_consistency_and_first_pick_bias', 'eval::tests::the_dataset_is_well_formed_synthetic_and_balanced', 'eval::tests::threshold_is_the_lowest_that_meets_the_target', 'eval::tests::validation_catches_bad_expectations', 'eval::tests::wake_threshold_maximises_member_accuracy_ties_toward_half', 'key::tests::a_fifo_at_the_key_path_is_refused_without_hanging', 'key::tests::a_symlinked_key_file_is_refused', 'key::tests::file_store_roundtrips_with_0600_and_clear_is_idempotent', 'key::tests::garbage_in_the_file_is_invalid_not_a_key', 'key::tests::keychain_roundtrip', 'key::tests::loose_permissions_are_refused_not_used', 'key::tests::missing_parent_directories_are_created_private', 'key::tests::owner_type_and_mode_are_all_vetted', 'key::tests::platform_default_matches_the_spec', 'model::tests::choice_criteria_keep_their_order_on_the_wire', 'model::tests::documented_answer_shapes_parse', 'model::tests::noul_and_score_questions_serialize_like_the_docs', 'model::tests::noul_confidence_is_distance_from_a_coin_flip', 'model::tests::unknown_answer_type_is_an_error_not_a_default', 'prompts::tests::every_prompt_file_has_its_sections', 'prompts::tests::missing_section_names_itself', 'prompts::tests::parser_rejects_empty_and_duplicate_sections', 'prompts::tests::prompt_texts_carry_no_digits_that_could_be_mistaken_for_data', 'scrub::tests::a_rejected_candidate_does_not_hide_the_real_value', 'scrub::tests::any_amount_of_whitespace_between_label_and_value', 'scrub::tests::assignments_keep_the_name_and_hide_the_value', 'scrub::tests::bare_key_and_plain_words_are_not_credentials', 'scrub::tests::chinese_label_plus_space_needs_a_mixed_value', 'scrub::tests::chinese_labelled_credentials_keep_the_label_and_hide_the_value', 'scrub::tests::chinese_prose_and_counts_stay_untouched', 'scrub::tests::env_style_assignments_keep_the_name_and_hide_the_value', 'scrub::tests::fuzzed_inputs_scrub_idempotently', 'scrub::tests::glued_vendor_keys_are_all_redacted_in_one_pass', 'scrub::tests::identifier_prefixes_do_not_make_ordinary_words_secrets', 'scrub::tests::is_takes_the_strict_rule', 'scrub::tests::long_values_are_redacted_to_the_end_of_the_run', 'scrub::tests::more_vendor_shapes_webhooks_pgp_and_basic_auth', 'scrub::tests::numeric_passwords_after_a_space_are_redacted', 'scrub::tests::ordinary_chat_is_left_alone', 'scrub::tests::quoted_fullwidth_json_traditional_and_suffixed_forms', 'scrub::tests::realistic_double_scrub_is_a_no_op', 'scrub::tests::request_is_scrubbed_in_place_without_reordering_options', 'scrub::tests::scrubbing_twice_finds_nothing_new', 'scrub::tests::urls_private_keys_and_jwts', 'scrub::tests::values_keep_non_cjk_unicode', 'scrub::tests::vendor_keys_and_tokens', 'scrub::tests::vendor_lookalikes_in_chat_stay_untouched', 'scrub::tests::verification_code_needs_a_code_not_a_year_or_a_count', 'scrub::tests::verification_codes_followed_by_punctuation', 'shuffle::tests::every_item_leads_about_equally_often', 'shuffle::tests::same_seed_same_order_and_it_is_a_permutation', 'shuffle::tests::seed_separates_segments', 'shuffle::tests::tiny_inputs_are_fine')
+    IGNORED = ('key::tests::keychain_roundtrip',)
+    SHOULD_PANIC = 'prompts::tests::missing_section_names_itself'
+    FIXTURE_SHA256 = '4ca53159d6b1b1809c842037b0ffd862b2c3cea24e27b6bf22145aac081e3d8b'
+    def helpers(self):
+        path=ROOT/'scripts/dev/build-crewd-linux-public34-current.py';tree=ast.parse(path.read_bytes())
+        wanted={'affected_output_audit','require_affected_output'}
+        nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in wanted]
+        self.assertEqual({n.name for n in nodes},wanted)
+        scope={'re':re};exec(compile(ast.Module(body=nodes,type_ignores=[]),str(path),'exec'),scope)
+        return scope['affected_output_audit'],scope['require_affected_output']
+    def raw(self):
+        data=(ROOT/'scripts/dev/fixtures/linux_public34_current/cargo_passed_names_fixture.log').read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(),self.FIXTURE_SHA256)
+        return data.decode('utf-8')
+    def audit(self,text):
+        parse,_=self.helpers();return parse(text,self.LISTED,self.IGNORED)
+    def refuses(self,text):
+        audit=self.audit(text);_,qualify=self.helpers()
+        with self.assertRaises(AssertionError):qualify(audit)
+        return audit
+    def test_actual_original87_fixture_exposes_old85_parser_and_qualifies_real86(self):
+        raw=self.raw();old=re.findall(r'^test (\S+) \.\.\. ok$',raw,re.M)
+        self.assertEqual(len(old),85)
+        self.assertEqual(set(self.LISTED)-set(self.IGNORED)-set(old),{self.SHOULD_PANIC})
+        audit=self.audit(raw);_,qualify=self.helpers();qualify(audit)
+        self.assertEqual(len(audit['passedNames']),86);self.assertEqual(audit['summaries'],[['86','1']])
+        self.assertEqual(audit['runIgnoredNames'],list(self.IGNORED));self.assertEqual(audit['failedNames'],[])
+        self.assertEqual(audit['missingNames'],[]);self.assertEqual(audit['extraNames'],[])
+        self.assertIn(self.SHOULD_PANIC,audit['passedNames']);self.assertNotIn(self.SHOULD_PANIC+' - should panic',audit['passedNames'])
+    def test_missing_should_panic_or_ordinary_actual_terminal_is_not_inferred_from_summary(self):
+        raw=self.raw()
+        for line in ['test '+self.SHOULD_PANIC+' - should panic ... ok',
+                     next(x for x in raw.splitlines() if x.startswith('test ') and x.endswith(' ... ok') and '- should panic' not in x)]:
+            with self.subTest(line=line):
+                audit=self.refuses(raw.replace(line+'\n','',1))
+                self.assertEqual(audit['summaries'],[['86','1']]);self.assertEqual(len(audit['missingNames']),1)
+    def test_extra_and_duplicate_actual_ok_terminals_fail_even_with_original_summary(self):
+        raw=self.raw();line='test '+self.SHOULD_PANIC+' - should panic ... ok'
+        extra=self.refuses(raw+'test foreign::extra ... ok\n')
+        self.assertEqual(extra['extraNames'],['foreign::extra'])
+        duplicate=self.refuses(raw+line+'\n')
+        self.assertEqual(duplicate['missingNames'],[]);self.assertEqual(duplicate['extraNames'],[])
+        self.assertEqual(duplicate['duplicatePassedNames'],[self.SHOULD_PANIC])
+    def test_true_failed_terminal_rejects_even_when_all_expected_ok_names_are_present(self):
+        raw=self.raw()
+        audit=self.refuses(raw+'test foreign::actually_failed ... FAILED\n')
+        self.assertEqual(audit['missingNames'],[]);self.assertEqual(audit['extraNames'],[])
+        self.assertEqual(audit['failedNames'],['foreign::actually_failed'])
+        line='test '+self.SHOULD_PANIC+' - should panic ... ok'
+        audit=self.refuses(raw.replace(line,line[:-2]+'FAILED',1))
+        self.assertEqual(audit['failedNames'],[self.SHOULD_PANIC]);self.assertEqual(audit['missingNames'],[self.SHOULD_PANIC])
+    def test_actual_ignored_name_missing_extra_or_duplicate_never_weakens_original_ignore_gate(self):
+        raw=self.raw();line=next(x for x in raw.splitlines() if x.startswith('test key::tests::keychain_roundtrip ... ignored'))
+        missing=self.refuses(raw.replace(line+'\n','',1));self.assertEqual(missing['missingIgnoredNames'],list(self.IGNORED))
+        extra=self.refuses(raw.replace(line,line.replace('key::tests::keychain_roundtrip','foreign::ignored'),1))
+        self.assertEqual(extra['extraIgnoredNames'],['foreign::ignored'])
+        duplicate=self.refuses(raw+line+'\n');self.assertEqual(duplicate['duplicateRunIgnoredNames'],list(self.IGNORED))
+    def test_wrong_missing_duplicate_or_failed_summary_is_not_hidden_by_good_named_lines(self):
+        raw=self.raw();summary=next(x for x in raw.splitlines() if x.startswith('test result: ok.'))
+        variants=[raw.replace('86 passed; 0 failed; 1 ignored;','85 passed; 0 failed; 1 ignored;',1),
+                  raw.replace('86 passed; 0 failed; 1 ignored;','86 passed; 1 failed; 1 ignored;',1),
+                  raw.replace('86 passed; 0 failed; 1 ignored;','86 passed; 0 failed; 0 ignored;',1),
+                  raw.replace(summary+'\n','',1),raw+summary+'\n']
+        for text in variants:
+            with self.subTest(summary=text[-150:]):self.refuses(text)
+    def test_only_literal_standard_should_panic_display_suffix_is_supported(self):
+        raw=self.raw();line='test '+self.SHOULD_PANIC+' - should panic ... ok'
+        for suffix in [' - expected panic',' - should panic eventually',' - SHOULD PANIC']:
+            with self.subTest(suffix=suffix):
+                audit=self.refuses(raw.replace(line,'test '+self.SHOULD_PANIC+suffix+' ... ok',1))
+                self.assertEqual(audit['missingNames'],[self.SHOULD_PANIC])
+    def test_each_selection_persists_output_audit_before_the_actual_qualifier_call(self):
+        tree=ast.parse((ROOT/'scripts/dev/build-crewd-linux-public34-current.py').read_bytes())
+        execute=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='execute')
+        loops=[n for n in ast.walk(execute) if isinstance(n,ast.For) and isinstance(n.iter,ast.Call)
+            and isinstance(n.iter.func,ast.Name) and n.iter.func.id=='enumerate' and n.iter.args
+            and isinstance(n.iter.args[0],ast.Name) and n.iter.args[0].id=='additional']
+        self.assertEqual(len(loops),1);body=loops[0].body
+        def named_call(n,name):return isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id==name
+        saved=next(i for i,n in enumerate(body) if named_call(n,'save') and len(n.value.args)==2
+            and isinstance(n.value.args[1],ast.Name) and n.value.args[1].id=='audit')
+        qualified=next(i for i,n in enumerate(body) if named_call(n,'require_affected_output'))
+        self.assertLess(saved,qualified)
+
+
 if __name__=='__main__':
     assert not sys.flags.optimize
     unittest.main(verbosity=2)

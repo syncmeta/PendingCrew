@@ -127,3 +127,26 @@ remain failed. The original plan is valid only with Root amendment1 and the
 different author's RevisedPlanAdmit. Current implementation still requires a
 different-author whole-source review, actual Root Linux execution and independent
 raw-evidence audit. Source parsing/hashing is not any of those runtime gates.
+
+
+## 2026-11-15：首次当前Linux原运行的具名解析后继
+
+原43681638500/attempt1、controller/source eec0、artifact14149119524保持失败。
+完整503063214字节ZIP SHA256为2bc55a9fcc7dcb13e77e17e698f0afca8c0b95c1b6e6713e743ee0640ade5059。
+首个新增受影响组crewd-jev --lib实际87列出、86通过、1原keychain跳过、0失败、原child0；
+旧整行regex只解析85条，唯一遗漏是原 `prompts::tests::missing_section_names_itself - should panic ... ok`。
+这不是已证实的测试失败、颜色或nocapture交错问题。CLI236、package及13runtime均在失败点之后，未启动。
+
+后继只补标准libtest可选literal ` - should panic` 的纯具名终态解析；canonical name仍来自原--list。
+原命令/exit0、summary/count/0failed、原ignore集合、passed name exact set/unique门保持，
+另明确拒绝矛盾FAILED或错误ignored终态。每selection先保存discovery及missing/extra/duplicate/
+summary/原log SHA审计，再断言；不删nocapture、不改线程/预算/测试/feature/ignore或Core。
+原23纯控逐字保留，新增8项解析控制使用原6918字节log完整fixture：
+实际85漏名重现→86标准终态、缺失、额外、重复、真实FAILED（全expected ok仍在时也拒）、
+错误ignored及summary、非标准suffix与实际audit先落盘接线。控制仍待Root执行，非Linux新运行通过。
+
+新fixture路径为scripts/dev/fixtures/linux_public34_current/cargo_passed_names_fixture.log；
+内容SHA256为4ca53159d6b1b1809c842037b0ffd862b2c3cea24e27b6bf22145aac081e3d8b。
+它是本次真实合成测试stdout/stderr，不含用户数据/实际凭据，不重新运行原测试或业务UUID。
+Root提交时须确保此明确reviewed .log实际入Git；若被既有ignore挡住，只对该准确路径显式stage，
+不得改全局ignore或省fixture。原流水线失败与原log/ZIP/旧包均不改标；新SourceAdmit后才派发新固定来源。

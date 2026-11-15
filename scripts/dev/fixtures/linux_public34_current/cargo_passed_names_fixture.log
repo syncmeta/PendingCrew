@@ -1,0 +1,101 @@
+Argv: ["cargo", "test", "--offline", "--locked", "--release", "-p", "crewd-jev", "--lib", "", "--", "--nocapture"]
+[1m[92m    Finished[0m `release` profile [optimized] target(s) in 0.11s
+[1m[92m     Running[0m unittests src/lib.rs (/home/runner/work/_temp/linux-public34-targets/source/release/deps/crewd_jev-0d0cdfa9c8ea3193)
+
+running 87 tests
+test client::tests::backoff_grows_by_four_is_capped_and_a_long_retry_after_gives_up ... ok
+test client::tests::key_is_trimmed_validated_and_never_printed ... ok
+test client::tests::retry_after_reads_integer_seconds_only ... ok
+test client::tests::endpoint_accepts_https_and_local_http_only ... ok
+test decisions::attribute::tests::none_maps_to_none ... ok
+test decisions::attribute::tests::candidates_plus_none_capped_and_described_with_vocab_words ... ok
+test decisions::attribute::tests::none_is_reserved_and_empty_candidate_list_is_refused ... ok
+test decisions::route::tests::answers_map_to_targets_and_low_confidence_defers ... ok
+test decisions::route::tests::bad_inputs_are_refused ... ok
+test decisions::route::tests::invented_or_missing_answers_are_malformed ... ok
+test decisions::route::tests::roster_is_capped_at_fifteen_most_recent ... ok
+test decisions::tests::clip_counts_characters_not_bytes ... ok
+test decisions::route::tests::wire_order_matches_options ... ok
+test decisions::tests::defaults_are_pinned ... ok
+test decisions::tests::keys_must_be_ascii_slugs_unique_and_not_reserved ... ok
+test decisions::tests::quantities_become_words_without_digits ... ok
+test decisions::tests::roster_is_cut_to_the_most_recent_and_unknown_rank_goes_last ... ok
+test decisions::tests::member_view_has_no_raw_numbers ... ok
+test decisions::route::tests::options_are_the_three_fixed_ones_plus_members_shuffled_by_seed ... ok
+test decisions::urgency::tests::argmax_level_and_gate ... ok
+test decisions::urgency::tests::levels_are_in_order_and_quantities_are_words ... ok
+test decisions::urgency::tests::state_never_carries_the_durations_or_counts_as_digits ... ok
+test decisions::urgency::tests::out_of_range_levels_or_scores_are_malformed ... ok
+test decisions::wake::tests::a_missing_member_answer_voids_the_whole_judgement ... ok
+test decisions::wake::tests::empty_set_goes_to_the_captain ... ok
+test decisions::wake::tests::one_noul_per_member_and_only_the_last_five_recent_messages ... ok
+test decisions::wake::tests::wake_set_is_everyone_at_or_above_the_line ... ok
+test decisions::wake::tests::no_members_or_empty_message_is_refused ... ok
+test error::tests::safe_projection_uses_types_and_never_error_text ... ok
+test diag::tests::existing_loose_file_is_tightened ... ok
+test eval::tests::calibration_buckets_include_one_in_the_top_bucket ... ok
+test diag::tests::one_json_object_per_line_in_a_private_file ... ok
+test error::tests::statuses_are_classified_like_the_docs_say ... ok
+test eval::tests::summary_counts_consistency_and_first_pick_bias ... ok
+test eval::tests::threshold_is_the_lowest_that_meets_the_target ... ok
+test eval::tests::validation_catches_bad_expectations ... ok
+test eval::tests::wake_threshold_maximises_member_accuracy_ties_toward_half ... ok
+test key::tests::a_symlinked_key_file_is_refused ... ok
+test key::tests::a_fifo_at_the_key_path_is_refused_without_hanging ... ok
+test eval::tests::the_dataset_is_well_formed_synthetic_and_balanced ... ok
+test key::tests::keychain_roundtrip ... ignored, 碰真钥匙串：CREWD_KEYCHAIN_TEST=1 cargo test -p crewd-jev keychain -- --ignored
+test key::tests::garbage_in_the_file_is_invalid_not_a_key ... ok
+test key::tests::loose_permissions_are_refused_not_used ... ok
+test key::tests::owner_type_and_mode_are_all_vetted ... ok
+test key::tests::platform_default_matches_the_spec ... ok
+test model::tests::choice_criteria_keep_their_order_on_the_wire ... ok
+test model::tests::documented_answer_shapes_parse ... ok
+test model::tests::noul_and_score_questions_serialize_like_the_docs ... ok
+test model::tests::noul_confidence_is_distance_from_a_coin_flip ... ok
+test model::tests::unknown_answer_type_is_an_error_not_a_default ... ok
+test prompts::tests::every_prompt_file_has_its_sections ... ok
+
+thread 'prompts::tests::missing_section_names_itself' (34917) panicked at crates/jev/src/prompts.rs:18:21:
+prompts/t.md 缺少一节：## nope
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test prompts::tests::missing_section_names_itself - should panic ... ok
+test prompts::tests::parser_rejects_empty_and_duplicate_sections ... ok
+test prompts::tests::prompt_texts_carry_no_digits_that_could_be_mistaken_for_data ... ok
+test scrub::tests::a_rejected_candidate_does_not_hide_the_real_value ... ok
+test scrub::tests::any_amount_of_whitespace_between_label_and_value ... ok
+test diag::tests::rotates_into_a_single_old_file ... ok
+test key::tests::missing_parent_directories_are_created_private ... ok
+test scrub::tests::assignments_keep_the_name_and_hide_the_value ... ok
+test scrub::tests::chinese_label_plus_space_needs_a_mixed_value ... ok
+test scrub::tests::bare_key_and_plain_words_are_not_credentials ... ok
+test scrub::tests::chinese_prose_and_counts_stay_untouched ... ok
+test key::tests::file_store_roundtrips_with_0600_and_clear_is_idempotent ... ok
+test scrub::tests::chinese_labelled_credentials_keep_the_label_and_hide_the_value ... ok
+test scrub::tests::env_style_assignments_keep_the_name_and_hide_the_value ... ok
+test scrub::tests::identifier_prefixes_do_not_make_ordinary_words_secrets ... ok
+test scrub::tests::glued_vendor_keys_are_all_redacted_in_one_pass ... ok
+test scrub::tests::is_takes_the_strict_rule ... ok
+test scrub::tests::numeric_passwords_after_a_space_are_redacted ... ok
+test scrub::tests::more_vendor_shapes_webhooks_pgp_and_basic_auth ... ok
+test scrub::tests::ordinary_chat_is_left_alone ... ok
+test scrub::tests::realistic_double_scrub_is_a_no_op ... ok
+test scrub::tests::request_is_scrubbed_in_place_without_reordering_options ... ok
+test scrub::tests::long_values_are_redacted_to_the_end_of_the_run ... ok
+test scrub::tests::scrubbing_twice_finds_nothing_new ... ok
+test scrub::tests::quoted_fullwidth_json_traditional_and_suffixed_forms ... ok
+test scrub::tests::urls_private_keys_and_jwts ... ok
+test scrub::tests::values_keep_non_cjk_unicode ... ok
+test scrub::tests::vendor_lookalikes_in_chat_stay_untouched ... ok
+test scrub::tests::vendor_keys_and_tokens ... ok
+test scrub::tests::verification_code_needs_a_code_not_a_year_or_a_count ... ok
+test shuffle::tests::same_seed_same_order_and_it_is_a_permutation ... ok
+test shuffle::tests::seed_separates_segments ... ok
+test scrub::tests::verification_codes_followed_by_punctuation ... ok
+test shuffle::tests::tiny_inputs_are_fine ... ok
+test shuffle::tests::every_item_leads_about_equally_often ... ok
+test scrub::tests::fuzzed_inputs_scrub_idempotently ... ok
+
+test result: ok. 86 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.93s
+
+
+Exit: 0

@@ -120,6 +120,44 @@ def build_one(workspace,out,label,reference,digest):
     return binary,witness,target
 
 
+def affected_output_audit(text,listed,ignored):
+    """Pure libtest display parsing; canonical names still come from --list.
+
+    `- should panic` is a standard display annotation, never part of the name.
+    No substring matching, name aliasing, ANSI stripping or outcome guessing.
+    """
+    passed=re.findall(r'^test (\S+)(?: - should panic)? \.\.\. ok$',text,re.M)
+    failed=re.findall(r'^test (\S+)(?: - should panic)? \.\.\. FAILED$',text,re.M)
+    run_ignored=re.findall(r'^test (\S+)(?: - should panic)? \.\.\. ignored(?:, [^\n]*)?$',text,re.M)
+    summaries=re.findall(r'^test result: ok\. ([0-9]+) passed; 0 failed; ([0-9]+) ignored;',text,re.M)
+    wanted=set(listed)-set(ignored)
+    def duplicates(values):
+        seen=set();extra=set()
+        for value in values:
+            if value in seen:extra.add(value)
+            seen.add(value)
+        return sorted(extra)
+    return {'listedNames':list(listed),'ignoredNames':list(ignored),'passedNames':passed,
+        'failedNames':failed,'runIgnoredNames':run_ignored,'summaries':[list(x) for x in summaries],
+        'expectedSummary':[[str(len(listed)-len(ignored)),str(len(ignored))]],
+        'missingNames':sorted(wanted-set(passed)),'extraNames':sorted(set(passed)-wanted),
+        'duplicatePassedNames':duplicates(passed),'duplicateListedNames':duplicates(listed),
+        'duplicateIgnoredNames':duplicates(ignored),'duplicateRunIgnoredNames':duplicates(run_ignored),
+        'missingIgnoredNames':sorted(set(ignored)-set(run_ignored)),
+        'extraIgnoredNames':sorted(set(run_ignored)-set(ignored))}
+
+
+def require_affected_output(audit):
+    # Keep the original zero-failure summary/count and exact name/set/unique
+    # gates, and also refuse contradictory actual FAILED/ignored terminals.
+    assert audit['summaries']==audit['expectedSummary'],'discovered current affected names/count differ'
+    names=audit['listedNames'];skips=audit['ignoredNames'];passed=audit['passedNames']
+    assert names and len(names)==len(set(names)) and len(skips)==len(set(skips)) and set(skips)<=set(names)
+    assert set(passed)==set(names)-set(skips) and len(passed)==len(set(passed))
+    assert not audit['failedNames'],'actual failed terminal cannot qualify'
+    assert set(audit['runIgnoredNames'])==set(skips) and len(audit['runIgnoredNames'])==len(set(audit['runIgnoredNames']))
+
+
 def execute(workspace,out,bound):
     controller=workspace/'controller';source=workspace/'source';reference=bound['sourceRef']
     source_checkpoint(workspace,out,bound,'before-build')
@@ -169,12 +207,19 @@ def execute(workspace,out,bound):
         command([*base,'--','--ignored','--list'],source/'crewd',ignored,env)
         names=re.findall(r'^(.+): test$',listing.read_text(),re.M)
         skips=re.findall(r'^(.+): test$',ignored.read_text(),re.M)
+        save(out/f'current-affected-{index}-discovery-audit.json',{'package':package,'target':target_args,
+            'selector':selector,'listedNames':names,'ignoredNames':skips,'expectedOriginalIgnoredNames':sorted(original_ignored)})
         assert names and len(names)==len(set(names)) and set(skips)==original_ignored
         run=out/f'current-affected-{index}.log';command([*base,'--','--nocapture'],source/'crewd',run,env)
-        actual=re.findall(r'^test result: ok\. ([0-9]+) passed; 0 failed; ([0-9]+) ignored;',run.read_text(),re.M)
-        assert actual==[(str(len(names)-len(skips)),str(len(skips)))], 'discovered current affected names/count differ'
-        passed=re.findall(r'^test (\S+) \.\.\. ok$',run.read_text(),re.M)
-        assert set(passed)==set(names)-set(skips) and len(passed)==len(set(passed))
+        audit=affected_output_audit(run.read_text(),names,skips)
+        audit.update(package=package,target=target_args,selector=selector,sourceRef=reference,
+            originalLog=run.name,originalLogSHA256=sha(run),originalCommandExitPassed=True,
+            expectedOriginalIgnoredNames=sorted(original_ignored))
+        # Persist the actual missing/extra/duplicate/summary evidence BEFORE
+        # qualification assertions, including on a contradictory failed result.
+        save(out/f'current-affected-{index}-output-audit.json',audit)
+        require_affected_output(audit)
+        passed=audit['passedNames']
         affected.append({'package':package,'target':target_args,'selector':selector,'discoveredNames':names,
                          'originalIgnoredNames':skips,'actualPassedNames':passed,'originalLog':run.name})
     save(out/'current-affected-result.json',affected)
