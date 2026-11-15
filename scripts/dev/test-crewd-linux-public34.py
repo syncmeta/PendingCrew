@@ -45,8 +45,8 @@ def main():
     root=pathlib.Path(__file__).resolve().parents[2]
     source_clean_recipe_controls(root)
     source=root/'deploy/linux/pendingcrew-host.py';tree=ast.parse(source.read_bytes())
-    selected=['PUBLIC34','PUBLIC34_H33_DDL','PUBLIC34_SECRETARY_DDL']
-    pure=['release_generation','qualify_public34_release','qualify_public34_schema','qualify_release_manifest']
+    selected=['PUBLIC34','PUBLIC34_CURRENT','PUBLIC34_H33_DDL','PUBLIC34_SECRETARY_DDL']
+    pure=['public34_descriptor','qualify_public34_source','release_generation','qualify_public34_release','qualify_public34_schema','qualify_release_manifest']
     values={}
     for node in tree.body:
         if isinstance(node,ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id in selected:

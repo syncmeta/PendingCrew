@@ -50,7 +50,7 @@ def verify_component_sources(here, package_source, core_source):
             raise ValueError('actual package component differs from its frozen source')
 
 
-def source_schema(here, source):
+def source_schema(here, source, cohort=None):
     """The frozen original Core commit issues its generation, never CLI input."""
     raw = subprocess.check_output(['git', '--no-replace-objects', '-C', str(here.parents[1]), 'show',
                                    source + ':crewd/crates/store/src/schema.rs'])
@@ -77,7 +77,8 @@ def source_schema(here, source):
             data = subprocess.check_output(['git','--no-replace-objects','-C',str(here.parents[1]),'show',source+':'+path])
             rows.append((path,sha(data)))
         evidence['rustInputDigest'] = sha(''.join(p+'\t'+h+'\n' for p,h in sorted(rows)).encode())
-        host.qualify_public34_release({'cohort':host.PUBLIC34['cohort'],'sourceCommit':source,'architecture':'x86_64','apiVersion':3,'schemaEvidence':evidence})
+        descriptor = host.qualify_public34_source(evidence['rustInputDigest'], len(rows), cohort)
+        host.qualify_public34_release({'cohort':descriptor['cohort'],'sourceCommit':source,'architecture':'x86_64','apiVersion':3,'schemaEvidence':evidence})
     return evidence
 
 
@@ -96,7 +97,9 @@ def package(args):
         raise ValueError('normal frozen-source build proof does not match this ELF')
     here = pathlib.Path(__file__).resolve().parent
     verify_component_sources(here, args.source, core_source)
-    schema = source_schema(here, core_source)
+    cohort = getattr(args, 'cohort', None)
+    schema = source_schema(here, core_source, cohort) if cohort is not None else source_schema(here, core_source)
+    if cohort is not None and schema['storeVersion'] != 34: raise ValueError('legacy package cannot acquire a public34 cohort')
     if schema['storeVersion'] == 34 and args.architecture != 'x86_64':
         raise ValueError('this reviewed public34 cohort qualifies Linux x86_64 only')
     if (schema['storeVersion'] in (33, 34) or 'schemaEvidence' in proof) and proof.get('schemaEvidence') != schema:
@@ -114,7 +117,7 @@ def package(args):
     release = {'format':{21:1,33:2,34:3}[schema['storeVersion']],'sourceCommit':args.source,'architecture':args.architecture,'storeVersion':schema['storeVersion'],'apiVersion':3,'files':{name:sha(data) for name,data in files.items()}}
     if core_source != args.source: release['coreSourceCommit'] = core_source
     if schema['storeVersion'] in (33, 34): release['schemaEvidence'] = schema
-    if schema['storeVersion'] == 34: release['cohort'] = 'public34-secretary-onboarding.1'
+    if schema['storeVersion'] == 34: release['cohort'] = cohort or 'public34-secretary-onboarding.1'
     files['release.json'] = canonical(release)
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive,mode='w:gz',format=tarfile.USTAR_FORMAT) as bundle:
@@ -155,6 +158,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ['core','proof','source','artifact-url','manifest-url','output']: p.add_argument('--'+name,required=True)
     p.add_argument('--installer-url', help='source-qualified HTTPS installer URL; also render short install.sh')
+    p.add_argument('--cohort', help='explicit closed public34 cohort; omission retains the historical original binding')
     p.add_argument('--core-source', help='original compiled Core commit; defaults to the package source')
     p.add_argument('--architecture',choices=['x86_64','aarch64'],required=True)
     package(p.parse_args())

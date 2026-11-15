@@ -124,19 +124,31 @@ def main():
   payload={'action':args.action,'sourceRef':ref,'packageInventoryDigest':inventory,'binarySHA256':value['binarySHA256'],'previousActivation':expected}
   if args.data_dir:payload['dataDir']=str(pathlib.Path(args.data_dir))
   if transaction.exists():
-   if json.loads(transaction.read_text())!=payload:raise ValueError('request UUID payload conflict; do not replay')
-   print(json.dumps(status(prefix,request),sort_keys=True));return # Readback only after an unknown result.
-  if pointer(prefix)!=expected:raise ValueError('activation CAS conflict; refresh status before deciding')
-  inactive(prefix)
+   original=json.loads(transaction.read_text())
+   base={k:v for k,v in original.items() if k not in {'cohort','formalAuthoritySHA256'}}
+   if base!=payload or original.get('cohort')!=value.get('cohort') or ('cohort' in original)!=('cohort' in value):raise ValueError('request UUID payload conflict; do not replay')
+   if 'cohort' in original and original.get('formalAuthoritySHA256')!=value.get('formalAuthoritySHA256'):raise ValueError('original immutable authority binding differs; status only')
+   print(json.dumps(status(prefix,request),sort_keys=True));return # No imports, repair, activation or replay after Unknown.
   import crewd_managed_launch as launch
   maximum=launch.supported_schema(package)
+  selected=launch.public34_profile(package) if maximum==34 else None
+  if maximum!=34 and 'cohort' in value:raise ValueError('historical candidate cannot acquire a public34 cohort')
+  if maximum==34:
+   authority_source=(pathlib.Path(__file__).resolve().parents[2]/'deploy/linux/pendingcrew-host.py').read_bytes()
+   authority_sha=hashlib.sha256(authority_source).hexdigest()
+   payload['formalAuthoritySHA256']=authority_sha
+   if 'cohort' in value:
+    if value.get('formalAuthoritySHA256')!=authority_sha:raise ValueError('candidate formal authority differs')
+    payload['cohort']=selected['cohort']
+  if pointer(prefix)!=expected:raise ValueError('activation CAS conflict; refresh status before deciding')
+  inactive(prefix)
   current=pointer(prefix)
   prior_maximum=launch.supported_schema((prefix/current/'release').resolve()) if current else None
   if maximum==34 or prior_maximum==34:
    if maximum not in (21,33,34):raise ValueError('unknown writer generation is outside the public34 cohort')
    if maximum==34:
     witness=json.loads((package/'normal-build-witness.json').read_text())
-    if witness.get('rustInputDigest')!='cc063b67727aeb2869b60e95fbe9f615aeccbcccd24c4c79766057acc8946e55' or not launch.certified_public34_source(package):raise ValueError('unreviewed public34 writer source')
+    if not launch.certified_public34_source(package):raise ValueError('unreviewed public34 writer source')
    if maximum==33:
     witness=json.loads((package/'normal-build-witness.json').read_text())
     if witness.get('rustInputDigest')!='0f1f1f96ce3a6704435217459b67c9f037c90d3a02edb88b6bb3153a4344dabc':raise ValueError('unreviewed genuine33 writer source')
@@ -181,6 +193,15 @@ def main():
   else:
    fd=os.open(module,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
    with os.fdopen(fd,'wb') as f:f.write(module_source);f.flush();os.fsync(f.fileno())
+   syncdir(bindir)
+  authority=bindir/'pendingcrew-host.py'
+  authority_source=(pathlib.Path(__file__).resolve().parents[2]/'deploy/linux/pendingcrew-host.py').read_bytes()
+  if authority.exists() or authority.is_symlink():
+   info=authority.lstat()
+   if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)!=0o400 or authority.read_bytes()!=authority_source:raise ValueError('formal host authority differs; refuse overwrite')
+  else:
+   fd=os.open(authority,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400)
+   with os.fdopen(fd,'wb') as f:f.write(authority_source);f.flush();os.fsync(f.fileno())
    syncdir(bindir)
   launcher_source="""#!/usr/bin/env python3
 import pathlib,sys
