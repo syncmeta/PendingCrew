@@ -1322,6 +1322,23 @@ pub(crate) mod tests {
         }
         panic!("bounded original patrol did not complete its source round")
     }
+    // Stable real background facts force a genuine >25 pagination boundary.
+    // The original Scope/identity/equal-count assertions below remain exact.
+    fn paginated_patrol_background(s: &mut Store) {
+        for n in 0..26 {
+            ok(s, |tx| {
+                crate::work::create(
+                    tx,
+                    &Sender::Human,
+                    WorkCreateParams {
+                        crew_id: "crew-a".into(),
+                        title: format!("stable paginated patrol background {n}"),
+                        ..Default::default()
+                    },
+                )
+            });
+        }
+    }
     fn trigger_round(s: &mut Store) {
         for _ in 0..10 {
             ok(s, |tx| {
@@ -1540,6 +1557,7 @@ pub(crate) mod tests {
                 },
             )
         });
+        paginated_patrol_background(&mut s);
         let first = real_round(&mut s, None);
         let source = request(&mut s).case.unwrap();
         let (case, reg) = start_source(&mut s, source);
@@ -1784,6 +1802,7 @@ pub(crate) mod tests {
     fn completed_patrol_cannot_rebind_a_partly_scanned_old_personal_scope_at_completion() {
         let mut s = store();
         install(&mut s);
+        paginated_patrol_background(&mut s);
         let first = real_round(&mut s, None);
         let key = "patrol.secretary.completed.v1:crew-a";
         let before = crewd_store::meta_get(s.conn(), key).unwrap();
@@ -1837,6 +1856,7 @@ pub(crate) mod tests {
             "w-a1",
             "original33 Human question remains independent",
         );
+        paginated_patrol_background(&mut s);
         let first = real_round(&mut s, None);
         trigger_round(&mut s);
         let mut partial = None;

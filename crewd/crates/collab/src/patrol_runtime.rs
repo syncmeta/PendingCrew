@@ -1,4 +1,4 @@
-//! One crew/source page per tick. Observations have no wake or execution effects.
+//! One crew/bounded factual slice per tick. No wake or execution effects.
 use crate::{Result, Tx, channel_archive_discovery as archive};
 use crewd_proto::{PatrolRun, PatrolStatus, WorkPatrolParams, WorkPatrolScan};
 use crewd_store::{StoreError, meta_get, meta_set};
@@ -6,7 +6,78 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 const CURSOR: &str = "patrol.cursor.v1";
+const FACTS_PER_STEP: u16 = 25;
 const ARCHIVE_CHECKS_PER_STEP: u8 = 2;
+/// Ephemeral allowance for the entire selected crew/tick, never per phase.
+/// Source readers retain their existing one-row lookahead; only returned facts
+/// debit this allowance, including rows deferred by the archive-check ceiling.
+struct ScanBudget {
+    rows_left: u16,
+    archive_checks_left: u8,
+}
+impl ScanBudget {
+    fn new() -> Self {
+        Self {
+            rows_left: FACTS_PER_STEP,
+            archive_checks_left: ARCHIVE_CHECKS_PER_STEP,
+        }
+    }
+    fn consume_rows(&mut self, rows: usize) -> Result<()> {
+        if rows > usize::from(self.rows_left) {
+            return Err(
+                StoreError::Invalid("patrol page exceeded its fact allowance".into()).into(),
+            );
+        }
+        self.rows_left -= rows as u16;
+        Ok(())
+    }
+}
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TestFaultPoint {
+    BeforeEntriesRead,
+    BeforeRunSave,
+}
+#[cfg(test)]
+struct TestFaultObservation {
+    draft: PatrolRun,
+    saved_before: Option<String>,
+    completed_before: Option<String>,
+    responsibility_rows: i64,
+}
+#[cfg(test)]
+std::thread_local! {
+    static TEST_FAULT: std::cell::Cell<Option<TestFaultPoint>> = const { std::cell::Cell::new(None) };
+    static TEST_FAULT_OBSERVATION: std::cell::RefCell<Option<TestFaultObservation>> = const { std::cell::RefCell::new(None) };
+}
+/// One-shot, thread-local source-test seam. Production has no fault branch or
+/// additional SQL. This is an explicit test fault, not a SQLite write failure.
+#[cfg(test)]
+fn test_fault(tx: &Tx<'_>, crew: &str, draft: &PatrolRun, point: TestFaultPoint) -> Result<()> {
+    if !TEST_FAULT.with(|armed| {
+        if armed.get() == Some(point) {
+            armed.set(None);
+            true
+        } else {
+            false
+        }
+    }) {
+        return Ok(());
+    }
+    let prefix = format!("channel.responsibility.v1:{}:{crew}:", crew.len());
+    let observed = TestFaultObservation {
+        draft: draft.clone(),
+        saved_before: meta_get(tx.conn(), &key(crew))?,
+        completed_before: meta_get(tx.conn(), &completed_key(crew))?,
+        responsibility_rows: tx.conn().query_row(
+            "SELECT count(*) FROM meta WHERE substr(key,1,length(?1))=?1",
+            [prefix],
+            |r| r.get(0),
+        )?,
+    };
+    TEST_FAULT_OBSERVATION.with(|saved| *saved.borrow_mut() = Some(observed));
+    Err(StoreError::Invalid("controlled one-shot patrol test fault".into()).into())
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Saved {
@@ -306,14 +377,22 @@ fn finding(r: &mut PatrolRun, category: &str, id: String) {
 }
 pub fn tick(tx: &mut Tx<'_>) -> Result<()> {
     let cursor = meta_get(tx.conn(), CURSOR)?.unwrap_or_default();
-    let crew: Option<String> = tx
-        .conn()
-        .query_row(
+    let crew = {
+        let mut select = tx.conn().prepare(
             "SELECT id FROM crews WHERE archived_at IS NULL AND id>?1 ORDER BY id LIMIT 1",
-            [&cursor],
-            |r| r.get(0),
-        )
-        .optional()?;
+        )?;
+        let mut next = |after: &str| {
+            select
+                .query_row([after], |r| r.get::<_, String>(0))
+                .optional()
+        };
+        match next(&cursor)? {
+            // At most one wrap query, still exactly one selected crew. An
+            // empty database never spins and a broken crew cannot hold cursor.
+            None if !cursor.is_empty() => next("")?,
+            crew => crew,
+        }
+    };
     let Some(crew) = crew else {
         meta_set(tx.conn(), CURSOR, "")?;
         return Ok(());
@@ -374,10 +453,12 @@ fn step(tx: &mut Tx<'_>, crew: &str) -> Result<()> {
         });
     }
     let saved = saved.as_mut().expect("initialized");
-    scan_step(tx, crew, &mut saved.run, true)?;
+    scan_periodic_slice(tx, crew, &mut saved.run)?;
     if saved.run.completed_at_ms.is_some() {
         save_completed(tx, crew, &saved.run, &saved.secretary_scope)?;
     }
+    #[cfg(test)]
+    test_fault(tx, crew, &saved.run, TestFaultPoint::BeforeRunSave)?;
     meta_set(
         tx.conn(),
         &key(crew),
@@ -402,16 +483,52 @@ pub(super) fn new_run(now: i64, seq: i64) -> PatrolRun {
 }
 
 pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun, periodic: bool) -> Result<()> {
+    // Explicit/manual jobs keep the original one-page behavior and allowance.
+    scan_page(tx, crew, r, periodic, &mut ScanBudget::new())
+}
+
+fn scan_periodic_slice(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun) -> Result<()> {
+    let mut budget = ScanBudget::new();
+    for _ in 0..3 {
+        if budget.rows_left == 0 || r.completed_at_ms.is_some() {
+            break;
+        }
+        let phase = r.scan;
+        scan_page(tx, crew, r, true, &mut budget)?;
+        // No second page in the same phase. A natural phase boundary may use
+        // leftover facts, but a full allowance may not probe later sources.
+        if r.scan == phase {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn scan_page(
+    tx: &Tx<'_>,
+    crew: &str,
+    r: &mut PatrolRun,
+    periodic: bool,
+    budget: &mut ScanBudget,
+) -> Result<()> {
+    if budget.rows_left == 0 {
+        return Err(StoreError::Invalid("patrol fact allowance is exhausted".into()).into());
+    }
+    #[cfg(test)]
+    if r.scan == WorkPatrolScan::Entries {
+        test_fault(tx, crew, r, TestFaultPoint::BeforeEntriesRead)?;
+    }
     let page = crate::work_patrol::read(
         tx.conn(),
         WorkPatrolParams {
             crew_id: Some(crew.into()),
             scan: r.scan,
             after: r.after.clone(),
-            limit: Some(25),
+            limit: Some(budget.rows_left),
         },
         tx.now_ms(),
     )?;
+    budget.consume_rows(page.items.len() + page.entries.len() + page.channels.len())?;
     *r.scanned_counts
         .entry(format!("{:?}", r.scan).to_lowercase())
         .or_default() += (page.items.len() + page.entries.len()) as u64;
@@ -438,20 +555,19 @@ pub(super) fn scan_step(tx: &Tx<'_>, crew: &str, r: &mut PatrolRun, periodic: bo
         }
     }
     r.after = page.next_after;
-    let mut verified = 0;
     let mut checkpoint = None;
     let mut observed_channels = Vec::new();
     for i in page.channels {
         let now_ms = tx.now_ms();
         let review = match archive::old_enough(tx.conn(), &i, now_ms) {
-            Ok(true) if verified == ARCHIVE_CHECKS_PER_STEP => {
+            Ok(true) if budget.archive_checks_left == 0 => {
                 // Do not consume or count this row. The next round resumes
                 // immediately after the last row actually examined.
                 r.after = checkpoint;
                 break;
             }
             Ok(true) => {
-                verified += 1;
+                budget.archive_checks_left -= 1;
                 archive::verify(tx.conn(), &i, now_ms)
             }
             Ok(false) => Ok(archive::Review::Ineligible),
@@ -586,9 +702,9 @@ mod tests {
         let bad_key = format!("channel.archive.v1:{broken}");
         meta_set(s.conn(), &bad_key, "{broken retained archive history").unwrap();
 
-        assert_eq!(advance(&mut s).scan, WorkPatrolScan::Entries);
-        assert_eq!(advance(&mut s).scan, WorkPatrolScan::Channels);
         let first = advance(&mut s);
+        assert_eq!(first.scan, WorkPatrolScan::Channels);
+        assert_eq!(first.scanned_counts["entries"], 0);
         assert!(
             first
                 .after
@@ -723,6 +839,21 @@ mod tests {
     #[test]
     fn ten_messages_trigger_and_inflight_messages_are_not_consumed() {
         let mut s = store();
+        // A real page boundary, rather than empty intermediate phases, keeps
+        // this original in-flight-message control partial on its first slice.
+        for n in 0..26 {
+            ok(&mut s, |tx| {
+                work::create(
+                    tx,
+                    &Sender::Human,
+                    WorkCreateParams {
+                        crew_id: "crew-b".into(),
+                        title: format!("in-flight patrol fixture {n}"),
+                        ..Default::default()
+                    },
+                )
+            });
+        }
         for _ in 0..30 {
             ok(&mut s, tick);
         }
@@ -819,3 +950,6 @@ mod tests {
         assert!(error_saved(s.conn(), "crew-a").unwrap().is_none());
     }
 }
+
+#[cfg(test)]
+mod bounded_first_round_tests;
