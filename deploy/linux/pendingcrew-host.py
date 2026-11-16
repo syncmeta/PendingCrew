@@ -31,10 +31,19 @@ These are installation prerequisites, not a model-access or full protocol test.
 No tool installation, login, credential copy or task is performed by PendingCrew.'''
 class Refused(Exception): pass
 
-# Explicit source eligibility for one NEW cohort; it is not Linux execution proof.
+# Closed historical/current source eligibility; neither is Linux execution proof.
 PUBLIC34 = {
     'cohort': 'public34-secretary-onboarding.1',
     'rustInputDigest': 'cc063b67727aeb2869b60e95fbe9f615aeccbcccd24c4c79766057acc8946e55',
+    'apiSchemaSHA256': 'e619e038d82b1da9eb26f492fb43304725ff01bb717048b0a1d80dada5282d4e',
+    'methodCount': 236,
+    'schemaSourceSHA256': 'ab8f305908ce6eb559289f9d6273dce1789c16392e1a0e44d48576b632bec795',
+    'h33SourceSHA256': '17559e4ef6ad7be953d01c6690036f9f4028aac35b9e3a2ad808c98d0f427d94',
+    'secretarySourceSHA256': '89adb90fd8f1948350aa116add95dae3e430fbaec10769f9947cbc737341fd11',
+}
+PUBLIC34_CURRENT = {
+    'cohort': 'public34-jev-diagnostics-bounded-patrol.1',
+    'rustInputDigest': 'a4812fe0f425d98219c9e86728489b03e68af4826075a02f2d751b31ae795853',
     'apiSchemaSHA256': 'e619e038d82b1da9eb26f492fb43304725ff01bb717048b0a1d80dada5282d4e',
     'methodCount': 236,
     'schemaSourceSHA256': 'ab8f305908ce6eb559289f9d6273dce1789c16392e1a0e44d48576b632bec795',
@@ -366,6 +375,34 @@ def release_generation(release):
     return version
 
 
+def public34_descriptor(cohort):
+    """Sole closed cohort authority; no count/default grants a new identity."""
+    for descriptor in (PUBLIC34, PUBLIC34_CURRENT):
+        if cohort == descriptor['cohort']:
+            return descriptor
+    raise Refused('unknown public34 cohort')
+
+
+def qualify_public34_source(digest, count, cohort=None):
+    # Historical fieldless packages keep only their original 680-file binding.
+    descriptor = public34_descriptor(PUBLIC34['cohort'] if cohort is None else cohort)
+    expected_count = 680 if descriptor['cohort'] == PUBLIC34['cohort'] else 681
+    if type(count) is not int or count != expected_count or digest != descriptor['rustInputDigest']:
+        raise Refused('public34 requires its exact named complete production source')
+    return descriptor
+
+
+def qualify_original_cohort(original, release):
+    version = release_generation(release)
+    if version == 34:
+        expected = original.get('cohort', PUBLIC34['cohort'])
+        public34_descriptor(expected)
+        if release['cohort'] != expected:
+            raise Refused('original immutable installation cohort differs from retained release')
+    elif 'cohort' in original:
+        raise Refused('historical installation cannot acquire a public34 cohort')
+
+
 def qualify_public34_schema(value):
     digest = sha(json.dumps(value, sort_keys=True, separators=(',', ':')).encode())
     if (len(value.get('methods', {})) != PUBLIC34['methodCount']
@@ -381,8 +418,8 @@ def qualify_release_manifest(manifest):
         if 'cohort' in manifest or 'rustInputDigest' in artifact:
             raise Refused('legacy manifest cannot acquire public34 source/cohort labels')
     elif manifest.get('format') == 2:
-        if (manifest.get('cohort') != PUBLIC34['cohort']
-                or artifact.get('rustInputDigest') != PUBLIC34['rustInputDigest']):
+        descriptor = public34_descriptor(manifest.get('cohort'))
+        if artifact.get('rustInputDigest') != descriptor['rustInputDigest']:
             raise Refused('unqualified public34 manifest cohort/source')
     else:
         raise Refused('unsupported immutable release manifest')
@@ -391,10 +428,11 @@ def qualify_release_manifest(manifest):
 def qualify_public34_release(release):
     source = release.get('coreSourceCommit', release.get('sourceCommit'))
     evidence = release.get('schemaEvidence')
-    expected = {key: PUBLIC34[key] for key in ['schemaSourceSHA256', 'h33SourceSHA256',
+    descriptor = public34_descriptor(release.get('cohort'))
+    expected = {key: descriptor[key] for key in ['schemaSourceSHA256', 'h33SourceSHA256',
                 'secretarySourceSHA256', 'apiSchemaSHA256', 'rustInputDigest']}
     expected.update(sourceCommit=source, storeVersion=34)
-    if (release.get('cohort') != PUBLIC34['cohort'] or release.get('architecture') != 'x86_64'
+    if (release.get('cohort') != descriptor['cohort'] or release.get('architecture') != 'x86_64'
             or type(release.get('apiVersion')) is not int
             or release.get('apiVersion') != 3 or not isinstance(evidence, dict)
             or type(evidence.get('storeVersion')) is not int
@@ -838,7 +876,7 @@ def install(args):
             (activation / 'release').symlink_to('../../releases/' + release['sourceCommit'])
             (activation / 'bin').symlink_to('release/bin')
             # Transaction file is public provenance only; all secret operations live in STATE.
-            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': release['storeVersion']}).encode(), 0o444)
+            replace_root_file(activation / 'transaction.json', json.dumps({'requestId': installation, 'previous': prior, 'sourceCommit': release['sourceCommit'], 'storeVersion': release['storeVersion'], **({'cohort':release['cohort']} if release['format']==3 else {})}).encode(), 0o444)
             syncdir(activation); syncdir(activation.parent)
             pending = PREFIX / ('.current-' + installation); pending.symlink_to('activations/' + installation); os.replace(pending, PREFIX / 'current'); syncdir(PREFIX)
             if pointer(PREFIX) != 'activations/' + installation: raise Refused('activation result unknown; inspect original request only')
@@ -846,7 +884,7 @@ def install(args):
             replace_root_file(pathlib.Path('/etc/systemd/system/pendingcrew.socket'), socket_unit.encode())
             replace_root_file(pathlib.Path('/etc/systemd/system/pendingcrew.service'), service_unit.encode())
             # Only this same service user/data binding may be updated by later installs.
-            replace_root_file(STATE / 'installation.json', json.dumps({'format': 1, 'requestId': installation, 'uid': account.pw_uid, 'gid': account.pw_gid, 'dataDir': str(data), 'sourceCommit': release['sourceCommit']}).encode(), 0o600)
+            replace_root_file(STATE / 'installation.json', json.dumps({'format': 1, 'requestId': installation, 'uid': account.pw_uid, 'gid': account.pw_gid, 'dataDir': str(data), 'sourceCommit': release['sourceCommit'], **({'cohort':release['cohort']} if release['format']==3 else {})}).encode(), 0o600)
         finish_installation(read_record(operation))
 
 
@@ -907,9 +945,16 @@ def resume_installation(args):
     data = pathlib.Path(original['dataDir'])
     release = None
     if 'cohort' in original:
-        if original['cohort'] != PUBLIC34['cohort']: raise Refused('original installation cohort changed')
+        public34_descriptor(original['cohort'])
+        activation = PREFIX/'activations'/request; root_code_directory(activation)
+        transaction = json.loads((activation/'transaction.json').read_bytes())
+        # Original fieldless historical records keep their validated old binding.
+        if original['cohort'] == PUBLIC34_CURRENT['cohort'] or 'cohort' in transaction:
+            if transaction.get('cohort') != original['cohort'] or transaction.get('sourceCommit') != original['sourceCommit'] or transaction.get('requestId') != request:
+                raise Refused('original immutable activation/cohort changed')
         directory = PREFIX/'releases'/original['sourceCommit']; root_code_directory(directory)
         release = json.loads((directory/'release.json').read_bytes())
+        qualify_original_cohort(original, release)
         if release_generation(release)!=34 or release['sourceCommit']!=original['sourceCommit']:
             raise Refused('original public34 retained release changed')
         for name,digest in release['files'].items():
@@ -940,7 +985,7 @@ def resume_installation(args):
             leases.callback(os.close,data_lease(data,original['uid'],original['gid']))
             if release is not None: require_install_generation(data,release)
             for path,content in expected: replace_root_file(path,content)
-            replace_root_file(binding,json.dumps({'format':1,'requestId':request,'uid':original['uid'],'gid':original['gid'],'dataDir':str(data),'sourceCommit':original['sourceCommit']}).encode(),0o600)
+            replace_root_file(binding,json.dumps({'format':1,'requestId':request,'uid':original['uid'],'gid':original['gid'],'dataDir':str(data),'sourceCommit':original['sourceCommit'], **({'cohort':original['cohort']} if 'cohort' in original else {})}).encode(),0o600)
     finish_installation(original)
 
 
@@ -999,6 +1044,12 @@ def rollback(args):
         release_dir = PREFIX / 'releases' / original['sourceCommit']
         root_code_directory(release_dir)
         release = json.loads((release_dir / 'release.json').read_bytes())
+        qualify_original_cohort(original, release)
+        transaction = json.loads((target/'transaction.json').read_bytes())
+        if original.get('cohort') == PUBLIC34_CURRENT['cohort'] or 'cohort' in transaction:
+            qualify_original_cohort(transaction, release)
+            if transaction.get('sourceCommit') != original['sourceCommit'] or transaction.get('requestId') != selected:
+                raise Refused('rollback original immutable activation binding changed')
         for name, digest in release['files'].items():
             member = release_dir / name; info = member.lstat()
             if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022 or sha(member.read_bytes()) != digest:
@@ -1012,11 +1063,13 @@ def rollback(args):
             proof = json.loads((release_dir / 'build-proof.json').read_bytes())
             if proof.get('schemaEvidence') != release['schemaEvidence']:
                 raise Refused('rollback original schema proof mismatch')
-        new_record(STATE / ('rollback-' + operation + '.json'), {'format':1, 'kind':'rollback', 'requestId':operation, 'expectedCurrent':expected, 'target':'activations/' + selected, 'databaseVersion':version})
+        new_record(STATE / ('rollback-' + operation + '.json'), {'format':1, 'kind':'rollback', 'requestId':operation, 'expectedCurrent':expected, 'target':'activations/' + selected, 'databaseVersion':version, **({'cohort':original['cohort']} if 'cohort' in original else {})})
         pending = PREFIX / ('.current-' + operation)
         pending.symlink_to('activations/' + selected)
         os.replace(pending, PREFIX / 'current'); syncdir(PREFIX)
         binding.update(requestId=selected, sourceCommit=original['sourceCommit'])
+        if 'cohort' in original: binding['cohort'] = original['cohort']
+        else: binding.pop('cohort', None)
         replace_root_file(STATE / 'installation.json', json.dumps(binding).encode(), 0o600)
     print(json.dumps({'requestId':operation, 'current':pointer(PREFIX), 'serviceStarted':False}))
 

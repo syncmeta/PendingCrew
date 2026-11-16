@@ -1,0 +1,313 @@
+{
+  "authorSourceOnly": true,
+  "actualNewLinuxBuildOrRuntime": false,
+  "oldResultsInherited": false,
+  "baseRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+  "wholeCrewdTree": "b68ff54fa2b51d6f5f2cf20515cc1756b8837488",
+  "cohort": "public34-jev-diagnostics-bounded-patrol.1",
+  "rustInputCount": 681,
+  "rustInputDigest": "a4812fe0f425d98219c9e86728489b03e68af4826075a02f2d751b31ae795853",
+  "newNamespacesOnly": true,
+  "originalElevenFlowsByteExactExceptExplicitProfileAdapters": true,
+  "currentAdapters": {
+    "qualification.py": "New exact681/a481/cohort; same full Git/witness/default12/13/ELF gates.",
+    "installation.py": "Exact cohort plus formal authority SHA in candidate, transaction and installed bytes. Original33 protections/leases/Unknown and every original assertion retained.",
+    "run.py": "Original11 in original order, then separate Linux no-executor1/61 all-unowned scopes.",
+    "patrol_n6_contract.py": "Separate exact61 all-unowned adapter; source-admitted old small patrol_contract stays byteexact. Large counts25/50/61;50sample/finaltruncated; same originalUUID.",
+    "natural_patrol.py": "New public source-only once-intent Linux natural-clock runner; no Native/Jev/credential/namespace policy expansion."
+  },
+  "selectedSourceModules": [
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/cold.py",
+      "sha256": "1bf62029f545ab2854afb033fb8046f72beab20b86e91e665aa5a675e7c13da6",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/cold.py",
+        "sha256": "1bf62029f545ab2854afb033fb8046f72beab20b86e91e665aa5a675e7c13da6"
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/common.py",
+      "sha256": "6a2b90c9740bb9f38fb028ff318c1718f007656574fa637262657a602726f47c",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/common.py",
+        "sha256": "6a2b90c9740bb9f38fb028ff318c1718f007656574fa637262657a602726f47c"
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/installation.py",
+      "sha256": "63565540e6529c36f594961012f3032d397eb812c1bbad7c00b69f04eab57784",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/installation.py",
+        "sha256": "b4a7d0408a556cb16c2701e46681fb4eb39a7e2cd6504190cb5a7d5e12596a38"
+      },
+      "byteExactOrigin": false
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/lifecycle.py",
+      "sha256": "317221e40ee19b7ec1b322ede7c93749e0c98b385c3d13039fb89b20f2d23bfe",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/lifecycle.py",
+        "sha256": "317221e40ee19b7ec1b322ede7c93749e0c98b385c3d13039fb89b20f2d23bfe"
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/native.py",
+      "sha256": "498fc23adb504972835575bfc69e14ce2ce832f9a7eae2bdbb90cfc6d30ff7b7",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/native.py",
+        "sha256": "498fc23adb504972835575bfc69e14ce2ce832f9a7eae2bdbb90cfc6d30ff7b7"
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/natural_patrol.py",
+      "sha256": "1e7d42329fe4afce99ed0502140ad5d8e909d3abec2d4ed7b3e4b10cd9c19a0f",
+      "origin": {
+        "newModule": true,
+        "productCallers": "work.create/work.get/work.list/work.patrolStatus/command.submit/command.lookup/crew.list/channel.list and original lifecycle"
+      },
+      "byteExactOrigin": false
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/network_probe.py",
+      "sha256": "d62b14b4b75c5b7c728b930c5362df570820d69f6db4391885a7f6a47ba17b90",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/network_probe.py",
+        "sha256": "d62b14b4b75c5b7c728b930c5362df570820d69f6db4391885a7f6a47ba17b90"
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/offline.py",
+      "sha256": "9e6aa0e8b376997bd56202fab8a68dea8b91f524c647a49c8fc65e58bde0c164",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/offline.py",
+        "sha256": "9e6aa0e8b376997bd56202fab8a68dea8b91f524c647a49c8fc65e58bde0c164"
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/patrol_contract.py",
+      "sha256": "769b75221bdefdd9cb531d801b8f2be661d6b33903cd473dc36b3d94b693710f",
+      "origin": {
+        "path": "/Users/hey/Untitled/Pendingname/PendingCrew/docs/private/recovery-2026-11-13/evidence/patrol-bounded-native-qa-v12/patrol_contract.py",
+        "sha256": "769b75221bdefdd9cb531d801b8f2be661d6b33903cd473dc36b3d94b693710f",
+        "historicalMacRuntimeNotInherited": true
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/patrol_n6_contract.py",
+      "sha256": "fdcad058fe5b2c09a5a8548fe2759bcd6fa88a6b56d222d2963094219fed20d9",
+      "origin": {
+        "path": "/Users/hey/Untitled/Pendingname/PendingCrew/docs/private/recovery-2026-11-13/evidence/patrol-bounded-native-qa-v12/patrol_n6_contract.py",
+        "sha256": "f0d574eef5b4c517ab7bb19bfa0734df049f915a8a61d15e750d9b01a8971cc2",
+        "historicalMacRuntimeNotInherited": true
+      },
+      "byteExactOrigin": false
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/qualification.py",
+      "sha256": "161e284ece2561e7644d152d1a0378188d68f305f655929825950e80ef89d605",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/qualification.py",
+        "sha256": "07f7bb2e1eea89e92053a0aca6c51d86d1a94e559426bb91a655cff6c8770d39"
+      },
+      "byteExactOrigin": false
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/run.py",
+      "sha256": "69cd8c038bd8bd6ed0838e5ee2d69820a1110c3c73eaa9ace01ad037cb151dde",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/run.py",
+        "sha256": "82d05f631931a7c5ba5fec3fbd453517fd55685f0f3d9bb18597cc4f0da40439"
+      },
+      "byteExactOrigin": false
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/runtime.py",
+      "sha256": "ce919d44a7cff6d0ff24da0b0ede5298a39c6d079b53da86ad83a009f194f352",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/runtime.py",
+        "sha256": "ce919d44a7cff6d0ff24da0b0ede5298a39c6d079b53da86ad83a009f194f352"
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/scenarios.py",
+      "sha256": "c3e3518a61403e1c6724e6bb6b0f6d137a9fe2ce2ba1605a05fc17247ee5295d",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/scenarios.py",
+        "sha256": "c3e3518a61403e1c6724e6bb6b0f6d137a9fe2ce2ba1605a05fc17247ee5295d"
+      },
+      "byteExactOrigin": true
+    },
+    {
+      "destination": "scripts/dev/fixtures/linux_public34_current/transport.py",
+      "sha256": "f1ed22669d7fb64c6518514f3b4fa9bbbdb17b1d1468821c5d3aa597fd4797cf",
+      "origin": {
+        "sourceRef": "67292b9d9e956ba17b68d70c6f2c1628ef997f0b",
+        "path": "scripts/dev/fixtures/linux_public34/transport.py",
+        "sha256": "f1ed22669d7fb64c6518514f3b4fa9bbbdb17b1d1468821c5d3aa597fd4797cf"
+      },
+      "byteExactOrigin": true
+    }
+  ],
+  "historicalSourceLineageOnly": {
+    "authorSourceOnly": true,
+    "originalRuntimeResultsInherited": false,
+    "selectedSourceModules": [
+      {
+        "destination": "scripts/dev/fixtures/linux_public34/common.py",
+        "origin": "docs/private/recovery-2026-11-13/evidence/onboarding-ordinary-qa-v2/common.py",
+        "originSHA256": "6a2b90c9740bb9f38fb028ff318c1718f007656574fa637262657a602726f47c"
+      },
+      {
+        "destination": "scripts/dev/fixtures/linux_public34/lifecycle.py",
+        "origin": "docs/private/recovery-2026-11-13/evidence/onboarding-ordinary-qa-v2/lifecycle.py",
+        "originSHA256": "317221e40ee19b7ec1b322ede7c93749e0c98b385c3d13039fb89b20f2d23bfe"
+      },
+      {
+        "destination": "scripts/dev/fixtures/linux_public34/transport.py",
+        "origin": "docs/private/recovery-2026-11-13/evidence/onboarding-ordinary-qa-v2/transport.py",
+        "originSHA256": "f1ed22669d7fb64c6518514f3b4fa9bbbdb17b1d1468821c5d3aa597fd4797cf"
+      },
+      {
+        "destination": "scripts/dev/fixtures/linux_public34/cold.py",
+        "origin": "docs/private/recovery-2026-11-13/evidence/onboarding-ordinary-qa-v5/cold.py",
+        "originSHA256": "9e9e3715e131b252a7ce5d52800db63f9839e31c0e1745f47dfaed5e719fd8c3"
+      },
+      {
+        "destination": "scripts/dev/fixtures/linux_public34/runtime.py",
+        "origin": "docs/private/recovery-2026-11-13/evidence/onboarding-ordinary-qa-v2/runtime.py",
+        "originSHA256": "f447724a0a6c11675b0d786be076a31e855dee4b0c4ca28f7429191ad5e13a34"
+      },
+      {
+        "destination": "scripts/dev/fixtures/linux_public34/scenarios.py",
+        "origin": "docs/private/recovery-2026-11-13/evidence/onboarding-ordinary-qa-v5/scenarios.py",
+        "originSHA256": "774b262b03bf68aa28d07dda789346c7377d16b126ab0470373f9bddba5f0d4f"
+      }
+    ],
+    "adaptations": {
+      "common.py": "byte-exact original selected source",
+      "lifecycle.py": "byte-exact original intent/hibernate/archive source",
+      "transport.py": "byte-exact original journal-before-send source",
+      "cold.py": "Adopt exact source-admitted v5 cold.py (FD reader unchanged from v4); only retain Linux qualified SOURCE asset root. Core database identity32lowerhex; all28 original canonical request/object UUID assertions retained. Owned() byte-exact v5.",
+      "runtime.py": "Linux proc/exec + inherited seccomp instead of Darwin; full stopped format checks after wait",
+      "scenarios.py": "Admitted v5 nine-scene contracts retained, with strict legacy33 initial []; Linux extensions retain full original33 catalog/all-table rows/receipt proof. user=true requires exactly one protective33 backup and full124-table facts+DDL equality; genuine empty33 requires no protective backup per real has_data(crews+messages), preserving original cold facts and current empty/skipped identity."
+    },
+    "ordinaryQAv2ManifestSHA256": "dc37f915e678f9c6384a2a5951d86410053fa4c429e8b40446bd0435d29309cc",
+    "ordinaryQAv4ManifestSHA256": "ec043d208ac42ffe4650cf9b7127763e945606ab9ce15f8eb62ec800402404b3",
+    "readerIndependentSourceReview": {
+      "report": "docs/private/recovery-2026-11-13/evidence/onboarding-ordinary-v4-independent-review/REPORT.md",
+      "reportSHA256": "fa7307b53c9f95903f8a1ce885709fd4263a97f029954a1f8f76ae43185955fe",
+      "manifestSHA256": "a1362f2f3ee1a364e273bafd511726f4faef01f5acc4b8a966f7f24d199855a4",
+      "conclusion": "SOURCE ADMIT / AdmitRootFreshOrdinaryRun3 for original v4; not Linux whole-packet admission or Linux execution",
+      "LinuxReaderOrProductExecutionInherited": false,
+      "RootIndependentDataOnlyControls": 30
+    },
+    "linuxPredecessor": {
+      "manifestSHA256": "df7bcbb2a7d22715c2db74f87a903a6745311c4e7bb533ea02d918794ad60062",
+      "status": "Root early SourceNoGo: dbId canonical-UUID assumption and basename-only export path; subsequent shared legacy fresh1management assumption also disproved. Original package immutable; no Linux execution occurred. Additional Linux-only NoGo: unconditional pre34 protective backup expectation for genuine no-data33; v2 branches strictly by real user/empty producer without fake seed or backup."
+    },
+    "ordinaryQAv5ManifestSHA256": "0b3f621ac8de054b9318ab4773687f1853677e5f20c246c03b2dd3af60065670",
+    "wholeScenarioIndependentSourceReview": {
+      "report": "docs/private/recovery-2026-11-13/evidence/onboarding-ordinary-v5-independent-review/REPORT.md",
+      "reportSHA256": "a93d5e5f753e2eb6a327933c1bbfd8d74eec3ecc4070628903118620c10e1057",
+      "manifestSHA256": "cf39769c0d74e01b033d3b7b6896052f0664a1e1085e111315519ef00ebe81b8",
+      "batchReportSHA256": "362e50ca3b3d5ad18736e58efd459fc1905c35cd847a9ef839977efa308c372e",
+      "batchManifestSHA256": "1daef9cc8884eca000ca533131abe0581761c6662e3cd0ba20364969a7b4a022",
+      "conclusion": "Source Admit original ordinaryQA v5; Linux whole-package review and actual execution remain pending",
+      "MacRuntimeResultsInheritedAsLinux": false
+    },
+    "formalRollbackLeaseRepair": {
+      "predecessor": "linux-public34-source-packet",
+      "finding": "duplicate data_lease acquisition of the same binding while the original LOCK_EX|NB FD is held; second acquisition self-conflicts",
+      "repair": "remove only the duplicate added acquisition; keep original single data lease in the same ExitStack across generation qualification, pointer switch and binding persist",
+      "sourceOnly": true,
+      "installerOrLocksExecuted": false
+    },
+    "currentIntegratedSource": {
+      "baseRef": "8d8c6275b4a75dbb9352a951b504e16f5b4e9290",
+      "rustInputDigest": "cc063b67727aeb2869b60e95fbe9f615aeccbcccd24c4c79766057acc8946e55",
+      "rustFileCount": 680,
+      "preparedInputWitness": "docs/private/recovery-2026-11-13/evidence/onboarding-delivery-normal-core/input-witness.json",
+      "preparedInputWitnessSHA256": "c947241de48720dd836b99fd3fb733de51715334039ac666b3662776768cfc2e",
+      "preparedWitnessIsNotNormalBuildProof": true,
+      "transferRecordSHA256": "7eb5905ae671933b6a09c6e228f680ccdbe2c9c3aee8f49388d499105eb78386",
+      "lintIndependentReviewManifestSHA256": "f95419f06e8167b795fdbe45e9dacc7cdbe11ac93c54f6fddd4d884f543f8554",
+      "oldPSourceAndMacRuntimeNotRelabeled": true,
+      "actualLinuxBuildOrRuntime": false,
+      "normativeSourceHashes": {
+        "apiSchemaSHA256": "e619e038d82b1da9eb26f492fb43304725ff01bb717048b0a1d80dada5282d4e",
+        "schemaSourceSHA256": "ab8f305908ce6eb559289f9d6273dce1789c16392e1a0e44d48576b632bec795",
+        "h33SourceSHA256": "17559e4ef6ad7be953d01c6690036f9f4028aac35b9e3a2ad808c98d0f427d94",
+        "secretarySourceSHA256": "89adb90fd8f1948350aa116add95dae3e430fbaec10769f9947cbc737341fd11"
+      },
+      "rootFullCheckResult": "docs/private/recovery-2026-11-13/evidence/onboarding-integrated-full-checks-run5/result.json",
+      "rootFullCheckResultSHA256": "d1b1f47231e8ce4e10e09fdd2b0e48894f138e02568d18c3ac296059c681bf39",
+      "rootFullCheckIsNotLinuxOrOrdinaryBuildProof": true
+    },
+    "genuine33ProtectiveBackupRepair": {
+      "source": "crewd/crates/store/src/schema.rs::migrate_guarded/has_data",
+      "hasDataColumns": [
+        "crews",
+        "messages"
+      ],
+      "emptyExpectedProtectedBackupCount": 0,
+      "userExpectedProtectedBackupCount": 1,
+      "userFullOriginalCatalogAndAll124TablesRequired": true,
+      "originalColdSnapshotStillPreserved": true,
+      "ordinaryQAV5BusinessScenesChanged": false,
+      "productOrSQLOrBackupExecutedByAuthor": false
+    },
+    "installerControlSelection": {
+      "current": "source/scripts/dev/test-crewd-host-installer.py InstallerControls",
+      "historical": "legacy33/scripts/dev/test-crewd-host-installer.py ReviewedBuildBindingControls",
+      "historicalSourceRef": "1edf6d47f64553773650389b40382a6181a1addb",
+      "historicalBuildContract": "public33/235 unchanged; exactlegacy source/assembler/builder/API fixture only",
+      "currentFutureSourceFixtureVersion": 35,
+      "currentFutureGuardStillRequiresValueError": true,
+      "currentSourceOverrideEnvironmentRemoved": true,
+      "testMethodCountsFromAST": {
+        "InstallerControls": 33,
+        "ReviewedBuildBindingControls": 6
+      },
+      "selectedClassesExecutedByAuthor": false
+    }
+  },
+  "historicalActualLinuxRef": "8efcde151a8a43f8de4893e5ea6f2c0460eece06",
+  "historicalActualLinuxDigest": "cc063b67727aeb2869b60e95fbe9f615aeccbcccd24c4c79766057acc8946e55",
+  "historicalEpochCorrection": "linux-public34-v4-epoch-supplement-independent-review/manifest.json 201b2777b17494cdb8e0fc40fbd704b4662bea47b8415a754c68974011d199ab",
+  "runtimeBoundaries": {
+    "heartbeatSeconds": 30,
+    "totalSeconds": 660,
+    "noProgressSeconds": 240,
+    "manualTick": false,
+    "replacementUUID": false,
+    "MacFixtureNotLinux": true,
+    "regularFileLogs": "actual wait0 and producer close; pipe EOF observation not applicable",
+    "pipeLogs": "no synthetic EOF assertion",
+    "formal35": "not supported; original unsupported35/catalog/format gates remain"
+  },
+  "pureExactComparisonExcerpt": {
+    "origin": "evidence/patrol-bounded-native-qa-v12/command_contract.py::exact_value",
+    "originFileSHA256": "03dc77a0622379f72965b85853ccf0a274f28b4da6e436027c740da58bef153c",
+    "destination": "patrol_n6_contract.py::exact_value",
+    "unrelatedCommandFrameworkCopied": false
+  }
+}

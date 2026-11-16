@@ -1,5 +1,5 @@
 """Conservative managed-prefix SQLite launch gate. Never opens SQLite."""
-import fcntl, hashlib, json, os, pathlib, re, stat, sys
+import fcntl, importlib.util, hashlib, json, os, pathlib, re, stat, sys
 sys.dont_write_bytecode = True
 DB_COMMANDS = {'serve', 'backup', 'check', 'restore', 'import'}
 # This whole production input was independently accepted for Store's no-touch
@@ -130,7 +130,42 @@ def certified_core14_recovery(package, maximum):
         if path.resolve() != path or sha(path) != witness[name + 'SHA256']: raise ValueError('fresh-source recovery sidecar changed or aliased')
     return True
 
-def certified_public34_source(package):
+def formal_public34_contract(expected_sha=None):
+    # Installed code is verified against the immutable activation BEFORE exec;
+    # compile these exact FD bytes, never reopen a different loader path.
+    here = pathlib.Path(__file__).resolve().parent
+    path = here / 'pendingcrew-host.py' if here.name == 'bin' else here.parents[1] / 'deploy/linux/pendingcrew-host.py'
+    if path.resolve() != path: raise ValueError('formal authority alias refused')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_mode & 0o022:
+            raise ValueError('original owned formal public34 authority required')
+        if here.name == 'bin' and stat.S_IMODE(info.st_mode) != 0o400:
+            raise ValueError('installed formal authority must remain owner-read-only 0400')
+        raw = stream.read(1024 * 1024 + 1); after = os.fstat(stream.fileno())
+    observed = path.lstat()
+    if len(raw) > 1024 * 1024 or (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) or (observed.st_dev, observed.st_ino) != (info.st_dev, info.st_ino):
+        raise ValueError('formal authority changed or exceeds bound')
+    if here.name == 'bin' and (not isinstance(expected_sha, str) or not re.fullmatch('[0-9a-f]{64}', expected_sha) or hashlib.sha256(raw).hexdigest() != expected_sha):
+        raise ValueError('immutable formal authority SHA differs before load')
+    spec = importlib.util.spec_from_file_location('managed_formal_public34', path)
+    host = importlib.util.module_from_spec(spec)
+    exec(compile(raw, str(path), 'exec'), host.__dict__)
+    return host
+
+
+def public34_profile(package, authority_sha=None):
+    candidate = json.loads((package / 'candidate.json').read_text())
+    witness = json.loads((package / 'normal-build-witness.json').read_text())
+    host = formal_public34_contract(authority_sha)
+    try:
+        return host.qualify_public34_source(witness.get('rustInputDigest'), len(witness.get('files', [])), candidate.get('cohort'))
+    except host.Refused as error:
+        raise ValueError('public34 formal source qualification refused') from error
+
+
+def certified_public34_source(package, authority_sha=None):
     # Reuse the original complete fresh-sidecar checker without granting its
     # historical14/15 WAL delegation. Public34 still rejects pending WAL here.
     candidate=json.loads((package/'candidate.json').read_text())
@@ -145,7 +180,8 @@ def certified_public34_source(package):
     if any(p.is_absolute() or '..' in p.parts for p in [evidence_name,snapshot]):raise ValueError('public34 proof escape')
     evidence=package/evidence_name
     rows=witness['files']
-    if len(rows)!=680 or len({r['path'] for r in rows})!=680:return False
+    public34_profile(package, authority_sha)
+    if len({r['path'] for r in rows})!=len(rows):return False
     for row in rows:
         p=pathlib.PurePosixPath(row['path'])
         if p.is_absolute() or '..' in p.parts or not row['path'].startswith('crewd/'):raise ValueError('public34 source escape')
@@ -238,9 +274,18 @@ def main(prefix, argv):
             # Source eligibility only: this is NOT installed/runtime acceptance.
             candidate=json.loads((package/'candidate.json').read_text())
             witness=json.loads((package/'normal-build-witness.json').read_text())
-            if witness.get('rustInputDigest')!='cc063b67727aeb2869b60e95fbe9f615aeccbcccd24c4c79766057acc8946e55' or len(witness.get('files',[]))!=680:
-                raise ValueError('public34 requires the exact independently reviewed complete Core input')
-            if not certified_public34_source(package):raise ValueError('public34 full fresh-source proof failed')
+            transaction=json.loads((prefix/'current/transaction.json').read_text())
+            authority_sha=transaction.get('formalAuthoritySHA256')
+            if 'cohort' in transaction:
+                if candidate.get('cohort')!=transaction['cohort'] or candidate.get('formalAuthoritySHA256')!=authority_sha:
+                    raise ValueError('immutable candidate/activation authority binding differs')
+            elif 'cohort' in candidate:raise ValueError('fieldless activation cannot acquire a new cohort')
+            profile=public34_profile(package,authority_sha)
+            host=formal_public34_contract(authority_sha)
+            try:bound=host.public34_descriptor(transaction.get('cohort',host.PUBLIC34['cohort']))
+            except host.Refused as error:raise ValueError('immutable activation cohort unknown') from error
+            if profile['cohort']!=bound['cohort']:raise ValueError('immutable activation cohort/source binding differs')
+            if not certified_public34_source(package,authority_sha):raise ValueError('public34 full fresh-source proof failed')
         # Only the exact certified Core14 serve route enters Store's validated
         # private WAL-copy guard. Offline readers are not substitutes for it.
         recover = argv[2] == 'serve' and certified_core14_recovery(package, maximum)
