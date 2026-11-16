@@ -1,5 +1,5 @@
-"""Unchanged selected peer/birth/transport excerpts; no prior acceptance claim."""
-import ctypes,hashlib,json,os,pathlib,socket,stat,struct,subprocess,sys,time,uuid
+"""Selected peer/transport plus bounded procfs disappearance/error contracts."""
+import ctypes,errno,hashlib,json,os,pathlib,socket,stat,struct,subprocess,sys,time,traceback,uuid
 
 def sha(path): return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
@@ -7,6 +7,69 @@ def sha(path): return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest(
 def save(path, value):
     with open(path, 'x') as f:
         os.chmod(path, 0o600); json.dump(value, f, indent=2); f.write('\n'); f.flush(); os.fsync(f.fileno())
+
+
+def procfs_gone(error):
+    # errno, not exception subclass/message. Only callers at exact generated
+    # /proc/<positive-pid>[/task/<positive-tid>] sites may use this predicate.
+    return isinstance(error,OSError) and error.errno in (errno.ENOENT,errno.ESRCH)
+
+
+def procfs_pid(pid):
+    if type(pid) is not int or pid<=0:raise ValueError('positive integer procfs PID required')
+    return pid
+
+
+class ProcfsObservationError(RuntimeError):
+    def __init__(self,operation,path,pid,error,tid=None):
+        self.observation={'operation':operation,'path':str(path),'pid':pid,'tid':tid,
+            'errorType':type(error).__name__,'errno':getattr(error,'errno',None),
+            'filename':getattr(error,'filename',None),'missingWasNotAccepted':True}
+        self.errno=getattr(error,'errno',None)
+        super().__init__('procfs observation unknown: '+operation+' '+str(path)+': '+type(error).__name__)
+
+
+def pid_text(pid,field):
+    procfs_pid(pid)
+    if field not in ('stat','status'):raise ValueError('only named PID stat/status may disappear')
+    path=pathlib.Path('/proc',str(pid),field)
+    try:return path.read_text()
+    except (OSError,UnicodeError) as error:
+        if procfs_gone(error):return None
+        raise ProcfsObservationError('read-pid-'+field,path,pid,error) from error
+
+
+def observation_error(error):
+    # Capture while still inside the ORIGINAL except, including NativeRunner's
+    # unchanged override. Do not guess a callsite from a free-form error string.
+    original={};tb=error.__traceback__
+    while tb is not None:
+        value=tb.tb_frame.f_locals.get('root')
+        if isinstance(value,dict) and all(k in value for k in ('pid','pgid','startTime','bootId')):
+            original={k:value.get(k) for k in ('pid','ppid','pgid','uid','startTime','bootId')}
+        tb=tb.tb_next
+    return {'errorType':type(error).__name__,'errno':getattr(error,'errno',None),
+        'filename':getattr(error,'filename',None),'message':str(error),
+        'procfs':getattr(error,'observation',None),'originalRootBirth':original or None,
+        'traceback':''.join(traceback.format_exception(type(error),error,error.__traceback__)),
+        'callsiteInferredFromMessage':False}
+
+
+class WatchErrors(list):
+    """Keep original fatal strings; add first64 exact structured error stacks."""
+    def __init__(self):super().__init__();self.details=[];self.details_dropped=0
+    def append(self,value):
+        super().append(value)  # preserve fatal state even if diagnostics fail
+        if len(self.details)>=64:self.details_dropped+=1;return
+        error=sys.exc_info()[1]
+        try:
+            detail=observation_error(error) if error is not None else {
+                'errorType':'MissingActiveException','message':str(value),'traceback':''.join(traceback.format_stack()),
+                'callsiteInferredFromMessage':False,'diagnosticIncomplete':True}
+        except BaseException as capture:
+            detail={'errorType':type(error).__name__ if error is not None else None,
+                'diagnosticIncomplete':True,'diagnosticErrorType':type(capture).__name__}
+        self.details.append(detail)
 
 
 def birth(pid):
@@ -20,11 +83,27 @@ def birth(pid):
             raise RuntimeError('kernel birth unreadable')
         assert info.pid==pid
         return dict(pid=pid,ppid=info.ppid,uid=info.uid,pgid=info.pgid,startTime=info.sec*1000000+info.usec,bootId=subprocess.check_output(['/usr/sbin/sysctl','-n','kern.bootsessionuuid'],text=True).strip())
+    text=pid_text(pid,'stat')
+    if text is None:return None
     try:
-        text=pathlib.Path(f'/proc/{pid}/stat').read_text(); fields=text[text.rfind(')')+2:].split()
-        uid=int(pathlib.Path(f'/proc/{pid}/status').read_text().split('Uid:')[1].split()[0])
-        return dict(pid=pid,ppid=int(fields[1]),pgid=int(fields[2]),uid=uid,startTime=int(fields[19]),bootId=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip())
-    except FileNotFoundError:return None
+        fields=text[text.rfind(')')+2:].split()
+        if int(text.split('(',1)[0].strip())!=pid:raise ValueError('PID stat identity differs')
+        ppid,pgid,start=int(fields[1]),int(fields[2]),int(fields[19])
+    except (ValueError,IndexError) as error:
+        raise ProcfsObservationError('parse-pid-stat',pathlib.Path('/proc',str(pid),'stat'),pid,error) from error
+    status=pid_text(pid,'status')
+    if status is None:return None
+    try:uid=int(status.split('Uid:')[1].split()[0])
+    except (ValueError,IndexError) as error:
+        raise ProcfsObservationError('parse-pid-status',pathlib.Path('/proc',str(pid),'status'),pid,error) from error
+    # Global boot metadata is never PID disappearance, even ENOENT/ESRCH.
+    boot_path=pathlib.Path('/proc/sys/kernel/random/boot_id')
+    try:
+        boot=boot_path.read_text().strip()
+        if str(uuid.UUID(boot))!=boot:raise ValueError('kernel boot UUID invalid')
+    except (OSError,ValueError) as error:
+        raise ProcfsObservationError('read-global-boot-id',boot_path,pid,error) from error
+    return dict(pid=pid,ppid=ppid,pgid=pgid,uid=uid,startTime=start,bootId=boot)
 
 
 def same(a,b): return a is not None and b is not None and all(a[k]==b[k] for k in ['pid','pgid','startTime','bootId'])

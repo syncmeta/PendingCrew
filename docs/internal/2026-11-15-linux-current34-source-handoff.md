@@ -150,3 +150,87 @@ summary/原log SHA审计，再断言；不删nocapture、不改线程/预算/测
 它是本次真实合成测试stdout/stderr，不含用户数据/实际凭据，不重新运行原测试或业务UUID。
 Root提交时须确保此明确reviewed .log实际入Git；若被既有ignore挡住，只对该准确路径显式stage，
 不得改全局ignore或省fixture。原流水线失败与原log/ZIP/旧包均不改标；新SourceAdmit后才派发新固定来源。
+
+
+## run2 process-observation successor (source only, 2026-11-15)
+
+Frozen predecessor is Git 2d3f38fa8a16fdaa3da525cb77bc3e2efdfb20ca and source packet v3;
+run 43691634266/attempt1, job132743339359, artifact14154365057 is permanently FAIL.
+Its original ESRCH observation has no throwing stack, so no unique original callsite is proved.
+The installer second Core had its original hibernate confirmation/wait0/birth/socket-gone proof;
+the subsequent watcher assertion failed. Ten prior scopes completed; the remainder of installer
+and both natural-N6 scopes were not entered. No original request or scope is replayed by this repair.
+Original evidence freeze cc4e98575fff864e5f4806c323068e43652aadf1ebb5732355e4a4c69f8e3afb
+and independent failed-evidence review 0c7d03b868de0bb39f68e20fb71805f994a9a280556d438afb89ac1be2eebdfd
+remain unchanged. FailedEvidenceAdmitOnly is not RuntimeEvidenceAdmit.
+
+Only four paths change: current common.py, runtime.py, current pure-controls file, and this handoff.
+Other22 module paths and all681 product inputs (a4812fe0f425d98219c9e86728489b03e68af4826075a02f2d751b31ae795853)
+are exact fixed-base bytes. No production, workflow, installer authority, phase budget, retry,
+network policy, model/provider, UUID, manual stop/hibernate or raw-wait contract changes.
+
+Named Linux /proc/<positive-pid>/stat and status accept only errno ENOENT/ESRCH as current
+PID absence. Original missing birth is still Unknown: no new identity is invented and no raw
+wait is replaced. The global boot_id is outside that exception boundary and every failure,
+including ENOENT/ESRCH, is Unknown. Permission, other IO and malformed identity remain fatal.
+Task enumeration disappearance requires a missing current root; an enumerated task children
+read can skip only a TID whose exact directory subsequently disappears, or a missing root.
+A live task whose children interface is missing remains Unknown; a second root-birth fence
+prevents claiming a replacement PID's children as those of the original Core. exe readlink
+normalizes errno2/3 to the existing NativeRunner FileNotFoundError branch only after current
+named PID absence; all other failures remain Unknown. This is snapshot observation, not
+an atomic proof that arbitrary processes are gone. Original wait/owner/final identity checks remain.
+
+WatchErrors keeps every original fatal string, plus at most64 structured records containing
+operation, generated procfs path, PID/TID, original errno/type, original root birth when available,
+and the actual chained traceback. Additional details count as dropped; diagnostic failure cannot
+clear the original fatal error. The unchanged NativeRunner catch is covered via active-exception
+capture, not guessed attribution. Tool-obligation observation errors also keep their exact stack.
+A wrapper records requested observer completion; unexpected return, exception, live thread after
+join, or any original watch error prevents success/cold-copy and retains the mutable failure site.
+Existing Popen handle/sink ownership, missing-birth Unknown, IOUnknown, raw-wait and supervisor
+requirements remain intact. No signals, replacement Popen, cleanup retry, longer budget or hidden
+provider call is introduced. New fields are diagnostic metadata, not a process-death authority.
+
+All31 predecessor pure-control methods and their assertions are byteexact, as is the separate
+original27-control source. Sixteen additional source-defined fake-procfs controls exercise
+stat/status errno2/3, wrong-errno subclasses, global boot failure, malformed identity, task
+iteration/read/recheck races, live-interface errors, readlink/caller compatibility, ordinary and
+unchanged Native watcher stacks, no-child/fence semantics, bounded diagnostics, and failed
+observer/cold-archive closure. They use actual helper AST with fake procfs/Popen metadata;
+they do not simulate successful product runtime or waive any previous assertion.
+The author has performed AST/hash/source checks only; controls and candidate are UNEXECUTED.
+Root must obtain different-author SourceAdmit, execute all47 current + original27 controls,
+then commit/push one exact reviewed source and dispatch a new current-cohort workflow.
+Both real natural-N6 scopes still require that new Linux run. The old FAIL must not be relabelled.
+
+### Root v5 whole source repair after v4 NoGo
+
+The v4 packet and independent NoGo f993a6acf0f898d3b4d699580d30eb867c23314f9d0471a3e81b7e37f5a73d86
+remain immutable. Root is the sole v5 author within the same four-path scope.
+An explicit fake observer now follows live -> requested join -> completed in the shared
+tool-control fixture. All31 original test methods and final assertions remain byteexact;
+the shared fixture prefix is deliberately adapted and is no longer claimed byteexact.
+Actual runtime observer guards are retained rather than weakened to accept watch=None.
+
+Observed nonempty child PID candidates survive parent-exit/replacement fences and later
+TID-read failures. Their structured record retains the PID list, lineageUnknown and
+candidatesNotProvenGone; it grants neither original-child identity nor signal permission.
+Such an observation latches failure and blocks cold qualification. A genuinely empty
+observation can still normalize a confirmed departed PID/TID at the narrow errno sites.
+The erroneous v4 empty-errors oracle is corrected; a new fake-procfs counterexample
+covers accumulated candidates followed by parent exit or a later permission error.
+There are48 declared current tests, all unexecuted at source freeze; the independent
+original27-control script is unchanged. The full product input and22 other module paths
+are unchanged. No old error callsite, old result or original business UUID is rewritten.
+
+### Root v6 exception fence completion
+
+The v5 delta review found one further record-retention path: a nonempty children
+observation followed by an exception in the second root-birth read. That was already
+fatal, but did not serialize the known candidate PIDs. The post-fence read now wraps
+this exact exception with the candidate list, lineageUnknown and the original chained
+errno/stack. With no observed candidates the original observation error is retained.
+A new fake status/global-boot permission failure control covers both cases. There are49
+current declared controls, still unexecuted at this source freeze. The prior v5 source
+packet stays immutable; no existing runtime result or business request is retried.

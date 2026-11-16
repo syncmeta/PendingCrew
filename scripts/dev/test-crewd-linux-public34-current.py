@@ -269,7 +269,12 @@ class ToolSupervisionControls(unittest.TestCase):
         nodes=[n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Runner'];self.assertEqual(len(nodes),1)
         exec(compile(ast.Module(body=nodes,type_ignores=[]),str(source),'exec'),namespace)
         runner=namespace['Runner'].__new__(namespace['Runner']);runner.out=out;runner.runtime=runtime;runner.env={}
-        runner.proc=runner.owner=runner.human=runner.watch=None;runner._pending_tool=None
+        runner.proc=runner.owner=runner.human=None;runner._pending_tool=None
+        class FakeWatch:
+            alive=True
+            def is_alive(self):return self.alive
+            def join(self,timeout):self.alive=False
+        runner.watch=FakeWatch();runner._watch_loop_completed=True
         runner.commands=[];runner.pending=[];runner.streams=[];runner.tools=[];runner.births=[];runner.watch_errors=[];runner._finish_errors=[]
         runner.input_hashes={};runner.report={'exit':1,'scope':'fake-local-control'}
         runner.watch_stop=types.SimpleNamespace(set=lambda:None);runner.record=record
@@ -486,6 +491,237 @@ class NamedTerminalParserControls(unittest.TestCase):
             and isinstance(n.value.args[1],ast.Name) and n.value.args[1].id=='audit')
         qualified=next(i for i,n in enumerate(body) if named_call(n,'require_affected_output'))
         self.assertLess(saved,qualified)
+
+
+class ProcfsObservationControls(unittest.TestCase):
+    """Actual common/runtime AST with fake procfs only; never a kernel/Popen."""
+    def fixture(self,changes=None,birth_override=None):
+        import errno,traceback
+        fields=['0']*20;fields[0]='S';fields[1]='7';fields[2]='8';fields[19]='99'
+        boot='11111111-1111-4111-8111-111111111111'
+        values={('read','/proc/42/stat'):'42 (owned core) '+' '.join(fields),
+            ('read','/proc/42/status'):'Name:\towned\nUid:\t1001\t1001\t1001\t1001\n',
+            ('read','/proc/sys/kernel/random/boot_id'):boot,('iter','/proc/42/task'):['42'],
+            ('read','/proc/42/task/42/children'):'',('stat','/proc/42/task/42'):True,
+            ('link','/proc/42/exe'):'/owned/crewd'}
+        values.update(changes or {});calls=[]
+        def operation(kind,path):
+            path=str(path);calls.append((kind,path));key=(kind,path)
+            value=values.get(key,FileNotFoundError(errno.ENOENT,'fake procfs absent',path))
+            if isinstance(value,list) and kind!='iter':
+                value=value.pop(0)
+            if isinstance(value,BaseException):raise value
+            return value
+        class FakePath:
+            def __init__(self,*parts):self.value=str(pathlib.PurePosixPath(*map(str,parts)))
+            def __str__(self):return self.value
+            @property
+            def name(self):return pathlib.PurePosixPath(self.value).name
+            def __truediv__(self,part):return FakePath(self.value,str(part))
+            def read_text(self):return operation('read',self)
+            def iterdir(self):
+                result=operation('iter',self)
+                if isinstance(result,types.GeneratorType):return result
+                return iter([FakePath(self.value,v) for v in result])
+            def stat(self):return operation('stat',self)
+        common_path=ROOT/'scripts/dev/fixtures/linux_public34_current/common.py'
+        tree=ast.parse(common_path.read_bytes())
+        selected={'procfs_gone','procfs_pid','ProcfsObservationError','pid_text','observation_error','WatchErrors','birth','same'}
+        nodes=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in selected]
+        self.assertEqual(len(nodes),len(selected))
+        scope={'__name__':'pure_procfs_control','errno':errno,'traceback':traceback,'uuid':uuid,
+            'pathlib':types.SimpleNamespace(Path=FakePath),'sys':types.SimpleNamespace(platform='linux',exc_info=sys.exc_info)}
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),str(common_path),'exec'),scope)
+        real_fake_birth=scope['birth']
+        if birth_override is not None:scope['birth']=birth_override
+        runtime_path=ROOT/'scripts/dev/fixtures/linux_public34_current/runtime.py';tree=ast.parse(runtime_path.read_bytes())
+        nodes=[n for n in tree.body if (isinstance(n,ast.FunctionDef) and n.name in ('children','scan_children','executable','candidate_error'))
+            or (isinstance(n,ast.ClassDef) and n.name=='Runner')]
+        scope.update(Path=FakePath,Lifecycle=type('NoProductLifecycle',(),{}),
+            os=types.SimpleNamespace(readlink=lambda path:operation('link',path)))
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),str(runtime_path),'exec'),scope)
+        return types.SimpleNamespace(scope=scope,values=values,calls=calls,birth=real_fake_birth,boot=boot,errno=errno,FakePath=FakePath)
+    def run_watch_once(self,f,native=False):
+        import threading
+        r=f.scope['Runner'].__new__(f.scope['Runner']);r.births=[{'pid':42,'ppid':7,'pgid':8,'uid':1001,'startTime':99,'bootId':f.boot}]
+        r.watch_lock=threading.Lock();r.watch_errors=f.scope['WatchErrors']();r.helper_births={}
+        class Stop:
+            count=0
+            def wait(self,delay):self.count+=1;return self.count>1
+            def is_set(self):return True
+        r.watch_stop=Stop()
+        if native:
+            p=ROOT/'scripts/dev/fixtures/linux_public34_current/native.py';t=ast.parse(p.read_bytes())
+            c=next(n for n in t.body if isinstance(n,ast.ClassDef) and n.name=='NativeRunner')
+            fn=next(n for n in c.body if isinstance(n,ast.FunctionDef) and n.name=='observe')
+            exec(compile(ast.Module(body=[fn],type_ignores=[]),str(p),'exec'),f.scope)
+            r.observe=types.MethodType(f.scope['observe'],r)
+        r.observe();return r
+    def test_real_linux_birth_fields_and_only_generated_positive_pid_paths(self):
+        f=self.fixture();self.assertEqual(f.birth(42),{'pid':42,'ppid':7,'pgid':8,'uid':1001,'startTime':99,'bootId':f.boot})
+        self.assertEqual(f.calls,[('read','/proc/42/stat'),('read','/proc/42/status'),('read','/proc/sys/kernel/random/boot_id')])
+        for pid in (True,0,-1,'42','../sys'):
+            with self.subTest(pid=pid),self.assertRaises(ValueError):f.birth(pid)
+        with self.assertRaises(ValueError):f.scope['pid_text'](42,'../sys/kernel/random/boot_id')
+    def test_stat_and_status_disappearance_both_enoent_and_esrch_are_current_absence_only(self):
+        for field in ('stat','status'):
+            for number in (2,3):
+                path='/proc/42/'+field;f=self.fixture({('read',path):OSError(number,'fake PID disappeared',path)})
+                self.assertIsNone(f.birth(42));self.assertNotIn(('read','/proc/sys/kernel/random/boot_id'),f.calls)
+                self.assertIs(f.scope['same'](None,None),False) # no original identity is never gone proof
+    def test_permission_other_io_and_wrong_errno_subclasses_never_become_missing(self):
+        for field in ('stat','status'):
+            for number in (1,5,11,13,22,None):
+                error=ProcessLookupError(number,'wrong errno is not disappearance')
+                f=self.fixture({('read','/proc/42/'+field):error})
+                with self.subTest(field=field,errno=number),self.assertRaises(f.scope['ProcfsObservationError']) as got:f.birth(42)
+                self.assertEqual(got.exception.observation['operation'],'read-pid-'+field)
+                self.assertIs(got.exception.__cause__,error)
+    def test_global_boot_missing_or_unreadable_is_unknown_even_with_disappearance_errno(self):
+        for number in (2,3,5,13):
+            f=self.fixture({('read','/proc/sys/kernel/random/boot_id'):OSError(number,'global unavailable')})
+            with self.subTest(errno=number),self.assertRaises(f.scope['ProcfsObservationError']) as got:f.birth(42)
+            self.assertEqual(got.exception.observation['operation'],'read-global-boot-id')
+    def test_malformed_stat_uid_and_boot_are_never_a_gone_identity(self):
+        for path,value,stage in [('/proc/42/stat','42 (owned) S','parse-pid-stat'),
+            ('/proc/42/stat','different','parse-pid-stat'),('/proc/42/status','Uid: not-integer','parse-pid-status'),
+            ('/proc/sys/kernel/random/boot_id','','read-global-boot-id')]:
+            f=self.fixture({('read',path):value})
+            with self.subTest(path=path),self.assertRaises(f.scope['ProcfsObservationError']) as got:f.birth(42)
+            self.assertEqual(got.exception.observation['operation'],stage)
+    def test_task_enumeration_disappearance_requires_root_absence_not_just_errno(self):
+        for number in (2,3):
+            f=self.fixture({('iter','/proc/42/task'):OSError(number,'task disappeared')},birth_override=lambda pid:None)
+            self.assertEqual(f.scope['children'](42),[])
+            f=self.fixture({('iter','/proc/42/task'):OSError(number,'task missing but root alive')})
+            with self.assertRaises(f.scope['ProcfsObservationError']) as got:f.scope['children'](42)
+            self.assertEqual(got.exception.observation['operation'],'list-pid-task')
+        f=self.fixture({('iter','/proc/42/task'):PermissionError(13,'denied')},birth_override=lambda pid:None)
+        with self.assertRaises(f.scope['ProcfsObservationError']):f.scope['children'](42)
+    def test_disappeared_enumerated_tid_skips_only_that_tid_and_keeps_other_children(self):
+        for number in (2,3):
+            f=self.fixture({('iter','/proc/42/task'):['42','43'],('read','/proc/42/task/42/children'):OSError(number,'old TID disappeared'),
+                ('stat','/proc/42/task/42'):OSError(number,'TID absent'),('read','/proc/42/task/43/children'):'100 101 100'})
+            self.assertEqual(f.scope['children'](42),[100,101])
+            self.assertIn(('stat','/proc/42/task/42'),f.calls)
+    def test_live_task_missing_children_is_unknown_and_real_root_exit_is_narrowly_allowed(self):
+        for number in (2,3):
+            changes={('read','/proc/42/task/42/children'):OSError(number,'interface unavailable')}
+            f=self.fixture(changes)
+            with self.assertRaises(f.scope['ProcfsObservationError']) as got:f.scope['children'](42)
+            self.assertEqual(got.exception.observation['operation'],'read-live-task-children')
+            f=self.fixture(changes,birth_override=lambda pid:None);self.assertEqual(f.scope['children'](42),[])
+    def test_task_read_recheck_and_parse_other_errors_do_not_suppress_unknown(self):
+        cases=[{('read','/proc/42/task/42/children'):PermissionError(13,'denied')},
+            {('read','/proc/42/task/42/children'):OSError(3,'gone?'),('stat','/proc/42/task/42'):OSError(5,'IO unknown')},
+            {('read','/proc/42/task/42/children'):'100 broken'},
+            {('iter','/proc/42/task'):['unexpected']},
+            {('read','/proc/42/task/42/children'):'0'}]
+        for changes in cases:
+            f=self.fixture(changes)
+            with self.subTest(changes=list(changes)),self.assertRaises((f.scope['ProcfsObservationError'],ValueError)):f.scope['children'](42)
+    def test_partial_task_iterator_error_is_not_an_empty_live_snapshot(self):
+        def broken(path):
+            yield path
+            raise ProcessLookupError(3,'enumeration changed')
+        f=self.fixture();f.values[('iter','/proc/42/task')]=broken(f.FakePath('/proc/42/task/42'))
+        with self.assertRaises(f.scope['ProcfsObservationError']):f.scope['children'](42)
+        f=self.fixture(birth_override=lambda pid:None);f.values[('iter','/proc/42/task')]=broken(f.FakePath('/proc/42/task/42'))
+        self.assertEqual(f.scope['children'](42),[])
+    def test_exe_link_normalizes_only_named_gone_pid_enoent_esrch_for_unchanged_native_caller(self):
+        for number in (2,3):
+            error=OSError(number,'gone link')
+            f=self.fixture({('link','/proc/42/exe'):error},birth_override=lambda pid:None)
+            with self.assertRaises(FileNotFoundError) as got:f.scope['executable'](42)
+            self.assertIs(got.exception.__cause__,error);self.assertEqual(got.exception.filename,'/proc/42/exe')
+            f=self.fixture({('link','/proc/42/exe'):error})
+            with self.assertRaises(f.scope['ProcfsObservationError']):f.scope['executable'](42)
+        f=self.fixture({('link','/proc/42/exe'):PermissionError(13,'denied')},birth_override=lambda pid:None)
+        with self.assertRaises(f.scope['ProcfsObservationError']):f.scope['executable'](42)
+    def test_regular_watch_errors_have_real_operation_errno_path_and_original_stack(self):
+        f=self.fixture({('read','/proc/42/status'):PermissionError(13,'fake status denied')});r=self.run_watch_once(f)
+        self.assertEqual(len(r.watch_errors),1);detail=r.watch_errors.details[0]
+        self.assertEqual(detail['errno'],13);self.assertEqual(detail['procfs']['path'],'/proc/42/status')
+        self.assertEqual(detail['procfs']['operation'],'read-pid-status');self.assertIn('pid_text',detail['traceback'])
+        self.assertIn('PermissionError',detail['traceback']);self.assertIn('runtime.py',detail['traceback'])
+        self.assertEqual(detail['originalRootBirth']['pid'],42);self.assertIs(detail['callsiteInferredFromMessage'],False)
+    def test_unchanged_native_override_also_keeps_active_exception_stack(self):
+        f=self.fixture({('read','/proc/42/status'):OSError(5,'status IO unknown')});r=self.run_watch_once(f,native=True)
+        self.assertEqual(len(r.watch_errors),1);detail=r.watch_errors.details[0]
+        self.assertEqual(detail['errno'],5);self.assertIn('native.py',detail['traceback'])
+        self.assertEqual(detail['procfs']['operation'],'read-pid-status')
+    def test_no_child_guard_stays_fatal_and_original_pid_post_fence_prevents_replacement_mix(self):
+        f=self.fixture({('read','/proc/42/task/42/children'):'100'});r=self.run_watch_once(f)
+        self.assertEqual(len(r.watch_errors),1);self.assertEqual(r.watch_errors.details[0]['errorType'],'AssertionError')
+        f=self.fixture({('read','/proc/42/task/42/children'):'100'})
+        original=f.values[('read','/proc/42/stat')];f.values[('read','/proc/42/stat')]=[original,OSError(3,'original exited')]
+        r=self.run_watch_once(f);self.assertEqual(len(r.watch_errors),1)
+        detail=r.watch_errors.details[0]['procfs']
+        self.assertEqual(detail['observedCandidatePIDs'],[100]);self.assertTrue(detail['lineageUnknown'])
+        self.assertTrue(detail['candidatesNotProvenGone']);self.assertFalse(detail['signalsAllowed'])
+        f=self.fixture();original=f.values[('read','/proc/42/stat')]
+        f.values[('read','/proc/42/stat')]=[original,OSError(3,'original exited with no observed child')]
+        r=self.run_watch_once(f);self.assertEqual(r.watch_errors,[]) # empty observation never invents children
+    def test_root_exit_during_later_tid_read_preserves_previously_observed_candidates(self):
+        changes={('iter','/proc/42/task'):['42','43'],('read','/proc/42/task/42/children'):'100 101 100',
+            ('read','/proc/42/task/43/children'):OSError(3,'later children interface disappeared'),
+            ('stat','/proc/42/task/43'):True}
+        f=self.fixture(changes,birth_override=lambda pid:None)
+        with self.assertRaises(f.scope['ProcfsObservationError']) as got:f.scope['children'](42)
+        detail=got.exception.observation
+        self.assertEqual(detail['observedCandidatePIDs'],[100,101]);self.assertTrue(detail['lineageUnknown'])
+        self.assertEqual(detail['operation'],'root-disappeared-after-observed-children')
+        self.assertEqual(detail['tid'],43);self.assertTrue(detail['candidatesNotProvenGone'])
+        f=self.fixture({**changes,('read','/proc/42/task/43/children'):PermissionError(13,'later TID unreadable')})
+        with self.assertRaises(f.scope['ProcfsObservationError']) as got:f.scope['children'](42)
+        self.assertEqual(got.exception.observation['observedCandidatePIDs'],[100,101])
+        self.assertEqual(got.exception.observation['errno'],13)
+        self.assertTrue(got.exception.observation['candidatesNotProvenGone'])
+        f=self.fixture({**changes,('read','/proc/42/task/42/children'):''},birth_override=lambda pid:None)
+        self.assertEqual(f.scope['children'](42),[]) # no known PID is being discarded
+    def test_post_fence_unknown_retains_candidates_and_original_error_chain(self):
+        for path,stage in [('/proc/42/status','read-pid-status'),
+            ('/proc/sys/kernel/random/boot_id','read-global-boot-id')]:
+            f=self.fixture({('read','/proc/42/task/42/children'):'100'})
+            original=f.values[('read',path)];f.values[('read',path)]=[original,PermissionError(13,'fake post-fence observation unknown')]
+            r=self.run_watch_once(f);self.assertEqual(len(r.watch_errors),1)
+            detail=r.watch_errors.details[0]
+            self.assertEqual(detail['procfs']['observedCandidatePIDs'],[100])
+            self.assertEqual(detail['procfs']['operation'],'root-recheck-failed-after-observed-children')
+            self.assertTrue(detail['procfs']['lineageUnknown']);self.assertTrue(detail['procfs']['candidatesNotProvenGone'])
+            self.assertEqual(detail['errno'],13);self.assertIn(stage,detail['traceback'])
+            self.assertIn('PermissionError',detail['traceback']);self.assertFalse(detail['procfs']['signalsAllowed'])
+            f=self.fixture();original=f.values[('read',path)]
+            f.values[('read',path)]=[original,PermissionError(13,'unknown with genuinely empty child observation')]
+            r=self.run_watch_once(f);self.assertEqual(len(r.watch_errors),1)
+            self.assertEqual(r.watch_errors.details[0]['procfs']['operation'],stage)
+    def test_error_detail_bound_and_formatter_failure_never_clear_fatal_strings(self):
+        f=self.fixture();errors=f.scope['WatchErrors']()
+        for _ in range(65):
+            try:raise OSError(5,'fake observer unknown')
+            except OSError as error:errors.append(type(error).__name__+': '+str(error))
+        self.assertEqual(len(errors),65);self.assertEqual(len(errors.details),64);self.assertEqual(errors.details_dropped,1)
+        def broken(error):raise RuntimeError('fake diagnostic formatter failed')
+        f.scope['observation_error']=broken;errors=f.scope['WatchErrors']()
+        try:raise PermissionError(13,'fake denied')
+        except PermissionError as error:errors.append(str(error))
+        self.assertEqual(len(errors),1);self.assertTrue(errors.details[0]['diagnosticIncomplete'])
+    def test_unexpected_watch_return_or_error_cannot_qualify_finish_or_cold(self):
+        pf=self.fixture();r=pf.scope['Runner'].__new__(pf.scope['Runner'])
+        r.watch_stop=types.SimpleNamespace(is_set=lambda:False);r.watch_errors=pf.scope['WatchErrors']()
+        r.observe=lambda:None;r.watch_loop()
+        self.assertFalse(r._watch_loop_completed);self.assertEqual(r.watch_errors,[])
+        r.watch_stop=types.SimpleNamespace(is_set=lambda:True);r.watch_loop();self.assertTrue(r._watch_loop_completed)
+        def broken():raise PermissionError(13,'fake observer terminated before requested closure')
+        r.observe=broken;r.watch_loop();self.assertFalse(r._watch_loop_completed)
+        self.assertEqual(len(r.watch_errors),1);self.assertEqual(r.watch_errors.details[0]['errno'],13)
+        f=ToolSupervisionControls.fixture(self)
+        f.r.watch=types.SimpleNamespace(join=lambda timeout:None,is_alive=lambda:False)
+        f.r._watch_loop_completed=False;f.r.finish()
+        self.assertEqual(f.r.report['exit'],1);self.assertTrue(f.r.report['processObservationUnqualified'])
+        self.assertFalse(f.r.report['completeArchive']);self.assertTrue(f.r.report['mutableFailureSnapshot']);self.assertEqual(f.archives,[])
+        f=ToolSupervisionControls.fixture(self);f.r.endpoint=f.r.runtime/'never-a-socket';f.r.watch_errors=['original observation Unknown']
+        with self.assertRaisesRegex(AssertionError,'process observation Unknown'):f.r.archive_cold('must-not-copy')
 
 
 if __name__=='__main__':
