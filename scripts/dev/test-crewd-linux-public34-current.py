@@ -191,6 +191,104 @@ class NaturalN6Controls(unittest.TestCase):
         with self.assertRaises(ValueError):fixed.completed_checksum(value,'target',scope,'foreign',run)
 
 
+class WorkCreationWitnessControls(unittest.TestCase):
+    def fixture(self):
+        params={'requestId':'33333333-3333-4333-8333-333333333333',
+                'crewId':'crew-0123456789abcdef0123456789abcdef','title':'Linux stable unowned Work 01',
+                'goal':'Natural fixed page coverage','acceptance':'Remain exactly unchanged','owner':None}
+        original={'params':params,'receipt':{'id':'W7','crewId':params['crewId'],'owner':None}}
+        digest='1a42325a8ac7ab76229273f9b45f7c3da078245a8ca23ae14c08a0cf34ff65c2'
+        row=[params['requestId'],'W7',params['crewId'],'human',None,'blob',32,digest]
+        return original,row
+    def test_typed_work_create_payload_golden_and_request_id_erasure(self):
+        original,row=self.fixture();params=original['params'];before=copy.deepcopy(params)
+        golden=('{"requestId":null,"channelId":null,"crewId":"crew-0123456789abcdef0123456789abcdef",'
+            '"title":"Linux stable unowned Work 01","goal":"Natural fixed page coverage","level":"local",'
+            '"acceptance":"Remain exactly unchanged","owner":null,"parent":null,"dependsOn":[],"sources":[],"nextCheckAt":null}')
+        # The literal bytes/hash are fixed independently from the helper output.
+        payload=fixed.work_create_payload(params)
+        encoded=json.dumps(payload,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode()
+        self.assertEqual(encoded,golden.encode())
+        self.assertEqual(hashlib.sha256(golden.encode()).hexdigest(),row[7])
+        self.assertEqual(fixed.work_create_digest(params),row[7])
+        self.assertEqual(list(payload),['requestId','channelId','crewId','title','goal','level','acceptance',
+            'owner','parent','dependsOn','sources','nextCheckAt'])
+        other=copy.deepcopy(params);other['requestId']='44444444-4444-4444-8444-444444444444'
+        self.assertEqual(fixed.work_create_digest(other),row[7]);self.assertEqual(params,before)
+        proof=fixed.work_creation_witness(tuple(row),original,params['crewId'])
+        self.assertEqual(proof['originalTypedPayload'],payload)
+        self.assertEqual(proof['payloadDigest'],{'storageClass':'blob','byteLength':32,'hex':row[7]})
+    def test_rejects_text64_and_non_BLOB32_storage_or_length(self):
+        original,row=self.fixture();fixed.work_creation_witness(row,original,row[2])
+        # A real TEXT64 lower(hex(...)) projection has128 ASCII hex characters.
+        for kind,size,value in [('text',64,row[7].encode().hex()),('text',32,row[7]),
+            ('blob',31,'01'*31),('blob',33,'01'*33),('blob',32.0,row[7]),('blob',True,row[7]),
+            ('null',None,''),('integer',32,row[7])]:
+            bad=copy.deepcopy(row);bad[5:8]=[kind,size,value]
+            with self.subTest(kind=kind,size=size),self.assertRaisesRegex(ValueError,'BLOB32'):
+                fixed.work_creation_witness(bad,original,row[2])
+    def test_rejects_wrong_digest_changed_params_and_noncanonical_hex(self):
+        original,row=self.fixture();fixed.work_creation_witness(row,original,row[2])
+        bad=copy.deepcopy(row);bad[7]='0'*64
+        with self.assertRaisesRegex(ValueError,'differs_from_original_typed_params'):
+            fixed.work_creation_witness(bad,original,row[2])
+        for key in ['title','goal','acceptance']:
+            changed=copy.deepcopy(original);changed['params'][key]+=' changed 中文🙂\n'
+            with self.subTest(key=key),self.assertRaisesRegex(ValueError,'differs_from_original_typed_params'):
+                fixed.work_creation_witness(row,changed,row[2])
+        for value in [row[7].upper(),row[7].encode().hex(),bytes.fromhex(row[7]),'g'*64]:
+            bad=copy.deepcopy(row);bad[7]=value
+            with self.subTest(value=type(value).__name__),self.assertRaisesRegex(ValueError,'hex_projection'):
+                fixed.work_creation_witness(bad,original,row[2])
+    def test_binds_typed_original_UUID_work_crew_creator_and_null_source(self):
+        original,row=self.fixture();fixed.work_creation_witness(row,original,row[2])
+        for index,value in [(0,'44444444-4444-4444-8444-444444444444'),(0,True),(1,'W8'),(1,7),
+            (2,'foreign'),(2,False),(3,'Human'),(3,'session:foreign'),(4,''),(4,False)]:
+            bad=copy.deepcopy(row);bad[index]=value
+            with self.subTest(index=index,value=value),self.assertRaisesRegex(ValueError,'identity_differs'):
+                fixed.work_creation_witness(bad,original,row[2])
+        changed=copy.deepcopy(original);changed['params']['requestId']='44444444-4444-4444-8444-444444444444'
+        self.assertEqual(fixed.work_create_digest(changed['params']),row[7])
+        with self.assertRaisesRegex(ValueError,'identity_differs'):fixed.work_creation_witness(row,changed,row[2])
+        for key,value in [('id',True),('crewId',False),('owner',False)]:
+            changed=copy.deepcopy(original);changed['receipt'][key]=value
+            with self.subTest(receipt=key),self.assertRaisesRegex(ValueError,'original_work_creation_receipt'):
+                fixed.work_creation_witness(row,changed,row[2])
+        with self.assertRaisesRegex(ValueError,'foreign_work_creation_crew'):fixed.work_creation_witness(row,original,False)
+    def test_closed_N6_params_refuse_unknown_missing_and_wrong_typed_fields(self):
+        original,row=self.fixture();params=original['params'];fixed.work_create_payload(params)
+        for key in params:
+            bad=copy.deepcopy(params);del bad[key]
+            with self.subTest(missing=key),self.assertRaisesRegex(ValueError,'unexpected_N6'):fixed.work_create_payload(bad)
+        for key,value in [('extra',None),('level','local'),('channelId',None),('dependsOn',[])]:
+            with self.subTest(extra=key),self.assertRaisesRegex(ValueError,'unexpected_N6'):
+                fixed.work_create_payload(dict(params,**{key:value}))
+        for key in ['requestId','crewId','title','goal','acceptance']:
+            with self.subTest(type=key),self.assertRaisesRegex(ValueError,'work_create_string'):
+                fixed.work_create_payload(dict(params,**{key:False}))
+        for bad in [dict(params,owner='session:foreign'),dict(params,owner=False),dict(params,crewId=''),
+            dict(params,requestId='AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA')]:
+            with self.assertRaises(ValueError):fixed.work_create_payload(bad)
+    def test_JSON_safe_witness_and_shared_small_large_cold_projection_wiring(self):
+        original,row=self.fixture();proof=fixed.work_creation_witness(row,original,row[2])
+        self.assertEqual(json.loads(json.dumps(proof,ensure_ascii=False,allow_nan=False)),proof)
+        self.assertEqual(proof['requestId'],original['params']['requestId'])
+        self.assertEqual(proof['sourceChannelId'],None);self.assertEqual(proof['expectedPayloadDigestHex'],row[7])
+        path=ROOT/'scripts/dev/fixtures/linux_public34_current/natural_patrol.py';tree=ast.parse(path.read_bytes())
+        cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='PatrolRunner')
+        cold=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='cold_proof')
+        queries=[n.args[0].value for n in ast.walk(cold) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
+            and n.func.attr=='execute' and n.args and isinstance(n.args[0],ast.Constant) and isinstance(n.args[0].value,str)]
+        self.assertIn('SELECT request_id,work_id,crew_id,creator_key,source_channel_id,typeof(payload_digest),length(payload_digest),lower(hex(payload_digest)) FROM work_creation_requests ORDER BY request_id',queries)
+        self.assertEqual(sum('FROM work_creation_requests' in q for q in queries),1)
+        self.assertTrue(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
+            and isinstance(n.func.value,ast.Name) and n.func.value.id=='fixed' and n.func.attr=='work_creation_witness' for n in ast.walk(cold)))
+        functions={n.name:n for n in tree.body if isinstance(n,ast.FunctionDef)}
+        flow=functions['natural_flow'];self.assertEqual([n.value.func.attr for n in flow.body],['source','wait_natural','stop','cold_proof'])
+        self.assertEqual(functions['small_flow'].body[0].value.args[1].value,1)
+        self.assertEqual(functions['large_flow'].body[0].value.args[1].value,61)
+
+
 import subprocess,types
 
 

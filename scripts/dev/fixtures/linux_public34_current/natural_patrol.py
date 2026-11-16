@@ -150,23 +150,25 @@ class PatrolRunner(Runner):
                 value=json.loads(meta(c,'patrol.secretary.completed.v1:'+crew))
                 checks[crew]=fixed.completed_checksum(value,crew,scope,epoch,run)
             assert len(checks)==6
-            creations=c.execute('SELECT request_id,work_id,crew_id,creator_key,source_channel_id,payload_digest FROM work_creation_requests ORDER BY request_id').fetchall()
+            # Preserve the actual SQLite BLOB type/byte length; raw bytes never
+            # enter the JSON report. Hex alone must not admit a TEXT64 impostor.
+            creations=c.execute('SELECT request_id,work_id,crew_id,creator_key,source_channel_id,typeof(payload_digest),length(payload_digest),lower(hex(payload_digest)) FROM work_creation_requests ORDER BY request_id').fetchall()
             assert len(creations)==len(self.receipts)
             by_request={x[0]:x for x in creations};assert len(by_request)==len(creations)
+            witnesses=[]
             for original in self.receipts:
                 row=by_request[original['params']['requestId']]
-                assert row[1:5]==(original['receipt']['id'],self.crew,'human',None)
-                assert type(row[5]) is str and len(row[5])==64 and all(x in '0123456789abcdef' for x in row[5])
+                witnesses.append(fixed.work_creation_witness(row,original,self.crew))
             assert c.execute('SELECT count(*) FROM sessions').fetchone()[0]==0
             assert c.execute('SELECT count(*) FROM ask_meta').fetchone()[0]==0
             assert c.execute('SELECT count(*) FROM wakes').fetchone()[0]==0
         assert sha(db)==before
         self.report.update(originalNaturalRunChecksums=checks,actualCompletedScope=scope,actualJudgmentEpoch=epoch,
             fixedUnownedWorkCount=len(self.works),allWorkFullObjectsUnchanged=True,originalWorkUUIDsSubmittedOnce=True,
-            originalWorkCreationWitnesses=creations,allSixNaturalFirstRounds=True,regularFileCaptureEOF='not-a-pipe',
+            originalWorkCreationWitnesses=witnesses,allSixNaturalFirstRounds=True,regularFileCaptureEOF='not-a-pipe',
             coldOnlyAfterOriginalWaitAndSocketGone=True,otherFiveCompletedWhileTargetPartial=sorted(self.other_partial))
         self.record('Linux-natural-original-cold-proof',{'checksums':checks,'scope':scope,'epoch':epoch,
-                    'DBSHA256':before,'originalWorkCreationRows':creations,'timing':self.report['actualLinuxNaturalTiming']})
+                    'DBSHA256':before,'originalWorkCreationRows':witnesses,'timing':self.report['actualLinuxNaturalTiming']})
 
 
 def natural_flow(r,total):

@@ -16,6 +16,57 @@ def exact_value(left,right):
 
 RUN_ORDER=('runId','startedAtMs','completedAtMs','scan','after','capturedSeq','scannedCounts','findings','counts','truncated')
 
+def work_create_payload(params):
+    """Only this N6 fixture's six input fields, serialized as the real12-field DTO.
+
+    Fixed7572 proto/work.rs144-169 declares this order and WorkLevel defaults to
+    local. collab/work.rs563-565 clears only request_id before acl::digest.
+    This is a witness calculation, never a replacement work.create request.
+    """
+    require(type(params) is dict and set(params)=={'requestId','crewId','title','goal','acceptance','owner'},
+            'unexpected_N6_work_create_params')
+    for key in ['requestId','crewId','title','goal','acceptance']:
+        require(type(params[key]) is str,'invalid_N6_work_create_string')
+        params[key].encode('utf-8')
+    require(bool(params['crewId']) and params['owner'] is None,'invalid_N6_unowned_work_input')
+    try:valid=str(uuid.UUID(params['requestId']))==params['requestId']
+    except (ValueError,TypeError,AttributeError):valid=False
+    require(valid,'invalid_original_work_create_uuid')
+    return {'requestId':None,'channelId':None,'crewId':params['crewId'],'title':params['title'],
+            'goal':params['goal'],'level':'local','acceptance':params['acceptance'],'owner':None,
+            'parent':None,'dependsOn':[],'sources':[],'nextCheckAt':None}
+
+def work_create_digest(params):
+    payload=work_create_payload(params)
+    # resource_acl::digest uses typed serde_json::to_vec, not sorted Value keys.
+    encoded=json.dumps(payload,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+def work_creation_witness(row,original,crew):
+    """Qualify the SQL typeof/length/lower(hex) projection; return only JSON data."""
+    require(type(row) in (tuple,list) and len(row)==8,'invalid_work_creation_projection')
+    require(type(original) is dict and set(original)=={'params','receipt'},'invalid_original_work_creation')
+    params=original['params'];payload=work_create_payload(params);receipt=original['receipt']
+    require(type(crew) is str and bool(crew) and params['crewId']==crew,'foreign_work_creation_crew')
+    require(type(receipt) is dict and type(receipt.get('id')) is str
+            and re.fullmatch(r'W[1-9][0-9]*',receipt['id']) is not None
+            and type(receipt.get('crewId')) is str and receipt['crewId']==crew
+            and 'owner' in receipt and receipt['owner'] is None,'invalid_original_work_creation_receipt')
+    require(type(row[0]) is str and row[0]==params['requestId']
+            and type(row[1]) is str and row[1]==receipt['id']
+            and type(row[2]) is str and row[2]==crew
+            and type(row[3]) is str and row[3]=='human' and row[4] is None,
+            'original_work_creation_identity_differs')
+    require(row[5]=='blob' and type(row[5]) is str and type(row[6]) is int and row[6]==32,
+            'work_creation_digest_is_not_BLOB32')
+    require(type(row[7]) is str and re.fullmatch(r'[0-9a-f]{64}',row[7]) is not None,
+            'invalid_work_creation_digest_hex_projection')
+    expected=work_create_digest(params)
+    require(row[7]==expected,'work_creation_digest_differs_from_original_typed_params')
+    return {'requestId':row[0],'workId':row[1],'crewId':row[2],'creatorKey':row[3],
+            'sourceChannelId':row[4],'payloadDigest':{'storageClass':row[5],'byteLength':row[6],'hex':row[7]},
+            'originalTypedPayload':payload,'expectedPayloadDigestHex':expected}
+
 def start_small(crew,active,topics,created,began):
     require(len(active)==6 and topics==[],'exact_N6_zero_topic_fixture_required')
     state=small.start(crew,active,topics,created,began,'readiness-unconfigured')

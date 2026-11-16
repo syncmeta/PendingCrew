@@ -234,3 +234,62 @@ errno/stack. With no observed candidates the original observation error is retai
 A new fake status/global-boot permission failure control covers both cases. There are49
 current declared controls, still unexecuted at this source freeze. The prior v5 source
 packet stays immutable; no existing runtime result or business request is retried.
+
+### Run3 Work-creation cold-witness successor v7 (source only)
+
+The exact source baseline is7572e21b9ffd902435aa255954de7e6112b3eb94. Root's
+run43807149262/artifact14200003912 remains FAIL. Its selected CRC-qualified
+records show the original eleven scopes, including installer, completed; small
+natural-N6 reached its first real completed run and original formal stop, then
+failed at natural_patrol.py159 because the harness treated payload_digest as
+64-character TEXT. The large scope was not entered. That precise failed assertion
+is separate from the previously repaired watcher failure. The complete artifact
+is1,705,795,561 bytes, SHA fc35d8d74dc91a2e14731271bbbbf3826260b24ba3a09aa2f4d01a640b388348;
+this source author reads only Root's already selected records and fixed source,
+not the archive's cold DB or an unfinished download. No old result is relabelled.
+
+Fixed7572 primary source declares work_creation_requests.payload_digest as BLOB
+with32-byte length (store/schema.rs1037-1040). CreationWitness.digest is Vec<u8>
+and record_creation binds that Vec directly (store/channel_work.rs108-120).
+collab/work.rs563-565 clones the actual WorkCreateParams, changes only request_id
+to None, then resource_acl::digest112-117 hashes serde_json::to_vec of that typed
+struct. proto/work.rs144-169 declares the complete12-field serialization order:
+requestId,channelId,crewId,title,goal,level,acceptance,owner,parent,dependsOn,sources,
+nextCheckAt. Option defaults serialize as null, vector defaults as[], and the
+default WorkLevel is local. No sorted generic-Value or omitted-null digest is used.
+
+The two natural cases share one corrected cold reader. Its SQL is still read-only
+after the inherited original hibernate/wait/birth/socket/watch/log closure and
+immutable no-WAL fence. The witness projection includes typeof(payload_digest),
+length(payload_digest) and lower(hex(payload_digest)), so both storage class and
+byte length remain explicit. A TEXT64 impostor is rejected even if some spelling
+looks like a hash. Each row must match its unique original request UUID, complete
+retained Work ID and crew, creator human, and sourceChannelId null. Its BLOB32
+bytes must equal SHA256 of the original six fixture params expanded into the
+exact typed12 fields with only requestId cleared. Unknown/missing/unsupported
+fixture params and incorrect JSON scalar types fail closed. No original request
+is changed or resubmitted by this witness calculation.
+
+Only JSON-safe strings/numbers/null/objects enter the report: the verified blob
+is represented with storageClass, byteLength and lowercase hex, alongside the
+original typed payload and independently calculated expected digest. Raw bytes
+cannot cause report serialization to fail after the SQL assertion is repaired.
+The original full Work before/after reads, six original completed Scope/epoch/run
+checksums, exact UUIDs/cursors/counts/samples, other-five fairness, selected fact
+delta25, product same64 budget,30-second heartbeat and660/240 bounds are unchanged.
+Original H/session/wake absence, stop ownership and Unknown behavior remain.
+
+Only four authorized files change: natural_patrol.py, patrol_n6_contract.py,
+test-crewd-linux-public34-current.py and this handoff. The other22 module files,
+entire681/a481 production input and independent original27-control script remain
+byteexact. All49 predecessor test method bodies and their final assertions remain
+byteexact. Six added methods (55 declared total) cover the literal typed JSON and
+golden SHA, request-ID erasure without input mutation, TEXT64/BLOB31/wrong scalar
+or hex/digest, changed original params, wrong typed identity/creator/channel, closed
+fixture fields, JSON-safe proof, and shared small/large cold-reader wiring. These
+are source-defined pure/AST controls, UNEXECUTED by this author; no SQL, candidate
+import, product, process, network or compiler was run. Root is the different-author
+reviewer and sole executor/committer: full source admission precedes55 current plus
+the original27 controls and one newly bound full fresh Linux pipeline. Both natural
+cases and all13 scopes still require actual new runtime evidence and independent
+acceptance; the old small natural completion is not overall success.
