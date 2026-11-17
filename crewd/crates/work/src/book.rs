@@ -9,6 +9,7 @@ use crate::model::{
     Status, WorkItem,
 };
 use crate::perm::{self, Action, Ctx};
+use crate::persistent_delta::PersistentDelta;
 
 /// 命令被拒的原因。被拒 = 账本原样不动。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +108,7 @@ pub struct WorkBook {
     pub(crate) cfg: Config,
     log: Vec<Event>,
     default_crew: Option<CrewId>,
+    persistent_delta: Option<Box<PersistentDelta>>,
 }
 
 /// 草稿：命令在它上面改；`transact` 负责校验与提交。
@@ -127,6 +129,7 @@ impl WorkBook {
             cfg,
             log: Vec::new(),
             default_crew: None,
+            persistent_delta: None,
         }
     }
 
@@ -147,6 +150,7 @@ impl WorkBook {
             cfg,
             log: Vec::new(),
             default_crew: None,
+            persistent_delta: None,
         })
     }
 
@@ -198,6 +202,40 @@ impl WorkBook {
     /// 取走事件日志（M4b 落库后调用）。
     pub fn take_log(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.log)
+    }
+
+    /// Explicit pure-model tracking, starting at the current actual state.
+    /// Idempotent: enabling an already tracked book never discards its delta.
+    /// Costs one complete typed baseline and changed-value clones only when
+    /// enabled; no Store/Actor/Scope authority or serialization is introduced.
+    pub fn enable_persistent_delta_tracking(&mut self) {
+        if self.persistent_delta.is_none() {
+            self.persistent_delta =
+                Some(Box::new(PersistentDelta::between(&self.state, &self.state)));
+        }
+    }
+
+    pub fn pending_persistent_delta(&self) -> Option<&PersistentDelta> {
+        self.persistent_delta.as_deref()
+    }
+
+    /// Drain independently of take_log and start a fresh current-state anchor.
+    /// None means tracking is disabled; Some(empty) means no actual state change.
+    pub fn take_persistent_delta(&mut self) -> Option<PersistentDelta> {
+        let pending = self.persistent_delta.as_mut()?;
+        let next = PersistentDelta::between(&self.state, &self.state);
+        Some(std::mem::replace(pending.as_mut(), next))
+    }
+
+    /// Return the last delta and disable tracking without dropping unseen data.
+    pub fn finish_persistent_delta_tracking(&mut self) -> Option<PersistentDelta> {
+        self.persistent_delta.take().map(|pending| *pending)
+    }
+
+    pub(crate) fn record_persistent_state(&mut self) {
+        if let Some(pending) = &mut self.persistent_delta {
+            pending.refresh_after(&self.state);
+        }
     }
 
     pub(crate) fn transact<T>(
@@ -269,6 +307,7 @@ impl WorkBook {
             });
         }
         self.state = d.s;
+        self.record_persistent_state();
         self.log.extend(events.iter().cloned());
         Ok(Applied { value, events })
     }

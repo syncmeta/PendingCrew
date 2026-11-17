@@ -11,6 +11,7 @@ pub mod model;
 pub mod organization;
 pub mod owner;
 pub mod perm;
+pub mod persistent_delta;
 pub mod progress;
 #[cfg(test)]
 mod testkit;
@@ -32,6 +33,7 @@ pub use model::{
 };
 pub use owner::WakeResult;
 pub use perm::Action;
+pub use persistent_delta::PersistentDelta;
 pub use progress::{Progress, Report};
 pub use views::{CheckpointDue, EntryStatus, EntryView, LostCause, LostOwner, MyItem};
 pub use watch::{

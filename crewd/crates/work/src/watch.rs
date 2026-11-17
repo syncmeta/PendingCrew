@@ -225,10 +225,13 @@ impl WorkBook {
         let v = self.stop_violations(session, now);
         if v.is_empty() {
             self.state.stop_streaks.remove(session);
+            self.record_persistent_state();
             return StopDecision::Clean;
         }
         let streak = self.state.stop_streaks.entry(session.clone()).or_default();
-        advance_stop_streak(streak, v, &self.cfg)
+        let decision = advance_stop_streak(streak, v, &self.cfg);
+        self.record_persistent_state();
+        decision
     }
 
     /// 人的待确认清单：还开着、且此刻卡着至少一个活着的项的问（没人等的问不打扰人）。等得最久的在前。
